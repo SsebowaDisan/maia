@@ -1,6 +1,6 @@
 # Creating a component
 
-A fundamental concept in kotaemon is "component".
+A fundamental concept in maia is "component".
 
 Anything that isn't data or data structure is a "component". A component can be
 thought of as a step within a pipeline. It takes in some input, processes it,
@@ -8,12 +8,12 @@ and returns an output, just the same as a Python function! The output will then
 become an input for the next component in a pipeline. In fact, a pipeline is just
 a component. More appropriately, a nested component: a component that makes use of one or more other components in
 the processing step. So in reality, there isn't a difference between a pipeline
-and a component! Because of that, in kotaemon, we will consider them the
+and a component! Because of that, in maia, we will consider them the
 same as "component".
 
 To define a component, you will:
 
-1. Create a class that subclasses from `kotaemon.base.BaseComponent`
+1. Create a class that subclasses from `maia.base.BaseComponent`
 2. Declare init params with type annotation
 3. Declare nodes (nodes are just other components!) with type annotation
 4. Implement the processing logic in `run`.
@@ -21,9 +21,9 @@ To define a component, you will:
 The syntax of a component is as follow:
 
 ```python
-from kotaemon.base import BaseComponent
-from kotaemon.llms import LCAzureChatOpenAI
-from kotaemon.parsers import RegexExtractor
+from maia.base import BaseComponent
+from maia.llms import LCAzureChatOpenAI
+from maia.parsers import RegexExtractor
 
 
 class FancyPipeline(BaseComponent):

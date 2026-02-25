@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from ktem.app import BasePage
 
-    from kotaemon.base import BaseComponent
+    from maia.base import BaseComponent
 
 
 logger = logging.getLogger(__name__)

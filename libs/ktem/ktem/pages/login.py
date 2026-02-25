@@ -1,10 +1,27 @@
 import hashlib
+from pathlib import Path
 
 import gradio as gr
 from ktem.app import BasePage
 from ktem.db.models import User, engine
 from ktem.pages.resources.user import create_user
 from sqlmodel import Session, select
+
+ASSETS_IMG_DIR = Path(__file__).resolve().parents[1] / "assets" / "img"
+MAIA_ICON_SVG_PATH = ASSETS_IMG_DIR / "favicon.svg"
+MAIA_WHITE_ICON_SVG_PATH = ASSETS_IMG_DIR / "maia-white_icon.svg"
+
+
+def _read_svg(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+MAIA_ICON_SVG = _read_svg(MAIA_ICON_SVG_PATH)
+MAIA_WHITE_ICON_SVG = _read_svg(MAIA_WHITE_ICON_SVG_PATH)
+HERO_ICON_SVG = MAIA_WHITE_ICON_SVG or MAIA_ICON_SVG
 
 fetch_creds = """
 function() {
@@ -22,7 +39,6 @@ function(usn, pwd) {
 }
 """
 
-
 class LoginPage(BasePage):
 
     public_events = ["onSignIn"]
@@ -32,10 +48,67 @@ class LoginPage(BasePage):
         self.on_building_ui()
 
     def on_building_ui(self):
-        gr.Markdown(f"# Welcome to {self._app.app_name}!")
-        self.usn = gr.Textbox(label="Username", visible=False)
-        self.pwd = gr.Textbox(label="Password", type="password", visible=False)
-        self.btn_login = gr.Button("Login", visible=False)
+        with gr.Row(elem_id="maia-login-shell"):
+            with gr.Column(elem_id="maia-login-hero", scale=1, min_width=320):
+                gr.HTML(
+                    f"""
+                    <div class="maia-login-hero-inner">
+                      <div class="maia-login-hero-logo" aria-hidden="true">{HERO_ICON_SVG}</div>
+                      <h2>Welcome back</h2>
+                      <p>
+                        Sign in to access your {self._app.app_name} workspace
+                        and continue where you left off
+                      </p>
+                    </div>
+                    """
+                )
+
+            with gr.Column(elem_id="maia-login-form-panel", scale=1, min_width=360):
+                gr.HTML(
+                    f"""
+                    <div class="maia-login-form-intro">
+                      <p class="maia-login-kicker">{self._app.app_name}</p>
+                      <h1>Sign in</h1>
+                      <p>Enter your credentials to access your account</p>
+                    </div>
+                    """
+                )
+                self.usn = gr.Textbox(
+                    label="Email or Phone Number",
+                    placeholder="name@example.com",
+                    visible=False,
+                    elem_id="maia-login-username",
+                )
+                self.pwd = gr.Textbox(
+                    label="Password",
+                    type="password",
+                    placeholder="Enter your password",
+                    visible=False,
+                    elem_id="maia-login-password",
+                )
+                gr.HTML(
+                    """
+                    <div class="maia-login-options" aria-hidden="true">
+                      <label class="maia-login-remember">
+                        <input type="checkbox" />
+                        <span>Remember me</span>
+                      </label>
+                      <a href="#" onclick="return false;">Forgot password?</a>
+                    </div>
+                    """
+                )
+                self.btn_login = gr.Button(
+                    "Sign In",
+                    visible=False,
+                    elem_id="maia-login-submit",
+                    variant="primary",
+                )
+                gr.HTML(
+                    """
+                    <div class="maia-login-divider"><span>OR</span></div>
+                    <p class="maia-login-footnote">Don't have a Maia account?</p>
+                    """
+                )
 
     def on_register_events(self):
         onSignIn = gr.on(

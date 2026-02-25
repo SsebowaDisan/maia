@@ -3,7 +3,7 @@
 
 activate*
 activate/*
-kotaemon-env*
+maia-env*
 .env
 
 ### Emacs ###
@@ -338,11 +338,16 @@ celerybeat.pid
 
 # Environments
 .venv
+.venv*/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Project-specific exclusions
+flow_tmp/
+.maia_agent/
 
 # Spyder project settings
 .spyderproject
@@ -452,7 +457,7 @@ $RECYCLE.BIN/
 
 # PDF files
 *.pdf
-!libs/kotaemon/tests/resources/*.pdf
+!libs/maia/tests/resources/*.pdf
 
 .theflow/
 
@@ -477,3 +482,5 @@ doc_env/
 # application data
 ktem_app_data/
 gradio_tmp/
+frontend/user_interface/node_modules/
+frontend/user_interface/dist/

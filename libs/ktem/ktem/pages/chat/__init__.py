@@ -22,9 +22,9 @@ from sqlmodel import Session, select
 from theflow.settings import settings as flowsettings
 from theflow.utils.modules import import_dotted_string
 
-from kotaemon.base import Document
-from kotaemon.indices.ingests.files import KH_DEFAULT_FILE_EXTRACTORS
-from kotaemon.indices.qa.utils import strip_think_tag
+from maia.base import Document
+from maia.indices.ingests.files import KH_DEFAULT_FILE_EXTRACTORS
+from maia.indices.qa.utils import strip_think_tag
 
 from ...utils import SUPPORTED_LANGUAGE_MAP, get_file_names_regex, get_urls
 from ...utils.commands import WEB_SEARCH_COMMAND
@@ -275,7 +275,10 @@ class ChatPage(BasePage):
                         "Quick Upload" if not KH_DEMO_MODE else "Or input new paper URL"
                     )
 
-                    with gr.Accordion(label=quick_upload_label) as _:
+                    with gr.Accordion(
+                        label=quick_upload_label,
+                        elem_id="quick-upload-accordion",
+                    ) as _:
                         self.quick_file_upload_status = gr.Markdown()
                         if not KH_DEMO_MODE:
                             self.quick_file_upload = File(

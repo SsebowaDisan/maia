@@ -47,7 +47,7 @@ IF ERRORLEVEL 1 GOTO :end
 CALL :activate_environment
 IF ERRORLEVEL 1 GOTO :end
 
-CALL :print_highlight "Installing Kotaemon"
+CALL :print_highlight "Installing Maia"
 CALL :install_dependencies
 IF ERRORLEVEL 1 GOTO :end
 
@@ -59,7 +59,7 @@ CALL :print_highlight "Downloading and extracting PDF.js"
 CALL :download_and_extract_pdf_js
 IF ERRORLEVEL 1 GOTO :end
 
-CALL :print_highlight "Launching Kotaemon in your browser, please wait..."
+CALL :print_highlight "Launching Maia in your browser, please wait..."
 CALL :launch_ui
 
 CALL :deactivate_environment
@@ -197,29 +197,29 @@ IF "%CONDA_PREFIX%" == "%env_dir%" (
 GOTO :eof
 
 :install_dependencies
-pip list | findstr /C:"kotaemon" >NUL 2>&1
+pip list | findstr /C:"maia" >NUL 2>&1
 IF %ERRORLEVEL% == 0  (
     ECHO Dependencies are already installed
 ) ELSE (
     IF EXIST "pyproject.toml" (
         ECHO Found pyproject.toml. Installing from source...
 
-        ECHO Installing libs\kotaemon
-        python -m pip install -e "%CD%\libs\kotaemon"
+        ECHO Installing libs\maia
+        python -m pip install -e "%CD%\libs\maia"
 
         ECHO Installing libs\ktem
         python -m pip install -e "%CD%\libs\ktem"
 
         python -m pip install --no-deps -e .
     ) ELSE (
-        ECHO Installing Kotaemon %app_version%
+        ECHO Installing Maia %app_version%
         @REM Work around for versioning control
-        python -m pip install git+https://github.com/Cinnamon/kotaemon.git@"%app_version%"#subdirectory=libs/kotaemon
-        python -m pip install git+https://github.com/Cinnamon/kotaemon.git@"%app_version%"#subdirectory=libs/ktem
-        python -m pip install --no-deps git+https://github.com/Cinnamon/kotaemon.git@"%app_version%"
+        python -m pip install git+https://github.com/Cinnamon/maia.git@"%app_version%"#subdirectory=libs/maia
+        python -m pip install git+https://github.com/Cinnamon/maia.git@"%app_version%"#subdirectory=libs/ktem
+        python -m pip install --no-deps git+https://github.com/Cinnamon/maia.git@"%app_version%"
     )
 
-    ( CALL pip list | findstr /C:"kotaemon" >NUL 2>&1 ) || (
+    ( CALL pip list | findstr /C:"maia" >NUL 2>&1 ) || (
         ECHO. && ECHO Installation failed. You may need to run the installer again.
         CALL :deactivate_environment
         GOTO :exit_func_with_error
@@ -274,7 +274,7 @@ GOTO :eof
 :: Workaround for diskcache path with folder start with .
 SET THEFLOW_TEMP_PATH=flow_tmp
 SET PDFJS_PREBUILT_DIR=%target_pdf_js_dir%
-ECHO Starting Kotaemon UI... (prebuilt PDF.js is at %PDFJS_PREBUILT_DIR%)
+ECHO Starting Maia UI... (prebuilt PDF.js is at %PDFJS_PREBUILT_DIR%)
 CALL python -Xutf8 "%CD%\app.py" || ( ECHO. && ECHO Will exit now... && GOTO :exit_func_with_error )
 GOTO :eof
 

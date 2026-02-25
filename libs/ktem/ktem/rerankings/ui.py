@@ -7,7 +7,7 @@ from ktem.app import BasePage
 from ktem.utils.file import YAMLNoDateSafeLoader
 from theflow.utils.modules import deserialize
 
-from kotaemon.base import Document
+from maia.base import Document
 
 from .manager import reranking_models_manager
 

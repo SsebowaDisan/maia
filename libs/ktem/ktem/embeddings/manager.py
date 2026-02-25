@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from theflow.settings import settings as flowsettings
 from theflow.utils.modules import deserialize
 
-from kotaemon.embeddings.base import BaseEmbeddings
+from maia.embeddings.base import BaseEmbeddings
 
 from .db import EmbeddingTable, engine
 
@@ -53,7 +53,7 @@ class EmbeddingManager:
                     self._models["default"] = self._models[item.name]
 
     def load_vendors(self):
-        from kotaemon.embeddings import (
+        from maia.embeddings import (
             AzureOpenAIEmbeddings,
             FastEmbedEmbeddings,
             LCCohereEmbeddings,

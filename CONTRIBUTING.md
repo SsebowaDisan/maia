@@ -1,9 +1,9 @@
-# Contributing to Kotaemon
+# Contributing to Maia
 
-Welcome 👋 to the Kotaemon project! We're thrilled that you're interested in contributing. Whether you're fixing bugs, adding new features, or improving documentation, your efforts are highly appreciated. This guide aims to help you get started with contributing to Kotaemon.
+Welcome 👋 to the Maia project! We're thrilled that you're interested in contributing. Whether you're fixing bugs, adding new features, or improving documentation, your efforts are highly appreciated. This guide aims to help you get started with contributing to Maia.
 
-<a href="https://github.com/Cinnamon/kotaemon/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Cinnamon/kotaemon" />
+<a href="https://github.com/Cinnamon/maia/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Cinnamon/maia" />
 </a>
 
 ### Table of Contents
@@ -20,7 +20,7 @@ Please review our [code of conduct](./CODE_OF_CONDUCT.md), which is in effect at
 
 ## 🔁 Contributing via Pull Requests
 
-1. [**Fork the repository**](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo): Click on the [Fork](https://github.com/Cinnamon/kotaemon/fork) button on the repository's page to create a copy of Kotaemon under your GitHub account.
+1. [**Fork the repository**](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo): Click on the [Fork](https://github.com/Cinnamon/maia/fork) button on the repository's page to create a copy of Maia under your GitHub account.
 
 2. [**Clone your code**](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository): Clone your forked repository to your local machine.
 
@@ -33,7 +33,7 @@ git checkout -b descriptive-name-for-your-changes
 4. **Setup the development environment**: If you are working on the code, make sure to install the necessary dependencies for development
 
 ```sh
-pip install -e "libs/kotaemon[dev]"
+pip install -e "libs/maia[dev]"
 ```
 
 5. **Make your changes**: Ensure your code follows the project's coding style and passes all test cases.
@@ -47,7 +47,7 @@ pip install -e "libs/kotaemon[dev]"
    - Run the tests
 
    ```sh
-   pytest libs/kotaemon/tests/
+   pytest libs/maia/tests/
    ```
 
 6. [**Commit your changes**](https://docs.github.com/en/desktop/making-changes-in-a-branch/committing-and-reviewing-changes-to-your-project-in-github-desktop): Once you are done with your changes, add and commit them with clear messages.
@@ -58,9 +58,9 @@ git commit -m "clear message described your changes."
 git push -u origin descriptive-name-for-your-changes
 ```
 
-7. [**Create a pull request**](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request): When you are satisfied with your changes, [submit a pull request](https://github.com/Cinnamon/kotaemon/compare) from your forked repository to Kotaemon repository. In the pull request, provide a clear description of your changes and any related issues. For the title of the pull request, please refer to our [commit messages convention](#-commit-messages).
+7. [**Create a pull request**](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request): When you are satisfied with your changes, [submit a pull request](https://github.com/Cinnamon/maia/compare) from your forked repository to Maia repository. In the pull request, provide a clear description of your changes and any related issues. For the title of the pull request, please refer to our [commit messages convention](#-commit-messages).
 
-8. **Wait for reviews**: Wait for the maintainers to review your pull request. If everything is okay, your changes will be merged into the Kotaemon project.
+8. **Wait for reviews**: Wait for the maintainers to review your pull request. If everything is okay, your changes will be merged into the Maia project.
 
 ### GitHub Actions CI Tests
 
@@ -68,7 +68,7 @@ All pull requests must pass the [GitHub Actions Continuous Integration (CI)](htt
 
 ## 📥 Opening an Issue
 
-Before [creating an issues](https://github.com/Cinnamon/kotaemon/issues/new/choose), search through existing issues to ensure you are not opening a duplicate. If you are reporting a bug or issue, please provide a reproducible example to help us quickly identify the problem.
+Before [creating an issues](https://github.com/Cinnamon/maia/issues/new/choose), search through existing issues to ensure you are not opening a duplicate. If you are reporting a bug or issue, please provide a reproducible example to help us quickly identify the problem.
 
 ## 📝 Commit Messages
 
@@ -112,4 +112,4 @@ docs(api): update api doc
 
 ## 🧾 License
 
-All contributions will be licensed under the project's license: [Apache License 2.0](https://github.com/Cinnamon/kotaemon/blob/main/LICENSE.txt).
+All contributions will be licensed under the project's license: [Apache License 2.0](https://github.com/Cinnamon/maia/blob/main/LICENSE.txt).

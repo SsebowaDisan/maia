@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Generator, Optional
 
-from kotaemon.base import BaseComponent, Document, Param
+from maia.base import BaseComponent, Document, Param
 
 
 class BaseFileIndexRetriever(BaseComponent):

@@ -5,8 +5,8 @@
 - Clone the repo
 
   ```shell
-  git clone git@github.com:Cinnamon/kotaemon.git
-  cd kotaemon
+  git clone git@github.com:Cinnamon/maia.git
+  cd maia
   ```
 
 - Install the environment
@@ -14,11 +14,11 @@
   - Create a conda environment (python >= 3.10 is recommended)
 
     ```shell
-    conda create -n kotaemon python=3.10
-    conda activate kotaemon
+    conda create -n maia python=3.10
+    conda activate maia
 
     # install dependencies
-    cd libs/kotaemon
+    cd libs/maia
     pip install -e ".[all]"
     ```
 
@@ -44,15 +44,15 @@
 
 ## Package overview
 
-`kotaemon` library focuses on the AI building blocks to implement a RAG-based QA application. It consists of base interfaces, core components and a list of utilities:
+`maia` library focuses on the AI building blocks to implement a RAG-based QA application. It consists of base interfaces, core components and a list of utilities:
 
-- Base interfaces: `kotaemon` defines the base interface of a component in a pipeline. A pipeline is also a component. By clearly define this interface, a pipeline of steps can be easily constructed and orchestrated.
-- Core components: `kotaemon` implements (or wraps 3rd-party libraries
+- Base interfaces: `maia` defines the base interface of a component in a pipeline. A pipeline is also a component. By clearly define this interface, a pipeline of steps can be easily constructed and orchestrated.
+- Core components: `maia` implements (or wraps 3rd-party libraries
   like Langchain, llama-index,... when possible) commonly used components in
-  kotaemon use cases. Some of these components are: LLM, vector store,
+  maia use cases. Some of these components are: LLM, vector store,
   document store, retriever... For a detailed list and description of these
   components, please refer to the [API Reference](../reference/Summary.md) section.
-- List of utilities: `kotaemon` provides utilities and tools that are
+- List of utilities: `maia` provides utilities and tools that are
   usually needed in client project. For example, it provides a prompt
   engineering UI for AI developers in a project to quickly create a prompt
   engineering tool for DMs and QALs. It also provides a command to quickly spin
@@ -61,7 +61,7 @@
 
 ```mermaid
 mindmap
-  root((kotaemon))
+  root((maia))
     Base Interfaces
       Document
       LLMInterface

@@ -1,12 +1,12 @@
 import os
 from typing import List
 
-from kotaemon.base import BaseComponent, Document, LLMInterface, Node, Param, lazy
-from kotaemon.contribs.promptui.logs import ResultLog
-from kotaemon.embeddings import LCAzureOpenAIEmbeddings
-from kotaemon.indices import VectorIndexing, VectorRetrieval
-from kotaemon.llms import LCAzureChatOpenAI
-from kotaemon.storages import ChromaVectorStore, SimpleFileDocumentStore
+from maia.base import BaseComponent, Document, LLMInterface, Node, Param, lazy
+from maia.contribs.promptui.logs import ResultLog
+from maia.embeddings import LCAzureOpenAIEmbeddings
+from maia.indices import VectorIndexing, VectorRetrieval
+from maia.llms import LCAzureChatOpenAI
+from maia.storages import ChromaVectorStore, SimpleFileDocumentStore
 
 
 class QAResultLog(ResultLog):

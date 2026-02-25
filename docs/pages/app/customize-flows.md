@@ -16,7 +16,7 @@ constructed.
 
 ## Define a pipeline as a class
 
-In essence, a pipeline will subclass from `kotaemon.base.BaseComponent`.
+In essence, a pipeline will subclass from `maia.base.BaseComponent`.
 Each pipeline has 2 main parts:
 
 - All declared arguments and sub-pipelines.
@@ -25,7 +25,7 @@ Each pipeline has 2 main parts:
 An example pipeline:
 
 ```python
-from kotaemon.base import BaseComponent
+from maia.base import BaseComponent
 
 
 class SoSimple(BaseComponent):
@@ -80,7 +80,7 @@ The reasoning pipeline:
             history: the chat history [(user_msg1, bot_msg1), (user_msg2, bot_msg2)...]
 
         Returns:
-            kotaemon.base.Document: the final answer
+            maia.base.Document: the final answer
         """
 ```
 
@@ -89,7 +89,7 @@ The reasoning pipeline:
 To register your pipelines to ktem, you declare it in the `flowsettings.py`
 file. This file locates at the current working directory where you start the
 ktem. In most use cases, it is this
-[one](https://github.com/Cinnamon/kotaemon/blob/main/flowsettings.py).
+[one](https://github.com/Cinnamon/maia/blob/main/flowsettings.py).
 
 ```python
 KH_REASONING = ["<python.module.path.to.the.reasoning.class>"]

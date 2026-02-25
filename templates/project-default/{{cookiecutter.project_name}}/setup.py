@@ -7,7 +7,7 @@ setuptools.setup(
     author_email="{{ cookiecutter.ptl }}@cinnamon.is",
     description="Project {{ cookiecutter.project_name }}",
     long_description="Project {{ cookiecutter.project_name }}",
-    url="https://github.com/Cinnamon/kotaemon",
+    url="https://github.com/Cinnamon/maia",
     python_requires=">=3",
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -15,6 +15,6 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     install_requires=[
-        "kotaemon@git+ssh://git@github.com/Cinnamon/kotaemon.git",
+        "maia@git+ssh://git@github.com/Cinnamon/maia.git",
     ],
 )

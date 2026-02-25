@@ -89,10 +89,10 @@ function deactivate_conda_env() {
 }
 
 function install_dependencies() {
-    if pip list 2>/dev/null | grep -q "kotaemon"; then
+    if pip list 2>/dev/null | grep -q "maia"; then
         echo "Requirements are already installed"
     else
-        local kotaemon_root="$(pwd)/libs/kotaemon"
+        local maia_root="$(pwd)/libs/maia"
         local ktem_root="$(pwd)/libs/ktem/"
 
         if [ -f "$(pwd)/VERSION" ]; then
@@ -103,21 +103,21 @@ function install_dependencies() {
 
         if [ -f "pyproject.toml" ]; then
             echo "Found pyproject.toml. Installing from source"
-            echo "" && echo "Installing libs/kotaemon"
-            python -m pip install -e "$kotaemon_root"
+            echo "" && echo "Installing libs/maia"
+            python -m pip install -e "$maia_root"
             echo "" && echo "Installing libs/ktem"
             python -m pip install -e "$ktem_root"
 
             python -m pip install --no-deps -e .
         else
-            echo "Installing Kotaemon $app_version"
+            echo "Installing Maia $app_version"
             # Work around for versioning control
-            python -m pip install "git+https://github.com/Cinnamon/kotaemon.git@$app_version#subdirectory=libs/kotaemon"
-            python -m pip install "git+https://github.com/Cinnamon/kotaemon.git@$app_version#subdirectory=libs/ktem"
-            python -m pip install --no-deps "git+https://github.com/Cinnamon/kotaemon.git@$app_version"
+            python -m pip install "git+https://github.com/Cinnamon/maia.git@$app_version#subdirectory=libs/maia"
+            python -m pip install "git+https://github.com/Cinnamon/maia.git@$app_version#subdirectory=libs/ktem"
+            python -m pip install --no-deps "git+https://github.com/Cinnamon/maia.git@$app_version"
         fi
 
-        if ! pip list 2>/dev/null | grep -q "kotaemon"; then
+        if ! pip list 2>/dev/null | grep -q "maia"; then
             echo "Installation failed. You may need to run the installer again."
             deactivate_conda_env
             exit 1
@@ -217,7 +217,7 @@ download_and_unzip $pdf_js_dist_url $target_pdf_js_dir
 print_highlight "Setting up a local model"
 setup_local_model
 
-print_highlight "Launching Kotaemon in your browser, please wait..."
+print_highlight "Launching Maia in your browser, please wait..."
 launch_ui $target_pdf_js_dir
 
 deactivate_conda_env

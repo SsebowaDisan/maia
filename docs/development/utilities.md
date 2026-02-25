@@ -8,7 +8,7 @@
 
 In the development process, developers typically build the pipeline. However, for use
 cases requiring expertise in prompt creation, non-technical members (testers, domain experts) can be more
-effective. To facilitate this, `kotaemon` offers a user-friendly prompt engineering UI
+effective. To facilitate this, `maia` offers a user-friendly prompt engineering UI
 that developers integrate into their pipelines. This enables non-technical members to
 adjust prompts and parameters, run experiments, and export results for optimization.
 
@@ -22,9 +22,9 @@ As of Sept 2023, there are 2 kinds of prompt engineering UI:
 For simple pipeline, the supported client project workflow looks as follow:
 
 1. [tech] Build pipeline
-2. [tech] Export pipeline to config: `$ kotaemon promptui export <module.path.piplineclass> --output <path/to/config/file.yml>`
+2. [tech] Export pipeline to config: `$ maia promptui export <module.path.piplineclass> --output <path/to/config/file.yml>`
 3. [tech] Customize the config
-4. [tech] Spin up prompt engineering UI: `$ kotaemon promptui run <path/to/config/file.yml>`
+4. [tech] Spin up prompt engineering UI: `$ maia promptui run <path/to/config/file.yml>`
 5. [non-tech] Change params, run inference
 6. [non-tech] Export to Excel
 7. [non-tech] Select the set of params that achieve the best output
@@ -37,7 +37,7 @@ done by the developers, while step 7 happens exclusively in Excel file).
 Command:
 
 ```shell
-$ kotaemon promptui export <module.path.piplineclass> --output <path/to/config/file.yml>
+$ maia promptui export <module.path.piplineclass> --output <path/to/config/file.yml>
 ```
 
 where:
@@ -138,7 +138,7 @@ logs:
 Command:
 
 ```shell
-$ kotaemon promptui run <path/to/config/file.yml>
+$ maia promptui run <path/to/config/file.yml>
 ```
 
 This will generate an UI as follow:

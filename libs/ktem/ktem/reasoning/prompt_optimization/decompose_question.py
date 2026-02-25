@@ -4,8 +4,8 @@ from ktem.llms.manager import llms
 from ktem.reasoning.prompt_optimization.rewrite_question import RewriteQuestionPipeline
 from pydantic import BaseModel, Field
 
-from kotaemon.base import Document, HumanMessage, Node, SystemMessage
-from kotaemon.llms import ChatLLM
+from maia.base import Document, HumanMessage, Node, SystemMessage
+from maia.llms import ChatLLM
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,8 @@ from typing import Optional
 from theflow.settings import settings
 from theflow.utils.modules import deserialize
 
-from kotaemon.base import BaseComponent
-from kotaemon.storages import BaseDocumentStore, BaseVectorStore
+from maia.base import BaseComponent
+from maia.storages import BaseDocumentStore, BaseVectorStore
 
 logger = logging.getLogger(__name__)
 

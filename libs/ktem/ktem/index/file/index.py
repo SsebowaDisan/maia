@@ -12,7 +12,7 @@ from theflow.settings import settings as flowsettings
 from theflow.utils.modules import import_dotted_string
 from tzlocal import get_localzone
 
-from kotaemon.storages import BaseDocumentStore, BaseVectorStore
+from maia.storages import BaseDocumentStore, BaseVectorStore
 
 from .base import BaseFileIndexIndexing, BaseFileIndexRetriever
 

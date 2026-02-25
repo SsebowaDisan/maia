@@ -13,8 +13,8 @@ import pandas as pd
 import plotly.graph_objs as go
 import umap
 
-from kotaemon.base import BaseComponent
-from kotaemon.embeddings import BaseEmbeddings
+from maia.base import BaseComponent
+from maia.embeddings import BaseEmbeddings
 
 VISUALIZATION_SETTINGS = {
     "Original Query": {"color": "red", "opacity": 1, "symbol": "cross", "size": 15},

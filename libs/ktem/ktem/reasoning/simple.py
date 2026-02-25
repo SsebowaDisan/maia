@@ -14,7 +14,7 @@ from ktem.utils.render import Render
 from ktem.utils.visualize_cited import CreateCitationVizPipeline
 from plotly.io import to_json
 
-from kotaemon.base import (
+from maia.base import (
     AIMessage,
     BaseComponent,
     Document,
@@ -23,15 +23,15 @@ from kotaemon.base import (
     RetrievedDocument,
     SystemMessage,
 )
-from kotaemon.indices.qa.citation_qa import (
+from maia.indices.qa.citation_qa import (
     CONTEXT_RELEVANT_WARNING_SCORE,
     DEFAULT_QA_TEXT_PROMPT,
     AnswerWithContextPipeline,
 )
-from kotaemon.indices.qa.citation_qa_inline import AnswerWithInlineCitation
-from kotaemon.indices.qa.format_context import PrepareEvidencePipeline
-from kotaemon.indices.qa.utils import replace_think_tag_with_details
-from kotaemon.llms import ChatLLM
+from maia.indices.qa.citation_qa_inline import AnswerWithInlineCitation
+from maia.indices.qa.format_context import PrepareEvidencePipeline
+from maia.indices.qa.utils import replace_think_tag_with_details
+from maia.llms import ChatLLM
 
 from ..utils import SUPPORTED_LANGUAGE_MAP
 from .base import BaseReasoning

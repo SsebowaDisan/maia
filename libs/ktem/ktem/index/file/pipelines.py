@@ -33,19 +33,20 @@ from sqlalchemy.orm import Session
 from theflow.settings import settings
 from theflow.utils.modules import import_dotted_string
 
-from kotaemon.base import BaseComponent, Document, Node, Param, RetrievedDocument
-from kotaemon.embeddings import BaseEmbeddings
-from kotaemon.indices import VectorIndexing, VectorRetrieval
-from kotaemon.indices.ingests.files import (
+from maia.base import BaseComponent, Document, Node, Param, RetrievedDocument
+from maia.embeddings import BaseEmbeddings
+from maia.indices import VectorIndexing, VectorRetrieval
+from maia.indices.ingests.files import (
     KH_DEFAULT_FILE_EXTRACTORS,
+    KH_OCR_FILE_EXTRACTORS,
     adobe_reader,
     azure_reader,
     docling_reader,
     unstructured,
-    web_reader,
 )
-from kotaemon.indices.rankings import BaseReranking, LLMReranking, LLMTrulensScoring
-from kotaemon.indices.splitters import BaseSplitter, TokenSplitter
+from maia.indices.rankings import BaseReranking, LLMReranking, LLMTrulensScoring
+from maia.indices.splitters import BaseSplitter, TokenSplitter
+from maia.loaders import WebReader
 
 from .base import BaseFileIndexIndexing, BaseFileIndexRetriever
 
@@ -388,6 +389,10 @@ class IndexPipeline(BaseComponent):
         chunk_size = self.chunk_batch_size * 4
         for start_idx in range(0, len(to_index_chunks), chunk_size):
             chunks = to_index_chunks[start_idx : start_idx + chunk_size]
+            yield Document(
+                f" => [{file_name}] Adding {len(chunks)} chunks to doc store",
+                channel="debug",
+            )
             self.handle_chunks_docstore(chunks, file_id)
             n_chunks += len(chunks)
             yield Document(
@@ -401,6 +406,10 @@ class IndexPipeline(BaseComponent):
             chunk_size = self.chunk_batch_size
             for start_idx in range(0, len(to_index_chunks), chunk_size):
                 chunks = to_index_chunks[start_idx : start_idx + chunk_size]
+                yield Document(
+                    f" => [{file_name}] Adding {len(chunks)} chunks to vector store",
+                    channel="debug",
+                )
                 self.handle_chunks_vectorstore(chunks, file_id)
                 n_chunks += len(chunks)
                 if self.VS:
@@ -536,6 +545,15 @@ class IndexPipeline(BaseComponent):
 
         return file_id
 
+    def get_stored_file_path(self, file_id: str) -> Path | None:
+        """Return the persisted file path in index storage for a given file id."""
+        with Session(engine) as session:
+            stmt = select(self.Source.path).where(self.Source.id == file_id)
+            row = session.execute(stmt).first()
+            if not row or not row[0]:
+                return None
+            return self.FSPath / str(row[0])
+
     def finish(self, file_id: str, file_path: str | Path) -> str:
         """Finish the indexing"""
         with Session(engine) as session:
@@ -606,6 +624,7 @@ class IndexPipeline(BaseComponent):
         if isinstance(file_path, Path):
             file_path = file_path.resolve()
 
+        stored_file_path: Path | None = None
         file_id = self.get_id_if_exists(file_path)
 
         if isinstance(file_path, Path):
@@ -625,16 +644,22 @@ class IndexPipeline(BaseComponent):
             else:
                 # add record to db
                 file_id = self.store_file(file_path)
+            stored_file_path = self.get_stored_file_path(file_id)
         else:
             if file_id is not None:
-                raise ValueError(f"URL {file_path} already indexed.")
-            else:
-                # add record to db
-                file_id = self.store_url(file_path)
+                if not reindex:
+                    raise ValueError(f"URL {file_path} already indexed.")
+                yield Document(f" => Removing old {file_path}", channel="debug")
+                self.delete_file(file_id)
+
+            # add record to db
+            file_id = self.store_url(file_path)
 
         # extract the file
         if isinstance(file_path, Path):
             extra_info = default_file_metadata_func(str(file_path))
+            if stored_file_path is not None:
+                extra_info["file_path"] = str(stored_file_path)
             file_name = file_path.name
         else:
             extra_info = {"file_name": file_path}
@@ -669,10 +694,29 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
     reader_mode: str = Param("default", help="The reader mode")
     embedding: BaseEmbeddings
     run_embedding_in_thread: bool = False
+    web_crawl_depth: int = Param(
+        0, help="How many link levels to crawl when indexing a URL. 0 means unlimited."
+    )
+    web_crawl_max_pages: int = Param(
+        0, help="Maximum number of pages to crawl per input URL. 0 means unlimited."
+    )
+    web_crawl_same_domain_only: bool = Param(
+        True, help="Only crawl links that stay on the same domain."
+    )
+    web_crawl_include_pdfs: bool = Param(
+        True, help="Include linked PDF URLs while crawling."
+    )
+    web_crawl_include_images: bool = Param(
+        True, help="Include linked image URLs while crawling."
+    )
 
     @Param.auto(depends_on="reader_mode")
     def readers(self):
-        readers = deepcopy(KH_DEFAULT_FILE_EXTRACTORS)
+        readers = deepcopy(
+            KH_OCR_FILE_EXTRACTORS
+            if self.reader_mode == "ocr"
+            else KH_DEFAULT_FILE_EXTRACTORS
+        )
         print("reader_mode", self.reader_mode)
         if self.reader_mode == "adobe":
             readers[".pdf"] = adobe_reader
@@ -694,6 +738,7 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
                 "value": "default",
                 "choices": [
                     ("Default (open-source)", "default"),
+                    ("OCR (local, scanned/image-first)", "ocr"),
                     ("Adobe API (figure+table extraction)", "adobe"),
                     (
                         "Azure AI Document Intelligence (figure+table extraction)",
@@ -703,10 +748,52 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
                 ],
                 "component": "dropdown",
             },
+            "web_crawl_depth": {
+                "name": "Web crawl depth",
+                "value": 0,
+                "component": "number",
+            },
+            "web_crawl_max_pages": {
+                "name": "Web crawl max pages",
+                "value": 0,
+                "component": "number",
+            },
+            "web_crawl_same_domain_only": {
+                "name": "Web crawl same domain only",
+                "value": True,
+                "component": "checkbox",
+            },
+            "web_crawl_include_pdfs": {
+                "name": "Web crawl include PDFs",
+                "value": True,
+                "component": "checkbox",
+            },
+            "web_crawl_include_images": {
+                "name": "Web crawl include images",
+                "value": True,
+                "component": "checkbox",
+            },
         }
 
     @classmethod
     def get_pipeline(cls, user_settings, index_settings) -> BaseFileIndexIndexing:
+        def _to_int(value, default: int, minimum: int) -> int:
+            try:
+                return max(minimum, int(value))
+            except (TypeError, ValueError):
+                return default
+
+        def _to_bool(value, default: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    return True
+                if lowered in {"0", "false", "no", "off"}:
+                    return False
+            return default
+
         use_quick_index_mode = user_settings.get("quick_index_mode", False)
         print("use_quick_index_mode", use_quick_index_mode)
         obj = cls(
@@ -717,6 +804,19 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
             ],
             run_embedding_in_thread=use_quick_index_mode,
             reader_mode=user_settings.get("reader_mode", "default"),
+            web_crawl_depth=_to_int(user_settings.get("web_crawl_depth", 0), 0, 0),
+            web_crawl_max_pages=_to_int(
+                user_settings.get("web_crawl_max_pages", 0), 0, 0
+            ),
+            web_crawl_same_domain_only=_to_bool(
+                user_settings.get("web_crawl_same_domain_only", True), True
+            ),
+            web_crawl_include_pdfs=_to_bool(
+                user_settings.get("web_crawl_include_pdfs", True), True
+            ),
+            web_crawl_include_images=_to_bool(
+                user_settings.get("web_crawl_include_images", True), True
+            ),
         )
         return obj
 
@@ -738,7 +838,13 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
 
         # check if file_path is a URL
         if self.is_url(file_path):
-            reader = web_reader
+            reader = WebReader(
+                max_depth=self.web_crawl_depth,
+                max_pages=self.web_crawl_max_pages,
+                same_domain_only=self.web_crawl_same_domain_only,
+                include_pdfs=self.web_crawl_include_pdfs,
+                include_images=self.web_crawl_include_images,
+            )
         else:
             assert isinstance(file_path, Path)
             ext = file_path.suffix.lower()
@@ -752,14 +858,18 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
         print(f"Chunk size: {chunk_size}, chunk overlap: {chunk_overlap}")
 
         print("Using reader", reader)
-        pipeline: IndexPipeline = IndexPipeline(
-            loader=reader,
-            splitter=TokenSplitter(
+        splitter = None
+        if chunk_size or chunk_overlap:
+            splitter = TokenSplitter(
                 chunk_size=chunk_size or 1024,
                 chunk_overlap=chunk_overlap or 256,
                 separator="\n\n",
                 backup_separators=["\n", ".", "\u200B"],
-            ),
+            )
+
+        pipeline: IndexPipeline = IndexPipeline(
+            loader=reader,
+            splitter=splitter,
             run_embedding_in_thread=self.run_embedding_in_thread,
             Source=self.Source,
             Index=self.Index,
@@ -817,6 +927,7 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
                         "file_path": file_path,
                         "file_name": file_name,
                         "status": "success",
+                        "file_id": file_id,
                     },
                     channel="index",
                 )
@@ -830,6 +941,7 @@ class IndexDocumentPipeline(BaseFileIndexIndexing):
                         "file_name": file_name,
                         "status": "failed",
                         "message": str(e),
+                        "file_id": None,
                     },
                     channel="index",
                 )

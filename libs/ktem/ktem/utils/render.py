@@ -3,7 +3,7 @@ import os
 import markdown
 from fast_langdetect import detect
 
-from kotaemon.base import RetrievedDocument
+from maia.base import RetrievedDocument
 
 BASE_PATH = os.environ.get("GR_FILE_ROOT_PATH", "")
 

@@ -10,15 +10,15 @@ from ktem.utils.render import Render
 from langchain.text_splitter import CharacterTextSplitter
 from pydantic import BaseModel, Field
 
-from kotaemon.agents import (
+from maia.agents import (
     BaseTool,
     GoogleSearchTool,
     LLMTool,
     RewooAgent,
     WikipediaTool,
 )
-from kotaemon.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
-from kotaemon.llms import ChatLLM, PromptTemplate
+from maia.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
+from maia.llms import ChatLLM, PromptTemplate
 
 from ..utils import SUPPORTED_LANGUAGE_MAP
 

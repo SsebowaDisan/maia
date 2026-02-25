@@ -14,7 +14,7 @@ this_file = getframeinfo(cur_frame).filename
 this_dir = Path(this_file).parent
 
 # change this if your app use a different name
-KH_PACKAGE_NAME = "kotaemon_app"
+KH_PACKAGE_NAME = "maia_app"
 
 KH_APP_VERSION = config("KH_APP_VERSION", None)
 if not KH_APP_VERSION:
@@ -82,24 +82,24 @@ KH_FEATURE_USER_MANAGEMENT_PASSWORD = str(
     config("KH_FEATURE_USER_MANAGEMENT_PASSWORD", default="admin")
 )
 KH_ENABLE_ALEMBIC = False
-KH_DATABASE = f"sqlite:///{KH_USER_DATA_DIR / 'sql.db'}"
+KH_DATABASE = config("KH_DATABASE", default=f"sqlite:///{KH_USER_DATA_DIR / 'sql.db'}")
 KH_FILESTORAGE_PATH = str(KH_USER_DATA_DIR / "files")
 KH_WEB_SEARCH_BACKEND = (
-    "kotaemon.indices.retrievers.tavily_web_search.WebSearch"
-    # "kotaemon.indices.retrievers.jina_web_search.WebSearch"
+    "maia.indices.retrievers.tavily_web_search.WebSearch"
+    # "maia.indices.retrievers.jina_web_search.WebSearch"
 )
 
 KH_DOCSTORE = {
-    # "__type__": "kotaemon.storages.ElasticsearchDocumentStore",
-    # "__type__": "kotaemon.storages.SimpleFileDocumentStore",
-    "__type__": "kotaemon.storages.LanceDBDocumentStore",
+    # "__type__": "maia.storages.ElasticsearchDocumentStore",
+    # "__type__": "maia.storages.SimpleFileDocumentStore",
+    "__type__": "maia.storages.LanceDBDocumentStore",
     "path": str(KH_USER_DATA_DIR / "docstore"),
 }
 KH_VECTORSTORE = {
-    # "__type__": "kotaemon.storages.LanceDBVectorStore",
-    "__type__": "kotaemon.storages.ChromaVectorStore",
-    # "__type__": "kotaemon.storages.MilvusVectorStore",
-    # "__type__": "kotaemon.storages.QdrantVectorStore",
+    # "__type__": "maia.storages.LanceDBVectorStore",
+    "__type__": "maia.storages.ChromaVectorStore",
+    # "__type__": "maia.storages.MilvusVectorStore",
+    # "__type__": "maia.storages.QdrantVectorStore",
     "path": str(KH_USER_DATA_DIR / "vectorstore"),
 }
 KH_LLMS = {}
@@ -113,7 +113,7 @@ if config("AZURE_OPENAI_API_KEY", default="") and config(
     if config("AZURE_OPENAI_CHAT_DEPLOYMENT", default=""):
         KH_LLMS["azure"] = {
             "spec": {
-                "__type__": "kotaemon.llms.AzureChatOpenAI",
+                "__type__": "maia.llms.AzureChatOpenAI",
                 "temperature": 0,
                 "azure_endpoint": config("AZURE_OPENAI_ENDPOINT", default=""),
                 "api_key": config("AZURE_OPENAI_API_KEY", default=""),
@@ -127,7 +127,7 @@ if config("AZURE_OPENAI_API_KEY", default="") and config(
     if config("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT", default=""):
         KH_EMBEDDINGS["azure"] = {
             "spec": {
-                "__type__": "kotaemon.embeddings.AzureOpenAIEmbeddings",
+                "__type__": "maia.embeddings.AzureOpenAIEmbeddings",
                 "azure_endpoint": config("AZURE_OPENAI_ENDPOINT", default=""),
                 "api_key": config("AZURE_OPENAI_API_KEY", default=""),
                 "api_version": config("OPENAI_API_VERSION", default="")
@@ -148,7 +148,7 @@ IS_OPENAI_DEFAULT = len(OPENAI_API_KEY) > 0 and OPENAI_API_KEY != OPENAI_DEFAULT
 if OPENAI_API_KEY:
     KH_LLMS["openai"] = {
         "spec": {
-            "__type__": "kotaemon.llms.ChatOpenAI",
+            "__type__": "maia.llms.ChatOpenAI",
             "temperature": 0,
             "base_url": config("OPENAI_API_BASE", default="")
             or "https://api.openai.com/v1",
@@ -160,7 +160,7 @@ if OPENAI_API_KEY:
     }
     KH_EMBEDDINGS["openai"] = {
         "spec": {
-            "__type__": "kotaemon.embeddings.OpenAIEmbeddings",
+            "__type__": "maia.embeddings.OpenAIEmbeddings",
             "base_url": config("OPENAI_API_BASE", default="https://api.openai.com/v1"),
             "api_key": OPENAI_API_KEY,
             "model": config(
@@ -176,7 +176,7 @@ VOYAGE_API_KEY = config("VOYAGE_API_KEY", default="")
 if VOYAGE_API_KEY:
     KH_EMBEDDINGS["voyageai"] = {
         "spec": {
-            "__type__": "kotaemon.embeddings.VoyageAIEmbeddings",
+            "__type__": "maia.embeddings.VoyageAIEmbeddings",
             "api_key": VOYAGE_API_KEY,
             "model": config("VOYAGE_EMBEDDINGS_MODEL", default="voyage-3-large"),
         },
@@ -184,7 +184,7 @@ if VOYAGE_API_KEY:
     }
     KH_RERANKINGS["voyageai"] = {
         "spec": {
-            "__type__": "kotaemon.rerankings.VoyageAIReranking",
+            "__type__": "maia.rerankings.VoyageAIReranking",
             "model_name": "rerank-2",
             "api_key": VOYAGE_API_KEY,
         },
@@ -194,7 +194,7 @@ if VOYAGE_API_KEY:
 if config("LOCAL_MODEL", default=""):
     KH_LLMS["ollama"] = {
         "spec": {
-            "__type__": "kotaemon.llms.ChatOpenAI",
+            "__type__": "maia.llms.ChatOpenAI",
             "base_url": KH_OLLAMA_URL,
             "model": config("LOCAL_MODEL", default="qwen2.5:7b"),
             "api_key": "ollama",
@@ -203,7 +203,7 @@ if config("LOCAL_MODEL", default=""):
     }
     KH_LLMS["ollama-long-context"] = {
         "spec": {
-            "__type__": "kotaemon.llms.LCOllamaChat",
+            "__type__": "maia.llms.LCOllamaChat",
             "base_url": KH_OLLAMA_URL.replace("v1/", ""),
             "model": config("LOCAL_MODEL", default="qwen2.5:7b"),
             "num_ctx": 8192,
@@ -213,7 +213,7 @@ if config("LOCAL_MODEL", default=""):
 
     KH_EMBEDDINGS["ollama"] = {
         "spec": {
-            "__type__": "kotaemon.embeddings.OpenAIEmbeddings",
+            "__type__": "maia.embeddings.OpenAIEmbeddings",
             "base_url": KH_OLLAMA_URL,
             "model": config("LOCAL_MODEL_EMBEDDINGS", default="nomic-embed-text"),
             "api_key": "ollama",
@@ -222,7 +222,7 @@ if config("LOCAL_MODEL", default=""):
     }
     KH_EMBEDDINGS["fast_embed"] = {
         "spec": {
-            "__type__": "kotaemon.embeddings.FastEmbedEmbeddings",
+            "__type__": "maia.embeddings.FastEmbedEmbeddings",
             "model_name": "BAAI/bge-base-en-v1.5",
         },
         "default": False,
@@ -231,7 +231,7 @@ if config("LOCAL_MODEL", default=""):
 # additional LLM configurations
 KH_LLMS["claude"] = {
     "spec": {
-        "__type__": "kotaemon.llms.chats.LCAnthropicChat",
+        "__type__": "maia.llms.chats.LCAnthropicChat",
         "model_name": "claude-3-5-sonnet-20240620",
         "api_key": "your-key",
     },
@@ -239,7 +239,7 @@ KH_LLMS["claude"] = {
 }
 KH_LLMS["google"] = {
     "spec": {
-        "__type__": "kotaemon.llms.chats.LCGeminiChat",
+        "__type__": "maia.llms.chats.LCGeminiChat",
         "model_name": "gemini-1.5-flash",
         "api_key": GOOGLE_API_KEY,
     },
@@ -247,7 +247,7 @@ KH_LLMS["google"] = {
 }
 KH_LLMS["groq"] = {
     "spec": {
-        "__type__": "kotaemon.llms.ChatOpenAI",
+        "__type__": "maia.llms.ChatOpenAI",
         "base_url": "https://api.groq.com/openai/v1",
         "model": "llama-3.1-8b-instant",
         "api_key": "your-key",
@@ -256,7 +256,7 @@ KH_LLMS["groq"] = {
 }
 KH_LLMS["cohere"] = {
     "spec": {
-        "__type__": "kotaemon.llms.chats.LCCohereChat",
+        "__type__": "maia.llms.chats.LCCohereChat",
         "model_name": "command-r-plus-08-2024",
         "api_key": config("COHERE_API_KEY", default="your-key"),
     },
@@ -264,7 +264,7 @@ KH_LLMS["cohere"] = {
 }
 KH_LLMS["mistral"] = {
     "spec": {
-        "__type__": "kotaemon.llms.ChatOpenAI",
+        "__type__": "maia.llms.ChatOpenAI",
         "base_url": "https://api.mistral.ai/v1",
         "model": "ministral-8b-latest",
         "api_key": config("MISTRAL_API_KEY", default="your-key"),
@@ -275,7 +275,7 @@ KH_LLMS["mistral"] = {
 # additional embeddings configurations
 KH_EMBEDDINGS["cohere"] = {
     "spec": {
-        "__type__": "kotaemon.embeddings.LCCohereEmbeddings",
+        "__type__": "maia.embeddings.LCCohereEmbeddings",
         "model": "embed-multilingual-v3.0",
         "cohere_api_key": config("COHERE_API_KEY", default="your-key"),
         "user_agent": "default",
@@ -284,7 +284,7 @@ KH_EMBEDDINGS["cohere"] = {
 }
 KH_EMBEDDINGS["google"] = {
     "spec": {
-        "__type__": "kotaemon.embeddings.LCGoogleEmbeddings",
+        "__type__": "maia.embeddings.LCGoogleEmbeddings",
         "model": "models/text-embedding-004",
         "google_api_key": GOOGLE_API_KEY,
     },
@@ -292,7 +292,7 @@ KH_EMBEDDINGS["google"] = {
 }
 KH_EMBEDDINGS["mistral"] = {
     "spec": {
-        "__type__": "kotaemon.embeddings.LCMistralEmbeddings",
+        "__type__": "maia.embeddings.LCMistralEmbeddings",
         "model": "mistral-embed",
         "api_key": config("MISTRAL_API_KEY", default="your-key"),
     },
@@ -300,7 +300,7 @@ KH_EMBEDDINGS["mistral"] = {
 }
 # KH_EMBEDDINGS["huggingface"] = {
 #     "spec": {
-#         "__type__": "kotaemon.embeddings.LCHuggingFaceEmbeddings",
+#         "__type__": "maia.embeddings.LCHuggingFaceEmbeddings",
 #         "model_name": "sentence-transformers/all-mpnet-base-v2",
 #     },
 #     "default": False,
@@ -309,7 +309,7 @@ KH_EMBEDDINGS["mistral"] = {
 # default reranking models
 KH_RERANKINGS["cohere"] = {
     "spec": {
-        "__type__": "kotaemon.rerankings.CohereReranking",
+        "__type__": "maia.rerankings.CohereReranking",
         "model_name": "rerank-multilingual-v2.0",
         "cohere_api_key": config("COHERE_API_KEY", default=""),
     },

@@ -3,8 +3,8 @@ from textwrap import dedent
 
 from ktem.llms.manager import llms
 
-from kotaemon.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
-from kotaemon.llms import ChatLLM, PromptTemplate
+from maia.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
+from maia.llms import ChatLLM, PromptTemplate
 
 logger = logging.getLogger(__name__)
 

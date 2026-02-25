@@ -1,6 +1,6 @@
 from typing import Optional
 
-from kotaemon.base import BaseComponent
+from maia.base import BaseComponent
 
 
 class BaseReasoning(BaseComponent):

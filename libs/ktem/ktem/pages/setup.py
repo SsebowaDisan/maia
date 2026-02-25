@@ -206,7 +206,7 @@ class SetupPage(BasePage):
                 llms.update(
                     name="cohere",
                     spec={
-                        "__type__": "kotaemon.llms.chats.LCCohereChat",
+                        "__type__": "maia.llms.chats.LCCohereChat",
                         "model_name": "command-r-plus-08-2024",
                         "api_key": cohere_api_key,
                     },
@@ -215,7 +215,7 @@ class SetupPage(BasePage):
                 embeddings.update(
                     name="cohere",
                     spec={
-                        "__type__": "kotaemon.embeddings.LCCohereEmbeddings",
+                        "__type__": "maia.embeddings.LCCohereEmbeddings",
                         "model": "embed-multilingual-v3.0",
                         "cohere_api_key": cohere_api_key,
                         "user_agent": "default",
@@ -225,7 +225,7 @@ class SetupPage(BasePage):
                 rerankers.update(
                     name="cohere",
                     spec={
-                        "__type__": "kotaemon.rerankings.CohereReranking",
+                        "__type__": "maia.rerankings.CohereReranking",
                         "model_name": "rerank-multilingual-v2.0",
                         "cohere_api_key": cohere_api_key,
                     },
@@ -236,7 +236,7 @@ class SetupPage(BasePage):
                 llms.update(
                     name="openai",
                     spec={
-                        "__type__": "kotaemon.llms.ChatOpenAI",
+                        "__type__": "maia.llms.ChatOpenAI",
                         "base_url": "https://api.openai.com/v1",
                         "model": "gpt-4o",
                         "api_key": openai_api_key,
@@ -247,7 +247,7 @@ class SetupPage(BasePage):
                 embeddings.update(
                     name="openai",
                     spec={
-                        "__type__": "kotaemon.embeddings.OpenAIEmbeddings",
+                        "__type__": "maia.embeddings.OpenAIEmbeddings",
                         "base_url": "https://api.openai.com/v1",
                         "model": "text-embedding-3-large",
                         "api_key": openai_api_key,
@@ -261,7 +261,7 @@ class SetupPage(BasePage):
                 llms.update(
                     name="google",
                     spec={
-                        "__type__": "kotaemon.llms.chats.LCGeminiChat",
+                        "__type__": "maia.llms.chats.LCGeminiChat",
                         "model_name": "gemini-1.5-flash",
                         "api_key": google_api_key,
                     },
@@ -270,7 +270,7 @@ class SetupPage(BasePage):
                 embeddings.update(
                     name="google",
                     spec={
-                        "__type__": "kotaemon.embeddings.LCGoogleEmbeddings",
+                        "__type__": "maia.embeddings.LCGoogleEmbeddings",
                         "model": "models/text-embedding-004",
                         "google_api_key": google_api_key,
                     },
@@ -280,7 +280,7 @@ class SetupPage(BasePage):
             llms.update(
                 name="ollama",
                 spec={
-                    "__type__": "kotaemon.llms.ChatOpenAI",
+                    "__type__": "maia.llms.ChatOpenAI",
                     "base_url": KH_OLLAMA_URL,
                     "model": ollama_model_name,
                     "api_key": "ollama",
@@ -290,7 +290,7 @@ class SetupPage(BasePage):
             embeddings.update(
                 name="ollama",
                 spec={
-                    "__type__": "kotaemon.embeddings.OpenAIEmbeddings",
+                    "__type__": "maia.embeddings.OpenAIEmbeddings",
                     "base_url": KH_OLLAMA_URL,
                     "model": ollama_emb_model_name,
                     "api_key": "ollama",

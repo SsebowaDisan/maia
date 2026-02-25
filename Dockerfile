@@ -41,7 +41,7 @@ COPY .env.example /app/.env
 # Install pip packages
 RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
-    pip install -e "libs/kotaemon" \
+    pip install -e "libs/maia" \
     && pip install -e "libs/ktem" \
     && pip install "pdfservices-sdk@git+https://github.com/niallcm/pdfservices-python-sdk.git@bump-and-unfreeze-requirements"
 
@@ -79,7 +79,7 @@ RUN --mount=type=ssh  \
 # Install additional pip packages
 RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
-    pip install -e "libs/kotaemon[adv]" \
+    pip install -e "libs/maia[adv]" \
     && pip install unstructured[all-docs]
 
 # Install lightRAG

@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+from decouple import config
+
+
+def _bootstrap_local_imports() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("libs/ktem", "libs/maia"):
+        lib_path = root / rel
+        if lib_path.exists():
+            path_str = str(lib_path)
+            if path_str not in sys.path:
+                sys.path.insert(0, path_str)
+
+
+_bootstrap_local_imports()
+
+from ktem.embeddings.manager import embedding_models_manager  # noqa: E402
+from ktem.llms.manager import llms  # noqa: E402
+from ktem.main import App as KtemApp  # noqa: E402
+
+
+@dataclass
+class ApiContext:
+    app: KtemApp
+    default_settings: dict[str, Any]
+
+    def get_index(self, index_id: int | None = None):
+        indices = self.app.index_manager.indices
+        if not indices:
+            raise ValueError("No indices are configured.")
+
+        if index_id is None:
+            return indices[0]
+
+        for index in indices:
+            if index.id == index_id:
+                return index
+
+        raise ValueError(f"Index with id `{index_id}` was not found.")
+
+
+PLACEHOLDER_KEYS = {
+    "",
+    "your-key",
+    "<your_openai_key>",
+    "changeme",
+    "none",
+    "null",
+}
+
+
+def _is_placeholder_api_key(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized in PLACEHOLDER_KEYS
+
+
+def _default_embedding_uses_placeholder_key() -> bool:
+    try:
+        default_name = embedding_models_manager.get_default_name()
+    except Exception:
+        return True
+
+    info = embedding_models_manager.info().get(default_name, {})
+    spec = info.get("spec", {}) if isinstance(info, dict) else {}
+    if not isinstance(spec, dict):
+        return False
+
+    for key in ("api_key", "google_api_key", "cohere_api_key"):
+        if key in spec and _is_placeholder_api_key(spec.get(key)):
+            return True
+    return False
+
+
+def _ensure_local_embedding_default() -> None:
+    # If current default requires an external key but only placeholder values are
+    # configured, switch to a local embedding to keep uploads/indexing functional.
+    if not _default_embedding_uses_placeholder_key():
+        return
+
+    local_name = "fast_embed_local"
+    local_spec = {
+        "__type__": "maia.embeddings.FastEmbedEmbeddings",
+        "model_name": "BAAI/bge-small-en-v1.5",
+    }
+
+    models = embedding_models_manager.options()
+    if local_name not in models:
+        embedding_models_manager.add(name=local_name, spec=local_spec, default=True)
+        return
+
+    existing = embedding_models_manager.info().get(local_name, {})
+    existing_spec = existing.get("spec", {}) if isinstance(existing, dict) else {}
+    embedding_models_manager.update(
+        name=local_name,
+        spec=existing_spec if isinstance(existing_spec, dict) and existing_spec else local_spec,
+        default=True,
+    )
+
+
+def _ensure_openai_llm_default() -> None:
+    env_openai_key = str(config("OPENAI_API_KEY", default="") or "").strip()
+    if _is_placeholder_api_key(env_openai_key):
+        return
+
+    openai_name = "openai"
+    openai_spec = {
+        "__type__": "maia.llms.ChatOpenAI",
+        "temperature": 0,
+        "base_url": str(config("OPENAI_API_BASE", default="https://api.openai.com/v1"))
+        or "https://api.openai.com/v1",
+        "api_key": env_openai_key,
+        "model": str(config("OPENAI_CHAT_MODEL", default="gpt-4o-mini")) or "gpt-4o-mini",
+        "timeout": 20,
+    }
+
+    try:
+        if openai_name not in llms.options():
+            llms.add(name=openai_name, spec=openai_spec, default=True)
+            return
+
+        existing_info = llms.info().get(openai_name, {})
+        existing_spec = existing_info.get("spec", {}) if isinstance(existing_info, dict) else {}
+        merged_spec = dict(existing_spec) if isinstance(existing_spec, dict) else {}
+        merged_spec.update(openai_spec)
+        llms.update(name=openai_name, spec=merged_spec, default=True)
+    except Exception:
+        # Keep API startup resilient even if model pool update fails.
+        return
+
+
+def _ensure_openai_embedding_default() -> None:
+    env_openai_key = str(config("OPENAI_API_KEY", default="") or "").strip()
+    if _is_placeholder_api_key(env_openai_key):
+        return
+
+    openai_name = "openai"
+    openai_spec = {
+        "__type__": "maia.embeddings.OpenAIEmbeddings",
+        "base_url": str(config("OPENAI_API_BASE", default="https://api.openai.com/v1"))
+        or "https://api.openai.com/v1",
+        "api_key": env_openai_key,
+        "model": str(config("OPENAI_EMBEDDINGS_MODEL", default="text-embedding-3-large"))
+        or "text-embedding-3-large",
+        "timeout": 20,
+        "context_length": 8191,
+    }
+
+    try:
+        if openai_name not in embedding_models_manager.options():
+            embedding_models_manager.add(name=openai_name, spec=openai_spec, default=True)
+            return
+
+        existing_info = embedding_models_manager.info().get(openai_name, {})
+        existing_spec = existing_info.get("spec", {}) if isinstance(existing_info, dict) else {}
+        merged_spec = dict(existing_spec) if isinstance(existing_spec, dict) else {}
+        merged_spec.update(openai_spec)
+        embedding_models_manager.update(
+            name=openai_name,
+            spec=merged_spec,
+            default=True,
+        )
+    except Exception:
+        return
+
+
+@lru_cache(maxsize=1)
+def get_context() -> ApiContext:
+    _ensure_openai_llm_default()
+    _ensure_openai_embedding_default()
+    _ensure_local_embedding_default()
+    app = KtemApp()
+    default_settings = app.default_settings.flatten()
+    return ApiContext(app=app, default_settings=default_settings)

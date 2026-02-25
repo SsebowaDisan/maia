@@ -16,7 +16,7 @@ function run() {
   // set favicon attributes
   favicon.rel = "icon";
   favicon.type = "image/svg+xml";
-  favicon.href = "/favicon.ico";
+  favicon.href = `/favicon.ico?v=${Date.now()}`;
   document.head.appendChild(favicon);
 
   // setup conversation dropdown placeholder

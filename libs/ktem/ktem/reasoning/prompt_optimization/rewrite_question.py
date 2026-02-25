@@ -1,7 +1,7 @@
 from ktem.llms.manager import llms
 
-from kotaemon.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
-from kotaemon.llms import ChatLLM, PromptTemplate
+from maia.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
+from maia.llms import ChatLLM, PromptTemplate
 
 DEFAULT_REWRITE_PROMPT = (
     "Given the following question, rephrase and expand it "

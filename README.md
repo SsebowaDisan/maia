@@ -1,30 +1,30 @@
 <div align="center">
 
-# kotaemon
+# maia
 
 An open-source clean & customizable RAG UI for chatting with your documents. Built with both end users and
 developers in mind.
 
-![Preview](https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/preview-graph.png)
+![Preview](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/preview-graph.png)
 
-<a href="https://trendshift.io/repositories/11607" target="_blank"><img src="https://trendshift.io/api/badge/repositories/11607" alt="Cinnamon%2Fkotaemon | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/11607" target="_blank"><img src="https://trendshift.io/api/badge/repositories/11607" alt="Cinnamon%2Fmaia | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-[Live Demo #1](https://huggingface.co/spaces/cin-model/kotaemon) |
-[Live Demo #2](https://huggingface.co/spaces/cin-model/kotaemon-demo) |
-[Online Install](https://cinnamon.github.io/kotaemon/online_install/) |
+[Live Demo #1](https://huggingface.co/spaces/cin-model/maia) |
+[Live Demo #2](https://huggingface.co/spaces/cin-model/maia-demo) |
+[Online Install](https://cinnamon.github.io/maia/online_install/) |
 [Colab Notebook (Local RAG)](https://colab.research.google.com/drive/1eTfieec_UOowNizTJA1NjawBJH9y_1nn)
 
-[User Guide](https://cinnamon.github.io/kotaemon/) |
-[Developer Guide](https://cinnamon.github.io/kotaemon/development/) |
-[Feedback](https://github.com/Cinnamon/kotaemon/issues) |
-[Contact](mailto:kotaemon.support@cinnamon.is)
+[User Guide](https://cinnamon.github.io/maia/) |
+[Developer Guide](https://cinnamon.github.io/maia/development/) |
+[Feedback](https://github.com/Cinnamon/maia/issues) |
+[Contact](mailto:maia.support@cinnamon.is)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-31013/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-<a href="https://github.com/Cinnamon/kotaemon/pkgs/container/kotaemon" target="_blank">
-<img src="https://img.shields.io/badge/docker_pull-kotaemon:latest-brightgreen" alt="docker pull ghcr.io/cinnamon/kotaemon:latest"></a>
-![download](https://img.shields.io/github/downloads/Cinnamon/kotaemon/total.svg?label=downloads&color=blue)
-<a href='https://huggingface.co/spaces/cin-model/kotaemon-demo'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue'></a>
+<a href="https://github.com/Cinnamon/maia/pkgs/container/maia" target="_blank">
+<img src="https://img.shields.io/badge/docker_pull-maia:latest-brightgreen" alt="docker pull ghcr.io/cinnamon/maia:latest"></a>
+![download](https://img.shields.io/github/downloads/Cinnamon/maia/total.svg?label=downloads&color=blue)
+<a href='https://huggingface.co/spaces/cin-model/maia-demo'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue'></a>
 <a href="https://hellogithub.com/en/repository/d3141471a0244d5798bc654982b263eb" target="_blank"><img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=d3141471a0244d5798bc654982b263eb&claim_uid=RLiD9UZ1rEHNaMf&theme=small" alt="Featured｜HelloGitHub" /></a>
 
 </div>
@@ -39,13 +39,13 @@ documents and developers who want to build their own RAG pipeline.
 
 ```yml
 +----------------------------------------------------------------------------+
-| End users: Those who use apps built with `kotaemon`.                       |
+| End users: Those who use apps built with `maia`.                       |
 | (You use an app like the one in the demo above)                            |
 |     +----------------------------------------------------------------+     |
-|     | Developers: Those who built with `kotaemon`.                   |     |
-|     | (You have `import kotaemon` somewhere in your project)         |     |
+|     | Developers: Those who built with `maia`.                   |     |
+|     | (You have `import maia` somewhere in your project)         |     |
 |     |     +----------------------------------------------------+     |     |
-|     |     | Contributors: Those who make `kotaemon` better.    |     |     |
+|     |     | Contributors: Those who make `maia` better.    |     |     |
 |     |     | (You make PR to this repo)                         |     |     |
 |     |     +----------------------------------------------------+     |     |
 |     +----------------------------------------------------------------+     |
@@ -62,7 +62,7 @@ documents and developers who want to build their own RAG pipeline.
 
 - **Framework for RAG Pipelines**: Tools to build your own RAG-based document QA pipeline.
 - **Customizable UI**: See your RAG pipeline in action with the provided UI, built with <a href='https://github.com/gradio-app/gradio'>Gradio <img src='https://img.shields.io/github/stars/gradio-app/gradio'></a>.
-- **Gradio Theme**: If you use Gradio for development, check out our theme here: [kotaemon-gradio-theme](https://github.com/lone17/kotaemon-gradio-theme).
+- **Gradio Theme**: If you use Gradio for development, check out our theme here: [maia-gradio-theme](https://github.com/lone17/maia-gradio-theme).
 
 ## Key Features
 
@@ -82,11 +82,11 @@ documents and developers who want to build their own RAG pipeline.
 
 - **Extensible**: Being built on Gradio, you are free to customize or add any UI elements as you like. Also, we aim to support multiple strategies for document indexing & retrieval. `GraphRAG` indexing pipeline is provided as an example.
 
-![Preview](https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/preview.png)
+![Preview](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/preview.png)
 
 ## Installation
 
-> If you are not a developer and just want to use the app, please check out our easy-to-follow [User Guide](https://cinnamon.github.io/kotaemon/). Download the `.zip` file from the [latest release](https://github.com/Cinnamon/kotaemon/releases/latest) to get all the newest features and bug fixes.
+> If you are not a developer and just want to use the app, please check out our easy-to-follow [User Guide](https://cinnamon.github.io/maia/). Download the `.zip` file from the [latest release](https://github.com/Cinnamon/maia/releases/latest) to get all the newest features and bug fixes.
 
 ### System requirements
 
@@ -106,21 +106,21 @@ documents and developers who want to build their own RAG pipeline.
      -e GRADIO_SERVER_PORT=7860 \
      -v ./ktem_app_data:/app/ktem_app_data \
      -p 7860:7860 -it --rm \
-     ghcr.io/cinnamon/kotaemon:main-full
+     ghcr.io/cinnamon/maia:main-full
      ```
 
    - To use the `full` version with bundled **Ollama** for _local / private RAG_.
 
      ```bash
      # change image name to
-     docker run <...> ghcr.io/cinnamon/kotaemon:main-ollama
+     docker run <...> ghcr.io/cinnamon/maia:main-ollama
      ```
 
    - To use the `lite` version.
 
    ```bash
     # change image name to
-    docker run <...> ghcr.io/cinnamon/kotaemon:main-lite
+    docker run <...> ghcr.io/cinnamon/maia:main-lite
    ```
 
 2. We currently support and test two platforms: `linux/amd64` and `linux/arm64` (for newer Mac). You can specify the platform by passing `--platform` in the `docker run` command. For example:
@@ -133,12 +133,12 @@ documents and developers who want to build their own RAG pipeline.
    -v ./ktem_app_data:/app/ktem_app_data \
    -p 7860:7860 -it --rm \
    --platform linux/arm64 \
-   ghcr.io/cinnamon/kotaemon:main-lite
+   ghcr.io/cinnamon/maia:main-lite
    ```
 
 3. Once everything is set up correctly, you can go to `http://localhost:7860/` to access the WebUI.
 
-4. We use [GHCR](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) to store docker images, all images can be found [here.](https://github.com/Cinnamon/kotaemon/pkgs/container/kotaemon)
+4. We use [GHCR](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) to store docker images, all images can be found [here.](https://github.com/Cinnamon/maia/pkgs/container/maia)
 
 ### Without Docker
 
@@ -146,14 +146,14 @@ documents and developers who want to build their own RAG pipeline.
 
    ```shell
    # optional (setup env)
-   conda create -n kotaemon python=3.10
-   conda activate kotaemon
+   conda create -n maia python=3.10
+   conda activate maia
 
    # clone this repo
-   git clone https://github.com/Cinnamon/kotaemon
-   cd kotaemon
+   git clone https://github.com/Cinnamon/maia
+   cd maia
 
-   pip install -e "libs/kotaemon[all]"
+   pip install -e "libs/maia[all]"
    pip install -e "libs/ktem"
    ```
 
@@ -163,7 +163,7 @@ documents and developers who want to build their own RAG pipeline.
 
 3. (Optional) To enable in-browser `PDF_JS` viewer, download [PDF_JS_DIST](https://github.com/mozilla/pdf.js/releases/download/v4.0.379/pdfjs-4.0.379-dist.zip) then extract it to `libs/ktem/ktem/assets/prebuilt`
 
-<img src="https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/pdf-viewer-setup.png" alt="pdf-setup" width="300">
+<img src="https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/pdf-viewer-setup.png" alt="pdf-setup" width="300">
 
 4. Start the web server:
 
@@ -174,7 +174,7 @@ documents and developers who want to build their own RAG pipeline.
    - The app will be automatically launched in your browser.
    - Default username and password are both `admin`. You can set up additional users directly through the UI.
 
-   ![Chat tab](https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/chat-tab.png)
+   ![Chat tab](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/chat-tab.png)
 
 5. Check the `Resources` tab and `LLMs and Embeddings` and ensure that your `api_key` value is set correctly from your `.env` file. If it is not set, you can set it there.
 
@@ -182,16 +182,16 @@ documents and developers who want to build their own RAG pipeline.
 
 > [!NOTE]
 > Official MS GraphRAG indexing only works with OpenAI or Ollama API.
-> We recommend most users to use NanoGraphRAG implementation for straightforward integration with Kotaemon.
+> We recommend most users to use NanoGraphRAG implementation for straightforward integration with Maia.
 
 <details>
 
 <summary>Setup Nano GRAPHRAG</summary>
 
 - Install nano-GraphRAG: `pip install nano-graphrag`
-- `nano-graphrag` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/kotaemon/issues/440)
+- `nano-graphrag` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/maia/issues/440)
   - To quickly fix: `pip uninstall hnswlib chroma-hnswlib && pip install chroma-hnswlib`
-- Launch Kotaemon with `USE_NANO_GRAPHRAG=true` environment variable.
+- Launch Maia with `USE_NANO_GRAPHRAG=true` environment variable.
 - Set your default LLM & Embedding models in Resources setting and it will be recognized automatically from NanoGraphRAG.
 
 </details>
@@ -201,9 +201,9 @@ documents and developers who want to build their own RAG pipeline.
 <summary>Setup LIGHTRAG</summary>
 
 - Install LightRAG: `pip install git+https://github.com/HKUDS/LightRAG.git`
-- `LightRAG` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/kotaemon/issues/440)
+- `LightRAG` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/maia/issues/440)
   - To quickly fix: `pip uninstall hnswlib chroma-hnswlib && pip install chroma-hnswlib`
-- Launch Kotaemon with `USE_LIGHTRAG=true` environment variable.
+- Launch Maia with `USE_LIGHTRAG=true` environment variable.
 - Set your default LLM & Embedding models in Resources setting and it will be recognized automatically from LightRAG.
 
 </details>
@@ -332,7 +332,7 @@ This file provides another way to configure your models and credentials.
 
       - Set the model names on web UI and make it as default:
 
-        ![Models](https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/models.png)
+        ![Models](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/models.png)
 
     - Using `GGUF` with `llama-cpp-python`
 
@@ -373,28 +373,28 @@ This file provides another way to configure your models and credentials.
 Please cite this project as
 
 ```BibTeX
-@misc{kotaemon2024,
-    title = {Kotaemon - An open-source RAG-based tool for chatting with any content.},
-    author = {The Kotaemon Team},
+@misc{maia2024,
+    title = {Maia - An open-source RAG-based tool for chatting with any content.},
+    author = {The Maia Team},
     year = {2024},
-    howpublished = {\url{https://github.com/Cinnamon/kotaemon}},
+    howpublished = {\url{https://github.com/Cinnamon/maia}},
 }
 ```
 
 ## Star History
 
-<a href="https://star-history.com/#Cinnamon/kotaemon&Date">
+<a href="https://star-history.com/#Cinnamon/maia&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Cinnamon/kotaemon&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Cinnamon/kotaemon&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Cinnamon/kotaemon&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Cinnamon/maia&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Cinnamon/maia&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Cinnamon/maia&type=Date" />
  </picture>
 </a>
 
 ## Contribution
 
-Since our project is actively being developed, we greatly value your feedback and contributions. Please see our [Contributing Guide](https://github.com/Cinnamon/kotaemon/blob/main/CONTRIBUTING.md) to get started. Thank you to all our contributors!
+Since our project is actively being developed, we greatly value your feedback and contributions. Please see our [Contributing Guide](https://github.com/Cinnamon/maia/blob/main/CONTRIBUTING.md) to get started. Thank you to all our contributors!
 
-<a href="https://github.com/Cinnamon/kotaemon/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Cinnamon/kotaemon" />
+<a href="https://github.com/Cinnamon/maia/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Cinnamon/maia" />
 </a>

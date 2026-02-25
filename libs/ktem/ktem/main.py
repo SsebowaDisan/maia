@@ -26,7 +26,7 @@ def toggle_first_setup_visibility():
 
 
 class App(BaseApp):
-    """The main app of Kotaemon
+    """The main app of Maia
 
     The main application contains app-level information:
         - setting state
@@ -48,7 +48,7 @@ class App(BaseApp):
                 from ktem.pages.login import LoginPage
 
                 with gr.Tab(
-                    "Welcome", elem_id="login-tab", id="login-tab"
+                    "Maia", elem_id="login-tab", id="login-tab"
                 ) as self._tabs["login-tab"]:
                     self.login_page = LoginPage(self)
 

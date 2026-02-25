@@ -7,8 +7,8 @@ from typing import Optional, Sequence
 import requests
 import yaml
 
-from kotaemon.base import RetrievedDocument
-from kotaemon.indices.rankings import BaseReranking, LLMReranking, LLMTrulensScoring
+from maia.base import RetrievedDocument
+from maia.indices.rankings import BaseReranking, LLMReranking, LLMTrulensScoring
 
 from ..pipelines import BaseFileIndexRetriever, IndexDocumentPipeline, IndexPipeline
 

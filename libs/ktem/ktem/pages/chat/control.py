@@ -51,7 +51,7 @@ class ConversationControl(BasePage):
 
     def on_building_ui(self):
         with gr.Row():
-            title_text = "Conversations" if not KH_DEMO_MODE else "Kotaemon Papers"
+            title_text = "Conversation" if not KH_DEMO_MODE else "Maia Papers"
             gr.Markdown("## {}".format(title_text))
             self.btn_toggle_dark_mode = gr.Button(
                 value="",
@@ -99,7 +99,7 @@ class ConversationControl(BasePage):
             elem_id="conversation-dropdown",
         )
 
-        with gr.Row() as self._new_delete:
+        with gr.Row(elem_id="conversation-actions") as self._new_delete:
             self.cb_suggest_chat = gr.Checkbox(
                 value=False,
                 label="Suggest chat",
@@ -125,6 +125,7 @@ class ConversationControl(BasePage):
                     scale=1,
                     size="sm",
                     elem_classes=["no-background", "body-text-color"],
+                    elem_id="rename-conv-button",
                 )
                 self.btn_del = gr.Button(
                     value="",
@@ -133,6 +134,7 @@ class ConversationControl(BasePage):
                     scale=1,
                     size="sm",
                     elem_classes=["no-background", "body-text-color"],
+                    elem_id="delete-conv-button",
                 )
                 self.btn_new = gr.Button(
                     value="",

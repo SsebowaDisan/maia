@@ -10,10 +10,10 @@ from ktem.reasoning.prompt_optimization.rewrite_question import (
 )
 from theflow.settings import settings as flowsettings
 
-from kotaemon.base import AIMessage, Document, HumanMessage, Node, SystemMessage
-from kotaemon.embeddings import BaseEmbeddings
-from kotaemon.llms import ChatLLM
-from kotaemon.storages import BaseDocumentStore, BaseVectorStore
+from maia.base import AIMessage, Document, HumanMessage, Node, SystemMessage
+from maia.embeddings import BaseEmbeddings
+from maia.llms import ChatLLM
+from maia.storages import BaseDocumentStore, BaseVectorStore
 
 
 class FewshotRewriteQuestionPipeline(RewriteQuestionPipeline):

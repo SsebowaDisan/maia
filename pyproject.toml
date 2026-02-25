@@ -13,13 +13,13 @@ dirty_template = "{tag}"
 tag_filter = "v?\\d+(\\.\\d+)*.*"
 
 [project]
-name = "kotaemon-app"
+name = "maia-app"
 dynamic = ["version"]
 requires-python = ">= 3.10"
-description = "Kotaemon App"
+description = "Maia App"
 dependencies = [
-    "kotaemon @ git+https://github.com/Cinnamon/kotaemon.git@main#subdirectory=libs/kotaemon",
-    "ktem @ git+https://github.com/Cinnamon/kotaemon.git@main#subdirectory=libs/ktem"
+    "maia @ git+https://github.com/Cinnamon/maia.git@main#subdirectory=libs/maia",
+    "ktem @ git+https://github.com/Cinnamon/maia.git@main#subdirectory=libs/ktem"
 ]
 authors = [
     { name = "@trducng", email = "john@cinnamon.is" },
@@ -33,9 +33,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://cinnamon.github.io/kotaemon/"
-Repository = "https://github.com/Cinnamon/kotaemon/"
-Documentation = "https://cinnamon.github.io/kotaemon/"
+Homepage = "https://cinnamon.github.io/maia/"
+Repository = "https://github.com/Cinnamon/maia/"
+Documentation = "https://cinnamon.github.io/maia/"
 
 [tool.codespell]
 skip = "*.js,*.css,*.map"
@@ -45,4 +45,4 @@ quiet-level = 3
 check-filenames = ""
 
 [tool.isort]
-known_first_party = ["kotaemon"]
+known_first_party = ["maia"]

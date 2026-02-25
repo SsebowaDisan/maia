@@ -20,8 +20,8 @@ from tenacity import (
 )
 from theflow.settings import settings
 
-from kotaemon.base import Document, Param, RetrievedDocument
-from kotaemon.base.schema import AIMessage, HumanMessage, SystemMessage
+from maia.base import Document, Param, RetrievedDocument
+from maia.base.schema import AIMessage, HumanMessage, SystemMessage
 
 from ..pipelines import BaseFileIndexRetriever
 from .pipelines import GraphRAGIndexingPipeline

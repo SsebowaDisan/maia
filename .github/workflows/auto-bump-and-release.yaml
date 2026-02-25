@@ -29,23 +29,23 @@ jobs:
         if: ${{ steps.update-version.outputs.new_tag != steps.update-version.outputs.old_tag }}
         run: |
           echo Create release folder
-          mkdir kotaemon-app
-          echo ${{ steps.update-version.outputs.new_tag }} > kotaemon-app/VERSION
-          cp LICENSE.txt kotaemon-app/
-          cp flowsettings.py kotaemon-app/
-          cp app.py kotaemon-app/
-          cp .env.example kotaemon-app/.env
-          cp -r scripts kotaemon-app/
-          mkdir -p kotaemon-app/libs/ktem/ktem/
-          cp -r libs/ktem/ktem/assets kotaemon-app/libs/ktem/ktem/
+          mkdir maia-app
+          echo ${{ steps.update-version.outputs.new_tag }} > maia-app/VERSION
+          cp LICENSE.txt maia-app/
+          cp flowsettings.py maia-app/
+          cp app.py maia-app/
+          cp .env.example maia-app/.env
+          cp -r scripts maia-app/
+          mkdir -p maia-app/libs/ktem/ktem/
+          cp -r libs/ktem/ktem/assets maia-app/libs/ktem/ktem/
 
-          tree kotaemon-app
-          zip -r kotaemon-app.zip kotaemon-app
+          tree maia-app
+          zip -r maia-app.zip maia-app
       - name: Release ${{ steps.update-version.outputs.new_tag }}
         if: ${{ steps.update-version.outputs.new_tag != steps.update-version.outputs.old_tag }}
         uses: softprops/action-gh-release@v2
         with:
-          files: kotaemon-app.zip
+          files: maia-app.zip
           fail_on_unmatched_files: true
           token: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true

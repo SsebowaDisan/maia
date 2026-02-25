@@ -3,172 +3,193 @@ from typing import Iterable
 from gradio.themes import Soft
 from gradio.themes.utils import colors, fonts, sizes
 
-gray = colors.Color(
-    name="dark",
-    c50="#f9fafb",
-    c100="#edeef0",
-    c200="#e1e2e6",
-    c300="#d5d6dd",
-    c400="#cacbd5",
-    c500="#acadb7",
-    c600="#313138",
-    c700="#25252b",
-    c800="#19191e",
-    c900="#0d0d11",
-    c950="#010104",
+apple_gray = colors.Color(
+    name="apple_gray",
+    c50="#f5f5f7",
+    c100="#ebebed",
+    c200="#e3e3e6",
+    c300="#d2d2d7",
+    c400="#b7b7bf",
+    c500="#86868b",
+    c600="#6e6e73",
+    c700="#515154",
+    c800="#2f2f32",
+    c900="#1d1d1f",
+    c950="#111113",
 )
 
-err_txt = "#f05656"
-gradient = "linear-gradient(90deg, *primary_400 20%, *secondary_500 80%)"
-gradient_muted = "linear-gradient(90deg, *primary_500 20%, *secondary_600 80%)"
+apple_blue = colors.Color(
+    name="apple_blue",
+    c50="#eff6ff",
+    c100="#dbeafe",
+    c200="#bfdbfe",
+    c300="#93c5fd",
+    c400="#60a5fa",
+    c500="#0071e3",
+    c600="#005cc8",
+    c700="#004aa5",
+    c800="#003b85",
+    c900="#002f6a",
+    c950="#00214a",
+)
 
-err_dark = "rgba(228, 98, 98, 1)"
-err_dark_muted = "rgba(228, 98, 98, 0.75)"
+apple_slate = colors.Color(
+    name="apple_slate",
+    c50="#f8fafc",
+    c100="#f1f5f9",
+    c200="#e2e8f0",
+    c300="#cbd5e1",
+    c400="#94a3b8",
+    c500="#64748b",
+    c600="#475569",
+    c700="#334155",
+    c800="#1e293b",
+    c900="#0f172a",
+    c950="#020617",
+)
 
-err = "rgba(255, 93, 93, 1)"
-err_muted = "rgba(237, 80, 80, 1)"
+surface_shadow = "0 1px 2px rgba(15,23,42,0.04), 0 14px 36px rgba(15,23,42,0.08)"
+surface_shadow_lg = (
+    "0 1px 2px rgba(15,23,42,0.06), 0 20px 44px rgba(15,23,42,0.14)"
+)
 
+err = "#d92d20"
+err_hover = "#b42318"
+err_dark = "#ff6961"
+err_dark_hover = "#ff847d"
 
 common = dict(
-    # element colours
-    color_accent="*primary_400",
-    # shadows
-    shadow_drop="0 0px 5px 1px rgb(0 0 0 / 0.05)",
-    shadow_drop_lg="0 0 10px 3px rgba(0 0 0 / 0.06)",
-    # layout atoms
-    block_label_margin="*spacing_xl",
-    block_label_padding="*spacing_xl",
+    color_accent="*primary_500",
+    shadow_drop=surface_shadow,
+    shadow_drop_lg=surface_shadow_lg,
+    block_label_margin="*spacing_lg",
+    block_label_padding="*spacing_lg",
     block_label_shadow="none",
-    layout_gap="*spacing_xxl",
+    layout_gap="*spacing_lg",
     section_header_text_size="*text_lg",
-    # buttons
     button_shadow="none",
-    button_shadow_active="*shadow_drop",
+    button_shadow_active="none",
     button_shadow_hover="none",
-    # button_large_radius="*radius_xxl",
-    # button_small_radius="*radius_xxl",
-    # -----
 )
+
 dark_mode = dict(
-    # body attributes
-    body_text_color_subdued_dark="*neutral_300",
-    # element colours
-    background_fill_secondary_dark="*neutral_950",
+    body_text_color_subdued_dark="*neutral_400",
+    background_fill_secondary_dark="#141416",
     border_color_accent_dark="rgba(255,255,255,0)",
-    border_color_primary_dark="*neutral_600",
-    color_accent_soft_dark="*secondary_400",
-    # text
-    link_text_color_dark="*secondary_200",
-    link_text_color_active_dark="*secondary_300",
-    link_text_color_visited_dark="*secondary_400",
-    # layout atoms
-    block_label_background_fill_dark="*neutral_800",
+    border_color_primary_dark="#2a2a2e",
+    color_accent_soft_dark="#1f2a44",
+    link_text_color_dark="*primary_300",
+    link_text_color_active_dark="*primary_200",
+    link_text_color_visited_dark="*primary_400",
+    block_label_background_fill_dark="#1c1c1f",
     block_label_border_width_dark="0px",
-    block_label_text_color_dark="*primary_200",
+    block_label_text_color_dark="#f5f5f7",
     block_shadow_dark="none",
-    block_title_text_color_dark="*primary_200",
+    block_title_text_color_dark="#f5f5f7",
     panel_border_width_dark="0px",
-    # component atoms
-    checkbox_background_color_selected_dark="*primary_400",
-    checkbox_border_color_focus_dark="*primary_400",
+    checkbox_background_color_selected_dark="*primary_500",
+    checkbox_border_color_focus_dark="*primary_500",
     checkbox_border_color_selected_dark="*primary_500",
-    checkbox_label_background_fill_selected_dark="*primary_200",
-    checkbox_label_text_color_selected_dark="*neutral_700",
+    checkbox_label_background_fill_selected_dark="#273554",
+    checkbox_label_text_color_selected_dark="#f5f5f7",
     error_border_color_dark=err_dark,
-    error_text_color_dark="*neutral_100",
+    error_text_color_dark="#fff5f5",
     error_icon_color_dark=err_dark,
-    input_background_fill_dark="*neutral_600",
-    input_border_color_dark="*input_background_fill",
-    input_border_color_focus_dark="*input_background_fill",
-    input_placeholder_color_dark="*neutral_500",
-    loader_color_dark="*primary_200",
-    slider_color_dark="*primary_300",
-    stat_background_fill_dark="*secondary_100",
-    table_border_color_dark="*neutral_800",
-    table_even_background_fill_dark="*neutral_900",
-    table_odd_background_fill_dark="*neutral_800",
-    table_row_focus_dark="*neutral_600",
-    # buttons
-    button_primary_background_fill_dark=gradient,
-    button_primary_background_fill_hover_dark=gradient_muted,
-    button_secondary_background_fill_hover_dark="*neutral_700",
+    input_background_fill_dark="#1f1f23",
+    input_border_color_dark="#34343a",
+    input_border_color_focus_dark="#4a4a52",
+    input_placeholder_color_dark="#8a8a94",
+    loader_color_dark="*primary_300",
+    slider_color_dark="*primary_400",
+    stat_background_fill_dark="#1f2734",
+    table_border_color_dark="#2a2a2e",
+    table_even_background_fill_dark="#141416",
+    table_odd_background_fill_dark="#1b1b1f",
+    table_row_focus_dark="#25252b",
+    button_primary_background_fill_dark="*primary_500",
+    button_primary_background_fill_hover_dark="*primary_600",
+    button_secondary_background_fill_dark="#242429",
+    button_secondary_background_fill_hover_dark="#2d2d33",
     button_cancel_background_fill_dark=err_dark,
-    button_cancel_background_fill_hover_dark=err_dark_muted,
+    button_cancel_background_fill_hover_dark=err_dark_hover,
 )
+
 light_mode = dict(
-    background_fill_primary="*neutral_50",
-    background_fill_secondary="*neutral_50",
-    # body attributes
-    body_background_fill="*background_fill_primary",
-    body_text_color_subdued="*neutral_600",
+    background_fill_primary="#f5f5f7",
+    background_fill_secondary="#f5f5f7",
+    body_background_fill="#f5f5f7",
+    body_text_color_subdued="*neutral_500",
     border_color_accent="rgba(255,255,255,0)",
-    border_color_primary="*neutral_300",
-    color_accent_soft="*secondary_100",
-    # text
-    link_text_color="*secondary_400",
-    link_text_color_visited="*secondary_700",
-    # layout atoms
+    border_color_primary="#d2d2d7",
+    color_accent_soft="#eef4ff",
+    link_text_color="*primary_500",
+    link_text_color_visited="*primary_700",
     block_label_border_width="0px",
-    block_label_background_fill="white",
-    block_label_text_color="*primary_600",
+    block_label_background_fill="#ffffff",
+    block_label_text_color="#1d1d1f",
     block_shadow="none",
-    block_title_text_color="*primary_600",
+    block_title_text_color="#1d1d1f",
     panel_border_width="0px",
-    # component atoms
-    checkbox_background_color_selected="*primary_400",
-    checkbox_border_color_focus="*primary_400",
-    checkbox_border_color_selected="*primary_400",
-    checkbox_label_border_color="*primary_200",
-    error_background_fill="*background_fill_primary",
-    error_border_color=err_muted,
-    error_text_color="*neutral_800",
-    input_background_fill="*neutral_200",
-    input_border_color="*input_background_fill",
-    input_border_color_focus="*input_background_fill",
-    input_placeholder_color="*neutral_500",
-    loader_color="*primary_300",
-    slider_color="*primary_400",
-    stat_background_fill="*secondary_300",
-    table_even_background_fill="*neutral_100",
-    table_odd_background_fill="*neutral_300",
-    table_row_focus="*secondary_200",
-    # buttons
-    button_primary_background_fill=gradient_muted,
-    button_primary_background_fill_hover=gradient,
-    button_secondary_background_fill="*neutral_300",
-    button_secondary_background_fill_hover="*neutral_100",
-    button_cancel_background_fill=err_muted,
-    button_cancel_background_fill_hover=err,
-    button_cancel_text_color="*neutral_50",
+    checkbox_background_color_selected="*primary_500",
+    checkbox_border_color_focus="*primary_500",
+    checkbox_border_color_selected="*primary_500",
+    checkbox_label_border_color="#bfd4ff",
+    error_background_fill="#fff7f6",
+    error_border_color=err,
+    error_text_color="#3d0c02",
+    input_background_fill="#ffffff",
+    input_border_color="#d2d2d7",
+    input_border_color_focus="#a7a7af",
+    input_placeholder_color="#8a8a94",
+    loader_color="*primary_500",
+    slider_color="*primary_500",
+    stat_background_fill="#eef4ff",
+    table_even_background_fill="#ffffff",
+    table_odd_background_fill="#f5f5f7",
+    table_row_focus="#eef4ff",
+    button_primary_background_fill="*primary_500",
+    button_primary_background_fill_hover="*primary_600",
+    button_secondary_background_fill="#f5f5f7",
+    button_secondary_background_fill_hover="#ebebed",
+    button_cancel_background_fill=err,
+    button_cancel_background_fill_hover=err_hover,
+    button_cancel_text_color="#ffffff",
 )
 
 
-class Kotaemon(Soft):
+class Maia(Soft):
     """
-    Official theme of Kotaemon.
-    Public version: https://huggingface.co/spaces/lone17/kotaemon
+    Official theme of Maia.
+    Public version: https://huggingface.co/spaces/lone17/maia
     """
 
     def __init__(
         self,
         *,
-        primary_hue: colors.Color | str = colors.emerald,
-        secondary_hue: colors.Color | str = colors.blue,
-        neutral_hue: colors.Color | str = gray,
+        primary_hue: colors.Color | str = apple_blue,
+        secondary_hue: colors.Color | str = apple_slate,
+        neutral_hue: colors.Color | str = apple_gray,
         spacing_size: sizes.Size | str = sizes.spacing_md,
-        radius_size: sizes.Size | str = sizes.radius_md,
+        radius_size: sizes.Size | str = sizes.radius_lg,
         text_size: sizes.Size | str = sizes.text_md,
         font: fonts.Font
         | str
         | Iterable[fonts.Font | str] = (
-            fonts.GoogleFont("Quicksand"),
+            "-apple-system",
+            "BlinkMacSystemFont",
+            "SF Pro Text",
+            "SF Pro Display",
+            "Helvetica Neue",
             "ui-sans-serif",
             "sans-serif",
         ),
         font_mono: fonts.Font
         | str
         | Iterable[fonts.Font | str] = (
-            fonts.GoogleFont("IBM Plex Mono"),
+            "SF Mono",
+            "Menlo",
+            "Monaco",
+            "Cascadia Mono",
             "ui-monospace",
             "monospace",
         ),
@@ -183,7 +204,7 @@ class Kotaemon(Soft):
             font=font,
             font_mono=font_mono,
         )
-        self.name = "kotaemon"
+        self.name = "maia"
         super().set(
             **common,
             **dark_mode,

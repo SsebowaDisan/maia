@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from theflow.settings import settings as flowsettings
 from theflow.utils.modules import deserialize, import_dotted_string
 
-from kotaemon.llms import ChatLLM
+from maia.llms import ChatLLM
 
 from .db import LLMTable, engine
 
@@ -54,7 +54,7 @@ class LLMManager:
                     self._default = item.name
 
     def load_vendors(self):
-        from kotaemon.llms import (
+        from maia.llms import (
             AzureChatOpenAI,
             ChatOpenAI,
             LCAnthropicChat,
