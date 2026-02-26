@@ -1,657 +1,439 @@
-# Maia Company Agent End-to-End Roadmap
-
-This roadmap defines the full implementation plan for a **Company Agent** in Maia that can execute cross-functional work across:
-- Marketing research and competitive intelligence
-- Google Ads and performance analysis
-- Email drafting/sending workflows
-- Data analysis and reporting
-- Invoice drafting, generation, and sending
-- Workplace integrations (Slack, Google Workspace, Microsoft 365)
-
-The roadmap is structured phase-by-phase with strict gates.
-
-Status legend:
-- `[ ]` Not started
-- `[~]` In progress
-- `[x]` Completed
-
+﻿# World-Class Company AI Agent Roadmap
+## Purpose
+Build Maia into an enterprise-grade Company AI Agent that can reliably handle:
+- research and evidence synthesis
+- analytics and reporting
+- server-side communication workflows
+- strategic, operational, HR, and finance support
+This roadmap is implementation-focused and slice-driven.
+## Non-Negotiable Engineering Constraints
+- replay-safe state transitions
+- no file over 500 LOC
 ---
-
-## 0. Baseline Analysis (Current State)
-Status: `[x]`
-
-Current architecture already provides:
-- FastAPI backend (`api/`) with chat, uploads, settings routes.
-- React frontend (`frontend/user_interface`) with Chat, Files, Resources, Settings, Help.
-- Chat retrieval + reasoning pipeline via `ktem` integrations.
-- File indexing pipeline + citations + info panel workflows.
-
-Gaps to close for a full Company Agent:
-- No dedicated agent mode in chat request contract.
-- No unified tool orchestration layer (research/email/ads/data/reporting).
-- No execution access mode model (restricted vs full access) for sensitive actions.
-- No workflow memory model for task plans and recurring reports.
-- No connector framework for external APIs (Slack, Google Ads, Docs/Sheets, Excel/OneDrive).
-
+## Rules For Execution
+- Only one active slice at a time.
+- A slice is complete only when:
+ - acceptance tests pass
+ - regression slice passes
+ - checklist is updated to `done`
+- Do not start the next slice until the current slice is complete.
+- If execution goes sideways (failed assumptions, repeated test failures, unclear architecture fit), stop immediately and re-plan before continuing.
+- Maintain `tasks/todo.md` during execution; every active slice must have explicit, checkable tasks and verification notes.
+- After every user correction, append a lesson entry to `tasks/lessons.md` with root cause and prevention rule before closing the slice.
+- Going forward, a slice status cannot be `done` while any checklist item remains `todo` or `in_progress`.
+## Naming Rule (Mandatory)
+- Scope: these naming rules apply to all modules under `src/`, not only UI modules.
+- Structure must be domain-first, not prefix-first.
+- Do not add new root-level prefix-first modules in any `src/namel3ss/*` package.
+- Do not add new root-level `manifest_*` modules under `src/namel3ss/ui/`.
+- Prefer paths like:
+ - `src/namel3ss/ui/manifest/chart.py`
+ - `src/namel3ss/ui/manifest/table.py`
+ - `src/namel3ss/ui/manifest/chat/items.py`
+ - `src/namel3ss/ui/manifest/chat/composer.py`
+- Keep names boring and searchable: lowercase folders, snake_case files.
+- Any move/rename must update all imports in the same slice and keep tests green.
+## Status Legend
+- `todo` not started
+- `in_progress` currently active
+- `done` complete and validated
+- `blocked` needs decision or prerequisite
 ---
-
-## API Add-on Catalog (Must Include)
-Status: `[x]`
-
-Required integrations:
-- Slack API
-  - Read channels/threads (with permissions)
-  - Post messages/replies
-  - Send alerts from reports
-- Google Ads API
-  - Campaign/ad-group/keyword metrics
-  - Budget and performance analysis
-- Google Workspace APIs
-  - Google Docs API (read/write report drafts)
-  - Google Sheets API (tabular data read/write)
-  - Google Drive API (file discovery and export storage)
-- Microsoft 365 APIs
-  - Excel (Graph API) for workbook/sheet data
-  - OneDrive/SharePoint for file access
-  - Outlook mail/calendar (optional after core release)
-- Invoice and accounting APIs
-  - QuickBooks / Xero (priority based on customer stack)
-  - Optional ERP invoice modules (NetSuite/Odoo/SAP) in later phase
-
-Optional next-wave connectors:
-- HubSpot / Salesforce
-- Meta Ads
-- Notion / Confluence
-
+## Execution Policy
+- Roadmap execution is sequential and autonomous.
+- Work advances slice by slice with no skip-ahead.
+- The next slice starts automatically only after the active slice is validated `done`.
+- Re-planning is mandatory whenever the active slice fails acceptance tests twice without a code change that addresses root cause.
+## Global Slice Gate (Applies to Every Slice)
+1. Implement scope for the active slice only.
+2. Run slice acceptance tests.
+3. Run assigned regression slice tests.
+4. Update slice checklist state to `done`.
+5. Update `tasks/todo.md` with execution evidence for the completed slice.
+6. If the user corrected behavior during the slice, record the correction in `tasks/lessons.md`.
+7. Only then activate the next slice.
+## Release-Wide Quality Gates
+- Evidence and traceability for all research/report outputs.
+- Audit logs for all write/execute operations.
+- RBAC and approval controls enforced for sensitive actions.
+- All critical state transitions are replay-safe and idempotent.
+- No file exceeds 500 LOC after merge.
+- Going forward, every completed slice has a matching verification record in `tasks/todo.md`.
+- Repeated mistakes are reduced over time via enforced `tasks/lessons.md` updates.
 ---
-
-## API Add-on Priority Order
-Status: `[x]`
-
-1. Slack (read/post) + Google Ads (read)
-2. Google Sheets + Google Docs + Google Drive
-3. Excel + OneDrive/SharePoint
-4. Outlook send/draft flow
-5. Invoice/accounting connector (QuickBooks/Xero)
-6. CRM and additional ad platforms
-
+## Foundation and Core Infrastructure
+### Strategic Scope and Governance Alignment
+**Status:** `done`
+**Objective**
+- lock functional scope, guardrails, and measurable outcomes across departments
+**In Scope**
+- final use-case catalog: research, analytics, email automation, RFP/brief generation
+- stakeholder alignment: legal, marketing, HR, finance, IT
+- compliance and data handling baseline
+- formal acceptance criteria per capability area
+**Deliverables**
+- approved capability map
+- role and permission matrix draft
+- governance checklist template
+**Acceptance Tests**
+- all domain owners sign off on capability and data boundaries
+- each capability has explicit success criteria and out-of-scope rules
+**Regression Slice**
+- none
+**Checklist**
+- [ ] capability map finalized (`in_progress`)
+- [ ] governance baseline approved (`todo`)
+- [ ] acceptance criteria cataloged (`todo`)
+### Architecture and Data Strategy Blueprint
+**Status:** `done`
+**Objective**
+- define modular runtime and durable data topology
+**In Scope**
+- orchestrator + specialist-module architecture
+- ingestion and storage plan (documents, vector index, task/results DB)
+- event model for replay-safe state transitions
+- data retention, isolation, and deletion strategy
+**Deliverables**
+- architecture diagram with domain boundaries
+- state machine spec for agent runs
+- storage/indexing design doc with scale assumptions
+**Acceptance Tests**
+- architecture review approved by backend/platform owners
+- replay simulation proves deterministic run reconstruction
+**Regression Slice**
+- Strategic Scope and Governance Alignment
+**Checklist**
+- [ ] architecture spec approved (`todo`)
+- [ ] state model validated for replay safety (`todo`)
+- [ ] data governance controls mapped (`todo`)
+### Integration and Runtime Baseline
+**Status:** `done`
+**Objective**
+- establish secure integration/runtime primitives before specialist features
+**In Scope**
+- core connectors: Gmail (DWD), web crawl/search, file parsing
+- local execution environment and container strategy
+- centralized config and secret loading model
+- connectivity health checks for external systems
+**Deliverables**
+- connector contracts and health endpoints
+- secure env/secret management policy
+- baseline runtime deployment profile
+**Acceptance Tests**
+- connectors pass health checks in staging
+- missing/invalid credential cases return actionable errors
+**Regression Slice**
+- Architecture and Data Strategy Blueprint
+**Checklist**
+- [ ] connector baseline available (`todo`)
+- [ ] config/secrets standardized (`todo`)
+- [ ] runtime smoke checks green (`todo`)
 ---
-
-## Execution Access Modes
-Status: `[x]`
-
-Supported modes:
-- `Restricted`:
-  - Confirm-before-execute for configured action classes.
-  - Suitable for normal users and gradual rollout.
-- `Full Access`:
-  - Auto-execute enabled for allowed tools.
-  - No per-action approval prompts.
-  - Intended for trusted users/workspaces that explicitly enable it.
-
-Common requirements in both modes:
-- RBAC and tenant isolation are always enforced.
-- Every action is auditable.
-- Per-tool kill switch and global emergency stop remain available.
-
+## Core Specialist Capability Buildout
+### Evidence Research Assistant
+**Status:** `done`
+**Objective**
+- provide evidence-grounded research synthesis
+**In Scope**
+- web search and browsing execution
+- document summarization
+- citation and source trace chain in outputs
+**Deliverables**
+- research module API contract
+- source attribution schema
+- user-visible evidence blocks
+**Acceptance Tests**
+- every answer contains traceable citations when external/internal sources are used
+- citation links and snippets match retrieved content
+**Regression Slice**
+- Integration and Runtime Baseline
+**Checklist**
+- [ ] retrieval + summarization operational (`todo`)
+- [ ] citation chain validated (`todo`)
+- [ ] traceability UI/API verified (`todo`)
+### Executive Writer and Report Generator
+**Status:** `done`
+**Objective**
+- generate executive-ready structured outputs
+**In Scope**
+- templates: market analysis, competitor overview, weekly KPI summary
+- output formats: Markdown + PDF
+- draft-ready communication summary blocks
+**Deliverables**
+- template library
+- report generation service with format options
+**Acceptance Tests**
+- generated reports pass structure and completeness checks
+- markdown and PDF exports are consistent for the same source data
+**Regression Slice**
+- Evidence Research Assistant
+**Checklist**
+- [ ] templates implemented (`todo`)
+- [ ] export pipeline stable (`todo`)
+- [ ] report QA checks pass (`todo`)
+### Server-Side Mailer Service
+**Status:** `done`
+**Objective**
+- send reports without interactive OAuth friction
+**In Scope**
+- backend-only report delivery via Google Workspace DWD
+- strong error mapping (API disabled, delegation, mailbox state, invalid recipient)
+- delivery logging and trace events
+**Deliverables**
+- `send_report_email(...)` server interface
+- error taxonomy and operator-facing remediation hints
+- smoke script and operational runbook section
+**Acceptance Tests**
+- test delivery succeeds in configured workspace using impersonated sender
+- failure cases produce explicit and actionable diagnostics
+**Regression Slice**
+- Executive Writer and Report Generator
+**Checklist**
+- [ ] DWD send path verified (`todo`)
+- [ ] failure diagnostics validated (`todo`)
+- [ ] delivery logging complete (`todo`)
+### Data Analyst Baseline
+**Status:** `done`
+**Objective**
+- enable practical structured data analysis
+**In Scope**
+- ingest CSV/Excel/SQL-style data sources
+- basic aggregations and chart-ready outputs
+- narrative summary for non-technical users
+**Deliverables**
+- data ingestion adapters
+- summary and chart pipeline
+**Acceptance Tests**
+- analyst module returns reproducible metrics with source references
+- chart artifacts and numeric summaries agree
+**Regression Slice**
+- Server-Side Mailer Service
+**Checklist**
+- [ ] data adapters stable (`todo`)
+- [ ] aggregation outputs validated (`todo`)
+- [ ] chart and narrative parity checks pass (`todo`)
 ---
-
-## 1. Product Definition and Guardrails
-Status: `[x]`
-
-Goal:
-- Define exactly what "company agent" can do in v1, v2, v3.
-
-Scope:
-- Capability matrix by domain:
-  - Marketing research
-  - Ads analysis
-  - Email operations
-  - Data analysis
-  - Reporting
-  - Invoice operations
-- Define user roles and permission tiers.
-- Define action classes:
-  - Read-only
-  - Draft
-  - Execute
-- Define execution access modes:
-  - Restricted mode (confirm-before-execute)
-  - Full Access mode (auto-execute, no approval prompts)
-
-Acceptance criteria:
-- Approved capability matrix.
-- Approved permission model.
-- Approved access mode policy and escalation policy.
-
+## Advanced Domain Specialists
+### Business Intelligence and Strategy Engine
+**Status:** `done`
+**Objective**
+- produce deeper, decision-grade business insight
+**In Scope**
+- trend dashboards and ROI/cash-flow style analytics blocks
+- forecasting primitives (time-series baseline + scenario simulations)
+**Deliverables**
+- strategy insight module
+- forecast report sections with assumptions
+**Acceptance Tests**
+- strategy outputs include assumptions, ranges, and confidence levels
+- forecast backtests beat baseline thresholds defined in governance acceptance
+**Regression Slice**
+- Data Analyst Baseline
+**Checklist**
+- [ ] BI analysis modules shipped (`todo`)
+- [ ] forecast model guardrails in place (`todo`)
+- [ ] decision-output QA complete (`todo`)
+### Marketing and Growth Specialist
+**Status:** `done`
+**Objective**
+- automate actionable growth workflows
+**In Scope**
+- ICP profiling
+- outreach sequencing logic
+- competitor content analysis
+- CRM-informed personalization
+**Deliverables**
+- growth specialist module
+- CRM mapping and response tracking hooks
+**Acceptance Tests**
+- generated outreach plans satisfy policy and personalization constraints
+- CRM sync and response-state updates are deterministic
+**Regression Slice**
+- Business Intelligence and Strategy Engine
+**Checklist**
+- [ ] ICP and sequencing logic validated (`todo`)
+- [ ] CRM-driven personalization integrated (`todo`)
+- [ ] growth workflow tests pass (`todo`)
+### Product and Operations Specialist
+**Status:** `done`
+**Objective**
+- improve product/process quality using structured analysis
+**In Scope**
+- feature gap analysis
+- feedback clustering
+- SOP/process map generation
+- bottleneck detection and optimization suggestions
+**Deliverables**
+- product/operations specialist module with standardized outputs
+**Acceptance Tests**
+- module outputs include ranked gaps, grouped themes, and prioritized actions
+**Regression Slice**
+- Marketing and Growth Specialist
+**Checklist**
+- [ ] feature-gap workflows complete (`todo`)
+- [ ] feedback clustering quality validated (`todo`)
+- [ ] SOP/process outputs reviewed (`todo`)
+### Human Resources and Finance Specialist
+**Status:** `done`
+**Objective**
+- support talent and financial planning tasks
+**In Scope**
+- CV parsing and job-description drafting
+- onboarding documentation assistants
+- budgeting, margin, and projection helpers
+**Deliverables**
+- HR specialist module
+- finance specialist module
+**Acceptance Tests**
+- HR artifacts follow required templates and compliance prompts
+- finance outputs are numerically consistent and assumption-tagged
+**Regression Slice**
+- Product and Operations Specialist
+**Checklist**
+- [ ] HR flows validated (`todo`)
+- [ ] finance modeling outputs validated (`todo`)
+- [ ] cross-domain regression stable (`todo`)
 ---
-
-## 2. UX Entry Point (Primary Access in Composer)
-Status: `[x]`
-
-Goal:
-- Add ChatGPT-style primary access directly in the chat composer.
-
-Scope:
-- Add segmented control in chat composer:
-  - `Ask`
-  - `Company Agent`
-- Keep current top navigation unchanged.
-- Persist selected mode per conversation.
-- Show active mode label in message metadata (for transparency).
-
-Implementation targets:
-- `frontend/user_interface/src/app/components/ChatMain.tsx`
-- `frontend/user_interface/src/app/App.tsx`
-- `frontend/user_interface/src/api/client.ts`
-- `api/schemas.py`
-
-Acceptance criteria:
-- User can switch between Ask and Company Agent before sending.
-- Mode selection is included in API payload.
-- Existing Ask flow remains backward compatible.
-
+## Enterprise Governance and Resilience
+### Access Governance and Approval Controls
+**Status:** `done`
+**Objective**
+- enforce strict operational control on sensitive actions
+**In Scope**
+- role model: employee, manager, admin
+- permission boundaries per module/data/action
+- explicit approval workflows for high-risk operations
+**Deliverables**
+- production RBAC policy map
+- approval workflow engine contracts
+**Acceptance Tests**
+- unauthorized action attempts are blocked and audited
+- approval-required flows cannot bypass controls
+**Regression Slice**
+- Human Resources and Finance Specialist
+**Checklist**
+- [ ] RBAC policy enforced (`todo`)
+- [ ] approvals audited end-to-end (`todo`)
+- [ ] governance controls signed off (`todo`)
+### Reliability, Preflight, and Fallback Framework
+**Status:** `done`
+**Objective**
+- maximize reliability under partial failure and dependency drift
+**In Scope**
+- preflight checks (credentials/connectivity/service health)
+- self-check gates (citation completeness, logic consistency)
+- retries, queuing, and fallback behavior for failed actions
+**Deliverables**
+- reliability guardrail framework
+- fallback orchestration rules
+**Acceptance Tests**
+- injected provider failures trigger expected retries/fallbacks
+- partial failures remain replay-safe and recoverable
+**Regression Slice**
+- Access Governance and Approval Controls
+**Checklist**
+- [ ] preflight framework active (`todo`)
+- [ ] self-check gates active (`todo`)
+- [ ] retry/fallback reliability targets met (`todo`)
+### Continuous Improvement and Learning Loop
+**Status:** `done`
+**Objective**
+- continuously improve quality and utility from real usage
+**In Scope**
+- feedback capture and usage metrics
+- controlled experiments where applicable
+- re-index/retrain/update cycle for knowledge and model components
+**Deliverables**
+- improvement loop pipeline
+- periodic quality review dashboard
+**Acceptance Tests**
+- quality metrics trend and alert thresholds defined and active
+- documented process exists for promoting improvements safely
+**Regression Slice**
+- Reliability, Preflight, and Fallback Framework
+**Checklist**
+- [ ] feedback telemetry pipeline running (`todo`)
+- [ ] experiment framework documented (`todo`)
+- [ ] update cadence and review ritual established (`todo`)
 ---
-
-## 2A. Agent Activity Replay (Live Execution View)
-Status: `[x]`
-
-Goal:
-- Add a ChatGPT-agent-style activity view that shows what the agent is doing live (searching web, opening documents, applying highlights, and running tools).
-
-Scope:
-- Add real-time activity timeline with structured steps:
-  - planning
-  - web search query + opened result
-  - document/PDF open and highlight events
-  - tool actions (email, ads analysis, reporting, etc.)
-- Add replay controls for completed runs:
-  - play/pause
-  - step scrubber
-  - speed control (`1x`/`2x`)
-- Persist per-run event logs for replay, audit, and debugging.
-- Link each activity step to evidence/source artifacts in the information panel.
-
-Implementation targets:
-- `api/routers/chat.py` (SSE event stream contract)
-- `api/services/chat_service.py` (emit activity events)
-- New `api/services/agent/activity.py` (event schema + persistence)
-- `frontend/user_interface/src/app/components/ChatMain.tsx`
-- New `frontend/user_interface/src/app/components/AgentActivityPanel.tsx`
-- `frontend/user_interface/src/api/client.ts`
-
-Acceptance criteria:
-- User can watch live agent execution steps while response is being generated.
-- Completed runs can be replayed step-by-step.
-- Clicking an activity step opens the corresponding source and highlight.
-- Activity logs are saved and available in run history.
-
+## Scale and Personalization Expansion
+### Systems Expansion and Performance Scale
+**Status:** `done`
+**Objective**
+- broaden enterprise data coverage without sacrificing latency or safety
+**In Scope**
+- integrate HR, finance, ticketing, and inventory systems
+- scale vector index and retrieval performance
+- add caching and async throughput improvements
+**Deliverables**
+- integration expansion plan implemented for priority systems
+- performance baseline and optimization report
+**Acceptance Tests**
+- defined scale test passes for throughput and latency targets
+- data isolation and access controls remain intact at scale
+**Regression Slice**
+- Continuous Improvement and Learning Loop
+**Checklist**
+- [ ] new systems integrated (`todo`)
+- [ ] performance targets met (`todo`)
+- [ ] security and tenancy checks pass (`todo`)
+### Cross-Module Workflow Orchestration
+**Status:** `done`
+**Objective**
+- execute end-to-end multi-module business workflows
+**In Scope**
+- module chaining (Researcher -> Writer -> Mailer -> Tracker)
+- reusable workflow templates (for example weekly KPI cycle)
+**Deliverables**
+- workflow orchestration templates
+- inter-module contract validation suite
+**Acceptance Tests**
+- chained workflows complete with full traceability and replay safety
+- handoff contracts preserve context and state deterministically
+**Regression Slice**
+- Systems Expansion and Performance Scale
+**Checklist**
+- [ ] workflow templates shipped (`todo`)
+- [ ] handoff contracts validated (`todo`)
+- [ ] chain reliability tests pass (`todo`)
+### Modes and Personalization Framework
+**Status:** `done`
+**Objective**
+- tailor behavior by domain, role, and user context
+**In Scope**
+- mode selection (strategy, legal, technical, and other domain modes)
+- role-aware prompt and tool policy overlays
+- preference/memory-aware response adaptation
+**Deliverables**
+- mode configuration framework
+- personalization rules and safety constraints
+**Acceptance Tests**
+- mode switching changes behavior predictably and safely
+- personalization improves relevance without violating policy
+**Regression Slice**
+- Cross-Module Workflow Orchestration
+**Checklist**
+- [ ] custom modes operational (`todo`)
+- [ ] personalization rules verified (`todo`)
+- [ ] safety and policy checks remain green (`todo`)
 ---
+## Slice Execution Order
+1. Strategic Scope and Governance Alignment
+2. Architecture and Data Strategy Blueprint
+3. Integration and Runtime Baseline
+4. Evidence Research Assistant
+5. Executive Writer and Report Generator
+6. Server-Side Mailer Service
+7. Data Analyst Baseline
+8. Business Intelligence and Strategy Engine
+9. Marketing and Growth Specialist
+10. Product and Operations Specialist
+11. Human Resources and Finance Specialist
+12. Access Governance and Approval Controls
+13. Reliability, Preflight, and Fallback Framework
+14. Continuous Improvement and Learning Loop
+15. Systems Expansion and Performance Scale
+16. Cross-Module Workflow Orchestration
+17. Modes and Personalization Framework
+Current Active Slice: `none`
 
-## 3. Agent API Contract and Orchestrator
-Status: `[x]`
-
-Goal:
-- Introduce a formal backend execution layer for company tasks.
-
-Scope:
-- Add `agent_mode` and `agent_goal` fields in chat request schema.
-- Add orchestrator service:
-  - Plan step generation
-  - Tool selection
-  - Tool execution
-  - Result synthesis
-- Add structured result format:
-  - `answer`
-  - `actions_taken`
-  - `sources_used`
-  - `next_recommended_steps`
-
-Implementation targets:
-- `api/schemas.py`
-- `api/routers/chat.py`
-- `api/services/chat_service.py`
-- New files under `api/services/agent/`
-
-Acceptance criteria:
-- Orchestrator can run at least one tool and return structured output.
-- Fallback to current chat path when `agent_mode` disabled.
-
----
-
-## 4. Tool Registry and Execution Framework
-Status: `[x]`
-
-Goal:
-- Create a secure, extensible tool framework for company operations.
-
-Scope:
-- Tool registry with metadata:
-  - `tool_id`
-  - `risk_level`
-  - `required_permissions`
-  - `execution_policy` (`auto_execute` or `confirm_before_execute`)
-- Common tool runtime:
-  - Timeout policy
-  - Retries
-  - Error normalization
-  - Audit logging
-- Add dry-run mode for execution tools.
-
-Implementation targets:
-- New `api/services/agent/tools/registry.py`
-- New `api/services/agent/tools/base.py`
-- New `api/services/agent/audit.py`
-
-Acceptance criteria:
-- Tools can be discovered and executed through one interface.
-- Tools must honor selected access mode and execution policy at runtime.
-
----
-
-## 4A. External API Connector Layer
-Status: `[x]`
-
-Goal:
-- Implement reusable, secure connector modules for API add-ons.
-
-Scope:
-- Connector SDK abstraction:
-  - auth provider
-  - token refresh
-  - rate-limit handling
-  - standardized request/response envelope
-- Per-provider connector modules:
-  - `slack_connector`
-  - `google_ads_connector`
-  - `google_docs_connector`
-  - `google_sheets_connector`
-  - `google_drive_connector`
-  - `m365_excel_connector`
-  - `m365_files_connector` (OneDrive/SharePoint)
-- Secret and credential mapping per workspace/user.
-- Provider-specific retry/backoff policies.
-
-Implementation targets:
-- New `api/services/agent/connectors/` package
-- New `api/services/agent/auth/` package
-- `api/services/settings_service.py` extensions for connector configs
-
-Acceptance criteria:
-- Connector health checks pass for enabled providers.
-- Tokens refresh automatically without user interruption.
-- Connector errors normalized for agent orchestration.
-
----
-
-## 5. Marketing Research Agent Tools
-Status: `[x]`
-
-Goal:
-- Enable robust online research for marketing use cases.
-
-Scope:
-- Web search tool adapter with source attribution.
-- Page extraction/summarization pipeline.
-- Slack trend ingestion (public/internal approved channels) for campaign signals.
-- Competitor profile builder:
-  - Messaging
-  - Pricing signals
-  - Positioning gaps
-- Research report output templates.
-
-Acceptance criteria:
-- Research responses include:
-  - Summary
-  - Evidence links
-  - Confidence notes
-- Sources are traceable in info panel.
-
----
-
-## 6. Email Agent Tools
-Status: `[x]`
-
-Goal:
-- Draft and send company emails safely.
-
-Scope:
-- Email draft generator from prompts + context.
-- Integrate SMTP/API provider (configurable).
-- Add execution policy support:
-  - Restricted mode: confirm-before-send
-  - Full Access mode: direct send (no approval prompt)
-  - Optional draft-only enforcement by workspace policy
-- Add delivery result capture and error reporting.
-
-Acceptance criteria:
-- User can generate and edit drafts.
-- Sending behavior follows selected execution mode and logs full audit trail.
-
----
-
-## 6A. Invoice Agent Tools
-Status: `[x]`
-
-Goal:
-- Enable end-to-end invoice writing and sending from the agent.
-
-Scope:
-- Invoice drafting:
-  - Client selection
-  - Line items, quantity, unit price, taxes, discounts
-  - Due date, payment terms, currency
-- Validation:
-  - Required fields and totals check
-  - Tax and rounding consistency checks
-- Document generation:
-  - Professional PDF invoice output
-  - Optional branded templates by company/project
-- Sending:
-  - Email delivery with PDF attachment
-  - Accounting API send/post (QuickBooks/Xero) when enabled
-- Tracking:
-  - Invoice status (`draft`, `sent`, `paid`, `overdue`)
-  - Delivery and postback logs
-
-Acceptance criteria:
-- Agent can generate a valid invoice PDF from prompt + structured data.
-- User can send invoice directly in Full Access mode.
-- All invoice actions are auditable with recipient, amount, currency, and timestamp.
-
----
-
-## 7. Google Ads / Performance Analysis Tools
-Status: `[x]`
-
-Goal:
-- Analyze ad performance and recommend optimizations.
-
-Scope:
-- Google Ads API connector (OAuth + secure token storage).
-- KPI analyzer:
-  - CTR, CPC, CPA, ROAS
-  - Campaign/ad-group breakdowns
-- Cross-source reconciliation:
-  - Google Ads metrics + Sheet/Excel budget trackers
-  - Optional Slack campaign feedback snapshots
-- Insight generator:
-  - Budget reallocation suggestions
-  - Underperforming keyword/ad detection
-  - Creative testing recommendations
-
-Acceptance criteria:
-- Agent can answer campaign health queries with numeric evidence.
-- Outputs include recommendations + rationale.
-
----
-
-## 8. Data Analysis Tools (Internal Data + Files)
-Status: `[x]`
-
-Goal:
-- Let the agent analyze company datasets and indexed docs together.
-
-Scope:
-- Connectors:
-  - CSV/Excel from Files
-  - Google Sheets
-  - Google Docs tables/structured exports
-  - OneDrive/SharePoint files
-  - Optional DB connectors (Postgres/MySQL/BigQuery)
-- Safe query runner with row/compute limits.
-- Auto-generated analysis blocks:
-  - Trends
-  - Segments
-  - Anomalies
-  - Forecast hints
-
-Acceptance criteria:
-- Agent returns reproducible analysis with cited source/data references.
-- Queries are sandboxed and bounded by limits.
-
----
-
-## 9. Reporting Engine (One-off + Scheduled)
-Status: `[x]`
-
-Goal:
-- Deliver clear company reporting outputs from agent workflows.
-
-Scope:
-- Report templates:
-  - Weekly marketing
-  - Ads performance
-  - Sales funnel
-  - Executive summary
-  - Accounts receivable and invoice aging
-- Export formats:
-  - Markdown
-  - PDF
-  - Email summary
-  - Google Docs publish
-  - Google Sheets append/update
-  - Excel workbook export/update
-  - Slack message digest
-  - Invoice summary bundle (PDF + sheet row + sent status)
-- Scheduling:
-  - Daily/weekly/monthly
-  - Recipients + execution profile (restricted or full access)
-
-Acceptance criteria:
-- Agent can generate and schedule reports from configured templates.
-- All scheduled runs produce logs and retry behavior.
-
----
-
-## 10. Memory, Task History, and Reuse
-Status: `[x]`
-
-Goal:
-- Make agent work persistent and reusable.
-
-Scope:
-- Store agent runs:
-  - Prompt
-  - Plan
-  - Tool calls
-  - Outputs
-- Saved playbooks:
-  - "Analyze this month's ads"
-  - "Send weekly leadership summary"
-  - "Create and send monthly client invoices"
-- Clone/edit/re-run flows.
-
-Acceptance criteria:
-- Any prior agent run can be inspected and rerun.
-- Playbooks can be versioned and reused.
-
----
-
-## 11. Security, Compliance, and Governance
-Status: `[x]`
-
-Goal:
-- Enforce enterprise-grade controls.
-
-Scope:
-- Secrets management:
-  - No hardcoded keys
-  - Environment + secret vault support
-- RBAC for tool access.
-- PII and sensitive data handling policy.
-- Audit logs for all execute actions.
-- Data retention and deletion policies.
-
-Acceptance criteria:
-- Sensitive actions are permission-gated and auditable.
-- Security review sign-off before production release.
-
----
-
-## 12. Quality, Testing, and Reliability
-Status: `[x]`
-
-Goal:
-- Ensure predictable behavior before launch.
-
-Scope:
-- Unit tests:
-  - Orchestrator
-  - Tool registry
-  - Tool adapters
-- Integration tests:
-  - Chat mode -> agent execution -> response
-  - Restricted-mode and full-access execution paths
-- Load tests for multi-step workflows.
-- Failure injection tests (timeouts/rate limits/provider outages).
-
-Acceptance criteria:
-- Critical test suites pass in CI.
-- Defined SLOs met for success rate and latency.
-
----
-
-## 13. Rollout Plan
-Status: `[x]`
-
-Goal:
-- Deploy safely with staged adoption.
-
-Scope:
-- Stage 1: Internal alpha (read-only tools only)
-- Stage 2: Beta (draft + controlled execute tools in restricted mode)
-- Stage 3: Production (full toolset with opt-in full access per workspace/user)
-- Feature flags for each tool domain.
-
-Acceptance criteria:
-- Clear rollback path exists.
-- Production launch checklist completed.
-
----
-
-## 14. Operational Playbook
-Status: `[x]`
-
-Goal:
-- Keep the system maintainable after launch.
-
-Scope:
-- Runbooks for:
-  - Provider outage
-  - Token expiry
-  - Email failure
-  - Ads API quota limits
-  - Invoice send failure / bounce
-  - Accounting API sync conflicts
-  - Slack API rate limits
-  - Google Workspace permission drift
-  - Microsoft Graph throttling/permission drift
-- Monitoring dashboards:
-  - Tool success/failure
-  - Latency
-  - Cost per run
-- Monthly review loop for prompt/tool quality.
-
-Acceptance criteria:
-- On-call can diagnose top incident classes using runbooks.
-- Ops metrics are visible and alerting is active.
-
----
-
-## Rules We Follow (Non-Negotiable)
-
-1. Phase gate rule:
-- We do not start the next phase until current phase acceptance criteria are verified.
-
-2. Safety-before-automation rule:
-- Execution policy is controlled by access mode. In Full Access mode, actions can auto-execute without approval prompts.
-
-3. Source-traceability rule:
-- Any analytical/research conclusion must include attributable evidence and source links.
-
-4. Least-privilege rule:
-- Tools only receive minimum permissions required for their task.
-
-5. Secrets and data rule:
-- No API keys in code or logs; sensitive data is redacted where required.
-
-6. Reproducibility rule:
-- Agent outputs must include enough context to rerun and validate results.
-
-7. Backward-compatibility rule:
-- Existing Ask chat behavior must continue to work during all agent rollouts.
-
-8. Observability rule:
-- Every agent run must emit structured logs for plan, tool calls, and outcomes.
-
-9. Access-mode rule:
-- Users/workspaces can run Restricted mode or Full Access mode. Full Access disables per-action approvals.
-
-10. Quality gate rule:
-- No production release without passing functional, security, and reliability checks.
-
-11. Connector-contract rule:
-- Every external integration must implement the shared connector interface and error schema.
-
-12. Write-action policy rule:
-- Write actions to Slack, Docs, Sheets, Excel, and email follow the selected execution mode (Restricted or Full Access).
-
-13. Tenant-isolation rule:
-- Workspace tokens/data are isolated per tenant and never cross-accessed.
-
-14. Full-access enablement rule:
-- Full Access must be explicitly enabled by authorized users and can be revoked instantly.
-
-15. Experience quality gate rule:
-- No feature is considered done if it feels basic. Every release must meet the Wow Standard below.
-
----
-
-## Wow Standard (Release Quality Bar)
-
-Every user-facing agent feature must pass all checks:
-
-1. Clarity in 3 seconds:
-- A first-time user must understand what to do next within 3 seconds (no training needed).
-
-2. One-action outcomes:
-- Core tasks (research, analyze ads, draft report, send updates) must be reachable in 1-2 actions from composer.
-
-3. Progressive depth, low noise:
-- UI stays calm by default; advanced controls appear only when relevant.
-
-4. Proactive intelligence:
-- The agent should not only answer; it should propose next best actions with rationale and expected impact.
-
-5. Trust by design:
-- Every important output includes sources, assumptions, and confidence signals.
-
-6. Fast perceived performance:
-- Provide immediate feedback states (planning, running tools, completed) with no dead UI moments.
-
-7. Executive-grade output:
-- Responses must be structured, concise, and ready to share (summary, evidence, action plan, owner, timeline).
-
-Release gate:
-- If any checklist item fails in internal review, the feature returns to iteration before release.
-
----
-
-## Execution Workflow (How We Build)
-
-1. Freeze requirements for current phase.
-2. Implement backend contract changes.
-3. Implement frontend UX and mode wiring.
-4. Add tests for new behavior.
-5. Verify acceptance criteria with reproducible checks.
-6. Document operational behavior and fallback paths.
-7. Mark phase completed and move forward.
-
----
-
-## Immediate Next Step
-
-Current focus after implementation:
-- **Production hardening and connector credential onboarding per tenant**  
-  (configure provider tokens, validate governance policies, and run staged rollout checks).

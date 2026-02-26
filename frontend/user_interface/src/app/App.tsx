@@ -576,7 +576,7 @@ export default function App() {
 
     const effectiveMode = options?.agentMode ?? composerMode;
     const effectiveAccessMode = options?.accessMode ?? accessMode;
-    const pendingAssistantMessage =
+    const delayedPendingAssistantMessage =
       effectiveMode === "company_agent" ? "Starting my desktop..." : "Thinking....";
 
     const attachedFileIds = (attachments || [])
@@ -593,6 +593,13 @@ export default function App() {
         : undefined;
 
     const pendingTurnIndex = chatTurns.length;
+    let delayedPendingTimer: number | null = null;
+    const clearDelayedPendingTimer = () => {
+      if (delayedPendingTimer !== null) {
+        window.clearTimeout(delayedPendingTimer);
+        delayedPendingTimer = null;
+      }
+    };
     setIsSending(true);
     setIsActivityStreaming(effectiveMode === "company_agent");
     setInfoText("");
@@ -602,13 +609,32 @@ export default function App() {
       ...prev,
       {
         user: message,
-        assistant: pendingAssistantMessage,
+        assistant: "",
         attachments: attachments && attachments.length > 0 ? attachments : undefined,
         info: "",
         mode: effectiveMode,
         activityEvents: [],
       },
     ]);
+    delayedPendingTimer = window.setTimeout(() => {
+      setChatTurns((prev) => {
+        if (pendingTurnIndex < 0 || pendingTurnIndex >= prev.length) {
+          return prev;
+        }
+        const next = [...prev];
+        const turn = next[pendingTurnIndex];
+        if (!turn) {
+          return prev;
+        }
+        const hasActivity = Array.isArray(turn.activityEvents) && turn.activityEvents.length > 0;
+        const hasAssistantText = Boolean(String(turn.assistant || "").trim());
+        if (hasActivity || hasAssistantText) {
+          return prev;
+        }
+        next[pendingTurnIndex] = { ...turn, assistant: delayedPendingAssistantMessage };
+        return next;
+      });
+    }, 5000);
 
     let streamedEventsLocal: AgentActivityEvent[] = [];
 
@@ -634,6 +660,7 @@ export default function App() {
                 return;
               }
               if (event.type === "chat_delta") {
+                clearDelayedPendingTimer();
                 setChatTurns((prev) => {
                   const next = [...prev];
                   const last = next[next.length - 1];
@@ -652,6 +679,7 @@ export default function App() {
                 return;
               }
               if (event.type === "activity" && event.event) {
+                clearDelayedPendingTimer();
                 const payload = event.event as AgentActivityEvent;
                 streamedEvents.push(payload);
                 streamedEventsLocal = [...streamedEvents];
@@ -661,6 +689,10 @@ export default function App() {
                   const last = next[next.length - 1];
                   next[next.length - 1] = {
                     ...(last || {}),
+                    assistant:
+                      last && String(last.assistant || "").trim() === delayedPendingAssistantMessage
+                        ? ""
+                        : String(last?.assistant || ""),
                     activityEvents: [...streamedEvents],
                   };
                   return next;
@@ -669,6 +701,7 @@ export default function App() {
             },
           });
         } catch (streamError) {
+          clearDelayedPendingTimer();
           response = await sendChat(message, selectedConversationId, {
             ...sharedPayload,
             agentGoal: message,
@@ -685,6 +718,7 @@ export default function App() {
       } else {
         response = await sendChat(message, selectedConversationId, sharedPayload);
       }
+      clearDelayedPendingTimer();
       setConversationProjects((prev) =>
         prev[response.conversation_id]
           ? prev
@@ -711,7 +745,7 @@ export default function App() {
           ...(last || {}),
           user: message,
           assistant: backendModeMismatch
-            ? `${response.answer || ""}\n\n[Notice] Backend is not running Company Agent mode. Restart the API server and try again.`
+            ? `${response.answer || ""}\n\n[Notice] Backend is not running Agent mode. Restart the API server and try again.`
             : response.answer || "",
           info: response.info || "",
           mode: effectiveReturnedMode,
@@ -727,6 +761,7 @@ export default function App() {
       setSelectedTurnIndex(pendingTurnIndex);
       await refreshConversations();
     } catch (error) {
+      clearDelayedPendingTimer();
       setChatTurns((prev) => {
         const next = [...prev];
         const last = next[next.length - 1];
@@ -740,6 +775,7 @@ export default function App() {
         return next;
       });
     } finally {
+      clearDelayedPendingTimer();
       setIsSending(false);
       setIsActivityStreaming(false);
     }

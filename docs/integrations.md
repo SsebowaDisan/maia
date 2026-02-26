@@ -64,6 +64,43 @@ Tool-level behavior:
 - no DuckDuckGo manual fallback links are emitted in agent responses
 - emits live events (`status`, `brave.search.query`, `brave.search.results`) through SSE
 
+## Ollama Local Models
+
+Maia can manage Ollama model downloads directly from Settings so users can pull and activate local models without manual resource editing.
+
+Recommended env var:
+
+```env
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+Ollama API endpoints used (official):
+
+- `GET /api/version`
+- `GET /api/tags`
+- `POST /api/pull` (streaming progress)
+
+Maia API endpoints:
+
+- `GET /api/agent/integrations/ollama/status`
+- `GET /api/agent/integrations/ollama/quickstart`
+- `POST /api/agent/integrations/ollama/start`
+- `POST /api/agent/integrations/ollama/config`
+- `GET /api/agent/integrations/ollama/models`
+- `POST /api/agent/integrations/ollama/pull`
+- `POST /api/agent/integrations/ollama/select`
+- `POST /api/agent/integrations/ollama/embeddings/select`
+- `POST /api/agent/integrations/ollama/embeddings/apply-all`
+
+Behavior:
+
+- Pulls model by name (e.g. `llama3.2:3b`) from Ollama.
+- Streams pull progress as live events (`ollama.pull.started`, `ollama.pull.progress`, `ollama.pull.completed`).
+- Automatically creates/updates a Maia LLM entry using Ollama's OpenAI-compatible endpoint and sets it as default.
+- Supports one-click local startup from Settings (`Start Ollama`), including quickstart command hints.
+- Supports selecting an Ollama embedding model (recommended: `nomic-embed-text`) for local indexing.
+- Supports one-click embedding migration across all index collections and automatically queues full reindex jobs for existing files/URLs.
+
 ## Gmail Live Desktop (Playwright)
 
 `gmail.draft` and `gmail.send` now support real Playwright desktop execution so the theater shows actual browser actions and snapshots.

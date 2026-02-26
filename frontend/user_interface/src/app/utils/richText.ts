@@ -158,19 +158,29 @@ function sanitizeHtml(html: string): string {
   return doc.body.innerHTML;
 }
 
+function normalizeMarkdownBlocks(input: string): string {
+  let normalized = input.replace(/\r\n/g, "\n");
+  // Some streamed payloads may lose newline before headings or list markers.
+  normalized = normalized.replace(/([^\n])\s(#{1,6}\s+)/g, "$1\n\n$2");
+  normalized = normalized.replace(/(#{1,6}[^\n]+)\s+(\d+\.\s+)/g, "$1\n$2");
+  normalized = normalized.replace(/(#{1,6}[^\n]+)\s+([-*]\s+)/g, "$1\n$2");
+  return normalized;
+}
+
 function toHtml(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     return "";
   }
+  const normalized = normalizeMarkdownBlocks(trimmed);
 
-  const looksLikeMarkdown = /(^|\n)\s*(#{1,6}\s+|[-*+]\s+|\d+\.\s+)|```/.test(trimmed);
-  const hasHtmlTags = /<[a-z][\s\S]*>/i.test(trimmed);
+  const looksLikeMarkdown = /(^|\n)\s*(#{1,6}\s+|[-*+]\s+|\d+\.\s+)|```/.test(normalized);
+  const hasHtmlTags = /<[a-z][\s\S]*>/i.test(normalized);
   if (hasHtmlTags && !looksLikeMarkdown) {
-    return trimmed;
+    return normalized;
   }
 
-  return marked.parse(trimmed, { gfm: true, breaks: true }) as string;
+  return marked.parse(normalized, { gfm: true, breaks: true }) as string;
 }
 
 export function renderRichText(input: string): string {

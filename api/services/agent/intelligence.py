@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from api.services.agent.llm_intent import enrich_task_intelligence
+from api.services.agent.llm_verification import build_llm_verification_check
 from api.services.agent.models import AgentAction, AgentSource
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
@@ -39,6 +41,7 @@ STOPWORDS = {
     "www",
 }
 NEGATION_TERMS = {"no", "not", "never", "without", "none", "cannot", "can't"}
+DELIVERY_ACTION_IDS = ("gmail.send", "email.send", "mailer.report_send")
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,8 @@ class TaskIntelligence:
     requires_delivery: bool
     requires_web_inspection: bool
     requested_report: bool
+    preferred_tone: str = ""
+    preferred_format: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +65,8 @@ class TaskIntelligence:
             "requires_delivery": self.requires_delivery,
             "requires_web_inspection": self.requires_web_inspection,
             "requested_report": self.requested_report,
+            "preferred_tone": self.preferred_tone,
+            "preferred_format": self.preferred_format,
         }
 
 
@@ -82,27 +89,78 @@ def _extract_first_url(*chunks: str) -> str:
     return match.group(0).strip().rstrip(".,;)") if match else ""
 
 
+def _has_delivery_intent(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "send",
+            "sent",
+            "sending",
+            "deliver",
+            "delivered",
+            "delivery",
+            "email",
+            "mail",
+            "share",
+            "forward",
+        )
+    )
+
+
 def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> TaskIntelligence:
     raw = f"{message} {agent_goal or ''}".strip()
     lowered = raw.lower()
     target_url = _extract_first_url(raw)
     host = (urlparse(target_url).hostname or "").strip().lower() if target_url else ""
     delivery_email = _extract_first_email(raw)
-    requires_delivery = any(token in lowered for token in ("send", "deliver", "email")) and bool(
-        delivery_email
-    )
+    requires_delivery = _has_delivery_intent(lowered) and bool(delivery_email)
     requires_web_inspection = bool(target_url) or any(
         token in lowered for token in ("website", "web", "online", "source", "research", "analy")
     )
     requested_report = any(token in lowered for token in ("report", "summary", "analysis", "brief"))
+    heuristic = {
+        "objective": _compact(message, 280),
+        "target_url": target_url,
+        "delivery_email": delivery_email,
+        "requires_delivery": requires_delivery,
+        "requires_web_inspection": requires_web_inspection,
+        "requested_report": requested_report,
+    }
+    llm_intent = enrich_task_intelligence(
+        message=message,
+        agent_goal=agent_goal,
+        heuristic=heuristic,
+    )
+    llm_target_url = str(llm_intent.get("target_url") or "").strip().rstrip(".,;)")
+    if llm_target_url.startswith(("http://", "https://")):
+        target_url = llm_target_url
+        host = (urlparse(target_url).hostname or "").strip().lower()
+    llm_delivery_email = str(llm_intent.get("delivery_email") or "").strip()
+    if "@" in llm_delivery_email and "." in llm_delivery_email:
+        delivery_email = llm_delivery_email
+    if isinstance(llm_intent.get("requires_delivery"), bool):
+        requires_delivery = bool(llm_intent.get("requires_delivery"))
+    if isinstance(llm_intent.get("requires_web_inspection"), bool):
+        requires_web_inspection = bool(llm_intent.get("requires_web_inspection"))
+    if isinstance(llm_intent.get("requested_report"), bool):
+        requested_report = bool(llm_intent.get("requested_report"))
+    if not delivery_email:
+        requires_delivery = False
+    objective = str(llm_intent.get("objective") or "").strip() or _compact(message, 280)
+    preferred_tone = str(llm_intent.get("preferred_tone") or "").strip()[:80]
+    preferred_format = str(llm_intent.get("preferred_format") or "").strip()[:80]
+
     return TaskIntelligence(
-        objective=_compact(message, 280),
+        objective=objective,
         target_url=target_url,
         target_host=host,
         delivery_email=delivery_email,
         requires_delivery=requires_delivery,
         requires_web_inspection=requires_web_inspection,
         requested_report=requested_report,
+        preferred_tone=preferred_tone,
+        preferred_format=preferred_format,
     )
 
 
@@ -311,9 +369,9 @@ def build_verification_report(
         for row in executed_steps
     )
     has_send_success = any(
-        item.tool_id in ("gmail.send", "email.send") and item.status == "success" for item in actions
+        item.tool_id in DELIVERY_ACTION_IDS and item.status == "success" for item in actions
     )
-    send_attempted = any(item.tool_id in ("gmail.send", "email.send") for item in actions)
+    send_attempted = any(item.tool_id in DELIVERY_ACTION_IDS for item in actions)
     evidence_units = _collect_evidence_units(sources=sources, executed_steps=executed_steps)
     claim_candidates = _extract_claim_candidates(executed_steps=executed_steps, actions=actions)
     claim_assessments = [
@@ -384,12 +442,21 @@ def build_verification_report(
         )
         if send_attempted and not has_send_success:
             latest_send_error = next(
-                (item.summary for item in reversed(actions) if item.tool_id in ("gmail.send", "email.send")),
+                (item.summary for item in reversed(actions) if item.tool_id in DELIVERY_ACTION_IDS),
                 "",
             )
             auth_hint = ""
             lowered_error = str(latest_send_error).lower()
-            if "invalid authentication" in lowered_error or "oauth" in lowered_error or "refresh_token" in lowered_error:
+            if "gmail_dwd_api_disabled" in lowered_error or "gmail api is not enabled" in lowered_error:
+                auth_hint = "Enable Gmail API in Google Cloud for the service-account project and retry."
+            elif "gmail_dwd_delegation_denied" in lowered_error or "domain-wide delegation" in lowered_error:
+                auth_hint = (
+                    "Verify Admin Console domain-wide delegation for the service-account client ID "
+                    "and scope https://www.googleapis.com/auth/gmail.send."
+                )
+            elif "gmail_dwd_mailbox_unavailable" in lowered_error:
+                auth_hint = "Confirm the impersonated mailbox exists and is active in Google Workspace."
+            elif "invalid authentication" in lowered_error or "oauth" in lowered_error or "refresh_token" in lowered_error:
                 auth_hint = "Reconnect Google OAuth in Settings and retry."
             elif "required role" in lowered_error and "admin" in lowered_error:
                 auth_hint = "Use Full Access for this run or set agent role to admin/owner."
@@ -407,6 +474,14 @@ def build_verification_report(
         len(action_failures) == 0,
         "No tool failures detected." if not action_failures else f"{len(action_failures)} tool failure(s) detected.",
     )
+    llm_check = build_llm_verification_check(
+        task=task.to_dict(),
+        executed_steps=executed_steps,
+        actions=actions,
+        sources=sources,
+    )
+    if isinstance(llm_check, dict):
+        checks.append(llm_check)
 
     pass_count = sum(1 for check in checks if check.get("status") == "pass")
     total = max(1, len(checks))

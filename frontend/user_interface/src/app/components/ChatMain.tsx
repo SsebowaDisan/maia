@@ -6,16 +6,9 @@ import {
   useState,
 } from "react";
 import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
   Copy,
   FileText,
-  Loader2,
-  Maximize2,
-  Minimize2,
   PenLine,
-  Paperclip,
   RotateCcw,
   Send,
   X,
@@ -24,7 +17,9 @@ import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from
 import type { UploadResponse } from "../../api/client";
 import { renderRichText } from "../utils/richText";
 import { parseEvidence } from "../utils/infoInsights";
+import { AccessModeDropdown } from "./AccessModeDropdown";
 import { AgentActivityPanel } from "./AgentActivityPanel";
+import { ComposerQuickActionsCard } from "./ComposerQuickActionsCard";
 
 interface ChatMainProps {
   onToggleInfoPanel: () => void;
@@ -68,19 +63,7 @@ type ComposerAttachment = {
   fileId?: string;
 };
 
-type ComposerContext =
-  | {
-      kind: "retry";
-      text: string;
-    }
-  | {
-      kind: "quote";
-      text: string;
-    };
-
 export function ChatMain({
-  onToggleInfoPanel,
-  isInfoPanelOpen,
   chatTurns,
   selectedTurnIndex,
   onSelectTurn,
@@ -89,9 +72,6 @@ export function ChatMain({
   onUploadFiles,
   isSending,
   citationMode,
-  onCitationModeChange,
-  mindmapEnabled,
-  onMindmapEnabledChange,
   onCitationClick,
   agentMode,
   onAgentModeChange,
@@ -101,10 +81,9 @@ export function ChatMain({
   isActivityStreaming,
 }: ChatMainProps) {
   const [message, setMessage] = useState("");
-  const [isCitationDropdownOpen, setIsCitationDropdownOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [composerContext, setComposerContext] = useState<ComposerContext | null>(null);
+  const [agentControlsVisible, setAgentControlsVisible] = useState(false);
   const [messageActionStatus, setMessageActionStatus] = useState("");
   const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -132,7 +111,7 @@ export function ChatMain({
   );
 
   const submit = async () => {
-    const payload = message.trim() || composerContext?.text.trim() || "";
+    const payload = message.trim();
     if (!payload || isSending) {
       return;
     }
@@ -142,12 +121,11 @@ export function ChatMain({
     setMessage("");
     await onSendMessage(payload, turnAttachments, {
       citationMode,
-      useMindmap: mindmapEnabled,
+      useMindmap: false,
       agentMode,
       accessMode,
     });
     setAttachments([]);
-    setComposerContext(null);
   };
 
   const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) => {
@@ -215,20 +193,29 @@ export function ChatMain({
     showActionStatus("Message updated. Generating response...");
     await onSendMessage(value, editedTurn?.attachments, {
       citationMode,
-      useMindmap: mindmapEnabled,
+      useMindmap: false,
       agentMode,
       accessMode,
     });
   };
 
   const retryTurn = (turn: ChatTurn) => {
-    setComposerContext({
-      kind: "retry",
-      text: turn.user,
-    });
-    setMessage("");
+    setMessage(turn.user);
     setAttachments(mapTurnAttachments(turn.attachments));
-    showActionStatus("Retry prompt added above the chat bar.");
+    showActionStatus("Retry prompt loaded into the command bar.");
+  };
+
+  const enableAgentMode = () => {
+    setAgentControlsVisible(true);
+    onAgentModeChange("company_agent");
+    showActionStatus("Agent mode enabled.");
+  };
+
+  const enableDeepResearch = () => {
+    setAgentControlsVisible(false);
+    onAgentModeChange("ask");
+    onAccessModeChange("restricted");
+    showActionStatus("Deep research enabled in Ask mode.");
   };
 
   const quoteAssistant = (turn: ChatTurn) => {
@@ -236,11 +223,12 @@ export function ChatMain({
     if (!quoteSource) {
       return;
     }
-    setComposerContext({
-      kind: "quote",
-      text: quoteSource.slice(0, 350),
+    const quoted = `> ${quoteSource.slice(0, 350)}`;
+    setMessage((previous) => {
+      const base = previous.trim();
+      return base ? `${base}\n${quoted}` : quoted;
     });
-    showActionStatus("Quoted answer in composer.");
+    showActionStatus("Quoted answer loaded into the command bar.");
   };
 
   const stopBubbleAction = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -372,7 +360,7 @@ export function ChatMain({
             </div>
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto w-full space-y-4">
+          <div className="mx-auto w-full max-w-[1800px] space-y-4">
             {chatTurns.map((turn, index) => {
               const isLatestTurn = index === chatTurns.length - 1;
               const turnActivityEvents =
@@ -384,6 +372,7 @@ export function ChatMain({
               const stageAttachment =
                 (turn.attachments || []).find((attachment) => Boolean(attachment.fileId)) ||
                 (turn.attachments || [])[0];
+              const hasAssistantOutput = Boolean(String(turn.assistant || "").trim());
 
               return (
                 <div
@@ -397,7 +386,7 @@ export function ChatMain({
                   <div className="max-w-[80%] space-y-2 group">
                     <div className="flex justify-end">
                       <span className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] text-[#6e6e73]">
-                        {turn.mode === "company_agent" ? "Company Agent" : "Ask"}
+                        {turn.mode === "company_agent" ? "Agent" : "Ask"}
                       </span>
                     </div>
                     {turn.attachments && turn.attachments.length > 0 ? (
@@ -514,54 +503,56 @@ export function ChatMain({
                     </div>
                   </div>
                 ) : null}
-                <div className="flex justify-start">
-                  <div className="max-w-[90%] space-y-1.5 group">
-                    <div className="rounded-2xl bg-[#f5f5f7] text-[#1d1d1f] px-4 py-3 text-[14px] leading-relaxed">
-                      <div
-                        className="chat-answer-html [&_p]:mb-3 [&_p:last-child]:mb-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:text-[22px] [&_h1]:font-semibold [&_h1]:mb-3 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h2]:mb-2 [&_h3]:text-[18px] [&_h3]:font-semibold [&_h3]:mb-2 [&_pre]:bg-white [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:rounded-xl [&_pre]:p-3 [&_pre]:overflow-x-auto [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-white [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#3a3a3f] hover:[&_a]:underline [&_a.citation]:inline-flex [&_a.citation]:items-center [&_a.citation]:justify-center [&_a.citation]:ml-1 [&_a.citation]:px-1.5 [&_a.citation]:py-0.5 [&_a.citation]:rounded-md [&_a.citation]:bg-[#ececf0] [&_a.citation]:text-[#2f2f34] [&_a.citation]:text-[11px] [&_a.citation]:font-medium hover:[&_a.citation]:bg-[#e4e4e8] [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg [&_mark]:bg-[#fff5b5]"
-                        dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
-                      />
-                    </div>
-                    <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          stopBubbleAction(event);
-                          void copyPlainText(turn.assistant, "Assistant answer");
-                        }}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
-                        title="Copy answer"
-                      >
-                        <Copy className="w-3 h-3" />
-                        <span>Copy</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          stopBubbleAction(event);
-                          retryTurn(turn);
-                        }}
-                        disabled={isSending}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors disabled:opacity-45"
-                        title="Stage retry prompt"
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>Retry</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          stopBubbleAction(event);
-                          quoteAssistant(turn);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
-                        title="Quote in composer"
-                      >
-                        <span>Quote</span>
-                      </button>
+                {hasAssistantOutput ? (
+                  <div className="flex justify-start">
+                    <div className="max-w-[90%] space-y-1.5 group">
+                      <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[14px] leading-relaxed text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
+                        <div
+                          className="chat-answer-html [&_p]:mb-3 [&_p]:leading-[1.7] [&_p:last-child]:mb-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:text-[17px] [&_h3]:font-semibold [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#0a66d9] hover:[&_a]:underline [&_a.citation]:ml-1 [&_a.citation]:inline-flex [&_a.citation]:items-center [&_a.citation]:justify-center [&_a.citation]:rounded-md [&_a.citation]:bg-[#ececf0] [&_a.citation]:px-1.5 [&_a.citation]:py-0.5 [&_a.citation]:text-[11px] [&_a.citation]:font-medium [&_a.citation]:text-[#2f2f34] hover:[&_a.citation]:bg-[#e4e4e8] [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg [&_mark]:bg-[#fff5b5]"
+                          dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            stopBubbleAction(event);
+                            void copyPlainText(turn.assistant, "Assistant answer");
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                          title="Copy answer"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            stopBubbleAction(event);
+                            retryTurn(turn);
+                          }}
+                          disabled={isSending}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors disabled:opacity-45"
+                          title="Stage retry prompt"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Retry</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            stopBubbleAction(event);
+                            quoteAssistant(turn);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                          title="Quote in composer"
+                        >
+                          <span>Quote</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : null}
               </div>
               );
             })}
@@ -570,123 +561,25 @@ export function ChatMain({
       </div>
 
       <div className="border-t border-black/[0.06] bg-white">
-        <div className="max-w-3xl mx-auto px-6 py-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="inline-flex rounded-xl bg-[#f5f5f7] p-1">
-              {[
-                { id: "ask", label: "Ask" },
-                { id: "company_agent", label: "Company Agent" },
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onAgentModeChange(item.id as "ask" | "company_agent")}
-                  className={`rounded-lg px-3 py-1.5 text-[12px] transition-colors ${
-                    agentMode === item.id
-                      ? "bg-white text-[#1d1d1f] shadow-sm"
-                      : "text-[#6e6e73] hover:text-[#1d1d1f]"
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
+        <div className="mx-auto w-full max-w-[1800px] px-6 py-4">
+          <div className="assistantComposer rounded-[22px] border border-black/[0.08] bg-[#f3f3f5]">
+            <div className="assistantComposerInputShell rounded-[14px] border border-black/[0.08] bg-white">
+              <input
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder="Ask for follow-up changes"
+                className="assistantComposerInput min-w-0 flex-1 border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#86868b] focus:outline-none"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void submit();
+                  }
+                }}
+              />
             </div>
-            {agentMode === "company_agent" ? (
-              <div className="inline-flex rounded-xl bg-[#f5f5f7] p-1">
-                {[
-                  { id: "restricted", label: "Restricted" },
-                  { id: "full_access", label: "Full Access" },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => onAccessModeChange(item.id as "restricted" | "full_access")}
-                    className={`rounded-lg px-3 py-1.5 text-[11px] transition-colors ${
-                      accessMode === item.id
-                        ? "bg-white text-[#1d1d1f] shadow-sm"
-                        : "text-[#6e6e73] hover:text-[#1d1d1f]"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
 
-          {messageActionStatus ? (
-            <p className="mb-2 text-[12px] text-[#6e6e73]">{messageActionStatus}</p>
-          ) : null}
-
-          <div className="relative mb-3">
-            <div className="bg-[#f5f5f7] rounded-2xl p-3 focus-within:ring-2 focus-within:ring-black/10 transition-all">
-              {composerContext ? (
-                <div className="mb-2 flex items-center gap-2 overflow-hidden rounded-xl border border-black/[0.08] bg-white px-2.5 py-2 shadow-sm">
-                  <div className="shrink-0 rounded-md bg-[#f5f5f7] p-1">
-                    {composerContext.kind === "retry" ? (
-                      <RotateCcw className="w-3.5 h-3.5 text-[#6e6e73]" />
-                    ) : (
-                      <FileText className="w-3.5 h-3.5 text-[#6e6e73]" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] text-[#86868b]">
-                      {composerContext.kind === "retry" ? "Retry prompt" : "Quoted answer"}
-                    </p>
-                    <p className="text-[13px] text-[#1d1d1f] truncate">
-                      {`> ${composerContext.text}`}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setComposerContext(null)}
-                    className="shrink-0 p-1 rounded-md hover:bg-black/5 transition-colors"
-                    title="Remove prompt"
-                  >
-                    <X className="w-3.5 h-3.5 text-[#86868b]" />
-                  </button>
-                </div>
-              ) : null}
-
-              {attachments.length > 0 ? (
-                <div className="mb-2 flex items-center gap-2 overflow-x-auto py-1">
-                  {attachments.map((attachment) => (
-                    <div
-                      key={attachment.id}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white border border-black/[0.08] shadow-sm min-w-0"
-                      title={attachment.message || attachment.name}
-                    >
-                      <FileText className="w-3.5 h-3.5 text-[#6e6e73] shrink-0" />
-                      <span className="text-[12px] text-[#1d1d1f] max-w-[150px] truncate">
-                        {attachment.name}
-                      </span>
-                      {attachment.status === "uploading" ? (
-                        <Loader2 className="w-3.5 h-3.5 text-[#6e6e73] animate-spin shrink-0" />
-                      ) : null}
-                      {attachment.status === "indexed" ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-[#1f8f4c] shrink-0" />
-                      ) : null}
-                      {attachment.status === "error" ? (
-                        <AlertCircle className="w-3.5 h-3.5 text-[#c9342e] shrink-0" />
-                      ) : null}
-                      <button
-                        onClick={() =>
-                          setAttachments((prev) =>
-                            prev.filter((item) => item.id !== attachment.id),
-                          )
-                        }
-                        className="p-0.5 rounded hover:bg-black/5 transition-colors shrink-0"
-                        aria-label={`Remove ${attachment.name}`}
-                        type="button"
-                      >
-                        <X className="w-3 h-3 text-[#86868b]" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="flex items-end gap-3">
+            <div className="assistantComposerToolbar">
+              <div className="assistantComposerTools">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -694,119 +587,60 @@ export function ChatMain({
                   className="hidden"
                   onChange={onFileChange}
                 />
-                <button
-                  className="p-2 hover:bg-black/5 rounded-lg transition-colors self-end disabled:opacity-40"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading || isSending}
-                  title={isUploading ? "Uploading..." : "Upload files"}
-                >
-                  <Paperclip className="w-5 h-5 text-[#86868b]" />
-                </button>
-
-                <textarea
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                  placeholder={
-                    agentMode === "company_agent"
-                      ? "Describe the company task: research, ads analysis, reporting, email, or invoice workflow"
-                      : "Type a message, search the @web, or tag a file with @filename"
-                  }
-                  className="flex-1 bg-transparent border-0 resize-none text-[15px] text-[#1d1d1f] placeholder:text-[#86868b] focus:outline-none min-h-[24px] max-h-[120px] py-1"
-                  rows={1}
-                  onInput={(event) => {
-                    const target = event.target as HTMLTextAreaElement;
-                    target.style.height = "auto";
-                    target.style.height = `${target.scrollHeight}px`;
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void submit();
-                    }
-                  }}
+                <ComposerQuickActionsCard
+                  onUploadFile={() => fileInputRef.current?.click()}
+                  onSelectAgent={enableAgentMode}
+                  onSelectDeepResearch={enableDeepResearch}
+                  disableUpload={isUploading || isSending}
+                  triggerClassName="composerAttachButton inline-flex items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f] disabled:opacity-40"
                 />
 
-                <button
-                  className="p-2 bg-[#1d1d1f] hover:bg-[#3a3a3c] rounded-lg transition-all self-end disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-                  disabled={
-                    (!message.trim() && !(composerContext?.text || "").trim()) ||
-                    isSending ||
-                    isUploading
-                  }
-                  onClick={() => void submit()}
-                >
-                  <Send className="w-5 h-5 text-white" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between text-[13px]">
-            <div className="flex items-center gap-4">
-              <span className="text-[#86868b]">Chat settings</span>
-
-              <div className="relative">
-                <button
-                  onClick={() => setIsCitationDropdownOpen(!isCitationDropdownOpen)}
-                  onBlur={() => setTimeout(() => setIsCitationDropdownOpen(false), 150)}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-white border border-[#e5e5e5] rounded-lg text-[#1d1d1f] hover:border-[#86868b] transition-colors"
-                >
-                  <span>citation: {citationMode}</span>
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 text-[#86868b] transition-transform ${
-                      isCitationDropdownOpen ? "rotate-180" : ""
-                    }`}
-                  />
-                </button>
-
-                {isCitationDropdownOpen && (
-                  <div className="absolute top-full left-0 mt-1 w-[180px] bg-white border border-[#e5e5e5] rounded-lg shadow-lg overflow-hidden z-10">
-                    {["highlight", "footnote", "inline"].map((mode) => (
-                      <button
-                        key={mode}
-                        onClick={() => {
-                          onCitationModeChange(mode);
-                          setIsCitationDropdownOpen(false);
-                        }}
-                        className={`w-full px-3 py-2 text-left text-[13px] transition-colors ${
-                          citationMode === mode
-                            ? "bg-[#1d1d1f] text-white"
-                            : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-                        }`}
-                      >
-                        citation: {mode}
-                      </button>
-                    ))}
+                <div className="assistantComposerAccessSlot">
+                  <div
+                    className="accessReveal"
+                    data-visible={agentControlsVisible && agentMode === "company_agent" ? "true" : "false"}
+                  >
+                    {agentControlsVisible && agentMode === "company_agent" ? (
+                      <AccessModeDropdown
+                        value={accessMode}
+                        onChange={(value) => onAccessModeChange(value)}
+                      />
+                    ) : (
+                      <span className="accessPopupPlaceholder" aria-hidden="true" />
+                    )}
                   </div>
-                )}
+                </div>
+
+                {attachments.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setAttachments([])}
+                    className="inline-flex h-7 items-center gap-1 rounded-full border border-black/[0.08] bg-white px-2 text-[11px] text-[#1d1d1f]"
+                    title="Clear attached files"
+                  >
+                    <span>{attachments.length}</span>
+                    <X className="h-3 w-3 text-[#86868b]" />
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="assistantComposerActions">
+                <button
+                  type="button"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-black/[0.08] bg-[#a4a4aa] text-white shadow-[0_6px_14px_-12px_rgba(0,0,0,0.45)] transition-colors duration-150 hover:bg-[#98989e] disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!message.trim() || isSending || isUploading}
+                  onClick={() => void submit()}
+                  aria-label="Send message"
+                  title="Send"
+                >
+                  <Send className="h-4.5 w-4.5" />
+                </button>
               </div>
             </div>
-
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={mindmapEnabled}
-                  onChange={(event) => onMindmapEnabledChange(event.target.checked)}
-                  className="w-4 h-4 rounded border-black/[0.2] text-[#1d1d1f] focus:ring-2 focus:ring-black/10"
-                />
-                <span className="text-[#1d1d1f]">
-                  Mindmap ({mindmapEnabled ? "on" : "off"})
-                </span>
-              </label>
-
-              <button
-                onClick={onToggleInfoPanel}
-                className="p-1.5 rounded-lg hover:bg-black/5 transition-colors"
-              >
-                {isInfoPanelOpen ? (
-                  <Minimize2 className="w-4 h-4 text-[#86868b]" />
-                ) : (
-                  <Maximize2 className="w-4 h-4 text-[#86868b]" />
-                )}
-              </button>
-            </div>
           </div>
+          {messageActionStatus ? (
+            <p className="mt-2 px-1 text-[12px] text-[#6e6e73]">{messageActionStatus}</p>
+          ) : null}
         </div>
       </div>
     </div>

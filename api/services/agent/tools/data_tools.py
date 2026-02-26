@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from statistics import mean
 from typing import Any
 
@@ -37,6 +38,45 @@ def _first_sentence(text: str, max_len: int = 220) -> str:
     if len(clean) <= max_len:
         return clean
     return f"{clean[: max_len - 1].rstrip()}..."
+
+
+def _has_location_prompt(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        token in lowered
+        for token in (
+            "where",
+            "location",
+            "located",
+            "headquarter",
+            "headquarters",
+            "address",
+            "office",
+            "based in",
+            "found in",
+            "city",
+            "country",
+        )
+    )
+
+
+def _extract_location_signal(text: str) -> str:
+    clean = " ".join(str(text or "").split())
+    if not clean:
+        return ""
+    patterns = (
+        r"\b(?:headquartered|based|located)\s+in\s+([A-Za-z0-9 ,.'()-]{4,80})",
+        r"\baddress(?:es)?[:\s]+([A-Za-z0-9 ,.'()#/-]{6,120})",
+        r"\b(?:offices?|locations?)\s+(?:in|across)\s+([A-Za-z0-9 ,.'()-]{4,100})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, clean, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value = " ".join(str(match.group(1) or "").split()).strip(" .,:;")
+        if value:
+            return value
+    return ""
 
 
 class DataAnalysisTool(AgentTool):
@@ -170,12 +210,30 @@ class ReportGenerationTool(AgentTool):
                 if isinstance(finding_keywords, list)
                 else ""
             )
-            summary = (
-                f"{finding_title} appears to focus on industrial solutions and related services."
-                + (f" Key terms observed: {keyword_line}." if keyword_line else "")
-                + (f" Evidence URL: {finding_url}." if finding_url else "")
-                + (f" Evidence note: {finding_excerpt}" if finding_excerpt else "")
-            )
+            requested_focus = _first_sentence(str(params.get("summary") or prompt), max_len=260)
+            location_requested = _has_location_prompt(requested_focus)
+            location_signal = _extract_location_signal(finding_excerpt)
+            summary_parts: list[str] = []
+            if requested_focus:
+                summary_parts.append(requested_focus)
+            summary_parts.append(f"Captured source analyzed: {finding_title}.")
+            if location_requested:
+                if location_signal:
+                    summary_parts.append(f"Location evidence found: {location_signal}.")
+                else:
+                    summary_parts.append(
+                        "No explicit headquarters/address was confirmed from the captured excerpt; "
+                        "inspect Contact/About pages for verified location details."
+                    )
+            if keyword_line:
+                summary_parts.append(f"Observed terms: {keyword_line}.")
+            if finding_url:
+                summary_parts.append(f"Evidence URL: {finding_url}.")
+            if finding_excerpt:
+                summary_parts.append(f"Evidence note: {finding_excerpt}")
+            summary = " ".join(summary_parts)
+        if len(summary) > 900:
+            summary = f"{summary[:899].rstrip()}..."
         highlights = params.get("highlights")
         if not isinstance(highlights, list):
             highlights = []

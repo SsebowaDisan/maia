@@ -19,6 +19,47 @@ def _safe_slug(text: str) -> str:
     return cleaned or "document"
 
 
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _build_copied_highlights_section(raw: Any, *, limit: int = 14) -> str:
+    if not isinstance(raw, list):
+        return ""
+    lines: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = " ".join(str(item.get("text") or "").split()).strip()
+        if not text:
+            continue
+        color = str(item.get("color") or "yellow").strip().lower()
+        color = "green" if color == "green" else "yellow"
+        word = str(item.get("word") or "").strip()
+        reference = str(item.get("reference") or item.get("title") or "").strip()
+        line = f"- [{color}] "
+        if word:
+            line += f"{word}: "
+        line += text
+        if reference:
+            line += f" ({reference})"
+        lines.append(line)
+        if len(lines) >= max(1, int(limit)):
+            break
+    if not lines:
+        return ""
+    return "\n".join(["## Copied Highlights", *lines])
+
+
 class DocumentCreateTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="docs.create",
@@ -39,26 +80,57 @@ class DocumentCreateTool(AgentTool):
         title = str(params.get("title") or "Company Brief").strip()
         body = str(params.get("body") or prompt).strip() or "No content provided."
         provider = str(params.get("provider") or context.settings.get("agent.docs_provider") or "local").strip()
+        include_copied_highlights = _truthy(params.get("include_copied_highlights"), default=False)
+        copied_section = (
+            _build_copied_highlights_section(context.settings.get("__copied_highlights"))
+            if include_copied_highlights
+            else ""
+        )
+        if copied_section:
+            body = f"{body}\n\n{copied_section}"
 
-        trace_events: list[ToolTraceEvent] = [
+        trace_events: list[ToolTraceEvent] = []
+        trace_events.append(
             ToolTraceEvent(
                 event_type="doc_open",
                 title="Open document composer",
                 detail=f"Provider: {provider}",
                 data={"provider": provider, "title": title},
-            ),
+            )
+        )
+        trace_events.append(
             ToolTraceEvent(
                 event_type="doc_locate_anchor",
                 title="Locate first editable section",
                 detail="Finding insertion anchor for generated content",
-            ),
+            )
+        )
+        if copied_section:
+            preview_line = copied_section.splitlines()[1] if len(copied_section.splitlines()) > 1 else ""
+            trace_events.append(
+                ToolTraceEvent(
+                    event_type="doc_copy_clipboard",
+                    title="Copy highlighted words",
+                    detail=preview_line[:160],
+                    data={"include_copied_highlights": True},
+                )
+            )
+            trace_events.append(
+                ToolTraceEvent(
+                    event_type="doc_paste_clipboard",
+                    title="Paste highlighted words into document",
+                    detail="Appending copied highlights section",
+                    data={"include_copied_highlights": True},
+                )
+            )
+        trace_events.append(
             ToolTraceEvent(
                 event_type="doc_insert_text",
                 title="Insert generated content",
                 detail="Writing generated body into document",
                 data={"body_length": len(body)},
-            ),
-        ]
+            )
+        )
 
         if provider == "google_workspace":
             connector = get_connector_registry().build("google_workspace", settings=context.settings)
@@ -87,6 +159,7 @@ class DocumentCreateTool(AgentTool):
                     "document_id": doc_id,
                     "url": doc_url,
                     "body_length": len(body),
+                    "copied_highlights_included": bool(copied_section),
                 },
                 sources=[],
                 next_steps=[
@@ -120,6 +193,7 @@ class DocumentCreateTool(AgentTool):
                 "title": title,
                 "path": str(file_path.resolve()),
                 "body_length": len(body),
+                "copied_highlights_included": bool(copied_section),
             },
             sources=[],
             next_steps=[

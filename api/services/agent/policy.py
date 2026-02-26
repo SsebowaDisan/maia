@@ -193,6 +193,14 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
     ),
     AgentToolCapability(
         domain="document_ops",
+        tool_id="documents.highlight.extract",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_ANALYST,
+        description="Highlight and copy relevant words from selected indexed files.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="document_ops",
         tool_id="workspace.docs.fill_template",
         action_class=ACTION_CLASS_DRAFT,
         minimum_role=USER_ROLE_MEMBER,

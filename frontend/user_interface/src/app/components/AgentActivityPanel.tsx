@@ -52,6 +52,145 @@ function readNumberField(value: unknown): number | null {
   return null;
 }
 
+function readStringListField(value: unknown, limit = 16): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const cleaned = value
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0);
+  return Array.from(new Set(cleaned)).slice(0, Math.max(1, limit));
+}
+
+function readObjectListField(value: unknown, limit = 16): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, Math.max(1, limit));
+}
+
+function mergeLiveSceneData(
+  events: AgentActivityEvent[],
+  activeEvent: AgentActivityEvent | null,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+
+  const assignString = (key: string, value: unknown) => {
+    const text = readStringField(value);
+    if (text) {
+      merged[key] = text;
+    }
+  };
+
+  const applyPayload = (payload: Record<string, unknown>, eventType: string) => {
+    const normalizedType = String(eventType || "").toLowerCase();
+    const isPlanningEvent =
+      normalizedType.startsWith("plan_") ||
+      normalizedType === "planning_started" ||
+      normalizedType === "task_understanding_ready";
+    const isHighlightEvent = normalizedType.includes("highlight");
+
+    [
+      "url",
+      "target_url",
+      "page_url",
+      "final_url",
+      "link",
+      "highlight_color",
+      "clipboard_text",
+      "document_id",
+      "document_url",
+      "spreadsheet_id",
+      "spreadsheet_url",
+      "step_name",
+      "status",
+      "tool_id",
+      "path",
+      "pdf_path",
+    ].forEach((key) => assignString(key, payload[key]));
+
+    const searchTerms = readStringListField(payload["search_terms"] ?? payload["planned_search_terms"], 12);
+    if (searchTerms.length) {
+      merged["search_terms"] = searchTerms;
+      if (isPlanningEvent || !Array.isArray(merged["planned_search_terms"])) {
+        merged["planned_search_terms"] = searchTerms;
+      }
+    }
+
+    const keywords = readStringListField(payload["keywords"] ?? payload["planned_keywords"], 16);
+    if (keywords.length) {
+      if (isPlanningEvent || !Array.isArray(merged["planned_keywords"])) {
+        merged["planned_keywords"] = keywords;
+      }
+      if (isHighlightEvent || !Array.isArray(merged["keywords"])) {
+        merged["keywords"] = keywords;
+      }
+    }
+
+    const highlightedKeywords = readStringListField(payload["highlighted_keywords"], 16);
+    if (highlightedKeywords.length) {
+      merged["highlighted_keywords"] = highlightedKeywords;
+      if (!Array.isArray(merged["keywords"])) {
+        merged["keywords"] = highlightedKeywords;
+      }
+    }
+
+    const stepIds = readStringListField(payload["step_ids"], 16);
+    if (stepIds.length) {
+      merged["step_ids"] = stepIds;
+    }
+
+    const copiedSnippets = readStringListField(payload["copied_snippets"], 12);
+    if (copiedSnippets.length) {
+      merged["copied_snippets"] = copiedSnippets;
+    }
+
+    const highlightedWords = readObjectListField(payload["highlighted_words"], 18);
+    if (highlightedWords.length) {
+      merged["highlighted_words"] = highlightedWords;
+    }
+
+    const highlightRegions = readObjectListField(payload["highlight_regions"], 12);
+    if (highlightRegions.length) {
+      merged["highlight_regions"] = highlightRegions;
+    }
+
+    const taskUnderstanding = payload["task_understanding"];
+    if (taskUnderstanding && typeof taskUnderstanding === "object") {
+      const understanding = taskUnderstanding as Record<string, unknown>;
+      const plannedSearchTerms = readStringListField(understanding["planned_search_terms"], 12);
+      if (plannedSearchTerms.length) {
+        merged["planned_search_terms"] = plannedSearchTerms;
+      }
+      const plannedKeywords = readStringListField(understanding["planned_keywords"], 16);
+      if (plannedKeywords.length) {
+        merged["planned_keywords"] = plannedKeywords;
+      }
+    }
+  };
+
+  for (const event of events) {
+    const payload =
+      event.data && typeof event.data === "object"
+        ? (event.data as Record<string, unknown>)
+        : event.metadata && typeof event.metadata === "object"
+          ? (event.metadata as Record<string, unknown>)
+          : null;
+    if (!payload) {
+      continue;
+    }
+    applyPayload(payload, event.event_type);
+  }
+
+  if (activeEvent?.data && typeof activeEvent.data === "object") {
+    applyPayload(activeEvent.data as Record<string, unknown>, activeEvent.event_type);
+  }
+
+  return merged;
+}
+
 export function AgentActivityPanel({
   events,
   streaming,
@@ -171,6 +310,10 @@ export function AgentActivityPanel({
   const isEmailScene = activeSceneTab === "email";
   const isDocumentScene = activeSceneTab === "document";
   const isSystemScene = activeSceneTab === "system";
+  const mergedSceneData = useMemo(
+    () => mergeLiveSceneData(visibleEvents, activeEvent),
+    [visibleEvents, activeEvent?.event_id],
+  );
 
   const snapshotUrl = useMemo(() => {
     if (!sceneEvent) {
@@ -256,7 +399,11 @@ export function AgentActivityPanel({
   const emailBodyHint = useMemo(() => {
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const event = visibleEvents[idx];
-      if (event.event_type !== "email_set_body" && event.event_type !== "email_type_body") {
+      if (
+        event.event_type !== "email_set_body" &&
+        event.event_type !== "email_type_body" &&
+        event.event_type !== "email_ready_to_send"
+      ) {
         continue;
       }
       const dataPreview =
@@ -291,6 +438,12 @@ export function AgentActivityPanel({
 
   const cursorLabel = useMemo(() => {
     const type = activeEvent?.event_type || "";
+    if (type === "planning_started") {
+      return "Planning search strategy";
+    }
+    if (type === "plan_candidate" || type === "plan_refined") {
+      return "Preparing roadmap";
+    }
     if (type === "document_opened") {
       return "Open file";
     }
@@ -315,17 +468,32 @@ export function AgentActivityPanel({
     if (type === "doc_copy_clipboard") {
       return "Copying note";
     }
+    if (type === "doc_open") {
+      return "Opening docs notebook";
+    }
+    if (type === "doc_type_text") {
+      return "Writing docs note";
+    }
     if (type === "doc_paste_clipboard") {
       return "Pasting content";
     }
+    if (type === "doc_save") {
+      return "Saving docs note";
+    }
     if (type === "browser_navigate" || type === "web_search_started") {
       return "Navigating";
+    }
+    if (type === "sheet_open") {
+      return "Opening tracker";
     }
     if (type === "sheet_cell_update") {
       return "Updating cells";
     }
     if (type === "sheet_append_row") {
       return "Appending row";
+    }
+    if (type === "sheet_save") {
+      return "Saving tracker";
     }
     if (type === "email_set_body") {
       return "Typing email";
@@ -490,7 +658,7 @@ export function AgentActivityPanel({
   const ActiveIcon = activeStyle.icon;
   const runId = orderedEvents[0]?.run_id || activeEvent?.run_id || "";
   const inlineViewerHeightClass = isTheaterView
-    ? "h-[320px] md:h-[420px] xl:h-[520px]"
+    ? "h-[380px] md:h-[500px] xl:h-[600px]"
     : "h-[220px] md:h-[280px]";
   const fullscreenViewerHeightClass = isFocusMode
     ? "h-[calc(100vh-160px)]"
@@ -590,8 +758,8 @@ export function AgentActivityPanel({
             sceneText={sceneText}
             activeTitle={sceneEvent?.title || ""}
             activeDetail={sceneEvent?.detail || ""}
-            activeEventType={sceneEvent?.event_type || ""}
-            activeSceneData={sceneEvent?.data || {}}
+            activeEventType={activeEvent?.event_type || sceneEvent?.event_type || ""}
+            activeSceneData={mergedSceneData}
             onSnapshotError={() => {
               if (sceneEvent?.event_id) {
                 setSnapshotFailedEventId(sceneEvent.event_id);

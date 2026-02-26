@@ -4,6 +4,7 @@ import {
   CheckSquare,
   ChevronDown,
   Eye,
+  Folder,
   FolderPlus,
   HelpCircle,
   LayoutGrid,
@@ -260,6 +261,7 @@ export function FilesView({
   const [sortField, setSortField] = useState<SortField>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const [groupViewMode, setGroupViewMode] = useState<"table" | "cards">("table");
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
   const [targetGroupId, setTargetGroupId] = useState("");
   const [manageGroupId, setManageGroupId] = useState("");
@@ -355,6 +357,19 @@ export function FilesView({
   const ungroupedCount = useMemo(
     () => files.filter((file) => !groupedFileIds.has(file.id)).length,
     [files, groupedFileIds],
+  );
+  const groupRows = useMemo(
+    () => [
+      { id: "all", name: "All Files", count: files.length, droppable: false },
+      { id: UNGROUPED_FILTER, name: "Ungrouped", count: ungroupedCount, droppable: false },
+      ...groupSummary.map((group) => ({
+        id: group.id,
+        name: group.name,
+        count: group.count,
+        droppable: true,
+      })),
+    ],
+    [files.length, ungroupedCount, groupSummary],
   );
 
   const selectedPdfFile = useMemo(
@@ -1017,26 +1032,6 @@ export function FilesView({
                   <ArrowUpDown className="h-4 w-4" />
                   {sortDir === "asc" ? "Asc" : "Desc"}
                 </button>
-                <div className="ml-auto inline-flex items-center gap-4">
-                  <button
-                    onClick={() => setViewMode("table")}
-                    className={`inline-flex items-center gap-1 text-[12px] ${
-                      viewMode === "table" ? "font-semibold text-[#1d1d1f]" : "text-[#8d8d93]"
-                    }`}
-                  >
-                    <List className="h-3.5 w-3.5" />
-                    Table
-                  </button>
-                  <button
-                    onClick={() => setViewMode("cards")}
-                    className={`inline-flex items-center gap-1 text-[12px] ${
-                      viewMode === "cards" ? "font-semibold text-[#1d1d1f]" : "text-[#8d8d93]"
-                    }`}
-                  >
-                    <LayoutGrid className="h-3.5 w-3.5" />
-                    Cards
-                  </button>
-                </div>
               </div>
 
               <div className="mt-6 flex flex-wrap items-center gap-5 border-b border-[#f2f2f5] pb-4">
@@ -1058,6 +1053,32 @@ export function FilesView({
                   <p className="text-[20px] font-semibold tracking-tight text-[#1d1d1f]">Groups</p>
                   <div className="flex items-center gap-3">
                     <span className="text-[12px] text-[#8d8d93]">{groupSummary.length} total</span>
+                    <div className="inline-flex items-center gap-1 rounded-xl border border-black/[0.08] bg-white p-1">
+                      <button
+                        onClick={() => setGroupViewMode("table")}
+                        className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[12px] ${
+                          groupViewMode === "table"
+                            ? "bg-[#f3f3f6] font-semibold text-[#1d1d1f]"
+                            : "text-[#8d8d93]"
+                        }`}
+                        title="Group table view"
+                      >
+                        <List className="h-3.5 w-3.5" />
+                        Table
+                      </button>
+                      <button
+                        onClick={() => setGroupViewMode("cards")}
+                        className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[12px] ${
+                          groupViewMode === "cards"
+                            ? "bg-[#f3f3f6] font-semibold text-[#1d1d1f]"
+                            : "text-[#8d8d93]"
+                        }`}
+                        title="Group card view"
+                      >
+                        <LayoutGrid className="h-3.5 w-3.5" />
+                        Cards
+                      </button>
+                    </div>
                     <button
                       onClick={() => {
                         setQuickGroupName("");
@@ -1073,59 +1094,119 @@ export function FilesView({
                 </div>
 
                 <div className="mt-4 overflow-hidden rounded-2xl border border-black/[0.06]">
-                  <button
-                    onClick={() => setActiveGroupFilter("all")}
-                    className={`flex w-full items-center justify-between border-b border-[#f2f2f5] px-4 py-[22px] text-left ${
-                      activeGroupFilter === "all" ? "bg-[#f7f7f9]" : "hover:bg-[#fafafd]"
-                    }`}
-                  >
-                    <span className="text-[15px] font-medium text-[#1d1d1f]">All Files</span>
-                    <span className="text-[13px] text-[#1d1d1f]/55">{files.length}</span>
-                  </button>
-                  <button
-                    onClick={() => setActiveGroupFilter(UNGROUPED_FILTER)}
-                    className={`flex w-full items-center justify-between border-b border-[#f2f2f5] px-4 py-[22px] text-left ${
-                      activeGroupFilter === UNGROUPED_FILTER ? "bg-[#f7f7f9]" : "hover:bg-[#fafafd]"
-                    }`}
-                  >
-                    <span className="text-[15px] font-medium text-[#1d1d1f]">Ungrouped</span>
-                    <span className="text-[13px] text-[#1d1d1f]/55">{ungroupedCount}</span>
-                  </button>
-                  {groupSummary.map((group, index) => {
-                    const isActive = activeGroupFilter === group.id;
-                    return (
-                      <button
-                        key={group.id}
-                        onClick={() => setActiveGroupFilter(group.id)}
-                        onDragOver={(event) => {
-                          if (!onMoveFilesToGroup) return;
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = "move";
-                          setDragOverGroupId(group.id);
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverGroupId === group.id) {
-                            setDragOverGroupId(null);
-                          }
-                        }}
-                        onDrop={(event) => {
-                          if (!onMoveFilesToGroup) return;
-                          event.preventDefault();
-                          const droppedId = event.dataTransfer.getData("text/plain") || draggingFileId || "";
-                          setDragOverGroupId(null);
-                          void dropFilesIntoGroup(group.id, droppedId || null);
-                        }}
-                        className={`flex w-full items-center justify-between px-4 py-[22px] text-left ${
-                          index < groupSummary.length - 1 ? "border-b border-[#f2f2f5]" : ""
-                        } ${
-                          isActive || dragOverGroupId === group.id ? "bg-[#f7f7f9]" : "hover:bg-[#fafafd]"
-                        }`}
-                      >
-                        <span className="truncate pr-3 text-[15px] font-medium text-[#1d1d1f]">{group.name}</span>
-                        <span className="text-[13px] text-[#1d1d1f]/55">{group.count}</span>
-                      </button>
-                    );
-                  })}
+                  {groupViewMode === "table" ? (
+                    <table className="w-full">
+                      <thead className="border-b border-[#f2f2f5] bg-[#fcfcfd]">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">
+                            Group
+                          </th>
+                          <th className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">
+                            Files
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupRows.map((group, index) => {
+                          const isActive = activeGroupFilter === group.id;
+                          const isDropTarget = group.droppable && dragOverGroupId === group.id;
+                          return (
+                            <tr
+                              key={group.id}
+                              onClick={() => setActiveGroupFilter(group.id)}
+                              onDragOver={(event) => {
+                                if (!group.droppable || !onMoveFilesToGroup) return;
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                                setDragOverGroupId(group.id);
+                              }}
+                              onDragLeave={() => {
+                                if (dragOverGroupId === group.id) {
+                                  setDragOverGroupId(null);
+                                }
+                              }}
+                              onDrop={(event) => {
+                                if (!group.droppable || !onMoveFilesToGroup) return;
+                                event.preventDefault();
+                                const droppedId = event.dataTransfer.getData("text/plain") || draggingFileId || "";
+                                setDragOverGroupId(null);
+                                void dropFilesIntoGroup(group.id, droppedId || null);
+                              }}
+                              className={`cursor-pointer ${
+                                index < groupRows.length - 1 ? "border-b border-[#f2f2f5]" : ""
+                              } ${
+                                isActive || isDropTarget ? "bg-[#f7f7f9]" : "hover:bg-[#fafafd]"
+                              }`}
+                            >
+                              <td className="px-4 py-[18px]">
+                                <div className="inline-flex items-center gap-2">
+                                  <Folder
+                                    className={`h-4 w-4 ${
+                                      isActive ? "text-[#1d1d1f]" : "text-[#8d8d93]"
+                                    }`}
+                                  />
+                                  <span className="truncate pr-3 text-[15px] font-medium text-[#1d1d1f]">
+                                    {group.name}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="px-4 py-[18px] text-right text-[13px] text-[#1d1d1f]/55">
+                                {group.count}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+                      {groupRows.map((group) => {
+                        const isActive = activeGroupFilter === group.id;
+                        const isDropTarget = group.droppable && dragOverGroupId === group.id;
+                        return (
+                          <button
+                            key={`group-card-${group.id}`}
+                            onClick={() => setActiveGroupFilter(group.id)}
+                            onDragOver={(event) => {
+                              if (!group.droppable || !onMoveFilesToGroup) return;
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              setDragOverGroupId(group.id);
+                            }}
+                            onDragLeave={() => {
+                              if (dragOverGroupId === group.id) {
+                                setDragOverGroupId(null);
+                              }
+                            }}
+                            onDrop={(event) => {
+                              if (!group.droppable || !onMoveFilesToGroup) return;
+                              event.preventDefault();
+                              const droppedId = event.dataTransfer.getData("text/plain") || draggingFileId || "";
+                              setDragOverGroupId(null);
+                              void dropFilesIntoGroup(group.id, droppedId || null);
+                            }}
+                            className={`rounded-xl border p-4 text-left transition-colors ${
+                              isActive || isDropTarget
+                                ? "border-[#1d1d1f]/18 bg-[#f7f7f9]"
+                                : "border-black/[0.08] bg-white hover:bg-[#fafafd]"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Folder
+                                className={`h-4 w-4 ${
+                                  isActive ? "text-[#1d1d1f]" : "text-[#8d8d93]"
+                                }`}
+                              />
+                              <p className="truncate text-[15px] font-medium text-[#1d1d1f]">
+                                {group.name}
+                              </p>
+                            </div>
+                            <p className="mt-1 text-[13px] text-[#1d1d1f]/55">{group.count} files</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {activeGroupRecord ? (
@@ -1179,6 +1260,39 @@ export function FilesView({
               {actionMessage ? (
                 <p className="mt-6 text-[12px] text-[#6e6e73]">{actionMessage}</p>
               ) : null}
+
+              <div className="mt-8 flex items-center justify-between">
+                <p className="text-[20px] font-semibold tracking-tight text-[#1d1d1f]">Files</p>
+                <div className="flex items-center gap-3">
+                  <span className="text-[12px] text-[#8d8d93]">{visibleFiles.length} visible</span>
+                  <div className="inline-flex items-center gap-1 rounded-xl border border-black/[0.08] bg-white p-1">
+                    <button
+                      onClick={() => setViewMode("table")}
+                      className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[12px] ${
+                        viewMode === "table"
+                          ? "bg-[#f3f3f6] font-semibold text-[#1d1d1f]"
+                          : "text-[#8d8d93]"
+                      }`}
+                      title="File table view"
+                    >
+                      <List className="h-3.5 w-3.5" />
+                      Table
+                    </button>
+                    <button
+                      onClick={() => setViewMode("cards")}
+                      className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[12px] ${
+                        viewMode === "cards"
+                          ? "bg-[#f3f3f6] font-semibold text-[#1d1d1f]"
+                          : "text-[#8d8d93]"
+                      }`}
+                      title="File card view"
+                    >
+                      <LayoutGrid className="h-3.5 w-3.5" />
+                      Cards
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               {viewMode === "table" ? (
                 <div className="mt-8 overflow-hidden rounded-2xl border border-black/[0.06]">

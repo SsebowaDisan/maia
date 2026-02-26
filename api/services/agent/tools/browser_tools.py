@@ -77,6 +77,13 @@ def _excerpt(text: str, *, limit: int = 360) -> str:
     return f"{compact[: max(1, limit - 1)].rstrip()}..."
 
 
+def _normalize_highlight_color(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text == "green":
+        return "green"
+    return "yellow"
+
+
 class PlaywrightInspectTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="browser.playwright.inspect",
@@ -110,12 +117,19 @@ class PlaywrightInspectTool(AgentTool):
         if not url:
             raise ToolExecutionError("Provide a valid URL for browser inspection.")
         auto_accept_cookies = _truthy(params.get("auto_accept_cookies"), default=True)
+        highlight_color = _normalize_highlight_color(
+            params.get("highlight_color") or context.settings.get("__highlight_color")
+        )
 
         connector = get_connector_registry().build("playwright_browser", settings=context.settings)
         trace_events: list[ToolTraceEvent] = []
         copied_snippets: list[str] = []
         highlighted_keywords: list[str] = []
-        stream = connector.browse_live_stream(url=url, auto_accept_cookies=auto_accept_cookies)
+        stream = connector.browse_live_stream(
+            url=url,
+            auto_accept_cookies=auto_accept_cookies,
+            highlight_color=highlight_color,
+        )
         while True:
             try:
                 payload = next(stream)
@@ -131,47 +145,16 @@ class PlaywrightInspectTool(AgentTool):
             )
             trace_events.append(event)
             yield event
-            if event.event_type == "browser_extract":
-                page_excerpt = str(event.data.get("text_excerpt") or "").strip()
-                cursor_payload = {}
-                if "cursor_x" in event.data and "cursor_y" in event.data:
-                    cursor_payload = {
-                        "cursor_x": event.data.get("cursor_x"),
-                        "cursor_y": event.data.get("cursor_y"),
-                    }
-                if page_excerpt:
-                    page_keywords = _extract_keywords(page_excerpt, limit=8)
-                    if page_keywords:
-                        highlighted_keywords.extend(page_keywords)
-                        highlight_event = ToolTraceEvent(
-                            event_type="browser_keyword_highlight",
-                            title="Highlight relevant keywords",
-                            detail=", ".join(page_keywords[:5]),
-                            data={
-                                "url": str(event.data.get("url") or ""),
-                                "keywords": page_keywords,
-                                **cursor_payload,
-                            },
-                            snapshot_ref=event.snapshot_ref,
-                        )
-                        trace_events.append(highlight_event)
-                        yield highlight_event
-                    copied = _excerpt(page_excerpt, limit=420)
-                    if copied:
-                        copied_snippets.append(copied)
-                        copy_event = ToolTraceEvent(
-                            event_type="browser_copy_selection",
-                            title="Copy evidence snippet",
-                            detail=_excerpt(copied, limit=150),
-                            data={
-                                "url": str(event.data.get("url") or ""),
-                                "clipboard_text": copied,
-                                **cursor_payload,
-                            },
-                            snapshot_ref=event.snapshot_ref,
-                        )
-                        trace_events.append(copy_event)
-                        yield copy_event
+            if event.event_type == "browser_keyword_highlight":
+                keyword_rows = event.data.get("keywords")
+                if isinstance(keyword_rows, list):
+                    highlighted_keywords.extend(
+                        str(item).strip() for item in keyword_rows if str(item).strip()
+                    )
+            if event.event_type == "browser_copy_selection":
+                copied = str(event.data.get("clipboard_text") or "").strip()
+                if copied:
+                    copied_snippets.append(copied)
 
         title = str(capture.get("title") or url)
         final_url = str(capture.get("url") or url)
@@ -185,6 +168,22 @@ class PlaywrightInspectTool(AgentTool):
             "keywords": keywords[:14],
             "excerpt": compact_excerpt,
         }
+        context.settings["__highlight_color"] = highlight_color
+        copied_highlights = context.settings.get("__copied_highlights")
+        if not isinstance(copied_highlights, list):
+            copied_highlights = []
+        for snippet in copied_snippets[:12]:
+            copied_highlights.append(
+                {
+                    "source": "website",
+                    "color": highlight_color,
+                    "word": "",
+                    "text": snippet,
+                    "reference": final_url,
+                    "title": title,
+                }
+            )
+        context.settings["__copied_highlights"] = copied_highlights[-64:]
 
         pages = capture.get("pages") if isinstance(capture, dict) else []
         visited_count = len(pages) if isinstance(pages, list) else 0
@@ -239,6 +238,7 @@ class PlaywrightInspectTool(AgentTool):
                 "keywords": keywords,
                 "pages": pages if isinstance(pages, list) else [],
                 "auto_accept_cookies": auto_accept_cookies,
+                "highlight_color": highlight_color,
                 "highlighted_keywords": list(dict.fromkeys(highlighted_keywords))[:24],
                 "copied_snippets": copied_snippets[:8],
             },

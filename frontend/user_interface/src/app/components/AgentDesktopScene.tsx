@@ -1,3 +1,6 @@
+import { useEffect, useRef } from "react";
+import { renderRichText } from "../utils/richText";
+
 type AgentDesktopSceneProps = {
   snapshotUrl: string;
   isBrowserScene: boolean;
@@ -39,12 +42,232 @@ export function AgentDesktopScene({
   activeSceneData,
   onSnapshotError,
 }: AgentDesktopSceneProps) {
+  const compactValue = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  const compactList = (value: unknown, limit = 12): string[] =>
+    Array.isArray(value)
+      ? Array.from(
+          new Set(
+            value
+              .map((item) => String(item || "").trim())
+              .filter((item) => item.length > 0),
+          ),
+        ).slice(0, Math.max(1, limit))
+      : [];
+  const compactObjectList = (value: unknown, limit = 10): Array<Record<string, unknown>> =>
+    Array.isArray(value)
+      ? value
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .slice(0, Math.max(1, limit))
+      : [];
+  const ellipsis = (value: string, limit = 56): string =>
+    value.length <= limit ? value : `${value.slice(0, Math.max(1, limit - 1)).trimEnd()}...`;
+
+  const highlightRegions = Array.isArray(activeSceneData["highlight_regions"])
+    ? activeSceneData["highlight_regions"]
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+          const row = item as Record<string, unknown>;
+          const toPercent = (value: unknown, fallback: number) => {
+            const parsed = typeof value === "number" ? value : Number(value);
+            if (!Number.isFinite(parsed)) {
+              return fallback;
+            }
+            return Math.max(0, Math.min(100, Number(parsed)));
+          };
+          const keyword = String(row["keyword"] || "").trim();
+          const color = String(row["color"] || activeSceneData["highlight_color"] || "yellow")
+            .trim()
+            .toLowerCase() === "green"
+            ? "green"
+            : "yellow";
+          const x = toPercent(row["x"], 0);
+          const y = toPercent(row["y"], 0);
+          const width = Math.max(1, toPercent(row["width"], 8));
+          const height = Math.max(1, toPercent(row["height"], 3));
+          return { keyword, color, x, y, width, height };
+        })
+        .filter(
+          (
+            item,
+          ): item is {
+            keyword: string;
+            color: "yellow" | "green";
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+          } => Boolean(item),
+        )
+        .slice(0, 8)
+    : [];
+  const documentHighlights = Array.isArray(activeSceneData["highlighted_words"])
+    ? activeSceneData["highlighted_words"]
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return null;
+          }
+          const row = item as Record<string, unknown>;
+          const word = String(row["word"] || "").trim();
+          const snippet = String(row["snippet"] || "").trim();
+          const color = String(row["color"] || activeSceneData["highlight_color"] || "yellow")
+            .trim()
+            .toLowerCase() === "green"
+            ? "green"
+            : "yellow";
+          if (!word && !snippet) {
+            return null;
+          }
+          return { word, snippet, color };
+        })
+        .filter((item): item is { word: string; snippet: string; color: "yellow" | "green" } => Boolean(item))
+        .slice(0, 8)
+    : [];
+  const highlightPalette = (color: "yellow" | "green") =>
+    color === "green"
+      ? {
+          border: "rgba(112, 216, 123, 0.95)",
+          fill: "rgba(112, 216, 123, 0.22)",
+          labelBackground: "rgba(112, 216, 123, 0.95)",
+          labelText: "#102915",
+        }
+      : {
+          border: "rgba(255, 213, 79, 0.95)",
+          fill: "rgba(255, 213, 79, 0.22)",
+          labelBackground: "rgba(255, 213, 79, 0.95)",
+          labelText: "#2b2410",
+        };
   const keywordBadges = Array.isArray(activeSceneData["keywords"])
     ? activeSceneData["keywords"]
         .map((item) => String(item || "").trim())
         .filter((item) => item)
         .slice(0, 6)
     : [];
+  const plannedSearchTerms =
+    compactList(activeSceneData["planned_search_terms"], 8).length > 0
+      ? compactList(activeSceneData["planned_search_terms"], 8)
+      : compactList(activeSceneData["search_terms"], 8);
+  const plannedKeywords = compactList(activeSceneData["planned_keywords"], 12);
+  const stepIds = compactList(activeSceneData["step_ids"], 8);
+  const copiedSnippets = (
+    Array.isArray(activeSceneData["copied_snippets"])
+      ? (activeSceneData["copied_snippets"] as unknown[])
+      : []
+  )
+    .map((item) => {
+      if (typeof item === "string") {
+        return item.trim();
+      }
+      if (item && typeof item === "object") {
+        const row = item as Record<string, unknown>;
+        return compactValue(row["text"] || row["snippet"]);
+      }
+      return "";
+    })
+    .filter((item) => item.length > 0)
+    .slice(0, 4);
+  const highlightedWordsInline = compactObjectList(activeSceneData["highlighted_words"], 8)
+    .map((item) => compactValue(item["word"]))
+    .filter((item) => item.length > 0)
+    .slice(0, 8);
+  const workspaceStepName = compactValue(activeSceneData["step_name"]);
+  const workspaceStatus = compactValue(activeSceneData["status"]);
+  const documentUrl = compactValue(activeSceneData["document_url"]);
+  const spreadsheetUrl = compactValue(activeSceneData["spreadsheet_url"]);
+  const artifactPath = compactValue(activeSceneData["path"]);
+  const pdfPath = compactValue(activeSceneData["pdf_path"]);
+  const hasLiveInsights =
+    plannedSearchTerms.length > 0 ||
+    plannedKeywords.length > 0 ||
+    stepIds.length > 0 ||
+    workspaceStepName.length > 0 ||
+    workspaceStatus.length > 0 ||
+    documentUrl.length > 0 ||
+    spreadsheetUrl.length > 0 ||
+    artifactPath.length > 0 ||
+    pdfPath.length > 0 ||
+    copiedSnippets.length > 0 ||
+    highlightedWordsInline.length > 0;
+
+  const renderLiveInsights = (variant: "light" | "dark") => {
+    if (!hasLiveInsights) {
+      return null;
+    }
+    const frameClass =
+      variant === "light"
+        ? "rounded-xl border border-black/15 bg-white/88 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm"
+        : "rounded-xl border border-white/20 bg-black/45 px-3 py-2 text-white/90 backdrop-blur-sm";
+    const mutedClass = variant === "light" ? "text-[#5a5a60]" : "text-white/70";
+    const chipClass =
+      variant === "light"
+        ? "rounded-full border border-black/15 bg-white/80 px-1.5 py-0.5 text-[10px] text-[#1d1d1f]"
+        : "rounded-full border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px] text-white/90";
+    return (
+      <div className={frameClass}>
+        {plannedSearchTerms.length ? (
+          <div className="mb-2">
+            <p className={`text-[10px] uppercase tracking-[0.08em] ${mutedClass}`}>Search terms</p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {plannedSearchTerms.map((term) => (
+                <span key={`term-${term}`} className={chipClass}>
+                  {term}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {plannedKeywords.length ? (
+          <div className="mb-2">
+            <p className={`text-[10px] uppercase tracking-[0.08em] ${mutedClass}`}>Keywords</p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {plannedKeywords.slice(0, 10).map((keyword) => (
+                <span key={`keyword-${keyword}`} className={chipClass}>
+                  {keyword}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {stepIds.length ? (
+          <p className={`mb-2 text-[10px] ${mutedClass}`}>
+            Roadmap steps: {stepIds.slice(0, 4).join(" -> ")}
+          </p>
+        ) : null}
+        {workspaceStepName || workspaceStatus ? (
+          <p className={`mb-1 text-[10px] ${mutedClass}`}>
+            Tracker: {workspaceStepName || "Step update"} {workspaceStatus ? `(${workspaceStatus})` : ""}
+          </p>
+        ) : null}
+        {spreadsheetUrl ? (
+          <p className={`text-[10px] ${mutedClass}`}>Sheet: {ellipsis(spreadsheetUrl, 66)}</p>
+        ) : null}
+        {documentUrl ? (
+          <p className={`text-[10px] ${mutedClass}`}>Doc: {ellipsis(documentUrl, 66)}</p>
+        ) : null}
+        {artifactPath ? (
+          <p className={`text-[10px] ${mutedClass}`}>File: {ellipsis(artifactPath, 66)}</p>
+        ) : null}
+        {pdfPath ? (
+          <p className={`text-[10px] ${mutedClass}`}>PDF: {ellipsis(pdfPath, 66)}</p>
+        ) : null}
+        {highlightedWordsInline.length ? (
+          <p className={`mt-1 text-[10px] ${mutedClass}`}>
+            Highlighted: {highlightedWordsInline.slice(0, 8).join(", ")}
+          </p>
+        ) : null}
+        {copiedSnippets.length ? (
+          <div className="mt-1.5 space-y-1">
+            {copiedSnippets.map((snippet, index) => (
+              <p key={`snippet-${index}`} className={`line-clamp-1 text-[10px] ${mutedClass}`}>
+                Copied: {ellipsis(snippet, 90)}
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   const clipboardPreview = typeof activeSceneData["clipboard_text"] === "string"
     ? activeSceneData["clipboard_text"]
     : "";
@@ -57,6 +280,20 @@ export function AgentDesktopScene({
   const scrollPercent = Number.isFinite(scrollPercentRaw)
     ? Math.max(0, Math.min(100, Number(scrollPercentRaw)))
     : null;
+  const emailBodyPreview = String(emailBodyHint || "").trim() || "Composing message body...";
+  const emailBodyHtml = renderRichText(emailBodyPreview);
+  const emailBodyScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isEmailScene) {
+      return;
+    }
+    const node = emailBodyScrollRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [emailBodyPreview, isEmailScene]);
 
   if (isBrowserScene) {
     const showSnapshotPrimary = Boolean(snapshotUrl);
@@ -78,7 +315,43 @@ export function AgentDesktopScene({
               className="h-full w-full object-cover"
               onError={onSnapshotError}
             />
-            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
+            {highlightRegions.length ? (
+              <div className="pointer-events-none absolute inset-0">
+                {highlightRegions.map((region, index) => {
+                  const palette = highlightPalette(region.color);
+                  return (
+                    <div
+                      key={`${region.keyword}-${index}`}
+                      className="absolute rounded-md"
+                      style={{
+                        left: `${region.x}%`,
+                        top: `${region.y}%`,
+                        width: `${region.width}%`,
+                        height: `${region.height}%`,
+                        border: `1px solid ${palette.border}`,
+                        backgroundColor: palette.fill,
+                        boxShadow: `0 0 0 1px ${palette.fill}`,
+                      }}
+                    >
+                      {region.keyword ? (
+                        <span
+                          className="absolute -top-5 left-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                          style={{ backgroundColor: palette.labelBackground, color: palette.labelText }}
+                        >
+                          {region.keyword}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {hasLiveInsights ? (
+              <div className="pointer-events-none absolute left-3 top-14 w-[min(42%,360px)]">
+                {renderLiveInsights("light")}
+              </div>
+            ) : null}
+            <div className="pointer-events-none absolute left-1/2 top-1/2 w-[min(92%,760px)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
               <p className="text-[12px] font-semibold">
                 {activeTitle || "Live website capture"}
               </p>
@@ -121,7 +394,43 @@ export function AgentDesktopScene({
               sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               referrerPolicy="no-referrer-when-downgrade"
             />
-            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
+            {highlightRegions.length ? (
+              <div className="pointer-events-none absolute inset-0">
+                {highlightRegions.map((region, index) => {
+                  const palette = highlightPalette(region.color);
+                  return (
+                    <div
+                      key={`${region.keyword}-iframe-${index}`}
+                      className="absolute rounded-md"
+                      style={{
+                        left: `${region.x}%`,
+                        top: `${region.y}%`,
+                        width: `${region.width}%`,
+                        height: `${region.height}%`,
+                        border: `1px solid ${palette.border}`,
+                        backgroundColor: palette.fill,
+                        boxShadow: `0 0 0 1px ${palette.fill}`,
+                      }}
+                    >
+                      {region.keyword ? (
+                        <span
+                          className="absolute -top-5 left-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                          style={{ backgroundColor: palette.labelBackground, color: palette.labelText }}
+                        >
+                          {region.keyword}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            {hasLiveInsights ? (
+              <div className="pointer-events-none absolute left-3 top-14 w-[min(42%,360px)]">
+                {renderLiveInsights("light")}
+              </div>
+            ) : null}
+            <div className="pointer-events-none absolute left-1/2 top-1/2 w-[min(92%,760px)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
               <p className="text-[12px] font-semibold">
                 {activeTitle || "Live website preview"}
               </p>
@@ -221,23 +530,38 @@ export function AgentDesktopScene({
 
   if (isEmailScene) {
     return (
-      <div className="absolute inset-0 flex flex-col bg-[#12161d] text-white/90">
-        <div className="border-b border-white/10 px-3 py-2 text-[12px] font-medium">Gmail compose</div>
-        <div className="space-y-2 p-3 text-[11px]">
-          <div className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-2">
-            <span className="text-white/65">To:</span> <span className="text-white">{emailRecipient}</span>
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,#e8eaef_0%,#dfe3ea_100%)] p-4 text-[#1d1d1f]">
+        <div className="mx-auto h-full w-full max-w-[920px] rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
+          <div className="flex items-center gap-2 border-b border-black/[0.08] px-4 py-2.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
+            <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+            <span className="ml-2 text-[12px] font-semibold tracking-tight text-[#3a3a3c]">Compose</span>
           </div>
-          <div className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-2">
-            <span className="text-white/65">Subject:</span> <span className="text-white">{emailSubject}</span>
-          </div>
-          <div className="min-h-[120px] rounded-lg border border-white/15 bg-white/5 px-2.5 py-2 text-white/85">
-            {emailBodyHint}
-          </div>
-          {activeEventType === "email_click_send" ? (
-            <div className="rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-white">
-              Send action confirmed
+          <div className="space-y-2 p-4 text-[12px]">
+            <div className="rounded-xl border border-black/[0.07] bg-[#fafafc] px-3 py-2.5">
+              <span className="font-semibold text-[#6e6e73]">To:</span>{" "}
+              <span className="text-[#1d1d1f]">{emailRecipient}</span>
             </div>
-          ) : null}
+            <div className="rounded-xl border border-black/[0.07] bg-[#fafafc] px-3 py-2.5">
+              <span className="font-semibold text-[#6e6e73]">Subject:</span>{" "}
+              <span className="text-[#1d1d1f]">{emailSubject}</span>
+            </div>
+            <div
+              ref={emailBodyScrollRef}
+              className="h-[320px] overflow-y-auto rounded-xl border border-black/[0.07] bg-white px-3 py-3 text-[14px] leading-[1.6] text-[#1f1f22]"
+            >
+              <div
+                className="[&_h1]:mb-2 [&_h1]:text-[21px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[18px] [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:text-[16px] [&_h3]:font-semibold [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#f2f2f7] [&_pre]:p-2 [&_a]:text-[#0a66d9] hover:[&_a]:underline"
+                dangerouslySetInnerHTML={{ __html: emailBodyHtml }}
+              />
+            </div>
+            {activeEventType === "email_click_send" ? (
+              <div className="rounded-xl border border-[#0a84ff]/25 bg-[#0a84ff]/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0756a8]">
+                Send action confirmed
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     );
@@ -245,11 +569,41 @@ export function AgentDesktopScene({
 
   if (isDocumentScene && canRenderPdfFrame) {
     return (
-      <iframe
-        src={`${stageFileUrl}#toolbar=0&navpanes=0&scrollbar=0`}
-        title="Agent PDF live preview"
-        className="absolute inset-0 h-full w-full bg-white"
-      />
+      <div className="absolute inset-0">
+        <iframe
+          src={`${stageFileUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+          title="Agent PDF live preview"
+          className="absolute inset-0 h-full w-full bg-white"
+        />
+        {hasLiveInsights ? (
+          <div className="pointer-events-none absolute left-3 top-3 w-[min(44%,360px)]">
+            {renderLiveInsights("light")}
+          </div>
+        ) : null}
+        {documentHighlights.length ? (
+          <div className="pointer-events-none absolute left-3 right-3 bottom-3 rounded-xl border border-black/15 bg-white/85 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
+            <p className="text-[11px] font-semibold">Copied highlights</p>
+            <div className="mt-1 space-y-1">
+              {documentHighlights.map((item, index) => (
+                <p key={`${item.word}-${index}`} className="line-clamp-2">
+                  <span
+                    className="rounded px-1 py-0.5 font-semibold"
+                    style={{
+                      backgroundColor:
+                        item.color === "green"
+                          ? "rgba(112, 216, 123, 0.22)"
+                          : "rgba(255, 213, 79, 0.22)",
+                    }}
+                  >
+                    {item.word || "highlight"}
+                  </span>{" "}
+                  {item.snippet}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -263,6 +617,31 @@ export function AgentDesktopScene({
         <p className="mb-3 text-[11px] text-white/85">
           {sceneText || activeDetail || "Preparing and updating document blocks..."}
         </p>
+        {hasLiveInsights ? (
+          <div className="mb-3">
+            {renderLiveInsights("dark")}
+          </div>
+        ) : null}
+        {documentHighlights.length ? (
+          <div className="mb-3 space-y-1.5 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2">
+            {documentHighlights.map((item, index) => (
+              <p key={`${item.word}-inline-${index}`} className="line-clamp-2 text-[10px] text-white/90">
+                <span
+                  className="rounded px-1 py-0.5 font-semibold"
+                  style={{
+                    backgroundColor:
+                      item.color === "green"
+                        ? "rgba(112, 216, 123, 0.22)"
+                        : "rgba(255, 213, 79, 0.22)",
+                  }}
+                >
+                  {item.word || "highlight"}
+                </span>{" "}
+                {item.snippet}
+              </p>
+            ))}
+          </div>
+        ) : null}
         {clipboardPreview ? (
           <div className="mb-3 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[10px] text-white/90">
             Clipboard: {clipboardPreview}
@@ -290,6 +669,11 @@ export function AgentDesktopScene({
           <p className="mt-2 text-[13px] text-white/80">
             {sceneText || activeDetail || "Finalizing run events and preparing delivery output."}
           </p>
+          {hasLiveInsights ? (
+            <div className="mt-3">
+              {renderLiveInsights("dark")}
+            </div>
+          ) : null}
           <div className="mt-4 space-y-2">
             <div className="h-2 w-[92%] rounded-full bg-white/25" />
             <div className="h-2 w-[86%] rounded-full bg-white/18" />

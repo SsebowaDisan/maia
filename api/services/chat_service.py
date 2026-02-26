@@ -220,22 +220,10 @@ def _default_llm_name() -> str:
 
 
 def _chunk_text_for_stream(text: str, chunk_size: int = 220) -> list[str]:
-    words = text.split()
-    if not words:
-        return [text] if text else []
-    chunks: list[str] = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}".strip()
-        if len(candidate) <= chunk_size:
-            current = candidate
-            continue
-        if current:
-            chunks.append(f"{current} ")
-        current = word
-    if current:
-        chunks.append(current)
-    return chunks
+    if not text:
+        return []
+    size = max(32, int(chunk_size or 220))
+    return [text[idx: idx + size] for idx in range(0, len(text), size)]
 
 
 def _create_pipeline(

@@ -125,15 +125,24 @@ def _ensure_openai_llm_default() -> None:
     }
 
     try:
+        all_info = llms.info()
+        has_explicit_default = any(
+            bool(item.get("default"))
+            for item in all_info.values()
+            if isinstance(item, dict)
+        )
+        should_default_if_new = not has_explicit_default
+
         if openai_name not in llms.options():
-            llms.add(name=openai_name, spec=openai_spec, default=True)
+            llms.add(name=openai_name, spec=openai_spec, default=should_default_if_new)
             return
 
         existing_info = llms.info().get(openai_name, {})
         existing_spec = existing_info.get("spec", {}) if isinstance(existing_info, dict) else {}
         merged_spec = dict(existing_spec) if isinstance(existing_spec, dict) else {}
         merged_spec.update(openai_spec)
-        llms.update(name=openai_name, spec=merged_spec, default=True)
+        keep_default = bool(existing_info.get("default")) if isinstance(existing_info, dict) else False
+        llms.update(name=openai_name, spec=merged_spec, default=keep_default)
     except Exception:
         # Keep API startup resilient even if model pool update fails.
         return
@@ -157,18 +166,31 @@ def _ensure_openai_embedding_default() -> None:
     }
 
     try:
+        all_info = embedding_models_manager.info()
+        has_explicit_default = any(
+            bool(item.get("default"))
+            for item in all_info.values()
+            if isinstance(item, dict)
+        )
+        should_default_if_new = not has_explicit_default
+
         if openai_name not in embedding_models_manager.options():
-            embedding_models_manager.add(name=openai_name, spec=openai_spec, default=True)
+            embedding_models_manager.add(
+                name=openai_name,
+                spec=openai_spec,
+                default=should_default_if_new,
+            )
             return
 
         existing_info = embedding_models_manager.info().get(openai_name, {})
         existing_spec = existing_info.get("spec", {}) if isinstance(existing_info, dict) else {}
         merged_spec = dict(existing_spec) if isinstance(existing_spec, dict) else {}
         merged_spec.update(openai_spec)
+        keep_default = bool(existing_info.get("default")) if isinstance(existing_info, dict) else False
         embedding_models_manager.update(
             name=openai_name,
             spec=merged_spec,
-            default=True,
+            default=keep_default,
         )
     except Exception:
         return

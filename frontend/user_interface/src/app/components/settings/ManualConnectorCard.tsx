@@ -19,11 +19,11 @@ type ManualConnectorCardProps = {
 
 function statusChip(ok: boolean | null) {
   if (ok === null) {
-    return "border-[#d2d2d7] bg-white text-[#6e6e73]";
+    return "border-[#d2d2d7] bg-[#f5f5f7] text-[#6e6e73]";
   }
   return ok
     ? "border-[#5f8a68] bg-[#f0f7f1] text-[#2d5937]"
-    : "border-[#be7b7b] bg-[#f9efef] text-[#7a3030]";
+    : "border-[#d2d2d7] bg-[#f5f5f7] text-[#6e6e73]";
 }
 
 export function ManualConnectorCard({
@@ -41,7 +41,7 @@ export function ManualConnectorCard({
     .map((entry) => entry[0]);
 
   return (
-    <section className="rounded-2xl border border-[#e5e5e5] bg-white p-6 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+    <section className="rounded-2xl border border-[#ececf0] bg-white p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-[16px] font-semibold text-[#1d1d1f]">{connector.label}</h3>

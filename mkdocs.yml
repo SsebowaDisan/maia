@@ -16,6 +16,8 @@ nav:
       # - Features: pages/app/features.md
       - Customize flow logic: pages/app/customize-flows.md
       - Creating a Component: development/create-a-component.md
+      - Gmail DWD Deployment: deployment/gmail_dwd.md
+      - Gmail DWD Env Setup: deployment/gmail_dwd_env.md
       - Components:
           - Index:
               - File index: pages/app/index/file.md

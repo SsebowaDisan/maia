@@ -28,6 +28,7 @@ from api.services.agent.tools.charts_tools import ChartGenerateTool
 from api.services.agent.tools.data_tools import DataAnalysisTool, ReportGenerationTool
 from api.services.agent.tools.discovery_tools import LocalDiscoveryTool
 from api.services.agent.tools.document_tools import DocumentCreateTool
+from api.services.agent.tools.document_highlight_tools import DocumentHighlightExtractTool
 from api.services.agent.tools.email_tools import EmailDraftTool, EmailSendTool
 from api.services.agent.tools.gmail_tools import GmailDraftTool, GmailSearchTool, GmailSendTool
 from api.services.agent.tools.invoice_tools import InvoiceCreateTool, InvoiceSendTool
@@ -56,6 +57,7 @@ class ToolRegistry:
         self.register(EmailSendTool())
         self.register(GoogleAdsPerformanceTool())
         self.register(DataAnalysisTool())
+        self.register(DocumentHighlightExtractTool())
         self.register(ReportGenerationTool())
         self.register(DocumentCreateTool())
         self.register(WorkspaceDocsTemplateTool())

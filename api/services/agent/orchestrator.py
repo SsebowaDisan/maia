@@ -14,6 +14,13 @@ from api.services.agent.intelligence import (
     derive_task_intelligence,
 )
 from api.services.agent.live_events import get_live_event_broker
+from api.services.agent.llm_execution_support import (
+    polish_email_content,
+    suggest_failure_recovery,
+)
+from api.services.agent.llm_personalization import infer_user_preferences
+from api.services.agent.llm_research_blueprint import build_research_blueprint
+from api.services.agent.llm_response_formatter import polish_final_response
 from api.services.agent.memory import get_memory_service
 from api.services.agent.models import (
     AgentActivityEvent,
@@ -22,6 +29,8 @@ from api.services.agent.models import (
     AgentSource,
     utc_now,
 )
+from api.services.agent.preferences import get_user_preference_store
+from api.services.agent.preflight import run_preflight_checks
 from api.services.agent.planner import (
     PlannedStep,
     build_browser_followup_steps,
@@ -37,9 +46,64 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
 )
 from api.services.agent.tools.registry import get_tool_registry
+from api.services.mailer_service import send_report_email as send_report_via_mailer
+from maia.integrations.gmail_dwd import GmailDwdError
+
+
+DELIVERY_ACTION_IDS = ("gmail.send", "email.send", "mailer.report_send")
+
+
 def _compact(text: str, max_len: int = 140) -> str:
     clean = " ".join(str(text or "").split())
     return clean if len(clean) <= max_len else f"{clean[: max_len - 1].rstrip()}..."
+
+
+def _truncate_text(text: str, max_len: int = 1800) -> str:
+    raw = str(text or "")
+    return raw if len(raw) <= max_len else f"{raw[: max_len - 1].rstrip()}..."
+
+
+def _chunk_preserve_text(text: str, chunk_size: int = 220, limit: int = 8) -> list[str]:
+    if not text:
+        return []
+    size = max(48, int(chunk_size or 220))
+    chunks = [text[idx: idx + size] for idx in range(0, len(text), size)]
+    return chunks[: max(1, int(limit or 8))]
+
+
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _extract_action_artifact_metadata(data: dict[str, Any] | None, *, step: int) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"step": step}
+    if not isinstance(data, dict):
+        return metadata
+    for key in ("url", "document_url", "spreadsheet_url", "path", "pdf_path", "document_id", "spreadsheet_id"):
+        value = data.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        metadata[key] = text[:320]
+    copied = data.get("copied_snippets")
+    if isinstance(copied, list):
+        compact = [str(item).strip() for item in copied if str(item).strip()]
+        if compact:
+            metadata["copied_snippets"] = compact[:4]
+    return metadata
+
+
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 def _extract_first_email(*chunks: str) -> str:
     joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
@@ -49,6 +113,20 @@ def _extract_first_email(*chunks: str) -> str:
 
 def _issue_fix_hint(issue: str) -> str:
     text = str(issue or "").lower()
+    if "gmail_dwd_api_disabled" in text or "gmail api is not enabled" in text:
+        return (
+            "Enable Gmail API in the Google Cloud project used by the service account, "
+            "then retry."
+        )
+    if "gmail_dwd_delegation_denied" in text or "domain-wide delegation" in text:
+        return (
+            "Verify Workspace Domain-Wide Delegation for the service-account client ID and "
+            "scope `https://www.googleapis.com/auth/gmail.send`."
+        )
+    if "gmail_dwd_mailbox_unavailable" in text or "mailbox" in text and "suspended" in text:
+        return (
+            "Confirm the impersonated mailbox exists and is active in Google Workspace."
+        )
     if "required role" in text and "admin" in text:
         return (
             "Switch to Company Agent > Full Access for this run, "
@@ -90,6 +168,26 @@ def _compose_professional_answer(
     lines.append("## Execution Plan")
     for idx, step in enumerate(planned_steps, start=1):
         lines.append(f"{idx}. {step.title} (`{step.tool_id}`)")
+    search_terms_raw = runtime_settings.get("__research_search_terms")
+    keywords_raw = runtime_settings.get("__research_keywords")
+    if isinstance(search_terms_raw, list) or isinstance(keywords_raw, list):
+        search_terms = (
+            [str(item).strip() for item in search_terms_raw if str(item).strip()]
+            if isinstance(search_terms_raw, list)
+            else []
+        )
+        keywords = (
+            [str(item).strip() for item in keywords_raw if str(item).strip()]
+            if isinstance(keywords_raw, list)
+            else []
+        )
+        if search_terms or keywords:
+            lines.append("")
+            lines.append("## Research Blueprint")
+            if search_terms:
+                lines.append(f"- Planned search terms: {', '.join(search_terms[:6])}")
+            if keywords:
+                lines.append(f"- Planned keywords: {', '.join(keywords[:12])}")
 
     lines.append("")
     lines.append("## Execution Summary")
@@ -143,7 +241,7 @@ def _compose_professional_answer(
 
     lines.append("")
     lines.append("## Delivery Status")
-    send_actions = [item for item in actions if item.tool_id in ("gmail.send", "email.send")]
+    send_actions = [item for item in actions if item.tool_id in DELIVERY_ACTION_IDS]
     if send_actions:
         latest_send = send_actions[-1]
         status = "sent" if latest_send.status == "success" else "not sent"
@@ -164,6 +262,30 @@ def _compose_professional_answer(
         lines.append("## Execution Issues")
         for item in failed_actions[:6]:
             lines.append(f"- {item.tool_id}: {_compact(item.summary, 180)}")
+
+    artifact_urls: list[str] = []
+    artifact_paths: list[str] = []
+    for action in actions:
+        metadata = action.metadata if isinstance(action.metadata, dict) else {}
+        for key in ("url", "document_url", "spreadsheet_url"):
+            raw = metadata.get(key)
+            value = str(raw or "").strip()
+            if not value or value in artifact_urls:
+                continue
+            artifact_urls.append(value)
+        for key in ("path", "pdf_path"):
+            raw = metadata.get(key)
+            value = str(raw or "").strip()
+            if not value or value in artifact_paths:
+                continue
+            artifact_paths.append(value)
+    if artifact_urls or artifact_paths:
+        lines.append("")
+        lines.append("## Files and Documents")
+        for url in artifact_urls[:10]:
+            lines.append(f"- {url}")
+        for path in artifact_paths[:10]:
+            lines.append(f"- {path}")
 
     if verification_report:
         checks = verification_report.get("checks")
@@ -241,6 +363,15 @@ class AgentOrchestrator:
                     collected.append(file_id_text)
         return list(dict.fromkeys(collected))
 
+    def _selected_index_id(self, request: ChatRequest) -> int | None:
+        for raw_index_id in request.index_selection.keys():
+            text = str(raw_index_id).strip()
+            if not text:
+                continue
+            if text.isdigit():
+                return int(text)
+        return None
+
     def _expected_event_types(
         self,
         *,
@@ -271,6 +402,7 @@ class AgentOrchestrator:
                 "data.dataset.analyze",
                 "invoice.create",
                 "docs.create",
+                "documents.highlight.extract",
             ):
                 expected.extend(
                     [
@@ -442,14 +574,55 @@ class AgentOrchestrator:
             message=request.message,
             agent_goal=request.agent_goal,
         )
+        preference_store = get_user_preference_store()
+        saved_preferences = preference_store.get(user_id=user_id)
+        inferred_preferences = infer_user_preferences(
+            message=request.message,
+            existing_preferences=saved_preferences,
+        )
+        user_preferences = (
+            preference_store.merge(user_id=user_id, patch=inferred_preferences)
+            if inferred_preferences
+            else saved_preferences
+        )
         task_understanding_ready = self._activity_event(
             run_id=run_id,
             event_type="task_understanding_ready",
             title="Task understanding completed",
             detail=task_intelligence.objective,
-            metadata=task_intelligence.to_dict(),
+            metadata={**task_intelligence.to_dict(), "preferences": user_preferences},
         )
         yield _stream_event(task_understanding_ready)
+
+        preflight_checks = run_preflight_checks(
+            requires_delivery=task_intelligence.requires_delivery,
+            requires_web_inspection=task_intelligence.requires_web_inspection,
+        )
+        preflight_started_event = self._activity_event(
+            run_id=run_id,
+            event_type="preflight_started",
+            title="Running preflight checks",
+            detail="Validating credentials and execution prerequisites",
+            metadata={"check_count": len(preflight_checks)},
+        )
+        yield _stream_event(preflight_started_event)
+        for check in preflight_checks:
+            preflight_check_event = self._activity_event(
+                run_id=run_id,
+                event_type="preflight_check",
+                title=str(check.get("name") or "preflight_check"),
+                detail=str(check.get("detail") or ""),
+                metadata={"status": str(check.get("status") or "info")},
+            )
+            yield _stream_event(preflight_check_event)
+        preflight_completed_event = self._activity_event(
+            run_id=run_id,
+            event_type="preflight_completed",
+            title="Preflight checks completed",
+            detail="Proceeding with planning and tool execution",
+            metadata={"checks": preflight_checks},
+        )
+        yield _stream_event(preflight_completed_event)
 
         started_event = self._activity_event(
             run_id=run_id,
@@ -463,6 +636,58 @@ class AgentOrchestrator:
         steps = build_plan(request)
         deep_research_mode = is_deep_research_request(request)
         request_text = f"{request.message} {request.agent_goal or ''}".lower()
+        highlight_color = "green" if "green" in request_text else "yellow"
+        research_blueprint = build_research_blueprint(
+            message=request.message,
+            agent_goal=request.agent_goal,
+            min_keywords=10,
+        )
+        planned_search_terms = [
+            str(item).strip()
+            for item in (research_blueprint.get("search_terms") if isinstance(research_blueprint, dict) else [])
+            if str(item).strip()
+        ]
+        planned_keywords = [
+            str(item).strip()
+            for item in (research_blueprint.get("keywords") if isinstance(research_blueprint, dict) else [])
+            if str(item).strip()
+        ]
+        normalized_steps: list[PlannedStep] = []
+        for step in steps:
+            params = dict(step.params)
+            if step.tool_id == "marketing.web_research" and planned_search_terms:
+                params["query"] = planned_search_terms[0]
+                if len(planned_search_terms) > 1:
+                    params.setdefault("query_variants", planned_search_terms[1:4])
+            if step.tool_id in ("browser.playwright.inspect", "documents.highlight.extract"):
+                params.setdefault("highlight_color", highlight_color)
+            if step.tool_id == "documents.highlight.extract" and planned_keywords:
+                params.setdefault("words", planned_keywords[:12])
+            if step.tool_id == "docs.create":
+                params.setdefault("include_copied_highlights", True)
+            normalized_steps.append(PlannedStep(tool_id=step.tool_id, title=step.title, params=params))
+        steps = normalized_steps
+
+        if request.agent_mode == "company_agent" and not any(
+            step.tool_id == "documents.highlight.extract" for step in steps
+        ):
+            insert_at = len(steps)
+            for idx, step in enumerate(steps):
+                if step.tool_id in ("browser.playwright.inspect", "marketing.web_research"):
+                    insert_at = idx + 1
+                    break
+            steps.insert(
+                insert_at,
+                PlannedStep(
+                    tool_id="documents.highlight.extract",
+                    title="Highlight words in selected files",
+                    params={
+                        "highlight_color": highlight_color,
+                        "words": planned_keywords[:12],
+                    },
+                ),
+            )
+
         workspace_logging_requested = any(
             token in request_text
             for token in (
@@ -474,10 +699,59 @@ class AgentOrchestrator:
                 "log to docs",
             )
         )
-        deep_workspace_logging_enabled = deep_research_mode and (
-            workspace_logging_requested
-            or bool(settings.get("agent.deep_research_workspace_logging", False))
+        # Company Agent runs always start with roadmap logging in Sheets/Docs.
+        always_workspace_logging = request.agent_mode == "company_agent"
+        deep_workspace_logging_enabled = always_workspace_logging or (
+            deep_research_mode
+            and (
+                workspace_logging_requested
+                or bool(settings.get("agent.deep_research_workspace_logging", False))
+            )
         )
+        if deep_workspace_logging_enabled and request.agent_mode == "company_agent":
+            search_preview = ", ".join(planned_search_terms[:4]) if planned_search_terms else "n/a"
+            keyword_preview = ", ".join(planned_keywords[:10]) if planned_keywords else "n/a"
+            roadmap_steps: list[PlannedStep] = [
+                PlannedStep(
+                    tool_id="workspace.sheets.track_step",
+                    title="Open execution roadmap in Google Sheets",
+                    params={
+                        "step_name": "Execution roadmap initialized",
+                        "status": "planned",
+                        "detail": f"Search terms: {search_preview} | Keywords: {keyword_preview}",
+                    },
+                )
+            ]
+            roadmap_steps.append(
+                PlannedStep(
+                    tool_id="workspace.docs.research_notes",
+                    title="Write planning blueprint to Google Docs",
+                    params={
+                        "note": (
+                            f"Planning blueprint\n"
+                            f"- Search terms: {search_preview}\n"
+                            f"- Keywords: {keyword_preview}"
+                        ),
+                    },
+                )
+            )
+            for idx, planned_step in enumerate(steps, start=1):
+                roadmap_steps.append(
+                    PlannedStep(
+                        tool_id="workspace.sheets.track_step",
+                        title=f"Roadmap step {idx}: {planned_step.title}",
+                        params={
+                            "step_name": f"{idx}. {planned_step.title}",
+                            "status": "planned",
+                            "detail": (
+                                f"Tool={planned_step.tool_id} | "
+                                f"Search terms={search_preview} | "
+                                f"Keywords={keyword_preview}"
+                            )[:900],
+                        },
+                    )
+                )
+            steps = roadmap_steps + steps
         deep_workspace_warning_emitted = False
         dynamic_inspection_inserted = False
 
@@ -494,6 +768,8 @@ class AgentOrchestrator:
                     "delivery_email": delivery_email,
                     "workspace_logging_requested": workspace_logging_requested,
                     "target_url": task_intelligence.target_url,
+                    "planned_search_terms": planned_search_terms[:6],
+                    "planned_keywords": planned_keywords[:12],
                 },
             },
         )
@@ -502,8 +778,12 @@ class AgentOrchestrator:
             run_id=run_id,
             event_type="plan_refined",
             title="Refined execution order",
-            detail="Prioritized sequence for speed and grounding quality",
-            metadata={"step_ids": [step.tool_id for step in steps]},
+            detail="Prioritized sequence with search terms and keyword blueprint",
+            metadata={
+                "step_ids": [step.tool_id for step in steps],
+                "search_terms": planned_search_terms[:6],
+                "keywords": planned_keywords[:12],
+            },
         )
         yield _stream_event(plan_refined_event)
         planned_event = self._activity_event(
@@ -533,6 +813,15 @@ class AgentOrchestrator:
                 **settings,
                 "__agent_user_id": user_id,
                 "__agent_run_id": run_id,
+                "__selected_file_ids": self._selected_file_ids(request),
+                "__selected_index_id": self._selected_index_id(request),
+                "__research_search_terms": planned_search_terms[:6],
+                "__research_keywords": planned_keywords[:16],
+                "__highlight_color": highlight_color,
+                "__copied_highlights": [],
+                "__user_preferences": user_preferences,
+                "__task_preferred_tone": task_intelligence.preferred_tone,
+                "__task_preferred_format": task_intelligence.preferred_format,
             },
         )
 
@@ -616,11 +905,12 @@ class AgentOrchestrator:
                     prompt=request.message,
                     params=params,
                 )
+                action_metadata = _extract_action_artifact_metadata(result.data, step=index)
                 action = self.registry.get(step.tool_id).to_action(
                     status="success",
                     summary=result.summary,
                     started_at=step_started,
-                    metadata={"step": index},
+                    metadata=action_metadata,
                 )
                 all_actions.append(action)
                 all_sources.extend(result.sources)
@@ -676,6 +966,31 @@ class AgentOrchestrator:
                         else []
                     )
                     keyword_line = f"Keywords: {', '.join(keywords[:12])}" if keywords else ""
+                    copied_rows = result.data.get("copied_snippets") if isinstance(result.data, dict) else None
+                    copied_snippets = (
+                        [str(item).strip() for item in copied_rows if str(item).strip()]
+                        if isinstance(copied_rows, list)
+                        else []
+                    )
+                    copied_line = (
+                        f"Copied snippets: {' | '.join(copied_snippets[:3])}"
+                        if copied_snippets
+                        else ""
+                    )
+                    highlighted_rows = result.data.get("highlighted_words") if isinstance(result.data, dict) else None
+                    highlighted_words = []
+                    if isinstance(highlighted_rows, list):
+                        for row in highlighted_rows:
+                            if not isinstance(row, dict):
+                                continue
+                            word = str(row.get("word") or "").strip()
+                            if word:
+                                highlighted_words.append(word)
+                    highlight_line = (
+                        f"Highlighted words: {', '.join(list(dict.fromkeys(highlighted_words))[:12])}"
+                        if highlighted_words
+                        else ""
+                    )
                     compact_content = _compact(result.content, 560)
                     note_body = "\n".join(
                         part
@@ -683,6 +998,8 @@ class AgentOrchestrator:
                             f"Step {index}: {step.title}",
                             f"Summary: {result.summary}",
                             keyword_line,
+                            highlight_line,
+                            copied_line,
                             compact_content,
                         ]
                         if part
@@ -716,11 +1033,16 @@ class AgentOrchestrator:
                                 prompt=request.message,
                                 params=shadow_params,
                             )
+                            shadow_metadata = _extract_action_artifact_metadata(
+                                shadow_result.data,
+                                step=index,
+                            )
+                            shadow_metadata["shadow"] = True
                             shadow_action = self.registry.get(shadow_step.tool_id).to_action(
                                 status="success",
                                 summary=shadow_result.summary,
                                 started_at=shadow_started_at,
-                                metadata={"step": index, "shadow": True},
+                                metadata=shadow_metadata,
                             )
                             all_actions.append(shadow_action)
                             all_sources.extend(shadow_result.sources)
@@ -807,7 +1129,221 @@ class AgentOrchestrator:
                     metadata={"tool_id": step.tool_id, "step": index},
                 )
                 yield _stream_event(fail_event)
+                recovery_hint = suggest_failure_recovery(
+                    request_message=request.message,
+                    tool_id=step.tool_id,
+                    step_title=step.title,
+                    error_text=exc_text,
+                    recent_steps=executed_steps[-8:],
+                )
+                if recovery_hint:
+                    next_steps.append(recovery_hint)
+                    recovery_event = self._activity_event(
+                        run_id=run_id,
+                        event_type="tool_progress",
+                        title="Recovery suggestion generated",
+                        detail=recovery_hint,
+                        metadata={"tool_id": step.tool_id, "step": index, "recovery_hint": recovery_hint},
+                    )
+                    yield _stream_event(recovery_event)
             step_cursor += 1
+
+        delivery_requested = bool(task_intelligence.requires_delivery and task_intelligence.delivery_email)
+        delivery_attempted = any(item.tool_id in DELIVERY_ACTION_IDS for item in all_actions)
+        if delivery_requested and not delivery_attempted:
+            delivery_step = len(executed_steps) + 1
+            delivery_started = utc_now().isoformat()
+            delivery_tool_id = "mailer.report_send"
+            delivery_title = "Send report email (server-side)"
+
+            queued_delivery = self._activity_event(
+                run_id=run_id,
+                event_type="tool_queued",
+                title=f"Queued: {delivery_title}",
+                detail=delivery_tool_id,
+                metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+            )
+            yield _stream_event(queued_delivery)
+            started_delivery = self._activity_event(
+                run_id=run_id,
+                event_type="tool_started",
+                title=f"Step {delivery_step}: {delivery_title}",
+                detail=task_intelligence.delivery_email,
+                metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+            )
+            yield _stream_event(started_delivery)
+
+            report_title = str(execution_context.settings.get("__latest_report_title") or "Website Analysis Report").strip()
+            report_body = str(execution_context.settings.get("__latest_report_content") or "").strip()
+            if not report_body:
+                summary_lines = [
+                    f"- {row.get('title') or row.get('tool_id')}: {row.get('summary') or ''}".strip()
+                    for row in executed_steps
+                    if str(row.get("status") or "") == "success"
+                ]
+                report_body = "\n".join(
+                    [
+                        "No dedicated report draft was generated; sending execution summary.",
+                        "",
+                        *summary_lines[:10],
+                    ]
+                ).strip()
+            preferred_tone = str(task_intelligence.preferred_tone or user_preferences.get("tone") or "").strip()
+            context_summary = f"{task_intelligence.objective} Tone: {preferred_tone}".strip()
+            polished_email = polish_email_content(
+                subject=report_title or "Website Analysis Report",
+                body_text=report_body or "Report requested, but no body content was generated.",
+                recipient=task_intelligence.delivery_email,
+                context_summary=context_summary,
+            )
+            report_title = str(polished_email.get("subject") or report_title or "Website Analysis Report").strip()
+            report_body = str(
+                polished_email.get("body_text")
+                or report_body
+                or "Report requested, but no body content was generated."
+            ).strip()
+
+            preview_body = _truncate_text(report_body or "Composing report body...")
+            set_recipient_event = self._activity_event(
+                run_id=run_id,
+                event_type="email_set_to",
+                title="Apply recipient",
+                detail=task_intelligence.delivery_email,
+                metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+            )
+            yield _stream_event(set_recipient_event)
+            set_subject_event = self._activity_event(
+                run_id=run_id,
+                event_type="email_set_subject",
+                title="Apply subject",
+                detail=report_title or "Website Analysis Report",
+                metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+            )
+            yield _stream_event(set_subject_event)
+            typed_preview = ""
+            for body_chunk in _chunk_preserve_text(preview_body, chunk_size=240, limit=7):
+                typed_preview += body_chunk
+                typing_event = self._activity_event(
+                    run_id=run_id,
+                    event_type="email_type_body",
+                    title="Typing email body",
+                    detail=_compact(body_chunk, 120) or "Composing body...",
+                    metadata={
+                        "tool_id": delivery_tool_id,
+                        "step": delivery_step,
+                        "typed_preview": typed_preview,
+                    },
+                )
+                yield _stream_event(typing_event)
+            set_body_event = self._activity_event(
+                run_id=run_id,
+                event_type="email_set_body",
+                title="Apply email body",
+                detail=_compact(preview_body, 180) or "Body ready.",
+                metadata={
+                    "tool_id": delivery_tool_id,
+                    "step": delivery_step,
+                    "typed_preview": preview_body,
+                },
+            )
+            yield _stream_event(set_body_event)
+            send_prepare_event = self._activity_event(
+                run_id=run_id,
+                event_type="email_ready_to_send",
+                title="Dispatching report via Mailer Service",
+                detail=task_intelligence.delivery_email,
+                metadata={
+                    "tool_id": delivery_tool_id,
+                    "step": delivery_step,
+                    "typed_preview": preview_body,
+                },
+            )
+            yield _stream_event(send_prepare_event)
+            try:
+                delivery_response = send_report_via_mailer(
+                    to_email=task_intelligence.delivery_email,
+                    subject=report_title or "Website Analysis Report",
+                    body_text=report_body or "Report requested, but no body content was generated.",
+                )
+                message_id = str(delivery_response.get("id") or "")
+                send_summary = (
+                    f"Server-side Mailer Service sent report to {task_intelligence.delivery_email}. "
+                    f"Message ID: {message_id or 'unknown'}"
+                )
+                all_actions.append(
+                    AgentAction(
+                        tool_id=delivery_tool_id,
+                        action_class="execute",
+                        status="success",
+                        summary=send_summary,
+                        started_at=delivery_started,
+                        ended_at=utc_now().isoformat(),
+                        metadata={
+                            "step": delivery_step,
+                            "recipient": task_intelligence.delivery_email,
+                            "subject": report_title,
+                            "message_id": message_id,
+                        },
+                    )
+                )
+                executed_steps.append(
+                    {
+                        "step": delivery_step,
+                        "tool_id": delivery_tool_id,
+                        "title": delivery_title,
+                        "status": "success",
+                        "summary": send_summary,
+                    }
+                )
+                next_steps.append("Monitor recipient inbox for response and follow-up actions.")
+                sent_event = self._activity_event(
+                    run_id=run_id,
+                    event_type="email_sent",
+                    title="Report email sent",
+                    detail=message_id or task_intelligence.delivery_email,
+                    metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+                )
+                yield _stream_event(sent_event)
+                completed_delivery = self._activity_event(
+                    run_id=run_id,
+                    event_type="tool_completed",
+                    title=f"Completed: {delivery_title}",
+                    detail=send_summary,
+                    metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+                )
+                yield _stream_event(completed_delivery)
+            except Exception as exc:
+                mapped = exc if isinstance(exc, GmailDwdError) else RuntimeError(str(exc))
+                code = str(getattr(mapped, "code", "mailer_send_failed")).strip()
+                summary = f"{code}: {mapped}"
+                all_actions.append(
+                    AgentAction(
+                        tool_id=delivery_tool_id,
+                        action_class="execute",
+                        status="failed",
+                        summary=summary,
+                        started_at=delivery_started,
+                        ended_at=utc_now().isoformat(),
+                        metadata={"step": delivery_step, "recipient": task_intelligence.delivery_email},
+                    )
+                )
+                executed_steps.append(
+                    {
+                        "step": delivery_step,
+                        "tool_id": delivery_tool_id,
+                        "title": delivery_title,
+                        "status": "failed",
+                        "summary": summary,
+                    }
+                )
+                failed_delivery = self._activity_event(
+                    run_id=run_id,
+                    event_type="tool_failed",
+                    title=f"Failed: {delivery_title}",
+                    detail=summary,
+                    metadata={"tool_id": delivery_tool_id, "step": delivery_step},
+                )
+                yield _stream_event(failed_delivery)
 
         unique_next_steps: list[str] = []
         for step in next_steps:
@@ -902,6 +1438,16 @@ class AgentOrchestrator:
             runtime_settings=execution_context.settings,
             verification_report=verification_report,
         )
+        answer = polish_final_response(
+            request_message=request.message,
+            answer_text=answer,
+            verification_report=verification_report,
+            preferences={
+                **(user_preferences if isinstance(user_preferences, dict) else {}),
+                "task_preferred_tone": task_intelligence.preferred_tone,
+                "task_preferred_format": task_intelligence.preferred_format,
+            },
+        )
 
         info_blocks: list[str] = []
         for idx, source in enumerate(all_sources, start=1):
@@ -978,6 +1524,7 @@ class AgentOrchestrator:
                     "actions_taken": [item.to_dict() for item in result.actions_taken],
                     "sources_used": [item.to_dict() for item in result.sources_used],
                     "next_recommended_steps": result.next_recommended_steps,
+                    "user_preferences": user_preferences,
                     "event_coverage": coverage,
                 }
             )

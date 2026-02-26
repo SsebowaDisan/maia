@@ -29,6 +29,8 @@ dependencies = [
     "fast_langdetect",
     "fastapi<=0.112.1",
     "gradio>=4.31.0,<4.40",
+    "google-api-python-client>=2.0.0,<3",
+    "google-auth>=2.0.0,<3",
     "html2text==2024.2.26",
     "langchain>=0.1.16,<0.2.16",
     "langchain-community>=0.0.34,<=0.2.11",
