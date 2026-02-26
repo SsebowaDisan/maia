@@ -48,6 +48,138 @@ export function AgentDesktopScene({
   const clipboardPreview = typeof activeSceneData["clipboard_text"] === "string"
     ? activeSceneData["clipboard_text"]
     : "";
+  const canRenderLiveUrl =
+    browserUrl.startsWith("http://") || browserUrl.startsWith("https://");
+  const scrollPercentRaw =
+    typeof activeSceneData["scroll_percent"] === "number"
+      ? activeSceneData["scroll_percent"]
+      : Number(activeSceneData["scroll_percent"]);
+  const scrollPercent = Number.isFinite(scrollPercentRaw)
+    ? Math.max(0, Math.min(100, Number(scrollPercentRaw)))
+    : null;
+
+  if (isBrowserScene) {
+    const showSnapshotPrimary = Boolean(snapshotUrl);
+    return (
+      <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
+        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
+          <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+          <div className="ml-2 flex-1 truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] text-white/85">
+            {browserUrl || "Searching the web and opening result pages..."}
+          </div>
+        </div>
+        {showSnapshotPrimary ? (
+          <div className="relative flex-1 bg-[#0a0c10]">
+            <img
+              src={snapshotUrl}
+              alt="Live browser capture"
+              className="h-full w-full object-cover"
+              onError={onSnapshotError}
+            />
+            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
+              <p className="text-[12px] font-semibold">
+                {activeTitle || "Live website capture"}
+              </p>
+              <p className="mt-0.5 line-clamp-2 text-[11px] text-[#3a3a3c]">
+                {sceneText || activeDetail || "Opening and reviewing the website in real time."}
+              </p>
+              {keywordBadges.length ? (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {keywordBadges.map((keyword) => (
+                    <span
+                      key={keyword}
+                      className="rounded-full border border-black/10 bg-white/70 px-2 py-0.5 text-[10px] text-[#1d1d1f]"
+                    >
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {typeof scrollPercent === "number" ? (
+              <div className="pointer-events-none absolute right-2 top-20 bottom-6 flex flex-col items-center">
+                <div className="h-full w-1.5 rounded-full bg-black/20">
+                  <div
+                    className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
+                    style={{ height: "24px", marginTop: `calc(${scrollPercent}% - 12px)` }}
+                  />
+                </div>
+                <span className="mt-1 text-[10px] font-medium text-black/70">
+                  {Math.round(scrollPercent)}%
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : canRenderLiveUrl ? (
+          <div className="relative flex-1 bg-white">
+            <iframe
+              src={browserUrl}
+              title="Live website preview"
+              className="h-full w-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
+              <p className="text-[12px] font-semibold">
+                {activeTitle || "Live website preview"}
+              </p>
+              <p className="mt-0.5 line-clamp-2 text-[11px] text-[#3a3a3c]">
+                {sceneText || activeDetail || "Opening and reviewing the website in real time."}
+              </p>
+              {keywordBadges.length ? (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {keywordBadges.map((keyword) => (
+                    <span
+                      key={keyword}
+                      className="rounded-full border border-black/10 bg-white/70 px-2 py-0.5 text-[10px] text-[#1d1d1f]"
+                    >
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {typeof scrollPercent === "number" ? (
+              <div className="pointer-events-none absolute right-2 top-20 bottom-6 flex flex-col items-center">
+                <div className="h-full w-1.5 rounded-full bg-black/20">
+                  <div
+                    className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
+                    style={{ height: "24px", marginTop: `calc(${scrollPercent}% - 12px)` }}
+                  />
+                </div>
+                <span className="mt-1 text-[10px] font-medium text-black/70">
+                  {Math.round(scrollPercent)}%
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="relative flex-1 space-y-3 p-4">
+            <p className="text-[13px] font-semibold text-white">{activeTitle || "Browser scene"}</p>
+            <p className="text-[12px] text-white/80">
+              {sceneText || activeDetail || "Inspecting page content and extracting evidence..."}
+            </p>
+            <div className="space-y-2">
+              <div className="h-2 w-[92%] rounded-full bg-white/20" />
+              <div className="h-2 w-[84%] rounded-full bg-white/15" />
+              <div className="h-2 w-[88%] rounded-full bg-white/20" />
+              <div className="h-2 w-[63%] rounded-full bg-white/15" />
+            </div>
+            {snapshotUrl ? (
+              <img
+                src={snapshotUrl}
+                alt="Browser capture"
+                className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-white/20 object-cover"
+                onError={onSnapshotError}
+              />
+            ) : null}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (snapshotUrl) {
     return (
@@ -83,67 +215,6 @@ export function AgentDesktopScene({
             </div>
           ) : null}
         </div>
-      </div>
-    );
-  }
-
-  if (isBrowserScene) {
-    const canRenderLiveUrl =
-      browserUrl.startsWith("http://") || browserUrl.startsWith("https://");
-    return (
-      <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
-        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-          <div className="ml-2 flex-1 truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] text-white/85">
-            {browserUrl || "Searching the web and opening result pages..."}
-          </div>
-        </div>
-        {canRenderLiveUrl ? (
-          <div className="relative flex-1 bg-white">
-            <iframe
-              src={browserUrl}
-              title="Live website preview"
-              className="h-full w-full border-0"
-              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
-            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-[#1d1d1f] backdrop-blur-sm">
-              <p className="text-[12px] font-semibold">
-                {activeTitle || "Live website preview"}
-              </p>
-              <p className="mt-0.5 line-clamp-2 text-[11px] text-[#3a3a3c]">
-                {sceneText || activeDetail || "Opening and reviewing the website in real time."}
-              </p>
-              {keywordBadges.length ? (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {keywordBadges.map((keyword) => (
-                    <span
-                      key={keyword}
-                      className="rounded-full border border-black/10 bg-white/70 px-2 py-0.5 text-[10px] text-[#1d1d1f]"
-                    >
-                      {keyword}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 space-y-3 p-4">
-            <p className="text-[13px] font-semibold text-white">{activeTitle || "Browser scene"}</p>
-            <p className="text-[12px] text-white/80">
-              {sceneText || activeDetail || "Inspecting page content and extracting evidence..."}
-            </p>
-            <div className="space-y-2">
-              <div className="h-2 w-[92%] rounded-full bg-white/20" />
-              <div className="h-2 w-[84%] rounded-full bg-white/15" />
-              <div className="h-2 w-[88%] rounded-full bg-white/20" />
-              <div className="h-2 w-[63%] rounded-full bg-white/15" />
-            </div>
-          </div>
-        )}
       </div>
     );
   }

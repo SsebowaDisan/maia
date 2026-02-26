@@ -58,6 +58,24 @@ class ToolRegistryTests(unittest.TestCase):
                 params={"to": "ops@example.com", "subject": "x", "body": "y"},
             )
 
+    def test_full_access_member_can_execute_send_tool(self) -> None:
+        access = build_access_context(
+            user_id="u1",
+            settings={
+                "agent.user_role": "member",
+                "agent.access_mode": "full_access",
+                "agent.full_access_enabled": True,
+            },
+        )
+        result = self.registry.execute(
+            tool_id="email.send",
+            context=self.exec_context,
+            access=access,
+            prompt="send this message",
+            params={"to": "ops@example.com", "subject": "x", "body": "y"},
+        )
+        self.assertIn("SMTP is not configured", result.summary)
+
 
 if __name__ == "__main__":
     unittest.main()

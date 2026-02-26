@@ -5,6 +5,7 @@ from typing import Any, Generator
 from api.services.agent.audit import get_audit_logger
 from api.services.agent.governance import get_governance_service
 from api.services.agent.policy import (
+    ACCESS_MODE_FULL,
     ACTION_CLASS_EXECUTE,
     AgentAccessContext,
     AgentToolCapability,
@@ -178,9 +179,13 @@ class ToolRegistry:
         if capability is None:
             raise ToolExecutionError(f"Capability mapping missing for tool: {tool_id}")
         if not has_required_role(access, capability.minimum_role):
-            raise ToolExecutionError(
-                f"Role `{access.role}` does not meet required role `{capability.minimum_role}`."
+            full_access_override = (
+                access.access_mode == ACCESS_MODE_FULL and access.full_access_enabled
             )
+            if not full_access_override:
+                raise ToolExecutionError(
+                    f"Role `{access.role}` does not meet required role `{capability.minimum_role}`."
+                )
 
         effective_policy = resolve_execution_policy(capability, access)
         if (

@@ -15,6 +15,7 @@ from .google_calendar_connector import GoogleCalendarConnector
 from .google_maps_connector import GoogleMapsConnector
 from .google_workspace_connector import GoogleWorkspaceConnector
 from .gmail_connector import GmailConnector
+from .gmail_playwright_connector import GmailPlaywrightConnector
 from .invoice_connector import InvoiceConnector
 from .m365_connector import M365Connector
 from .slack_connector import SlackConnector
@@ -30,6 +31,7 @@ class ConnectorRegistry:
             "google_calendar": GoogleCalendarConnector,
             "google_analytics": GoogleAnalyticsConnector,
             "gmail": GmailConnector,
+            "gmail_playwright": GmailPlaywrightConnector,
             "bing_search": BingSearchConnector,
             "brave_search": BraveSearchConnector,
             "playwright_browser": BrowserConnector,

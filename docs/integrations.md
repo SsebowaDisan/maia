@@ -60,8 +60,42 @@ API endpoints:
 Tool-level behavior:
 
 - `marketing.web_research` prefers Brave Search first
-- falls back to Bing, then DuckDuckGo
+- falls back to Bing only when Brave is unavailable
+- no DuckDuckGo manual fallback links are emitted in agent responses
 - emits live events (`status`, `brave.search.query`, `brave.search.results`) through SSE
+
+## Gmail Live Desktop (Playwright)
+
+`gmail.draft` and `gmail.send` now support real Playwright desktop execution so the theater shows actual browser actions and snapshots.
+
+Recommended env vars:
+
+```env
+AGENT_GMAIL_PLAYWRIGHT_HEADLESS=true
+AGENT_GMAIL_PLAYWRIGHT_SLOW_MO_MS=50
+AGENT_GMAIL_PLAYWRIGHT_PROFILE_DIR=.maia_agent/playwright/gmail_profile
+```
+
+Behavior:
+
+- Opens search engine and searches `gmail`
+- Opens Gmail web UI
+- Fills recipient, subject, and body
+- Sends message with real UI click (`gmail.send`) or leaves draft (`gmail.draft`)
+- Emits snapshot-backed events (`email_open_compose`, `email_type_body`, `email_click_send`, `email_sent`)
+
+Important:
+
+- First run may require manual Gmail web sign-in in the Playwright profile.
+- If sign-in is required, event `email_auth_required` is emitted.
+- By default, tools fall back to Gmail API if desktop mode is unavailable.
+- Set `desktop_required=true` in tool params to enforce desktop-only execution.
+
+Optional bootstrap command (one-time login):
+
+```bash
+python scripts/gmail_playwright_login.py
+```
 
 ## Live Events (SSE)
 

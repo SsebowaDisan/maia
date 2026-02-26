@@ -15,16 +15,14 @@ def test_direct_website_analysis_prioritizes_inspection_report_and_email_send() 
 
     assert "marketing.web_research" not in tool_ids
     assert tool_ids == [
-        "workspace.docs.research_notes",
-        "workspace.sheets.track_step",
         "browser.playwright.inspect",
         "report.generate",
         "gmail.draft",
         "gmail.send",
     ]
-    assert steps[2].params.get("url") == "https://axongroup.com/"
-    assert steps[4].params.get("to") == "ssebowadisan1@gmail.com"
-    assert steps[5].params.get("to") == "ssebowadisan1@gmail.com"
+    assert steps[0].params.get("url") == "https://axongroup.com/"
+    assert steps[2].params.get("to") == "ssebowadisan1@gmail.com"
+    assert steps[3].params.get("to") == "ssebowadisan1@gmail.com"
 
 
 def test_url_prompt_with_explicit_source_discovery_keeps_web_research() -> None:

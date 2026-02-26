@@ -133,6 +133,12 @@ class PlaywrightInspectTool(AgentTool):
             yield event
             if event.event_type == "browser_extract":
                 page_excerpt = str(event.data.get("text_excerpt") or "").strip()
+                cursor_payload = {}
+                if "cursor_x" in event.data and "cursor_y" in event.data:
+                    cursor_payload = {
+                        "cursor_x": event.data.get("cursor_x"),
+                        "cursor_y": event.data.get("cursor_y"),
+                    }
                 if page_excerpt:
                     page_keywords = _extract_keywords(page_excerpt, limit=8)
                     if page_keywords:
@@ -144,6 +150,7 @@ class PlaywrightInspectTool(AgentTool):
                             data={
                                 "url": str(event.data.get("url") or ""),
                                 "keywords": page_keywords,
+                                **cursor_payload,
                             },
                             snapshot_ref=event.snapshot_ref,
                         )
@@ -159,6 +166,7 @@ class PlaywrightInspectTool(AgentTool):
                             data={
                                 "url": str(event.data.get("url") or ""),
                                 "clipboard_text": copied,
+                                **cursor_payload,
                             },
                             snapshot_ref=event.snapshot_ref,
                         )
@@ -182,16 +190,29 @@ class PlaywrightInspectTool(AgentTool):
         visited_count = len(pages) if isinstance(pages, list) else 0
 
         content_lines = [
-            f"Browser inspection: {title}",
-            f"URL: {final_url}",
-            f"Pages reviewed: {visited_count}",
+            "## Website Inspection",
+            f"- Page title: {title}",
+            f"- URL: {final_url}",
+            f"- Pages reviewed: {visited_count}",
         ]
-        if compact_excerpt:
-            content_lines.extend(["", "Evidence excerpt:", compact_excerpt])
-        else:
-            content_lines.extend(["", "Evidence excerpt:", "No text content extracted."])
         if keywords:
-            content_lines.extend(["", "Keywords:", ", ".join(keywords[:14])])
+            content_lines.append(f"- Observed keywords: {', '.join(keywords[:12])}")
+        if compact_excerpt:
+            content_lines.extend(
+                [
+                    "",
+                    "## Evidence Excerpt",
+                    compact_excerpt,
+                ]
+            )
+        else:
+            content_lines.extend(
+                [
+                    "",
+                    "## Evidence Excerpt",
+                    "No readable text was extracted from the rendered page.",
+                ]
+            )
 
         sources = [
             AgentSource(
@@ -199,12 +220,17 @@ class PlaywrightInspectTool(AgentTool):
                 label=title,
                 url=final_url,
                 score=0.8,
-                metadata={"snapshot_path": screenshot_path},
+                metadata={
+                    "snapshot_path": screenshot_path,
+                    "excerpt": compact_excerpt,
+                    "keywords": keywords[:14],
+                    "pages_reviewed": visited_count,
+                },
             )
         ]
 
         return ToolExecutionResult(
-            summary=f"Inspected page: {title}",
+            summary=f"Website inspection completed for {title}.",
             content="\n".join(content_lines),
             data={
                 "url": final_url,

@@ -52,7 +52,7 @@ class GmailToolsReportFlowTests(unittest.TestCase):
             result = tool.execute(
                 context=self.context,
                 prompt="send the report to ssebowadisan1@gmail.com",
-                params={"to": "ssebowadisan1@gmail.com"},
+                params={"to": "ssebowadisan1@gmail.com", "live_desktop": False},
             )
         self.assertEqual(connector.last_draft.get("subject"), "Website Analysis Report")
         self.assertEqual(
@@ -69,7 +69,7 @@ class GmailToolsReportFlowTests(unittest.TestCase):
             result = tool.execute(
                 context=self.context,
                 prompt="send the report to ssebowadisan1@gmail.com",
-                params={"to": "ssebowadisan1@gmail.com", "confirmed": True},
+                params={"to": "ssebowadisan1@gmail.com", "confirmed": True, "live_desktop": False},
             )
         self.assertEqual(connector.last_send.get("subject"), "Website Analysis Report")
         self.assertEqual(

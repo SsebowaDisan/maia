@@ -97,9 +97,9 @@ def _intent_signals(request: ChatRequest) -> dict[str, Any]:
 
 def _sort_steps(steps: list[PlannedStep]) -> list[PlannedStep]:
     priorities = {
+        "browser.playwright.inspect": 5,
         "workspace.docs.research_notes": 10,
         "workspace.sheets.track_step": 15,
-        "browser.playwright.inspect": 20,
         "marketing.web_research": 30,
         "marketing.local_discovery": 35,
         "marketing.competitor_profile": 40,
@@ -226,9 +226,10 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -
             )
         )
 
-    if direct_url and not any(step.tool_id == "browser.playwright.inspect" for step in enriched):
+    if direct_url:
+        enriched = [step for step in enriched if step.tool_id != "browser.playwright.inspect"]
         enriched.insert(
-            1,
+            0,
             PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Inspect provided website in live browser",
@@ -236,26 +237,44 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -
             ),
         )
 
-    kickoff = [
-        PlannedStep(
-            tool_id="workspace.docs.research_notes",
-            title="Open research notebook",
-            params={
-                "title": f"Maia Deep Research - {message_preview}",
-                "note": f"Research goal: {request.message.strip()}",
-            },
+    lower_message = request.message.lower()
+    wants_workspace_logging = _has_any(
+        lower_message,
+        (
+            "google docs",
+            "google sheets",
+            "docs",
+            "sheet",
+            "sheets",
+            "tracker",
+            "notebook",
+            "track step",
+            "log step",
         ),
-        PlannedStep(
-            tool_id="workspace.sheets.track_step",
-            title="Initialize step tracker",
-            params={
-                "step_name": "Run started",
-                "status": "started",
-                "detail": "Deep research run initialized",
-            },
-        ),
-    ]
-    return _normalize_steps(request, kickoff + enriched)
+    )
+    if wants_workspace_logging:
+        kickoff = [
+            PlannedStep(
+                tool_id="workspace.docs.research_notes",
+                title="Open research notebook",
+                params={
+                    "title": f"Maia Deep Research - {message_preview}",
+                    "note": f"Research goal: {request.message.strip()}",
+                },
+            ),
+            PlannedStep(
+                tool_id="workspace.sheets.track_step",
+                title="Initialize step tracker",
+                params={
+                    "step_name": "Run started",
+                    "status": "started",
+                    "detail": "Deep research run initialized",
+                },
+            ),
+        ]
+        enriched = kickoff + enriched
+
+    return _normalize_steps(request, enriched)
 
 
 def build_plan(request: ChatRequest) -> list[PlannedStep]:

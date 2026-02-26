@@ -35,6 +35,16 @@ const eventStyles: Record<string, EventStyle> = {
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
+  task_understanding_started: {
+    label: "Understanding",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  task_understanding_ready: {
+    label: "Task Ready",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
   plan_ready: {
     label: "Plan Ready",
     icon: Activity,
@@ -114,6 +124,11 @@ const eventStyles: Record<string, EventStyle> = {
     label: "Cookie Consent",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
+  },
+  browser_cookie_check: {
+    label: "Cookie Check",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
   },
   clipboard_copy: {
     label: "Copy",
@@ -215,6 +230,11 @@ const eventStyles: Record<string, EventStyle> = {
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },
+  email_auth_required: {
+    label: "Gmail Login Required",
+    icon: TriangleAlert,
+    accent: "text-[#9b1c1c]",
+  },
   email_click_send: {
     label: "Click Send",
     icon: Activity,
@@ -270,6 +290,21 @@ const eventStyles: Record<string, EventStyle> = {
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },
+  verification_started: {
+    label: "Verification",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  verification_check: {
+    label: "Check",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  verification_completed: {
+    label: "Verified",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
   approval_required: {
     label: "Approval Needed",
     icon: TriangleAlert,
@@ -304,6 +339,21 @@ const eventStyles: Record<string, EventStyle> = {
     label: "Search Results",
     icon: Eye,
     accent: "text-[#4c4c50]",
+  },
+  retrieval_query_rewrite: {
+    label: "Rewrite Queries",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  retrieval_fused: {
+    label: "Fuse Results",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  retrieval_quality_assessed: {
+    label: "Quality Check",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
   },
 };
 

@@ -83,29 +83,37 @@ class BrowserConnector(BaseConnector):
                 browser.close()
                 raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
 
+            open_cursor = self._move_cursor(page=page, x=124, y=88)
             open_capture = self._capture_page_state(
                 page=page,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
                 label="open",
             )
+            open_metrics = self._page_metrics(page=page)
             yield {
                 "event_type": "browser_open",
                 "title": "Start Playwright browser session",
                 "detail": open_capture["url"],
-                "data": {"url": open_capture["url"], "title": open_capture["title"], "page_index": 1},
+                "data": {
+                    "url": open_capture["url"],
+                    "title": open_capture["title"],
+                    "page_index": 1,
+                    **open_cursor,
+                    **open_metrics,
+                },
                 "snapshot_ref": open_capture["screenshot_path"],
             }
 
             if auto_accept_cookies:
                 consent = self._accept_cookie_banner(page=page, wait_ms=wait_ms)
+                consent_capture = self._capture_page_state(
+                    page=page,
+                    output_dir=output_dir,
+                    stamp_prefix=stamp_prefix,
+                    label="cookie-accept-1",
+                )
                 if consent.get("accepted"):
-                    consent_capture = self._capture_page_state(
-                        page=page,
-                        output_dir=output_dir,
-                        stamp_prefix=stamp_prefix,
-                        label="cookie-accept-1",
-                    )
                     yield {
                         "event_type": "browser_cookie_accept",
                         "title": "Accept website cookies",
@@ -117,6 +125,52 @@ class BrowserConnector(BaseConnector):
                         },
                         "snapshot_ref": consent_capture["screenshot_path"],
                     }
+                else:
+                    yield {
+                        "event_type": "browser_cookie_check",
+                        "title": "Check website cookies",
+                        "detail": "No cookie banner detected or consent already stored.",
+                        "data": {
+                            "url": consent_capture["url"],
+                            "title": consent_capture["title"],
+                            "page_index": 1,
+                        },
+                        "snapshot_ref": consent_capture["screenshot_path"],
+                    }
+
+            # Always capture a fast first-pass extract before any scrolling/navigation so
+            # the agent can ground an initial answer from the landing page immediately.
+            quick_cursor = self._move_cursor(page=page, x=220, y=192)
+            quick_capture = self._capture_page_state(
+                page=page,
+                output_dir=output_dir,
+                stamp_prefix=stamp_prefix,
+                label="extract-initial-1",
+            )
+            visited_pages.append(
+                {
+                    "url": quick_capture["url"],
+                    "title": quick_capture["title"],
+                    "text_excerpt": quick_capture["text_excerpt"],
+                    "screenshot_path": quick_capture["screenshot_path"],
+                }
+            )
+            yield {
+                "event_type": "browser_extract",
+                "title": "Fast landing-page analysis",
+                "detail": quick_capture["title"] or quick_capture["url"],
+                "data": {
+                    "url": quick_capture["url"],
+                    "title": quick_capture["title"],
+                    "page_index": 1,
+                    "extract_pass": "initial",
+                    "characters": len(str(quick_capture["text_excerpt"] or "")),
+                    "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
+                    **quick_cursor,
+                    **self._page_metrics(page=page),
+                },
+                "snapshot_ref": quick_capture["screenshot_path"],
+            }
 
             current_url = str(open_capture["url"] or url)
             targets = [current_url]
@@ -129,18 +183,21 @@ class BrowserConnector(BaseConnector):
             )
 
             for page_index, target_url in enumerate(targets, start=1):
+                last_cursor = dict(open_cursor)
                 if page_index > 1:
                     try:
                         page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                         page.wait_for_timeout(max(200, wait_ms))
                     except Exception:
                         continue
+                    last_cursor = self._move_cursor(page=page, x=138, y=106)
                     nav_capture = self._capture_page_state(
                         page=page,
                         output_dir=output_dir,
                         stamp_prefix=stamp_prefix,
                         label=f"nav-{page_index}",
                     )
+                    nav_metrics = self._page_metrics(page=page)
                     yield {
                         "event_type": "browser_navigate",
                         "title": f"Navigate to page {page_index}",
@@ -149,18 +206,20 @@ class BrowserConnector(BaseConnector):
                             "url": nav_capture["url"],
                             "title": nav_capture["title"],
                             "page_index": page_index,
+                            **last_cursor,
+                            **nav_metrics,
                         },
                         "snapshot_ref": nav_capture["screenshot_path"],
                     }
                     if auto_accept_cookies:
                         consent = self._accept_cookie_banner(page=page, wait_ms=wait_ms)
+                        consent_capture = self._capture_page_state(
+                            page=page,
+                            output_dir=output_dir,
+                            stamp_prefix=stamp_prefix,
+                            label=f"cookie-accept-{page_index}",
+                        )
                         if consent.get("accepted"):
-                            consent_capture = self._capture_page_state(
-                                page=page,
-                                output_dir=output_dir,
-                                stamp_prefix=stamp_prefix,
-                                label=f"cookie-accept-{page_index}",
-                            )
                             yield {
                                 "event_type": "browser_cookie_accept",
                                 "title": f"Accept website cookies (page {page_index})",
@@ -169,13 +228,46 @@ class BrowserConnector(BaseConnector):
                                     "url": consent_capture["url"],
                                     "title": consent_capture["title"],
                                     "page_index": page_index,
+                                    **last_cursor,
+                                },
+                                "snapshot_ref": consent_capture["screenshot_path"],
+                            }
+                        else:
+                            yield {
+                                "event_type": "browser_cookie_check",
+                                "title": f"Check website cookies (page {page_index})",
+                                "detail": "No cookie banner detected or consent already stored.",
+                                "data": {
+                                    "url": consent_capture["url"],
+                                    "title": consent_capture["title"],
+                                    "page_index": page_index,
+                                    **last_cursor,
                                 },
                                 "snapshot_ref": consent_capture["screenshot_path"],
                             }
 
                 for scroll_index in range(max(1, int(max_scroll_steps))):
+                    metrics_before = self._page_metrics(page=page)
+                    viewport_width = int(metrics_before.get("viewport_width") or 1366)
+                    viewport_height = int(metrics_before.get("viewport_height") or 768)
+                    cursor_x_px = max(
+                        48,
+                        min(
+                            viewport_width - 48,
+                            140 + ((scroll_index + page_index) * 170) % max(220, viewport_width - 120),
+                        ),
+                    )
+                    cursor_y_px = max(
+                        96,
+                        min(
+                            viewport_height - 60,
+                            170 + ((scroll_index + page_index) * 90) % max(200, viewport_height - 120),
+                        ),
+                    )
+                    last_cursor = self._move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
                     page.mouse.wheel(0, 900)
                     page.wait_for_timeout(max(200, wait_ms // 2))
+                    metrics_after = self._page_metrics(page=page)
                     scroll_capture = self._capture_page_state(
                         page=page,
                         output_dir=output_dir,
@@ -191,6 +283,8 @@ class BrowserConnector(BaseConnector):
                             "title": scroll_capture["title"],
                             "page_index": page_index,
                             "scroll_pass": scroll_index + 1,
+                            **last_cursor,
+                            **metrics_after,
                         },
                         "snapshot_ref": scroll_capture["screenshot_path"],
                     }
@@ -219,6 +313,8 @@ class BrowserConnector(BaseConnector):
                         "page_index": page_index,
                         "characters": len(str(extract_capture["text_excerpt"] or "")),
                         "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
+                        **last_cursor,
+                        **self._page_metrics(page=page),
                     },
                     "snapshot_ref": extract_capture["screenshot_path"],
                 }
@@ -268,6 +364,52 @@ class BrowserConnector(BaseConnector):
             "text_excerpt": text_excerpt,
             "screenshot_path": str(screenshot_path.resolve()),
         }
+
+    def _move_cursor(self, *, page: Any, x: float, y: float) -> dict[str, float]:
+        try:
+            page.mouse.move(float(x), float(y), steps=14)
+        except Exception:
+            pass
+        metrics = self._page_metrics(page=page)
+        viewport_width = max(1.0, float(metrics.get("viewport_width") or 1366.0))
+        viewport_height = max(1.0, float(metrics.get("viewport_height") or 768.0))
+        return {
+            "cursor_x": round((float(x) / viewport_width) * 100.0, 2),
+            "cursor_y": round((float(y) / viewport_height) * 100.0, 2),
+        }
+
+    def _page_metrics(self, *, page: Any) -> dict[str, float]:
+        try:
+            raw = page.evaluate(
+                """() => {
+                    const doc = document.documentElement || {};
+                    const body = document.body || {};
+                    const scrollTop = Number(window.scrollY || doc.scrollTop || body.scrollTop || 0);
+                    const scrollHeight = Number(doc.scrollHeight || body.scrollHeight || 0);
+                    const viewportHeight = Number(window.innerHeight || doc.clientHeight || 0);
+                    const viewportWidth = Number(window.innerWidth || doc.clientWidth || 0);
+                    const maxScrollable = Math.max(1, scrollHeight - viewportHeight);
+                    const scrollPercent = Math.max(0, Math.min(100, (scrollTop / maxScrollable) * 100));
+                    return {
+                        scroll_top: scrollTop,
+                        scroll_height: scrollHeight,
+                        viewport_height: viewportHeight,
+                        viewport_width: viewportWidth,
+                        scroll_percent: scrollPercent,
+                    };
+                }"""
+            )
+            if isinstance(raw, dict):
+                result: dict[str, float] = {}
+                for key, value in raw.items():
+                    try:
+                        result[str(key)] = float(value)
+                    except Exception:
+                        continue
+                return result
+        except Exception:
+            return {}
+        return {}
 
     def _extract_same_origin_links(
         self,

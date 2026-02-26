@@ -12,6 +12,11 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
     ToolMetadata,
 )
+from api.services.agent.tools.gmail_live_desktop import (
+    desktop_mode_enabled,
+    desktop_mode_required,
+    stream_live_desktop_compose,
+)
 
 
 EMAIL_PATTERN = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
@@ -94,8 +99,54 @@ class GmailDraftTool(AgentTool):
         subject = str(params.get("subject") or report_title or _extract_subject(prompt)).strip()
         body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
         sender = str(params.get("from") or "").strip()
+        live_desktop = desktop_mode_enabled(context, params)
+        desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
+        if live_desktop:
+            try:
+                desktop_result = yield from stream_live_desktop_compose(
+                    context=context,
+                    trace_events=trace_events,
+                    to=to,
+                    subject=subject,
+                    body=body,
+                    send=False,
+                )
+                draft_id = str(desktop_result.get("draft_id") or "")
+                compose_url = str(desktop_result.get("url") or "")
+                return ToolExecutionResult(
+                    summary=f"Gmail draft created for {to} via live desktop session.",
+                    content=(
+                        "Created Gmail draft via live browser desktop.\n"
+                        f"- To: {to}\n"
+                        f"- Subject: {subject}\n"
+                        f"- Compose URL: {compose_url or 'unknown'}\n"
+                        f"- Draft ID: {draft_id or 'unknown'}"
+                    ),
+                    data={
+                        "to": to,
+                        "subject": subject,
+                        "draft_id": draft_id,
+                        "compose_url": compose_url,
+                        "delivery_mode": "playwright_desktop",
+                    },
+                    sources=[],
+                    next_steps=["Review draft in Gmail and send when ready."],
+                    events=trace_events,
+                )
+            except Exception as exc:
+                if desktop_required:
+                    raise ToolExecutionError(f"Live Gmail desktop draft failed: {exc}") from exc
+                fallback = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title="Live desktop draft unavailable",
+                    detail="Falling back to Gmail API draft flow",
+                    data={"reason": str(exc)},
+                )
+                trace_events.append(fallback)
+                yield fallback
+
         open_compose_event = ToolTraceEvent(
             event_type="email_open_compose",
             title="Open Gmail compose window",
@@ -153,7 +204,13 @@ class GmailDraftTool(AgentTool):
                 f"- Draft ID: {draft_id or 'unknown'}\n"
                 f"- Message ID: {message_id or 'unknown'}"
             ),
-            data={"to": to, "subject": subject, "draft_id": draft_id, "message_id": message_id},
+            data={
+                "to": to,
+                "subject": subject,
+                "draft_id": draft_id,
+                "message_id": message_id,
+                "delivery_mode": "gmail_api",
+            },
             sources=[],
             next_steps=["Review draft in Gmail and send when ready."],
             events=trace_events,
@@ -204,8 +261,53 @@ class GmailSendTool(AgentTool):
         body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
         sender = str(params.get("from") or "").strip()
         dry_run = _truthy(params.get("dry_run")) or _infer_dry_run(prompt)
+        live_desktop = desktop_mode_enabled(context, params)
+        desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
+        if live_desktop and not dry_run:
+            try:
+                desktop_result = yield from stream_live_desktop_compose(
+                    context=context,
+                    trace_events=trace_events,
+                    to=to,
+                    subject=subject,
+                    body=body,
+                    send=True,
+                )
+                compose_url = str(desktop_result.get("url") or "")
+                return ToolExecutionResult(
+                    summary=f"Gmail message sent to {to} via live desktop session.",
+                    content=(
+                        "Gmail desktop sent the message through live browser execution.\n"
+                        f"- To: {to}\n"
+                        f"- Subject: {subject}\n"
+                        f"- Compose URL: {compose_url or 'unknown'}"
+                    ),
+                    data={
+                        "to": to,
+                        "subject": subject,
+                        "id": str(desktop_result.get("message_id") or ""),
+                        "thread_id": str(desktop_result.get("thread_id") or ""),
+                        "compose_url": compose_url,
+                        "delivery_mode": "playwright_desktop",
+                    },
+                    sources=[],
+                    next_steps=["Track replies and update lead status."],
+                    events=trace_events,
+                )
+            except Exception as exc:
+                if desktop_required:
+                    raise ToolExecutionError(f"Live Gmail desktop send failed: {exc}") from exc
+                fallback = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title="Live desktop send unavailable",
+                    detail="Falling back to Gmail API send flow",
+                    data={"reason": str(exc)},
+                )
+                trace_events.append(fallback)
+                yield fallback
+
         open_compose_event = ToolTraceEvent(
             event_type="email_open_compose",
             title="Open Gmail compose window",
@@ -254,7 +356,7 @@ class GmailSendTool(AgentTool):
                     f"- Subject: {subject}\n"
                     "- Status: not sent (dry run)"
                 ),
-                data={"to": to, "subject": subject, "dry_run": True},
+                data={"to": to, "subject": subject, "dry_run": True, "delivery_mode": "dry_run"},
                 sources=[],
                 next_steps=["Remove dry-run and confirm send to dispatch message."],
                 events=trace_events,
@@ -291,7 +393,13 @@ class GmailSendTool(AgentTool):
                 f"- Message ID: {message_id or 'unknown'}\n"
                 f"- Thread ID: {thread_id or 'unknown'}"
             ),
-            data={"to": to, "subject": subject, "id": message_id, "thread_id": thread_id},
+            data={
+                "to": to,
+                "subject": subject,
+                "id": message_id,
+                "thread_id": thread_id,
+                "delivery_mode": "gmail_api",
+            },
             sources=[],
             next_steps=["Track replies and update lead status."],
             events=trace_events,

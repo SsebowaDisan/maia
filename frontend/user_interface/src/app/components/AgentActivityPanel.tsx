@@ -39,6 +39,19 @@ function readStringField(
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readNumberField(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 export function AgentActivityPanel({
   events,
   streaming,
@@ -320,6 +333,9 @@ export function AgentActivityPanel({
     if (type === "email_type_body") {
       return "Typing email";
     }
+    if (type === "email_auth_required") {
+      return "Awaiting sign in";
+    }
     if (type === "email_click_send") {
       return "Clicking send";
     }
@@ -332,40 +348,24 @@ export function AgentActivityPanel({
     return "Agent cursor";
   }, [activeEvent?.event_type]);
 
-  const shouldAnimateCursor = useMemo(() => {
-    const type = activeEvent?.event_type || "";
-    return (
-      streaming ||
-      [
-        "desktop_starting",
-        "desktop_ready",
-        "document_opened",
-        "document_scanned",
-        "highlights_detected",
-        "web_result_opened",
-        "response_writing",
-        "browser_open",
-        "browser_navigate",
-        "browser_keyword_highlight",
-        "browser_copy_selection",
-        "web_search_started",
-        "doc_copy_clipboard",
-        "doc_paste_clipboard",
-        "doc_type_text",
-        "sheet_cell_update",
-        "sheet_append_row",
-        "email_draft_create",
-        "email_open_compose",
-        "email_set_to",
-        "email_set_subject",
-        "email_set_body",
-        "email_type_body",
-        "email_ready_to_send",
-        "email_click_send",
-        "email_sent",
-      ].includes(type)
-    );
-  }, [activeEvent?.event_type, streaming]);
+  const eventCursor = useMemo(() => {
+    if (!activeEvent) {
+      return null;
+    }
+    const dataX = readNumberField(activeEvent.data?.["cursor_x"]);
+    const dataY = readNumberField(activeEvent.data?.["cursor_y"]);
+    const metaX = readNumberField(activeEvent.metadata?.["cursor_x"]);
+    const metaY = readNumberField(activeEvent.metadata?.["cursor_y"]);
+    const x = dataX ?? metaX;
+    const y = dataY ?? metaY;
+    if (x === null || y === null) {
+      return null;
+    }
+    return {
+      x: Math.max(2, Math.min(98, x)),
+      y: Math.max(2, Math.min(98, y)),
+    };
+  }, [activeEvent]);
 
   useEffect(() => {
     if (!orderedEvents.length) {
@@ -459,43 +459,11 @@ export function AgentActivityPanel({
   }, [activeEvent?.event_id]);
 
   useEffect(() => {
-    if (!shouldAnimateCursor) {
+    if (!eventCursor) {
       return;
     }
-
-    const interval = window.setInterval(() => {
-      setCursorPoint((current) => {
-        const eventType = activeEvent?.event_type || "";
-        if (eventType === "document_scanned") {
-          const nextY = current.y >= 84 ? 18 : Math.min(88, current.y + 10);
-          const nextX = 22 + Math.random() * 54;
-          return { x: nextX, y: nextY };
-        }
-        if (eventType === "response_writing") {
-          const nextX = current.x >= 82 ? 16 : current.x + 9;
-          const nextY = 70 + Math.random() * 15;
-          return { x: nextX, y: nextY };
-        }
-        const nextX = 12 + Math.random() * 76;
-        const nextY = 16 + Math.random() * 70;
-        return { x: nextX, y: nextY };
-      });
-    }, 640);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [shouldAnimateCursor, activeEvent?.event_id]);
-
-  useEffect(() => {
-    if (!listRef.current) {
-      return;
-    }
-    const active = listRef.current.querySelector<HTMLElement>("[data-activity-active='true']");
-    if (active) {
-      active.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
-  }, [safeCursor, orderedEvents.length]);
+    setCursorPoint(eventCursor);
+  }, [eventCursor]);
 
   useEffect(() => {
     if (!isFullscreenViewer) {
@@ -631,20 +599,23 @@ export function AgentActivityPanel({
             }}
           />
 
-          <div
-            className="pointer-events-none absolute left-0 right-0 h-px bg-white/25"
-            style={{ top: `${cursorPoint.y}%` }}
-          />
+          {eventCursor ? (
+            <>
+              <div
+                className="pointer-events-none absolute left-0 right-0 h-px bg-white/25"
+                style={{ top: `${cursorPoint.y}%` }}
+              />
 
-          <div
-            className="pointer-events-none absolute z-20 transition-all duration-500"
-            style={{ left: `${cursorPoint.x}%`, top: `${cursorPoint.y}%` }}
-          >
-            <div className="relative">
-              <MousePointer2 className="h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.65)]" />
-            </div>
-          </div>
-
+              <div
+                className="pointer-events-none absolute z-20 transition-all duration-300"
+                style={{ left: `${cursorPoint.x}%`, top: `${cursorPoint.y}%` }}
+              >
+                <div className="relative">
+                  <MousePointer2 className="h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.65)]" />
+                </div>
+              </div>
+            </>
+          ) : null}
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
 
           {activeEvent ? (

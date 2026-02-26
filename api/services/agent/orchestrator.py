@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 import time
 from typing import Any, Generator
 
@@ -8,6 +9,10 @@ from api.schemas import ChatRequest
 from api.services.agent.activity import get_activity_store
 from api.services.agent.audit import get_audit_logger
 from api.services.agent.events import CORE_EVENT_TYPES, RunEventEmitter, coverage_report
+from api.services.agent.intelligence import (
+    build_verification_report,
+    derive_task_intelligence,
+)
 from api.services.agent.live_events import get_live_event_broker
 from api.services.agent.memory import get_memory_service
 from api.services.agent.models import (
@@ -32,11 +37,164 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
 )
 from api.services.agent.tools.registry import get_tool_registry
-
-
 def _compact(text: str, max_len: int = 140) -> str:
     clean = " ".join(str(text or "").split())
     return clean if len(clean) <= max_len else f"{clean[: max_len - 1].rstrip()}..."
+EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+def _extract_first_email(*chunks: str) -> str:
+    joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
+    match = EMAIL_RE.search(joined)
+    return match.group(1).strip() if match else ""
+
+
+def _issue_fix_hint(issue: str) -> str:
+    text = str(issue or "").lower()
+    if "required role" in text and "admin" in text:
+        return (
+            "Switch to Company Agent > Full Access for this run, "
+            "or set `agent.user_role` to `admin`/`owner`."
+        )
+    if (
+        "google_api_http_error" in text
+        or "invalid authentication credentials" in text
+        or "oauth" in text
+        or "refresh_token" in text
+    ):
+        return (
+            "Reconnect Google OAuth in Settings and verify required scopes, then retry."
+        )
+    return ""
+
+
+def _compose_professional_answer(
+    *,
+    request: ChatRequest,
+    planned_steps: list[PlannedStep],
+    executed_steps: list[dict[str, Any]],
+    actions: list[AgentAction],
+    sources: list[AgentSource],
+    next_steps: list[str],
+    runtime_settings: dict[str, Any],
+    verification_report: dict[str, Any] | None = None,
+) -> str:
+    lines: list[str] = []
+    lines.append("## Task Understanding")
+    lines.append(f"- Request: {_compact(request.message, 260)}")
+    if request.agent_goal:
+        lines.append(f"- Goal: {_compact(request.agent_goal, 240)}")
+    delivery_email = _extract_first_email(request.message, request.agent_goal or "")
+    if delivery_email:
+        lines.append(f"- Delivery target: `{delivery_email}`")
+
+    lines.append("")
+    lines.append("## Execution Plan")
+    for idx, step in enumerate(planned_steps, start=1):
+        lines.append(f"{idx}. {step.title} (`{step.tool_id}`)")
+
+    lines.append("")
+    lines.append("## Execution Summary")
+    if executed_steps:
+        for row in executed_steps:
+            status = "completed" if row.get("status") == "success" else "failed"
+            step_no = int(row.get("step") or 0)
+            title = str(row.get("title") or "Step")
+            tool_id = str(row.get("tool_id") or "tool")
+            summary = _compact(str(row.get("summary") or "No summary."), 180)
+            lines.append(
+                f"- Step {step_no}: **{title}** (`{tool_id}`) {status}. {summary}"
+            )
+    else:
+        lines.append("- No execution steps completed.")
+
+    lines.append("")
+    lines.append("## Key Findings")
+    browser_findings = runtime_settings.get("__latest_browser_findings")
+    if isinstance(browser_findings, dict):
+        title = str(browser_findings.get("title") or "").strip()
+        url = str(browser_findings.get("url") or "").strip()
+        excerpt = _compact(str(browser_findings.get("excerpt") or ""), 240)
+        keywords_raw = browser_findings.get("keywords")
+        keywords = (
+            [str(item).strip() for item in keywords_raw if str(item).strip()]
+            if isinstance(keywords_raw, list)
+            else []
+        )
+        if title:
+            lines.append(f"- Website analyzed: {title}")
+        if url:
+            lines.append(f"- Source URL: {url}")
+        if keywords:
+            lines.append(f"- Observed keywords: {', '.join(keywords[:10])}")
+        if excerpt:
+            lines.append(f"- Evidence note: {excerpt}")
+    else:
+        lines.append("- Findings are based on executed tools and indexed evidence.")
+
+    if sources:
+        unique_urls: list[str] = []
+        for source in sources:
+            url = str(source.url or "").strip()
+            if not url or url in unique_urls:
+                continue
+            unique_urls.append(url)
+        lines.append(f"- Sources used: {len(sources)}")
+        if unique_urls:
+            lines.append(f"- Primary source: {unique_urls[0]}")
+
+    lines.append("")
+    lines.append("## Delivery Status")
+    send_actions = [item for item in actions if item.tool_id in ("gmail.send", "email.send")]
+    if send_actions:
+        latest_send = send_actions[-1]
+        status = "sent" if latest_send.status == "success" else "not sent"
+        lines.append(f"- Email delivery: {status}.")
+        lines.append(f"- Detail: {_compact(latest_send.summary, 180)}")
+        if latest_send.status != "success":
+            hint = _issue_fix_hint(latest_send.summary)
+            if hint:
+                lines.append(f"- Fix: {hint}")
+    elif delivery_email:
+        lines.append("- Email delivery: no send step executed.")
+    else:
+        lines.append("- No email delivery requested.")
+
+    failed_actions = [item for item in actions if item.status == "failed"]
+    if failed_actions:
+        lines.append("")
+        lines.append("## Execution Issues")
+        for item in failed_actions[:6]:
+            lines.append(f"- {item.tool_id}: {_compact(item.summary, 180)}")
+
+    if verification_report:
+        checks = verification_report.get("checks")
+        if isinstance(checks, list) and checks:
+            score = verification_report.get("score")
+            grade = str(verification_report.get("grade") or "").strip()
+            lines.append("")
+            lines.append("## Verification")
+            if score is not None:
+                lines.append(f"- Quality score: {score}% ({grade or 'n/a'})")
+            for check in checks[:8]:
+                if not isinstance(check, dict):
+                    continue
+                name = str(check.get("name") or "Check").strip()
+                status = str(check.get("status") or "info").strip().upper()
+                detail = _compact(str(check.get("detail") or ""), 180)
+                lines.append(f"- {name} [{status}]: {detail}")
+
+    unique_next_steps: list[str] = []
+    for step in next_steps:
+        cleaned = str(step or "").strip()
+        if not cleaned or cleaned in unique_next_steps:
+            continue
+        unique_next_steps.append(cleaned)
+    if unique_next_steps:
+        lines.append("")
+        lines.append("## Recommended Next Steps")
+        for item in unique_next_steps[:6]:
+            lines.append(f"- {item}")
+
+    return "\n".join(lines)
 
 
 class AgentOrchestrator:
@@ -153,255 +311,6 @@ class AgentOrchestrator:
                 )
         return list(dict.fromkeys(expected))
 
-    def _step_scene_events(
-        self,
-        *,
-        run_id: str,
-        step: PlannedStep,
-        request: ChatRequest,
-        step_index: int,
-    ) -> list[AgentActivityEvent]:
-        events: list[AgentActivityEvent] = []
-        lower_message = request.message.lower()
-        selected_file_ids = self._selected_file_ids(request)
-        primary_file_id = selected_file_ids[0] if selected_file_ids else ""
-        action_meta = {
-            "tool_id": step.tool_id,
-            "file_id": primary_file_id,
-            "file_count": len(selected_file_ids),
-        }
-
-        if step.tool_id in ("marketing.web_research", "browser.playwright.inspect"):
-            query = str(step.params.get("query") or request.message).strip()
-            web_meta = {
-                "tool_id": step.tool_id,
-                "query": query,
-                "file_id": primary_file_id,
-                "file_count": len(selected_file_ids),
-            }
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="web_search_started",
-                    title=f"Step {step_index}: Search the web",
-                    detail=_compact(query, 180),
-                    metadata=web_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="browser_open",
-                    title=f"Step {step_index}: Start browser session",
-                    detail="Launching sandboxed browser for research",
-                    metadata=web_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="browser_navigate",
-                    title=f"Step {step_index}: Navigate to sources",
-                    detail="Opening top-ranked results",
-                    metadata=web_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="browser_scroll",
-                    title=f"Step {step_index}: Scroll and inspect",
-                    detail="Reading sections for key claims and metrics",
-                    metadata=web_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="web_result_opened",
-                    title=f"Step {step_index}: Open top sources",
-                    detail="Collecting source snippets and relevance signals",
-                    metadata=web_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="browser_extract",
-                    title=f"Step {step_index}: Extract web evidence",
-                    detail="Saving excerpts for grounded synthesis",
-                    metadata=web_meta,
-                )
-            )
-
-        references_documents = step.tool_id == "docs.create" or any(
-            token in lower_message for token in ("pdf", "document", "file", "page")
-        )
-        if references_documents and step.tool_id in (
-            "report.generate",
-            "data.dataset.analyze",
-            "invoice.create",
-            "docs.create",
-        ):
-            doc_meta = {
-                "tool_id": step.tool_id,
-                "file_id": primary_file_id,
-                "file_count": len(selected_file_ids),
-            }
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="document_opened",
-                    title=f"Step {step_index}: Open indexed files",
-                    detail="Preparing file context from uploaded and indexed sources",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="pdf_open",
-                    title=f"Step {step_index}: Open PDF preview",
-                    detail="Rendering source document in agent desktop",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="pdf_page_change",
-                    title=f"Step {step_index}: Navigate PDF pages",
-                    detail="Jumping to the most relevant pages",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="document_scanned",
-                    title=f"Step {step_index}: Scan sections",
-                    detail="Reviewing sections, tables, and extracted text",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="pdf_scan_region",
-                    title=f"Step {step_index}: Scan target regions",
-                    detail="Reading key regions, formulas, and diagrams",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="highlights_detected",
-                    title=f"Step {step_index}: Mark evidence",
-                    detail="Identifying the most relevant excerpts for answer grounding",
-                    metadata=doc_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="pdf_evidence_linked",
-                    title=f"Step {step_index}: Link evidence to claims",
-                    detail="Binding evidence snippets to upcoming response claims",
-                    metadata=doc_meta,
-                )
-            )
-
-        if step.tool_id in ("email.draft", "gmail.draft", "email.send", "gmail.send", "slack.post_message"):
-            if step.tool_id.startswith("gmail."):
-                events.extend(
-                    [
-                        self._activity_event(
-                            run_id=run_id,
-                            event_type="browser_open",
-                            title=f"Step {step_index}: Open secure browser",
-                            detail="Launching browser workspace for Gmail task",
-                            metadata=action_meta,
-                        ),
-                        self._activity_event(
-                            run_id=run_id,
-                            event_type="browser_navigate",
-                            title=f"Step {step_index}: Search and open Gmail",
-                            detail="Opening search engine, then navigating to Gmail compose view",
-                            metadata=action_meta,
-                        ),
-                    ]
-                )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="action_prepared",
-                    title=f"Step {step_index}: Prepare action payload",
-                    detail=f"Validating parameters for {step.tool_id}",
-                    metadata=action_meta,
-                )
-            )
-        if step.tool_id in ("email.draft", "gmail.draft"):
-            events.extend(
-                [
-                    self._activity_event(
-                        run_id=run_id,
-                        event_type="email_draft_create",
-                        title=f"Step {step_index}: Start email draft",
-                        detail="Opening composer with draft template",
-                        metadata=action_meta,
-                    ),
-                    self._activity_event(
-                        run_id=run_id,
-                        event_type="email_set_to",
-                        title=f"Step {step_index}: Apply recipients",
-                        detail="Setting recipient list",
-                        metadata=action_meta,
-                    ),
-                    self._activity_event(
-                        run_id=run_id,
-                        event_type="email_set_subject",
-                        title=f"Step {step_index}: Draft subject",
-                        detail="Generating concise subject line",
-                        metadata=action_meta,
-                    ),
-                    self._activity_event(
-                        run_id=run_id,
-                        event_type="email_set_body",
-                        title=f"Step {step_index}: Draft body",
-                        detail="Writing structured business message",
-                        metadata=action_meta,
-                    ),
-                    self._activity_event(
-                        run_id=run_id,
-                        event_type="email_ready_to_send",
-                        title=f"Step {step_index}: Draft ready",
-                        detail="Email is ready for send policy check",
-                        metadata=action_meta,
-                    ),
-                ]
-            )
-        if step.tool_id in ("email.send", "gmail.send"):
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="email_ready_to_send",
-                    title=f"Step {step_index}: Confirm send action",
-                    detail="Final validation before dispatch",
-                    metadata=action_meta,
-                )
-            )
-            events.append(
-                self._activity_event(
-                    run_id=run_id,
-                    event_type="email_sent",
-                    title=f"Step {step_index}: Email dispatched",
-                    detail="Send action completed by configured connector",
-                    metadata=action_meta,
-                )
-            )
-        return events
-
     def run_stream(
         self,
         *,
@@ -412,10 +321,11 @@ class AgentOrchestrator:
     ) -> Generator[dict[str, Any], None, AgentRunResult]:
         access_context = build_access_context(user_id=user_id, settings=settings)
         if request.access_mode is not None:
+            request_full_access = request.access_mode == ACCESS_MODE_FULL
             access_context = access_context.__class__(
                 role=access_context.role,
                 access_mode=request.access_mode,
-                full_access_enabled=access_context.full_access_enabled,
+                full_access_enabled=access_context.full_access_enabled or request_full_access,
                 tenant_id=access_context.tenant_id,
             )
 
@@ -520,6 +430,27 @@ class AgentOrchestrator:
         )
         yield _stream_event(desktop_start_event)
 
+        task_understanding_started = self._activity_event(
+            run_id=run_id,
+            event_type="task_understanding_started",
+            title="Understanding requested outcome",
+            detail=_compact(request.message, 220),
+            metadata={"conversation_id": conversation_id},
+        )
+        yield _stream_event(task_understanding_started)
+        task_intelligence = derive_task_intelligence(
+            message=request.message,
+            agent_goal=request.agent_goal,
+        )
+        task_understanding_ready = self._activity_event(
+            run_id=run_id,
+            event_type="task_understanding_ready",
+            title="Task understanding completed",
+            detail=task_intelligence.objective,
+            metadata=task_intelligence.to_dict(),
+        )
+        yield _stream_event(task_understanding_ready)
+
         started_event = self._activity_event(
             run_id=run_id,
             event_type="planning_started",
@@ -531,16 +462,40 @@ class AgentOrchestrator:
 
         steps = build_plan(request)
         deep_research_mode = is_deep_research_request(request)
-        deep_workspace_logging_enabled = deep_research_mode
+        request_text = f"{request.message} {request.agent_goal or ''}".lower()
+        workspace_logging_requested = any(
+            token in request_text
+            for token in (
+                "google docs",
+                "google sheets",
+                "research notebook",
+                "step tracker",
+                "track in sheets",
+                "log to docs",
+            )
+        )
+        deep_workspace_logging_enabled = deep_research_mode and (
+            workspace_logging_requested
+            or bool(settings.get("agent.deep_research_workspace_logging", False))
+        )
         deep_workspace_warning_emitted = False
         dynamic_inspection_inserted = False
 
+        delivery_email = _extract_first_email(request.message, request.agent_goal or "")
         plan_candidate_event = self._activity_event(
             run_id=run_id,
             event_type="plan_candidate",
             title="Generated initial execution plan",
-            detail=f"Candidate plan has {len(steps)} step(s)",
-            metadata={"steps": [step.__dict__ for step in steps]},
+            detail=f"Parsed task into {len(steps)} concrete execution step(s).",
+            metadata={
+                "steps": [step.__dict__ for step in steps],
+                "task_understanding": {
+                    "objective": task_intelligence.objective,
+                    "delivery_email": delivery_email,
+                    "workspace_logging_requested": workspace_logging_requested,
+                    "target_url": task_intelligence.target_url,
+                },
+            },
         )
         yield _stream_event(plan_candidate_event)
         plan_refined_event = self._activity_event(
@@ -583,8 +538,8 @@ class AgentOrchestrator:
 
         all_actions: list[AgentAction] = []
         all_sources: list[AgentSource] = []
-        narrative_sections: list[str] = []
         next_steps: list[str] = []
+        executed_steps: list[dict[str, Any]] = []
 
         step_cursor = 0
         display_step_index = 0
@@ -607,13 +562,6 @@ class AgentOrchestrator:
                 metadata={"tool_id": step.tool_id, "step": index},
             )
             yield _stream_event(queued_event)
-            for scene_event in self._step_scene_events(
-                run_id=run_id,
-                step=step,
-                request=request,
-                step_index=index,
-            ):
-                yield _stream_event(scene_event)
 
             step_event = self._activity_event(
                 run_id=run_id,
@@ -676,8 +624,14 @@ class AgentOrchestrator:
                 )
                 all_actions.append(action)
                 all_sources.extend(result.sources)
-                narrative_sections.append(
-                    f"### {index}. {step.title}\n{result.content.strip()}"
+                executed_steps.append(
+                    {
+                        "step": index,
+                        "tool_id": step.tool_id,
+                        "title": step.title,
+                        "status": "success",
+                        "summary": result.summary,
+                    }
                 )
                 next_steps.extend(result.next_steps)
                 completed_event = self._activity_event(
@@ -818,6 +772,15 @@ class AgentOrchestrator:
                     metadata={"step": index},
                 )
                 all_actions.append(action)
+                executed_steps.append(
+                    {
+                        "step": index,
+                        "tool_id": step.tool_id,
+                        "title": step.title,
+                        "status": "failed",
+                        "summary": str(exc),
+                    }
+                )
                 exc_text = str(exc)
                 if "requires confirmation" in exc_text.lower():
                     approval_event = self._activity_event(
@@ -846,15 +809,48 @@ class AgentOrchestrator:
                 yield _stream_event(fail_event)
             step_cursor += 1
 
-        if not narrative_sections:
-            narrative_sections.append(
-                "### Result\nNo tool was executed successfully. Check configuration and retry."
-            )
-
         unique_next_steps: list[str] = []
         for step in next_steps:
             if step not in unique_next_steps:
                 unique_next_steps.append(step)
+
+        verification_report = build_verification_report(
+            task=task_intelligence,
+            planned_tool_ids=[step.tool_id for step in steps],
+            executed_steps=executed_steps,
+            actions=all_actions,
+            sources=all_sources,
+        )
+        verification_started_event = self._activity_event(
+            run_id=run_id,
+            event_type="verification_started",
+            title="Run verification checks",
+            detail="Evaluating evidence quality, delivery completion, and execution stability",
+            metadata={"check_count": len(verification_report.get("checks") or [])},
+        )
+        yield _stream_event(verification_started_event)
+        for check in verification_report.get("checks") or []:
+            if not isinstance(check, dict):
+                continue
+            verification_check_event = self._activity_event(
+                run_id=run_id,
+                event_type="verification_check",
+                title=str(check.get("name") or "Verification check"),
+                detail=str(check.get("detail") or ""),
+                metadata={
+                    "status": str(check.get("status") or "info"),
+                    "score": verification_report.get("score"),
+                },
+            )
+            yield _stream_event(verification_check_event)
+        verification_completed_event = self._activity_event(
+            run_id=run_id,
+            event_type="verification_completed",
+            title="Verification completed",
+            detail=f"Quality score: {verification_report.get('score')}% ({verification_report.get('grade')})",
+            metadata=verification_report,
+        )
+        yield _stream_event(verification_completed_event)
 
         if deep_research_mode:
             minimum_seconds_raw = settings.get("agent.deep_research_min_seconds", 30)
@@ -896,16 +892,16 @@ class AgentOrchestrator:
         )
         yield _stream_event(synthesis_started_event)
 
-        answer = "\n\n".join(narrative_sections)
-        failed_actions = [action for action in all_actions if action.status == "failed"]
-        if failed_actions:
-            answer += "\n\n### Execution issues\n" + "\n".join(
-                f"- {item.tool_id}: {_compact(item.summary, 180)}" for item in failed_actions[:6]
-            )
-        if unique_next_steps:
-            answer += "\n\n### Recommended next steps\n" + "\n".join(
-                f"- {item}" for item in unique_next_steps[:6]
-            )
+        answer = _compose_professional_answer(
+            request=request,
+            planned_steps=steps,
+            executed_steps=executed_steps,
+            actions=all_actions,
+            sources=all_sources,
+            next_steps=unique_next_steps,
+            runtime_settings=execution_context.settings,
+            verification_report=verification_report,
+        )
 
         info_blocks: list[str] = []
         for idx, source in enumerate(all_sources, start=1):

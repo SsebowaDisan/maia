@@ -193,15 +193,15 @@ class ReportGenerationTool(AgentTool):
 
         content = "\n".join(
             [
-                f"{title}",
+                f"## {title}",
                 "",
-                "Summary:",
+                "### Executive Summary",
                 summary,
                 "",
-                "Highlights:",
+                "### Highlights",
                 *highlight_lines[:8],
                 "",
-                "Action Plan:",
+                "### Action Plan",
                 *action_lines[:8],
             ]
         )

@@ -576,6 +576,8 @@ export default function App() {
 
     const effectiveMode = options?.agentMode ?? composerMode;
     const effectiveAccessMode = options?.accessMode ?? accessMode;
+    const pendingAssistantMessage =
+      effectiveMode === "company_agent" ? "Starting my desktop..." : "Thinking....";
 
     const attachedFileIds = (attachments || [])
       .map((item) => item.fileId)
@@ -600,7 +602,7 @@ export default function App() {
       ...prev,
       {
         user: message,
-        assistant: "",
+        assistant: pendingAssistantMessage,
         attachments: attachments && attachments.length > 0 ? attachments : undefined,
         info: "",
         mode: effectiveMode,
