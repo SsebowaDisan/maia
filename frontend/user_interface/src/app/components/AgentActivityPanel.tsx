@@ -89,21 +89,30 @@ function mergeLiveSceneData(
     const isPlanningEvent =
       normalizedType.startsWith("plan_") ||
       normalizedType === "planning_started" ||
-      normalizedType === "task_understanding_ready";
+      normalizedType === "task_understanding_ready" ||
+      normalizedType === "llm.task_rewrite_started" ||
+      normalizedType === "llm.task_rewrite_completed" ||
+      normalizedType === "llm.plan_decompose_started" ||
+      normalizedType === "llm.plan_decompose_completed" ||
+      normalizedType === "llm.plan_step";
     const isHighlightEvent = normalizedType.includes("highlight");
 
     [
       "url",
+      "source_url",
       "target_url",
       "page_url",
       "final_url",
       "link",
       "highlight_color",
+      "find_query",
       "clipboard_text",
+      "doc_id",
       "document_id",
       "document_url",
       "spreadsheet_id",
       "spreadsheet_url",
+      "range",
       "step_name",
       "status",
       "tool_id",
@@ -147,6 +156,11 @@ function mergeLiveSceneData(
       merged["copied_snippets"] = copiedSnippets;
     }
 
+    const copiedWords = readStringListField(payload["copied_words"], 12);
+    if (copiedWords.length) {
+      merged["copied_words"] = copiedWords;
+    }
+
     const highlightedWords = readObjectListField(payload["highlighted_words"], 18);
     if (highlightedWords.length) {
       merged["highlighted_words"] = highlightedWords;
@@ -155,6 +169,11 @@ function mergeLiveSceneData(
     const highlightRegions = readObjectListField(payload["highlight_regions"], 12);
     if (highlightRegions.length) {
       merged["highlight_regions"] = highlightRegions;
+    }
+
+    const matchCount = readNumberField(payload["match_count"]);
+    if (matchCount !== null) {
+      merged["match_count"] = Math.max(0, matchCount);
     }
 
     const taskUnderstanding = payload["task_understanding"];
@@ -208,9 +227,12 @@ export function AgentActivityPanel({
   const [isFullscreenViewer, setIsFullscreenViewer] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(true);
   const [snapshotFailedEventId, setSnapshotFailedEventId] = useState("");
+  const [sceneTransitionLabel, setSceneTransitionLabel] = useState("");
 
   const timerRef = useRef<number | null>(null);
   const typeTimerRef = useRef<number | null>(null);
+  const sceneTransitionTimerRef = useRef<number | null>(null);
+  const previousSceneSurfaceRef = useRef("");
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const orderedEvents = useMemo(() => {
@@ -265,6 +287,7 @@ export function AgentActivityPanel({
     }
     return activeEvent;
   }, [activeEvent, visibleEvents]);
+  const sceneTab = tabForEventType(sceneEvent?.event_type || activeEvent?.event_type || "");
 
   const progressPercent =
     orderedEvents.length <= 1
@@ -305,36 +328,97 @@ export function AgentActivityPanel({
   const isPdfStage = /\.pdf$/i.test(stageFileName);
   const stageFileUrl = derivedFileId ? getRawFileUrl(derivedFileId) : "";
   const canRenderPdfFrame = Boolean(isPdfStage && stageFileUrl);
-  const activeSceneTab = tabForEventType(sceneEvent?.event_type || "");
-  const isBrowserScene = activeSceneTab === "browser";
-  const isEmailScene = activeSceneTab === "email";
-  const isDocumentScene = activeSceneTab === "document";
-  const isSystemScene = activeSceneTab === "system";
   const mergedSceneData = useMemo(
     () => mergeLiveSceneData(visibleEvents, activeEvent),
     [visibleEvents, activeEvent?.event_id],
   );
+  const sceneEventType = String(sceneEvent?.event_type || activeEvent?.event_type || "").toLowerCase();
+  const isBrowserScene = previewTab === "browser";
+  const isEmailScene = previewTab === "email";
+  const isDocumentScene = previewTab === "document";
+  const isSystemScene = previewTab === "system";
+  const currentSceneSourceUrl =
+    readStringField(sceneEvent?.data?.["source_url"]) ||
+    readStringField(sceneEvent?.metadata?.["source_url"]) ||
+    readStringField(sceneEvent?.data?.["url"]) ||
+    readStringField(sceneEvent?.metadata?.["url"]);
+  const sceneDocumentUrl =
+    readStringField(sceneEvent?.data?.["document_url"]) ||
+    readStringField(sceneEvent?.metadata?.["document_url"]) ||
+    (currentSceneSourceUrl.includes("docs.google.com/document/") ? currentSceneSourceUrl : "");
+  const sceneSpreadsheetUrl =
+    readStringField(sceneEvent?.data?.["spreadsheet_url"]) ||
+    readStringField(sceneEvent?.metadata?.["spreadsheet_url"]) ||
+    (currentSceneSourceUrl.includes("docs.google.com/spreadsheets/") ? currentSceneSourceUrl : "");
+  const hasSpreadsheetUrlSignal =
+    sceneSpreadsheetUrl.length > 0 ||
+    currentSceneSourceUrl.includes("docs.google.com/spreadsheets/");
+  const isSheetsScene =
+    isDocumentScene &&
+    (
+      sceneEventType.startsWith("sheet_") ||
+      sceneEventType.startsWith("sheets.") ||
+      sceneEventType === "drive.go_to_sheet" ||
+      hasSpreadsheetUrlSignal
+    );
+  const isDocsScene = isDocumentScene && !isSheetsScene;
+  const sceneSurfaceKey = isBrowserScene
+    ? "website"
+    : isSheetsScene
+      ? "google_sheets"
+      : isDocsScene
+        ? "google_docs"
+        : isEmailScene
+          ? "email"
+          : isSystemScene
+            ? "system"
+            : "workspace";
+  const sceneSurfaceLabel = sceneSurfaceKey === "website"
+    ? "Website"
+    : sceneSurfaceKey === "google_sheets"
+      ? "Google Sheets"
+      : sceneSurfaceKey === "google_docs"
+        ? "Google Docs"
+        : sceneSurfaceKey === "email"
+          ? "Email"
+          : sceneSurfaceKey === "system"
+            ? "System"
+            : "Workspace";
 
   const snapshotUrl = useMemo(() => {
-    if (!sceneEvent) {
-      return "";
+    const resolveSnapshot = (event: AgentActivityEvent | null): string => {
+      if (!event) {
+        return "";
+      }
+      const raw = readStringField(event.snapshot_ref);
+      if (!raw) {
+        return "";
+      }
+      if (
+        raw.startsWith("http://") ||
+        raw.startsWith("https://") ||
+        raw.startsWith("data:image/")
+      ) {
+        return raw;
+      }
+      if (!event.run_id || !event.event_id) {
+        return "";
+      }
+      return getAgentEventSnapshotUrl(event.run_id, event.event_id);
+    };
+
+    const preferred = resolveSnapshot(sceneEvent);
+    if (preferred) {
+      return preferred;
     }
-    const raw = readStringField(sceneEvent.snapshot_ref);
-    if (!raw) {
-      return "";
+    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+      const fallback = resolveSnapshot(visibleEvents[idx]);
+      if (fallback) {
+        return fallback;
+      }
     }
-    if (
-      raw.startsWith("http://") ||
-      raw.startsWith("https://") ||
-      raw.startsWith("data:image/")
-    ) {
-      return raw;
-    }
-    if (!sceneEvent.run_id || !sceneEvent.event_id) {
-      return "";
-    }
-    return getAgentEventSnapshotUrl(sceneEvent.run_id, sceneEvent.event_id);
-  }, [sceneEvent?.event_id, sceneEvent?.run_id, sceneEvent?.snapshot_ref]);
+    return "";
+  }, [sceneEvent, visibleEvents]);
   const effectiveSnapshotUrl =
     sceneEvent && snapshotFailedEventId === sceneEvent.event_id ? "" : snapshotUrl;
 
@@ -420,6 +504,63 @@ export function AgentActivityPanel({
     return "Composing message body...";
   }, [visibleEvents]);
 
+  const docBodyHint = useMemo(() => {
+    let aggregated = "";
+    for (let idx = 0; idx < visibleEvents.length; idx += 1) {
+      const event = visibleEvents[idx];
+      if (event.event_type !== "doc_type_text") {
+        continue;
+      }
+      const dataPreview =
+        typeof event.data?.["typed_preview"] === "string"
+          ? event.data["typed_preview"]
+          : "";
+      if (dataPreview) {
+        aggregated = dataPreview;
+        continue;
+      }
+      const chunk = String(event.detail || "").trim();
+      if (!chunk) {
+        continue;
+      }
+      aggregated += chunk;
+      if (aggregated.length > 4000) {
+        aggregated = aggregated.slice(-4000);
+      }
+    }
+    return aggregated.trim();
+  }, [visibleEvents]);
+
+  const sheetBodyHint = useMemo(() => {
+    const lines: string[] = [];
+    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+      const event = visibleEvents[idx];
+      const type = String(event.event_type || "");
+      if (
+        !(
+          type === "sheet_open" ||
+          type === "sheet_cell_update" ||
+          type === "sheet_append_row" ||
+          type === "sheet_save" ||
+          type.startsWith("sheets.")
+        )
+      ) {
+        continue;
+      }
+      const detail = String(event.detail || "").trim();
+      const title = String(event.title || "").trim();
+      const line = [title, detail].filter(Boolean).join(": ").trim();
+      if (!line) {
+        continue;
+      }
+      lines.unshift(line);
+      if (lines.length >= 24) {
+        break;
+      }
+    }
+    return lines.join("\n");
+  }, [visibleEvents]);
+
   const desktopStatus = useMemo(() => {
     if (activeEvent?.event_type === "desktop_starting") {
       return "Starting secure agent desktop";
@@ -459,8 +600,32 @@ export function AgentActivityPanel({
     if (type === "browser_open") {
       return "Opening browser";
     }
+    if (type === "browser_contact_form_detected") {
+      return "Detecting contact form";
+    }
+    if (type === "browser_contact_fill_name") {
+      return "Typing name";
+    }
+    if (type === "browser_contact_fill_email") {
+      return "Typing email";
+    }
+    if (type === "browser_contact_fill_subject") {
+      return "Typing subject";
+    }
+    if (type === "browser_contact_fill_message") {
+      return "Typing message";
+    }
+    if (type === "browser_contact_submit") {
+      return "Submitting form";
+    }
+    if (type === "browser_contact_confirmation") {
+      return "Checking confirmation";
+    }
     if (type === "browser_keyword_highlight") {
       return "Highlighting keywords";
+    }
+    if (type === "browser_find_in_page") {
+      return "Searching within page";
     }
     if (type === "browser_copy_selection") {
       return "Copying excerpt";
@@ -479,6 +644,69 @@ export function AgentActivityPanel({
     }
     if (type === "doc_save") {
       return "Saving docs note";
+    }
+    if (type === "docs.create_started") {
+      return "Creating Google Doc";
+    }
+    if (type === "docs.create_completed") {
+      return "Doc created";
+    }
+    if (type === "docs.insert_started") {
+      return "Writing to doc";
+    }
+    if (type === "docs.insert_completed") {
+      return "Doc updated";
+    }
+    if (type === "sheets.create_started") {
+      return "Creating tracker sheet";
+    }
+    if (type === "sheets.create_completed") {
+      return "Sheet created";
+    }
+    if (type === "sheets.append_started") {
+      return "Appending sheet rows";
+    }
+    if (type === "sheets.append_completed") {
+      return "Rows saved";
+    }
+    if (type === "drive.go_to_doc") {
+      return "Opening doc link";
+    }
+    if (type === "drive.go_to_sheet") {
+      return "Opening sheet link";
+    }
+    if (type === "llm.context_summary") {
+      return "Summarizing context";
+    }
+    if (type === "llm.task_rewrite_started") {
+      return "Rewriting task";
+    }
+    if (type === "llm.task_rewrite_completed") {
+      return "Task rewrite ready";
+    }
+    if (type === "llm.clarification_requested") {
+      return "Requesting clarification";
+    }
+    if (type === "llm.clarification_resolved") {
+      return "Clarification resolved";
+    }
+    if (type === "llm.plan_decompose_started") {
+      return "Breaking into steps";
+    }
+    if (type === "llm.plan_decompose_completed") {
+      return "Step decomposition ready";
+    }
+    if (type === "llm.plan_step") {
+      return "Publishing plan step";
+    }
+    if (type === "llm.location_brief") {
+      return "Synthesizing location answer";
+    }
+    if (type === "llm.intent_tags") {
+      return "Classifying intent";
+    }
+    if (type === "llm.step_summary") {
+      return "Summarizing step";
     }
     if (type === "browser_navigate" || type === "web_search_started") {
       return "Navigating";
@@ -534,6 +762,43 @@ export function AgentActivityPanel({
       y: Math.max(2, Math.min(98, y)),
     };
   }, [activeEvent]);
+
+  const resolveEventSourceUrl = (event: AgentActivityEvent): string => {
+    const candidates = [
+      event.data?.["source_url"],
+      event.metadata?.["source_url"],
+      event.data?.["document_url"],
+      event.metadata?.["document_url"],
+      event.data?.["spreadsheet_url"],
+      event.metadata?.["spreadsheet_url"],
+      event.data?.["url"],
+      event.metadata?.["url"],
+    ];
+    for (const value of candidates) {
+      const text = readStringField(value);
+      if (text.startsWith("http://") || text.startsWith("https://")) {
+        return text;
+      }
+    }
+    return "";
+  };
+
+  const handleSelectEvent = (event: AgentActivityEvent, index: number) => {
+    setCursor(index);
+    setIsPlaying(false);
+    onJumpToEvent?.(event);
+    if (
+      event.event_type === "drive.go_to_doc" ||
+      event.event_type === "drive.go_to_sheet" ||
+      event.event_type.startsWith("docs.") ||
+      event.event_type.startsWith("sheets.")
+    ) {
+      const sourceUrl = resolveEventSourceUrl(event);
+      if (sourceUrl) {
+        window.open(sourceUrl, "_blank", "noopener,noreferrer");
+      }
+    }
+  };
 
   useEffect(() => {
     if (!orderedEvents.length) {
@@ -615,9 +880,36 @@ export function AgentActivityPanel({
       return;
     }
     if (streaming) {
-      setPreviewTab(activeTab);
+      const nextTab = sceneTab === "system" ? previewTab : sceneTab;
+      if (nextTab !== previewTab) {
+        setPreviewTab(nextTab);
+      }
     }
-  }, [activeEvent?.event_id, activeTab, streaming]);
+  }, [activeEvent?.event_id, previewTab, sceneTab, streaming]);
+
+  useEffect(() => {
+    if (!streaming) {
+      return;
+    }
+    const previous = previousSceneSurfaceRef.current;
+    if (!previous) {
+      previousSceneSurfaceRef.current = sceneSurfaceKey;
+      return;
+    }
+    if (previous === sceneSurfaceKey) {
+      return;
+    }
+    previousSceneSurfaceRef.current = sceneSurfaceKey;
+    setSceneTransitionLabel(`Switched to ${sceneSurfaceLabel}`);
+    if (sceneTransitionTimerRef.current) {
+      window.clearTimeout(sceneTransitionTimerRef.current);
+      sceneTransitionTimerRef.current = null;
+    }
+    sceneTransitionTimerRef.current = window.setTimeout(() => {
+      setSceneTransitionLabel("");
+      sceneTransitionTimerRef.current = null;
+    }, 1100);
+  }, [sceneSurfaceKey, sceneSurfaceLabel, streaming]);
 
   useEffect(() => {
     if (!activeEvent?.event_id) {
@@ -625,6 +917,16 @@ export function AgentActivityPanel({
     }
     setSnapshotFailedEventId("");
   }, [activeEvent?.event_id]);
+
+  useEffect(
+    () => () => {
+      if (sceneTransitionTimerRef.current) {
+        window.clearTimeout(sceneTransitionTimerRef.current);
+        sceneTransitionTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!eventCursor) {
@@ -742,30 +1044,43 @@ export function AgentActivityPanel({
         <div
           className={`relative overflow-hidden rounded-xl border border-white/15 bg-[linear-gradient(180deg,#11141b_0%,#0a0c11_100%)] ${viewerHeightClass}`}
         >
-          <AgentDesktopScene
-            snapshotUrl={effectiveSnapshotUrl}
-            isBrowserScene={isBrowserScene}
-            isEmailScene={isEmailScene}
-            isDocumentScene={isDocumentScene}
-            isSystemScene={isSystemScene}
-            canRenderPdfFrame={canRenderPdfFrame}
-            stageFileUrl={stageFileUrl}
-            stageFileName={stageFileName}
-            browserUrl={browserUrl}
-            emailRecipient={emailRecipient}
-            emailSubject={emailSubject}
-            emailBodyHint={emailBodyHint}
-            sceneText={sceneText}
-            activeTitle={sceneEvent?.title || ""}
-            activeDetail={sceneEvent?.detail || ""}
-            activeEventType={activeEvent?.event_type || sceneEvent?.event_type || ""}
-            activeSceneData={mergedSceneData}
-            onSnapshotError={() => {
-              if (sceneEvent?.event_id) {
-                setSnapshotFailedEventId(sceneEvent.event_id);
-              }
-            }}
-          />
+          <div className="absolute inset-0">
+            <AgentDesktopScene
+              snapshotUrl={effectiveSnapshotUrl}
+              isBrowserScene={isBrowserScene}
+              isEmailScene={isEmailScene}
+              isDocumentScene={isDocumentScene}
+              isDocsScene={isDocsScene}
+              isSheetsScene={isSheetsScene}
+              isSystemScene={isSystemScene}
+              canRenderPdfFrame={canRenderPdfFrame}
+              stageFileUrl={stageFileUrl}
+              stageFileName={stageFileName}
+              browserUrl={browserUrl}
+              emailRecipient={emailRecipient}
+              emailSubject={emailSubject}
+              emailBodyHint={emailBodyHint}
+              docBodyHint={docBodyHint}
+              sheetBodyHint={sheetBodyHint}
+              sceneText={sceneText}
+              activeTitle={sceneEvent?.title || ""}
+              activeDetail={sceneEvent?.detail || ""}
+              activeEventType={activeEvent?.event_type || sceneEvent?.event_type || ""}
+              activeSceneData={mergedSceneData}
+              sceneDocumentUrl={sceneDocumentUrl}
+              sceneSpreadsheetUrl={sceneSpreadsheetUrl}
+              onSnapshotError={() => {
+                if (sceneEvent?.event_id) {
+                  setSnapshotFailedEventId(sceneEvent.event_id);
+                }
+              }}
+            />
+          </div>
+          {sceneTransitionLabel ? (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/20 bg-black/58 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/85 backdrop-blur-sm">
+              {sceneTransitionLabel}
+            </div>
+          ) : null}
 
           {eventCursor ? (
             <>
@@ -1040,11 +1355,7 @@ export function AgentActivityPanel({
                   <button
                     key={`${event.event_id}-chip`}
                     type="button"
-                    onClick={() => {
-                      setCursor(index);
-                      setIsPlaying(false);
-                      onJumpToEvent?.(event);
-                    }}
+                    onClick={() => handleSelectEvent(event, index)}
                     className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition ${
                       isActive
                         ? "border-[#1d1d1f]/25 bg-[#1d1d1f] text-white"
@@ -1069,11 +1380,7 @@ export function AgentActivityPanel({
                   key={event.event_id || `${event.timestamp}-${index}`}
                   type="button"
                   data-activity-active={isActive ? "true" : "false"}
-                  onClick={() => {
-                    setCursor(index);
-                    setIsPlaying(false);
-                    onJumpToEvent?.(event);
-                  }}
+                  onClick={() => handleSelectEvent(event, index)}
                   className={`w-full rounded-xl border px-3 py-2 text-left transition ${
                     isActive
                       ? "border-[#1d1d1f]/20 bg-white"
@@ -1158,11 +1465,7 @@ export function AgentActivityPanel({
                       <button
                         key={`fullscreen-row-${event.event_id || index}`}
                         type="button"
-                        onClick={() => {
-                          setCursor(index);
-                          setIsPlaying(false);
-                          onJumpToEvent?.(event);
-                        }}
+                        onClick={() => handleSelectEvent(event, index)}
                         className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left text-white/90 transition hover:bg-white/[0.08]"
                       >
                         <p className="truncate text-[12px] font-medium">{event.title}</p>

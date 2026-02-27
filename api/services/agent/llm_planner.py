@@ -34,7 +34,8 @@ def _request_openai_plan(
         "Return ONLY valid JSON in this exact shape:\n"
         "{\n"
         '  "steps": [\n'
-        '    {"tool_id": "tool.id", "title": "Human readable title", "params": {}}\n'
+        '    {"tool_id": "tool.id", "title": "Human readable title", "params": {}, '
+        '"why_this_step":"string", "expected_evidence":["..."]}\n'
         "  ]\n"
         "}\n"
         f"Rules:\n"
@@ -44,6 +45,7 @@ def _request_openai_plan(
         "- Keep params minimal and concrete.\n"
         "- If email delivery is requested, include draft/send style steps where applicable.\n\n"
         "- If the request asks where a company is located/found, include steps that gather location evidence.\n"
+        "- If the request asks to submit a website contact form, include `browser.contact_form.send` with URL + message params.\n"
         "- When `agent_mode` is `company_agent`, prefer server-side execution tools and include roadmap logging steps "
         "(`workspace.sheets.track_step`, `workspace.docs.research_notes`) where relevant.\n\n"
         f"Input:\n{json.dumps(user_payload, ensure_ascii=True)}"
@@ -92,11 +94,19 @@ def plan_with_llm(
         params = sanitize_json_value(params_raw) if isinstance(params_raw, dict) else {}
         if not isinstance(params, dict):
             params = {}
+        why_this_step = " ".join(str(row.get("why_this_step") or "").split()).strip()[:240]
+        expected_evidence = [
+            " ".join(str(item).split()).strip()[:220]
+            for item in (row.get("expected_evidence") if isinstance(row.get("expected_evidence"), list) else [])
+            if " ".join(str(item).split()).strip()
+        ][:4]
         planned_rows.append(
             {
                 "tool_id": tool_id,
                 "title": title,
                 "params": params,
+                "why_this_step": why_this_step,
+                "expected_evidence": expected_evidence,
             }
         )
         if len(planned_rows) >= MAX_PLANNER_STEPS:

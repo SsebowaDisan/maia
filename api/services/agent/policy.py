@@ -96,6 +96,14 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         execution_policy="auto_execute",
     ),
     AgentToolCapability(
+        domain="outreach",
+        tool_id="browser.contact_form.send",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_ADMIN,
+        description="Fill and submit a website contact form for approved outreach.",
+        execution_policy="confirm_before_execute",
+    ),
+    AgentToolCapability(
         domain="email_ops",
         tool_id="email.draft",
         action_class=ACTION_CLASS_DRAFT,

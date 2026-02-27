@@ -7,6 +7,7 @@ from api.services.agent.auth.credentials import get_credential_store
 from .base import BaseConnector
 from .brave_search_connector import BraveSearchConnector
 from .bing_search_connector import BingSearchConnector
+from .browser_contact_connector import BrowserContactConnector
 from .browser_connector import BrowserConnector
 from .email_validation_connector import EmailValidationConnector
 from .google_ads_connector import GoogleAdsConnector
@@ -35,6 +36,7 @@ class ConnectorRegistry:
             "bing_search": BingSearchConnector,
             "brave_search": BraveSearchConnector,
             "playwright_browser": BrowserConnector,
+            "playwright_contact_form": BrowserContactConnector,
             "email_validation": EmailValidationConnector,
             "m365": M365Connector,
             "invoice": InvoiceConnector,

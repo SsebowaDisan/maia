@@ -5,7 +5,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from api.services.agent.llm_intent import enrich_task_intelligence
+from api.services.agent.llm_intent import classify_intent_tags, enrich_task_intelligence
 from api.services.agent.llm_verification import build_llm_verification_check
 from api.services.agent.models import AgentAction, AgentSource
 
@@ -55,6 +55,7 @@ class TaskIntelligence:
     requested_report: bool
     preferred_tone: str = ""
     preferred_format: str = ""
+    intent_tags: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +68,7 @@ class TaskIntelligence:
             "requested_report": self.requested_report,
             "preferred_tone": self.preferred_tone,
             "preferred_format": self.preferred_format,
+            "intent_tags": list(self.intent_tags),
         }
 
 
@@ -89,36 +91,14 @@ def _extract_first_url(*chunks: str) -> str:
     return match.group(0).strip().rstrip(".,;)") if match else ""
 
 
-def _has_delivery_intent(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(
-        token in lowered
-        for token in (
-            "send",
-            "sent",
-            "sending",
-            "deliver",
-            "delivered",
-            "delivery",
-            "email",
-            "mail",
-            "share",
-            "forward",
-        )
-    )
-
-
 def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> TaskIntelligence:
     raw = f"{message} {agent_goal or ''}".strip()
-    lowered = raw.lower()
     target_url = _extract_first_url(raw)
     host = (urlparse(target_url).hostname or "").strip().lower() if target_url else ""
     delivery_email = _extract_first_email(raw)
-    requires_delivery = _has_delivery_intent(lowered) and bool(delivery_email)
-    requires_web_inspection = bool(target_url) or any(
-        token in lowered for token in ("website", "web", "online", "source", "research", "analy")
-    )
-    requested_report = any(token in lowered for token in ("report", "summary", "analysis", "brief"))
+    requires_delivery = bool(delivery_email)
+    requires_web_inspection = bool(target_url)
+    requested_report = False
     heuristic = {
         "objective": _compact(message, 280),
         "target_url": target_url,
@@ -127,6 +107,11 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         "requires_web_inspection": requires_web_inspection,
         "requested_report": requested_report,
     }
+    intent_tags = classify_intent_tags(
+        message=message,
+        agent_goal=agent_goal,
+        heuristic=heuristic,
+    )
     llm_intent = enrich_task_intelligence(
         message=message,
         agent_goal=agent_goal,
@@ -150,6 +135,14 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
     objective = str(llm_intent.get("objective") or "").strip() or _compact(message, 280)
     preferred_tone = str(llm_intent.get("preferred_tone") or "").strip()[:80]
     preferred_format = str(llm_intent.get("preferred_format") or "").strip()[:80]
+    llm_tags = llm_intent.get("intent_tags")
+    if isinstance(llm_tags, list):
+        normalized = [
+            str(item).strip().lower()
+            for item in llm_tags
+            if str(item).strip()
+        ]
+        intent_tags = list(dict.fromkeys([*intent_tags, *normalized]))[:8]
 
     return TaskIntelligence(
         objective=objective,
@@ -161,6 +154,7 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         requested_report=requested_report,
         preferred_tone=preferred_tone,
         preferred_format=preferred_format,
+        intent_tags=tuple(intent_tags[:8]),
     )
 
 

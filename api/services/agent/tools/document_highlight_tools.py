@@ -262,10 +262,7 @@ class DocumentHighlightExtractTool(AgentTool):
                 ),
                 data={"highlight_color": highlight_color, "highlighted_words": [], "copied_snippets": []},
                 sources=[],
-                next_steps=[
-                    "Select files in the workspace and rerun the highlight step.",
-                    "Include explicit target words for more accurate highlighting.",
-                ],
+                next_steps=[],
                 events=[
                     ToolTraceEvent(
                         event_type="document_opened",
@@ -381,9 +378,6 @@ class DocumentHighlightExtractTool(AgentTool):
                 "chunk_count": len(chunks),
             },
             sources=list(source_by_id.values()),
-            next_steps=[
-                "Open docs and paste copied highlights into the report.",
-                "Switch highlight color between yellow and green based on review context.",
-            ],
+            next_steps=[],
             events=events,
         )

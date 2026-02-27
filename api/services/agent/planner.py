@@ -16,6 +16,7 @@ LLM_ALLOWED_TOOL_IDS = {
     "ads.google.performance",
     "analytics.chart.generate",
     "analytics.ga4.report",
+    "browser.contact_form.send",
     "browser.playwright.inspect",
     "calendar.create_event",
     "data.dataset.analyze",
@@ -49,73 +50,12 @@ class PlannedStep:
     tool_id: str
     title: str
     params: dict[str, Any]
-
-
-def _has_any(text: str, tokens: tuple[str, ...]) -> bool:
-    return any(token in text for token in tokens)
-
-
-def _has_delivery_intent(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return _has_any(
-        lowered,
-        (
-            "send",
-            "sent",
-            "sending",
-            "deliver",
-            "delivered",
-            "delivery",
-            "email",
-            "mail",
-            "share",
-            "forward",
-        ),
-    )
-
-
-def _has_location_intent(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return _has_any(
-        lowered,
-        (
-            "where",
-            "location",
-            "located",
-            "find them",
-            "found in",
-            "founded in",
-            "based in",
-            "headquarter",
-            "headquarters",
-            "hq",
-            "address",
-            "office",
-            "offices",
-            "country",
-            "city",
-        ),
-    )
+    why_this_step: str = ""
+    expected_evidence: tuple[str, ...] = ()
 
 
 def is_deep_research_request(request: ChatRequest) -> bool:
-    text = f"{request.message.lower()} {(request.agent_goal or '').lower()}".strip()
-    if request.agent_mode != "company_agent":
-        return False
-    return _has_any(
-        text,
-        (
-            "research",
-            "deep research",
-            "analyze",
-            "analysis",
-            "market",
-            "competitor",
-            "online",
-            "website",
-            "find companies",
-        ),
-    )
+    return request.agent_mode == "company_agent" and bool(str(request.agent_goal or "").strip())
 
 
 def _extract_url(text: str) -> str:
@@ -142,9 +82,6 @@ def _sanitize_search_query(text: str, *, fallback_url: str = "") -> str:
 
 
 def _preferred_highlight_color(text: str) -> str:
-    lowered = str(text or "").lower()
-    if "green" in lowered:
-        return "green"
     return "yellow"
 
 
@@ -152,49 +89,20 @@ def _intent_signals(request: ChatRequest) -> dict[str, Any]:
     message = str(request.message or "").strip()
     goal = str(request.agent_goal or "").strip()
     combined = f"{message} {goal}".strip()
-    lower_message = message.lower()
-    lower_combined = combined.lower()
     url = _extract_url(combined)
     recipient = _extract_email(combined)
-    explicit_web_discovery = _has_any(
-        lower_message,
-        (
-            "online",
-            "find companies",
-            "competitor",
-            "market",
-            "search",
-            "sources",
-        ),
-    )
-    wants_location_info = _has_location_intent(lower_combined)
-    wants_send = _has_delivery_intent(lower_combined)
-    wants_report = _has_any(lower_combined, ("report", "summary", "analysis", "analyze"))
-    wants_highlight_words = _has_any(
-        lower_combined,
-        (
-            "highlight",
-            "highlights",
-            "copied words",
-            "copy words",
-            "mark words",
-            "yellow",
-            "green",
-        ),
-    )
-    wants_docs_output = _has_any(lower_combined, ("docs", "doc", "document"))
-    wants_file_scope = _has_any(lower_combined, ("file", "files", "pdf", "document"))
     return {
         "url": url,
         "recipient_email": recipient,
-        "explicit_web_discovery": explicit_web_discovery,
-        "wants_location_info": wants_location_info,
-        "wants_send": wants_send,
-        "wants_report": wants_report,
-        "wants_highlight_words": wants_highlight_words,
-        "wants_docs_output": wants_docs_output,
-        "wants_file_scope": wants_file_scope,
-        "highlight_color": _preferred_highlight_color(lower_combined),
+        "explicit_web_discovery": False,
+        "wants_location_info": False,
+        "wants_send": bool(recipient),
+        "wants_report": False,
+        "wants_highlight_words": False,
+        "wants_contact_form": False,
+        "wants_docs_output": False,
+        "wants_file_scope": False,
+        "highlight_color": _preferred_highlight_color(combined),
     }
 
 
@@ -213,6 +121,7 @@ def _sort_steps(steps: list[PlannedStep]) -> list[PlannedStep]:
         "workspace.docs.fill_template": 74,
         "gmail.draft": 82,
         "email.draft": 82,
+        "browser.contact_form.send": 86,
         "gmail.send": 88,
         "email.send": 88,
     }
@@ -227,38 +136,24 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
     signals = _intent_signals(request)
     url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
-    explicit_web_discovery = bool(signals.get("explicit_web_discovery"))
-    wants_location_info = bool(signals.get("wants_location_info"))
-    wants_send = bool(signals.get("wants_send"))
-    wants_report = bool(signals.get("wants_report"))
-    wants_highlight_words = bool(signals.get("wants_highlight_words"))
-    wants_docs_output = bool(signals.get("wants_docs_output"))
-    wants_file_scope = bool(signals.get("wants_file_scope"))
     highlight_color = str(signals.get("highlight_color") or "yellow")
     company_agent_mode = request.agent_mode == "company_agent"
+    has_highlight_extract = any(step.tool_id == "documents.highlight.extract" for step in steps)
 
     normalized: list[PlannedStep] = []
     for step in steps:
         params = dict(step.params)
-        if step.tool_id == "browser.playwright.inspect" and url:
-            params.setdefault("url", url)
         if step.tool_id == "browser.playwright.inspect":
+            if url:
+                params.setdefault("url", url)
             params.setdefault("highlight_color", highlight_color)
         if step.tool_id == "documents.highlight.extract":
             params.setdefault("highlight_color", highlight_color)
         if step.tool_id == "marketing.web_research":
-            if wants_location_info and url:
-                host = (urlparse(url).hostname or "").strip()
-                query = (
-                    f"site:{host} company headquarters location address offices where located"
-                    if host
-                    else _sanitize_search_query(str(params.get("query") or request.message), fallback_url=url)
-                )
-            else:
-                query = _sanitize_search_query(
-                    str(params.get("query") or request.message),
-                    fallback_url=url,
-                )
+            query = _sanitize_search_query(
+                str(params.get("query") or request.message),
+                fallback_url=url,
+            )
             params["query"] = rewrite_search_query(
                 query=query,
                 request=request,
@@ -266,53 +161,17 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
             )
         if step.tool_id == "report.generate":
             params.setdefault("title", "Website Analysis Report")
-            if url:
-                host = (urlparse(url).hostname or url).strip()
-                if wants_location_info:
-                    params["summary"] = (
-                        f"Identify where this company is located (headquarters, offices, and address signals) "
-                        f"using evidence from {host}, then prepare a client-facing report."
-                    )
-                else:
-                    params["summary"] = (
-                        f"Analyze what this company does from {host} and prepare a client-facing report."
-                    )
+            params.setdefault("summary", request.message)
         if step.tool_id in ("gmail.draft", "gmail.send", "email.draft", "email.send") and recipient:
             params.setdefault("to", recipient)
-        if step.tool_id == "docs.create" and wants_highlight_words:
+        if step.tool_id == "browser.contact_form.send":
+            if url:
+                params.setdefault("url", url)
+            params.setdefault("subject", "Business inquiry")
+            params.setdefault("message", request.message)
+        if step.tool_id == "docs.create" and has_highlight_extract:
             params.setdefault("include_copied_highlights", True)
         normalized.append(PlannedStep(tool_id=step.tool_id, title=step.title, params=params))
-
-    if url and not explicit_web_discovery and not wants_location_info:
-        normalized = [step for step in normalized if step.tool_id != "marketing.web_research"]
-
-    if wants_location_info:
-        has_web_research = any(step.tool_id == "marketing.web_research" for step in normalized)
-        if not has_web_research:
-            location_query = _sanitize_search_query(request.message, fallback_url=url)
-            if url:
-                host = (urlparse(url).hostname or "").strip()
-                if host:
-                    location_query = (
-                        f"site:{host} headquarters location address offices where is the company based"
-                    )
-            normalized.append(
-                PlannedStep(
-                    tool_id="marketing.web_research",
-                    title="Research company location signals",
-                    params={"query": rewrite_search_query(query=location_query, request=request, fallback_url=url)},
-                )
-            )
-        has_browser = any(step.tool_id == "browser.playwright.inspect" for step in normalized)
-        if url and not has_browser:
-            normalized.insert(
-                0,
-                PlannedStep(
-                    tool_id="browser.playwright.inspect",
-                    title="Inspect provided website in live browser",
-                    params={"url": url, "highlight_color": highlight_color},
-                ),
-            )
 
     if company_agent_mode:
         normalized = [
@@ -320,71 +179,6 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
             for step in normalized
             if step.tool_id not in ("gmail.draft", "gmail.send", "email.draft", "email.send")
         ]
-
-    if recipient and wants_send and not company_agent_mode:
-        has_draft = any(step.tool_id in ("gmail.draft", "email.draft") for step in normalized)
-        has_send = any(step.tool_id in ("gmail.send", "email.send") for step in normalized)
-        if not has_draft:
-            normalized.append(
-                PlannedStep(
-                    tool_id="gmail.draft",
-                    title="Create Gmail draft",
-                    params={"to": recipient},
-                )
-            )
-        if not has_send:
-            normalized.append(
-                PlannedStep(
-                    tool_id="gmail.send",
-                    title="Send Gmail message",
-                    params={"to": recipient},
-                )
-            )
-
-    if wants_report and not any(step.tool_id == "report.generate" for step in normalized):
-        normalized.append(
-            PlannedStep(
-                tool_id="report.generate",
-                title="Generate report draft",
-                params={"summary": request.message},
-            )
-        )
-
-    if wants_highlight_words:
-        has_browser = any(step.tool_id == "browser.playwright.inspect" for step in normalized)
-        if url and not has_browser:
-            normalized.insert(
-                0,
-                PlannedStep(
-                    tool_id="browser.playwright.inspect",
-                    title="Inspect provided website in live browser",
-                    params={"url": url, "highlight_color": highlight_color},
-                ),
-            )
-        if wants_file_scope and not any(step.tool_id == "documents.highlight.extract" for step in normalized):
-            normalized.append(
-                PlannedStep(
-                    tool_id="documents.highlight.extract",
-                    title="Highlight words in selected files",
-                    params={"highlight_color": highlight_color},
-                )
-            )
-        if wants_docs_output:
-            has_docs_write = any(
-                step.tool_id in ("docs.create", "workspace.docs.research_notes") for step in normalized
-            )
-            if not has_docs_write:
-                normalized.append(
-                    PlannedStep(
-                        tool_id="docs.create",
-                        title="Create document with copied highlights",
-                        params={
-                            "title": "Copied Highlights",
-                            "body": "Captured highlights from files and websites.",
-                            "include_copied_highlights": True,
-                        },
-                    )
-                )
 
     deduped: list[PlannedStep] = []
     seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
@@ -406,13 +200,11 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -
         return _normalize_steps(request, steps)
 
     enriched = list(steps)
-    message_preview = " ".join(request.message.split())[:72] or "Deep Research"
     intent = _intent_signals(request)
     direct_url = str(intent.get("url") or "")
-    explicit_web_discovery = bool(intent.get("explicit_web_discovery"))
 
     has_web = any(step.tool_id == "marketing.web_research" for step in enriched)
-    if not has_web and (not direct_url or explicit_web_discovery):
+    if not has_web and not direct_url:
         enriched.insert(
             0,
             PlannedStep(
@@ -443,43 +235,6 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -
             ),
         )
 
-    lower_message = request.message.lower()
-    wants_workspace_logging = _has_any(
-        lower_message,
-        (
-            "google docs",
-            "google sheets",
-            "docs",
-            "sheet",
-            "sheets",
-            "tracker",
-            "notebook",
-            "track step",
-            "log step",
-        ),
-    )
-    if wants_workspace_logging:
-        kickoff = [
-            PlannedStep(
-                tool_id="workspace.docs.research_notes",
-                title="Open research notebook",
-                params={
-                    "title": f"Maia Deep Research - {message_preview}",
-                    "note": f"Research goal: {request.message.strip()}",
-                },
-            ),
-            PlannedStep(
-                tool_id="workspace.sheets.track_step",
-                title="Initialize step tracker",
-                params={
-                    "step_name": "Run started",
-                    "status": "started",
-                    "detail": "Deep research run initialized",
-                },
-            ),
-        ]
-        enriched = kickoff + enriched
-
     return _normalize_steps(request, enriched)
 
 
@@ -500,13 +255,23 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
     delivery_email = str(
         llm_intent.get("delivery_email") or heuristic.get("recipient_email") or ""
     ).strip()
-    preferred_format = str(llm_intent.get("preferred_format") or "").strip().lower()
+    llm_tags = llm_intent.get("intent_tags")
+    intent_tags = {
+        str(item).strip().lower()
+        for item in llm_tags
+        if str(item).strip()
+    } if isinstance(llm_tags, list) else set()
 
-    requires_web = bool(llm_intent.get("requires_web_inspection"))
+    requires_web = bool(llm_intent.get("requires_web_inspection")) or ("web_research" in intent_tags)
     if target_url:
         requires_web = True
+    requires_contact_form_submission = bool(
+        llm_intent.get("requires_contact_form_submission")
+    )
+    if "contact_form_submission" in intent_tags:
+        requires_contact_form_submission = True
     requires_delivery = bool(llm_intent.get("requires_delivery")) and bool(delivery_email)
-    requested_report = bool(llm_intent.get("requested_report")) or company_agent_mode
+    requested_report = bool(llm_intent.get("requested_report")) or ("report_generation" in intent_tags) or company_agent_mode
 
     steps: list[PlannedStep] = []
     if target_url:
@@ -535,12 +300,25 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
             )
         )
 
-    if any(token in preferred_format for token in ("doc", "document")):
+    if "docs_write" in intent_tags:
         steps.append(
             PlannedStep(
                 tool_id="docs.create",
                 title="Create structured document draft",
                 params={"title": "Company Draft", "body": objective or request.message},
+            )
+        )
+
+    if target_url and requires_contact_form_submission:
+        steps.append(
+            PlannedStep(
+                tool_id="browser.contact_form.send",
+                title="Fill and submit website contact form",
+                params={
+                    "url": target_url,
+                    "subject": "Business inquiry",
+                    "message": objective or request.message,
+                },
             )
         )
 
@@ -561,12 +339,7 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
         )
 
     return steps
-
-
 def build_plan(request: ChatRequest) -> list[PlannedStep]:
-    prompt = str(request.message or "").lower().strip()
-    goal = str(request.agent_goal or "").lower().strip()
-    text = prompt if prompt else goal
     steps: list[PlannedStep] = []
     company_agent_mode = request.agent_mode == "company_agent"
     llm_rows = plan_with_llm(request=request, allowed_tool_ids=LLM_ALLOWED_TOOL_IDS)
@@ -590,6 +363,18 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
                     tool_id=tool_id,
                     title=title,
                     params=dict(params) if isinstance(params, dict) else {},
+                    why_this_step=" ".join(str(row.get("why_this_step") or "").split()).strip()[:240],
+                    expected_evidence=tuple(
+                        [
+                            " ".join(str(item).split()).strip()[:220]
+                            for item in (
+                                row.get("expected_evidence")
+                                if isinstance(row.get("expected_evidence"), list)
+                                else []
+                            )
+                            if " ".join(str(item).split()).strip()
+                        ][:4]
+                    ),
                 )
             )
         if llm_steps:
@@ -599,7 +384,18 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
     if semantic_fallback_steps:
         return _augment_for_deep_research(request, semantic_fallback_steps)
 
-    if _has_any(text, ("research", "internet", "competitor", "market", "online", "sources")):
+    signals = _intent_signals(request)
+    target_url = str(signals.get("url") or "")
+    recipient = str(signals.get("recipient_email") or "")
+    if target_url:
+        steps.append(
+            PlannedStep(
+                tool_id="browser.playwright.inspect",
+                title="Inspect provided website in live browser",
+                params={"url": target_url},
+            )
+        )
+    else:
         steps.append(
             PlannedStep(
                 tool_id="marketing.web_research",
@@ -607,215 +403,37 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
                 params={"query": request.message},
             )
         )
-    if _has_any(text, ("local business", "nearby", "places", "geocode", "distance")):
+    steps.append(
+        PlannedStep(
+            tool_id="report.generate",
+            title="Create concise executive output",
+            params={"summary": request.message},
+        )
+    )
+    if recipient and not company_agent_mode:
         steps.append(
             PlannedStep(
-                tool_id="marketing.local_discovery",
-                title="Discover local companies",
-                params={"query": request.message},
+                tool_id="gmail.draft",
+                title="Create Gmail draft",
+                params={"to": recipient},
             )
         )
-    if _has_any(text, ("geocode", "coordinates", "lat", "lng")):
         steps.append(
             PlannedStep(
-                tool_id="maps.geocode",
-                title="Geocode address",
-                params={},
-            )
-        )
-    if _has_any(text, ("distance matrix", "travel time", "route distance")):
-        steps.append(
-            PlannedStep(
-                tool_id="maps.distance_matrix",
-                title="Calculate route distances",
-                params={},
-            )
-        )
-    if _has_any(text, ("browse ", "open website", "inspect website", "playwright")):
-        steps.append(
-            PlannedStep(
-                tool_id="browser.playwright.inspect",
-                title="Inspect website in live browser",
-                params={},
-            )
-        )
-    if "competitor" in text or "positioning" in text:
-        steps.append(
-            PlannedStep(
-                tool_id="marketing.competitor_profile",
-                title="Build competitor profile",
-                params={},
-            )
-        )
-    if _has_any(text, ("google ads", "ads", "campaign", "roas", "ctr")):
-        steps.append(
-            PlannedStep(
-                tool_id="ads.google.performance",
-                title="Analyze ad performance",
-                params={},
-            )
-        )
-    if _has_any(text, ("doc", "document", "proposal", "brief", "write report", "create report")):
-        steps.append(
-            PlannedStep(
-                tool_id="docs.create",
-                title="Create structured document draft",
-                params={"title": "Company Draft", "body": request.message},
-            )
-        )
-    if _has_any(text, ("csv", "dataset", "analyze data", "table", "excel")):
-        steps.append(
-            PlannedStep(
-                tool_id="data.dataset.analyze",
-                title="Analyze provided dataset",
-                params={},
-            )
-        )
-    if "invoice" in text or "billing" in text:
-        steps.append(
-            PlannedStep(
-                tool_id="invoice.create",
-                title="Draft invoice",
-                params={},
-            )
-        )
-        if _has_delivery_intent(text):
-            steps.append(
-                PlannedStep(
-                    tool_id="invoice.send",
-                    title="Send invoice",
-                    params={},
-                )
-            )
-    if not company_agent_mode and "email" in text and "gmail" not in text:
-        steps.append(
-            PlannedStep(
-                tool_id="email.draft",
-                title="Draft email",
-                params={},
-            )
-        )
-        if _has_delivery_intent(text):
-            steps.append(
-                PlannedStep(
-                    tool_id="email.send",
-                    title="Send email",
-                    params={},
-                )
-            )
-    if "gmail" in text:
-        if not company_agent_mode:
-            steps.append(
-                PlannedStep(
-                    tool_id="gmail.draft",
-                    title="Create Gmail draft",
-                    params={},
-                )
-            )
-            if _has_delivery_intent(text):
-                steps.append(
-                    PlannedStep(
-                        tool_id="gmail.send",
-                        title="Send Gmail message",
-                        params={},
-                    )
-                )
-        if _has_any(text, ("search", "inbox", "mailbox")):
-            steps.append(
-                PlannedStep(
-                    tool_id="gmail.search",
-                    title="Search Gmail mailbox",
-                    params={},
-                )
-            )
-    if _has_any(text, ("validate email", "email verify", "bounce")):
-        steps.append(
-            PlannedStep(
-                tool_id="email.validate",
-                title="Validate email quality",
-                params={},
-            )
-        )
-    if "slack" in text:
-        steps.append(
-            PlannedStep(
-                tool_id="slack.post_message",
-                title="Post update to Slack",
-                params={},
-            )
-        )
-    if _has_any(text, ("calendar", "meeting", "reminder", "schedule")):
-        steps.append(
-            PlannedStep(
-                tool_id="calendar.create_event",
-                title="Create calendar event",
-                params={},
-            )
-        )
-    if _has_any(text, ("ga4", "google analytics", "analytics", "sessions", "traffic")):
-        steps.append(
-            PlannedStep(
-                tool_id="analytics.ga4.report",
-                title="Run GA4 analytics report",
-                params={},
-            )
-        )
-    if _has_any(text, ("chart", "graph", "plot", "visual report")):
-        steps.append(
-            PlannedStep(
-                tool_id="analytics.chart.generate",
-                title="Generate chart artifact",
-                params={},
-            )
-        )
-    if _has_any(text, ("google drive", "drive files", "search drive")):
-        steps.append(
-            PlannedStep(
-                tool_id="workspace.drive.search",
-                title="Search Google Drive",
-                params={"query": request.message},
-            )
-        )
-    if _has_any(text, ("google sheet", "sheets", "append row", "crm sheet")):
-        steps.append(
-            PlannedStep(
-                tool_id="workspace.sheets.append",
-                title="Append rows to Google Sheets",
-                params={},
-            )
-        )
-    if _has_any(text, ("template", "placeholder", "fill doc")):
-        steps.append(
-            PlannedStep(
-                tool_id="workspace.docs.fill_template",
-                title="Fill Google Docs template",
-                params={},
-            )
-        )
-    if _has_any(text, ("report", "summary", "weekly", "monthly")):
-        steps.append(
-            PlannedStep(
-                tool_id="report.generate",
-                title="Generate report draft",
-                params={"summary": request.message},
+                tool_id="gmail.send",
+                title="Send Gmail message",
+                params={"to": recipient},
             )
         )
 
-    if not steps:
-        steps = [
-            PlannedStep(
-                tool_id="marketing.web_research",
-                title="Search relevant sources",
-                params={"query": request.message},
-            ),
-            PlannedStep(
-                tool_id="report.generate",
-                title="Create concise executive output",
-                params={"summary": request.message},
-            ),
-        ]
     candidate_rows = [
-        {"tool_id": step.tool_id, "title": step.title, "params": dict(step.params)}
+        {
+            "tool_id": step.tool_id,
+            "title": step.title,
+            "params": dict(step.params),
+            "why_this_step": step.why_this_step,
+            "expected_evidence": list(step.expected_evidence),
+        }
         for step in steps
     ]
     optimized_rows = optimize_plan_rows(
@@ -829,13 +447,23 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
                 tool_id=str(row.get("tool_id") or "").strip(),
                 title=str(row.get("title") or "").strip() or str(row.get("tool_id") or "Planned step"),
                 params=dict(row.get("params")) if isinstance(row.get("params"), dict) else {},
+                why_this_step=" ".join(str(row.get("why_this_step") or "").split()).strip()[:240],
+                expected_evidence=tuple(
+                    [
+                        " ".join(str(item).split()).strip()[:220]
+                        for item in (
+                            row.get("expected_evidence")
+                            if isinstance(row.get("expected_evidence"), list)
+                            else []
+                        )
+                        if " ".join(str(item).split()).strip()
+                    ][:4]
+                ),
             )
             for row in optimized_rows
             if str(row.get("tool_id") or "").strip()
         ] or steps
     return _augment_for_deep_research(request, steps)
-
-
 def build_browser_followup_steps(
     web_result_data: dict[str, Any] | None,
     *,

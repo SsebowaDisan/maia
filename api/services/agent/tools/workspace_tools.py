@@ -138,6 +138,7 @@ class WorkspaceSheetsAppendTool(AgentTool):
             raise ToolExecutionError("`values` must be a non-empty 2D array.")
 
         connector = get_connector_registry().build("google_workspace", settings=context.settings)
+        spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
         response = connector.append_sheet_values(
             spreadsheet_id=spreadsheet_id,
             sheet_range=sheet_range,
@@ -148,6 +149,48 @@ class WorkspaceSheetsAppendTool(AgentTool):
             if isinstance(response, dict)
             else 0
         )
+        events = [
+            ToolTraceEvent(
+                event_type="sheet_open",
+                title="Open Google Sheet",
+                detail=spreadsheet_id,
+                data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+            ),
+            ToolTraceEvent(
+                event_type="sheets.append_started",
+                title="Start appending rows",
+                detail=f"{sheet_range} ({len(values)} rows)",
+                data={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "rows": len(values),
+                    "source_url": spreadsheet_url,
+                },
+            ),
+            ToolTraceEvent(
+                event_type="sheet_append_row",
+                title="Append row payload",
+                detail=f"{len(values)} row(s)",
+                data={"spreadsheet_id": spreadsheet_id, "sheet_range": sheet_range},
+            ),
+            ToolTraceEvent(
+                event_type="sheets.append_completed",
+                title="Rows appended",
+                detail=f"Updated rows: {updated_rows or 0}",
+                data={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "updated_rows": updated_rows or 0,
+                    "source_url": spreadsheet_url,
+                },
+            ),
+            ToolTraceEvent(
+                event_type="sheet_save",
+                title="Save Google Sheet",
+                detail=spreadsheet_id,
+                data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+            ),
+        ]
 
         return ToolExecutionResult(
             summary=f"Appended rows to Google Sheet ({updated_rows or 0} updated).",
@@ -155,17 +198,15 @@ class WorkspaceSheetsAppendTool(AgentTool):
                 f"Rows appended to spreadsheet `{spreadsheet_id}` at range `{sheet_range}`.\n"
                 f"- Updated rows: {updated_rows or 0}"
             ),
-            data={"spreadsheet_id": spreadsheet_id, "sheet_range": sheet_range, "updated_rows": updated_rows},
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "spreadsheet_url": spreadsheet_url,
+                "sheet_range": sheet_range,
+                "updated_rows": updated_rows,
+            },
             sources=[],
             next_steps=["Verify appended rows and apply formatting rules if needed."],
-            events=[
-                ToolTraceEvent(
-                    event_type="tool_progress",
-                    title="Append rows to Google Sheets",
-                    detail=f"{spreadsheet_id} :: {sheet_range}",
-                    data={"updated_rows": updated_rows or 0},
-                )
-            ],
+            events=events,
         )
 
 
@@ -198,9 +239,34 @@ class WorkspaceDocsTemplateTool(AgentTool):
         trace_events.append(open_event)
         yield open_event
 
+        docs_create_started = ToolTraceEvent(
+            event_type="docs.create_started",
+            title="Start Google Doc creation",
+            detail=title,
+            data={"title": title},
+        )
+        trace_events.append(docs_create_started)
+        yield docs_create_started
         created = connector.create_docs_document(title=title)
         document_id = str(created.get("documentId") or "")
         doc_url = f"https://docs.google.com/document/d/{document_id}/edit" if document_id else ""
+        docs_create_completed = ToolTraceEvent(
+            event_type="docs.create_completed",
+            title="Google Doc created",
+            detail=document_id or title,
+            data={"doc_id": document_id, "document_url": doc_url, "source_url": doc_url},
+        )
+        trace_events.append(docs_create_completed)
+        yield docs_create_completed
+        if doc_url:
+            go_to_doc_event = ToolTraceEvent(
+                event_type="drive.go_to_doc",
+                title="Open document link",
+                detail=doc_url,
+                data={"source_url": doc_url, "document_url": doc_url, "doc_id": document_id},
+            )
+            trace_events.append(go_to_doc_event)
+            yield go_to_doc_event
         if replacements and document_id:
             replacement_summary = ", ".join(
                 f"{str(key)}={str(value)[:30]}" for key, value in list(replacements.items())[:4]
@@ -230,7 +296,23 @@ class WorkspaceDocsTemplateTool(AgentTool):
             )
             trace_events.append(replace_event)
             yield replace_event
+            replace_started = ToolTraceEvent(
+                event_type="docs.replace_started",
+                title="Start placeholder replacement",
+                detail=f"{len(replacements)} placeholder(s)",
+                data={"doc_id": document_id, "count": len(replacements), "source_url": doc_url},
+            )
+            trace_events.append(replace_started)
+            yield replace_started
             connector.docs_replace_text(document_id=document_id, replacements=replacements)
+            replace_completed = ToolTraceEvent(
+                event_type="docs.replace_completed",
+                title="Placeholder replacement completed",
+                detail=f"{len(replacements)} placeholder(s)",
+                data={"doc_id": document_id, "count": len(replacements), "source_url": doc_url},
+            )
+            trace_events.append(replace_completed)
+            yield replace_completed
 
         if prompt_text and document_id:
             chunks = _chunk_text(prompt_text, chunk_size=170, max_chunks=5)
@@ -266,11 +348,30 @@ class WorkspaceDocsTemplateTool(AgentTool):
             out_file.write_bytes(pdf_bytes)
             pdf_path = str(out_file.resolve())
 
+        if prompt_text and document_id:
+            insert_started = ToolTraceEvent(
+                event_type="docs.insert_started",
+                title="Start appending text",
+                detail=f"{len(prompt_text)} characters",
+                data={"doc_id": document_id, "characters": len(prompt_text), "source_url": doc_url},
+            )
+            trace_events.append(insert_started)
+            yield insert_started
+            connector.docs_insert_text(document_id=document_id, text=f"\n\n{prompt_text}\n")
+            insert_completed = ToolTraceEvent(
+                event_type="docs.insert_completed",
+                title="Appended text to Google Doc",
+                detail=f"{len(prompt_text)} characters",
+                data={"doc_id": document_id, "characters": len(prompt_text), "source_url": doc_url},
+            )
+            trace_events.append(insert_completed)
+            yield insert_completed
+
         save_event = ToolTraceEvent(
             event_type="doc_save",
             title="Persist Google Doc",
             detail=document_id or "document saved",
-            data={"document_id": document_id, "url": doc_url},
+            data={"document_id": document_id, "document_url": doc_url, "source_url": doc_url},
         )
         trace_events.append(save_event)
         yield save_event
@@ -347,6 +448,30 @@ class WorkspaceResearchNotesTool(AgentTool):
         note = str(params.get("note") or prompt).strip()
         if not note:
             raise ToolExecutionError("`note` is required.")
+        include_copied_highlights = bool(params.get("include_copied_highlights", True))
+        if include_copied_highlights:
+            copied_rows = context.settings.get("__copied_highlights")
+            copied_lines: list[str] = []
+            if isinstance(copied_rows, list):
+                for row in copied_rows[-8:]:
+                    if not isinstance(row, dict):
+                        continue
+                    snippet = " ".join(str(row.get("text") or "").split()).strip()
+                    if not snippet:
+                        continue
+                    word = str(row.get("word") or "").strip()
+                    reference = str(row.get("reference") or row.get("title") or "").strip()
+                    bullet = "- "
+                    if word:
+                        bullet += f"{word}: "
+                    bullet += snippet[:220]
+                    if reference:
+                        bullet += f" ({reference})"
+                    copied_lines.append(bullet)
+                    if len(copied_lines) >= 5:
+                        break
+            if copied_lines:
+                note = "\n".join([note, "", "Copied highlights:", *copied_lines]).strip()
         title = str(params.get("title") or "").strip() or f"Maia Deep Research {context.run_id[:8]}"
         connector = get_connector_registry().build("google_workspace", settings=context.settings)
 
@@ -372,6 +497,14 @@ class WorkspaceResearchNotesTool(AgentTool):
             )
             trace_events.append(create_event)
             yield create_event
+            docs_create_started = ToolTraceEvent(
+                event_type="docs.create_started",
+                title="Start Google research notebook creation",
+                detail=title,
+                data={"title": title},
+            )
+            trace_events.append(docs_create_started)
+            yield docs_create_started
             created = connector.create_docs_document(title=title)
             document_id = str(created.get("documentId") or "").strip()
             document_url = (
@@ -380,6 +513,23 @@ class WorkspaceResearchNotesTool(AgentTool):
             context.settings["__deep_research_doc_id"] = document_id
             context.settings["__deep_research_doc_url"] = document_url
             created_now = True
+            docs_create_completed = ToolTraceEvent(
+                event_type="docs.create_completed",
+                title="Google research notebook created",
+                detail=document_id or title,
+                data={"doc_id": document_id, "document_url": document_url, "source_url": document_url},
+            )
+            trace_events.append(docs_create_completed)
+            yield docs_create_completed
+            if document_url:
+                go_to_doc_event = ToolTraceEvent(
+                    event_type="drive.go_to_doc",
+                    title="Open research notebook link",
+                    detail=document_url,
+                    data={"source_url": document_url, "document_url": document_url, "doc_id": document_id},
+                )
+                trace_events.append(go_to_doc_event)
+                yield go_to_doc_event
         clipboard_source = _chunk_text(note, chunk_size=220, max_chunks=1)
         if clipboard_source:
             copy_event = ToolTraceEvent(
@@ -441,13 +591,29 @@ class WorkspaceResearchNotesTool(AgentTool):
             )
             trace_events.append(insert_event)
             yield insert_event
+            insert_started = ToolTraceEvent(
+                event_type="docs.insert_started",
+                title="Start writing note to Google Doc",
+                detail=f"{len(note_block)} characters",
+                data={"doc_id": document_id, "characters": len(note_block), "source_url": document_url},
+            )
+            trace_events.append(insert_started)
+            yield insert_started
             connector.docs_insert_text(document_id=document_id, text=note_block)
+            insert_completed = ToolTraceEvent(
+                event_type="docs.insert_completed",
+                title="Research note appended",
+                detail=f"{len(note_block)} characters",
+                data={"doc_id": document_id, "characters": len(note_block), "source_url": document_url},
+            )
+            trace_events.append(insert_completed)
+            yield insert_completed
 
         save_event = ToolTraceEvent(
             event_type="doc_save",
             title="Save research notebook",
             detail=document_id or "notebook saved",
-            data={"document_id": document_id, "document_url": document_url},
+            data={"document_id": document_id, "document_url": document_url, "source_url": document_url},
         )
         trace_events.append(save_event)
         yield save_event
@@ -554,6 +720,14 @@ class WorkspaceSheetsTrackStepTool(AgentTool):
             )
             trace_events.append(create_event)
             yield create_event
+            sheet_create_started = ToolTraceEvent(
+                event_type="sheets.create_started",
+                title="Start Google Sheets tracker creation",
+                detail=title,
+                data={"title": title, "sheet_title": sheet_name},
+            )
+            trace_events.append(sheet_create_started)
+            yield sheet_create_started
             created = connector.create_spreadsheet(title=title, sheet_title=sheet_name)
             spreadsheet_id = str(created.get("spreadsheet_id") or "").strip()
             spreadsheet_url = str(created.get("spreadsheet_url") or "").strip()
@@ -562,13 +736,60 @@ class WorkspaceSheetsTrackStepTool(AgentTool):
             context.settings["__deep_research_sheet_range"] = sheet_range
             header_written = False
             created_now = True
+            sheet_create_completed = ToolTraceEvent(
+                event_type="sheets.create_completed",
+                title="Google Sheets tracker created",
+                detail=spreadsheet_id or title,
+                data={
+                    "spreadsheet_id": spreadsheet_id,
+                    "spreadsheet_url": spreadsheet_url,
+                    "source_url": spreadsheet_url,
+                },
+            )
+            trace_events.append(sheet_create_completed)
+            yield sheet_create_completed
+            if spreadsheet_url:
+                open_sheet_event = ToolTraceEvent(
+                    event_type="drive.go_to_sheet",
+                    title="Open tracker sheet link",
+                    detail=spreadsheet_url,
+                    data={"source_url": spreadsheet_url, "spreadsheet_url": spreadsheet_url},
+                )
+                trace_events.append(open_sheet_event)
+                yield open_sheet_event
 
         if spreadsheet_id and not header_written:
+            header_start = ToolTraceEvent(
+                event_type="sheets.append_started",
+                title="Write tracker header row",
+                detail=sheet_range,
+                data={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "rows": 1,
+                    "source_url": spreadsheet_url,
+                },
+            )
+            trace_events.append(header_start)
+            yield header_start
             connector.append_sheet_values(
                 spreadsheet_id=spreadsheet_id,
                 sheet_range=sheet_range,
                 values=[["timestamp", "run_id", "step", "status", "detail", "source_url"]],
             )
+            header_done = ToolTraceEvent(
+                event_type="sheets.append_completed",
+                title="Tracker header row saved",
+                detail=sheet_range,
+                data={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "updated_rows": 1,
+                    "source_url": spreadsheet_url,
+                },
+            )
+            trace_events.append(header_done)
+            yield header_done
             context.settings["__deep_research_sheet_header_written"] = True
 
         row_values = [_now_iso(), context.run_id, step_name, status, detail, source_url]
@@ -594,6 +815,19 @@ class WorkspaceSheetsTrackStepTool(AgentTool):
         )
         trace_events.append(append_event)
         yield append_event
+        append_started = ToolTraceEvent(
+            event_type="sheets.append_started",
+            title="Start appending tracker row",
+            detail=f"{step_name} ({status})",
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "range": sheet_range,
+                "rows": 1,
+                "source_url": spreadsheet_url,
+            },
+        )
+        trace_events.append(append_started)
+        yield append_started
 
         response = (
             connector.append_sheet_values(
@@ -609,11 +843,28 @@ class WorkspaceSheetsTrackStepTool(AgentTool):
             if isinstance(response, dict)
             else 0
         )
+        append_completed = ToolTraceEvent(
+            event_type="sheets.append_completed",
+            title="Tracker row appended",
+            detail=f"Updated rows: {updated_rows or 0}",
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "range": sheet_range,
+                "updated_rows": updated_rows or 0,
+                "source_url": spreadsheet_url,
+            },
+        )
+        trace_events.append(append_completed)
+        yield append_completed
         save_event = ToolTraceEvent(
             event_type="sheet_save",
             title="Save tracker updates",
             detail=spreadsheet_id or "tracker saved",
-            data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "spreadsheet_url": spreadsheet_url,
+                "source_url": spreadsheet_url,
+            },
         )
         trace_events.append(save_event)
         yield save_event

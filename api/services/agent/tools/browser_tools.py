@@ -243,10 +243,7 @@ class PlaywrightInspectTool(AgentTool):
                 "copied_snippets": copied_snippets[:8],
             },
             sources=sources,
-            next_steps=[
-                "Extract contacts or CTA details from the captured page.",
-                "Use findings to personalize outreach messaging.",
-            ],
+            next_steps=[],
             events=trace_events,
         )
 

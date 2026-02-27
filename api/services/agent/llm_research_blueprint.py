@@ -8,58 +8,6 @@ from urllib.parse import urlparse
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
-STOPWORDS = {
-    "about",
-    "after",
-    "also",
-    "because",
-    "before",
-    "being",
-    "between",
-    "company",
-    "could",
-    "deliver",
-    "delivery",
-    "document",
-    "email",
-    "file",
-    "files",
-    "from",
-    "have",
-    "into",
-    "more",
-    "most",
-    "other",
-    "please",
-    "report",
-    "send",
-    "share",
-    "task",
-    "that",
-    "their",
-    "there",
-    "these",
-    "this",
-    "those",
-    "using",
-    "with",
-    "write",
-    "your",
-}
-FALLBACK_KEYWORDS = [
-    "company profile",
-    "products",
-    "services",
-    "industry",
-    "customers",
-    "competitors",
-    "pricing",
-    "operations",
-    "market positioning",
-    "growth strategy",
-    "value proposition",
-    "contact channels",
-]
 
 
 def _extract_url(message: str, goal: str) -> str:
@@ -77,18 +25,27 @@ def _host_tokens(url: str) -> list[str]:
     return pieces[:3]
 
 
-def _heuristic_keywords(message: str, goal: str, *, min_keywords: int, url: str = "") -> list[str]:
+def _extract_candidate_keywords(message: str, goal: str, *, url: str = "") -> list[str]:
     tokens = [match.group(0).lower() for match in WORD_RE.finditer(f"{message} {goal}")]
-    ranked = [token for token in tokens if len(token) >= 4 and token not in STOPWORDS]
-    deduped = list(dict.fromkeys(ranked))
+    deduped = list(dict.fromkeys(tokens))
     for host_token in _host_tokens(url):
         if host_token not in deduped:
             deduped.insert(0, host_token)
-    for fallback in FALLBACK_KEYWORDS:
-        if len(deduped) >= min_keywords:
-            break
-        if fallback not in deduped:
-            deduped.append(fallback)
+    return deduped[:48]
+
+
+def _seed_keywords(message: str, goal: str, *, min_keywords: int, url: str = "") -> list[str]:
+    deduped = _extract_candidate_keywords(message, goal, url=url)
+    if len(deduped) >= min_keywords:
+        return deduped[: max(min_keywords, 16)]
+    if not deduped:
+        host_parts = _host_tokens(url)
+        deduped.extend(host_parts or ["request"])
+    base = deduped[0]
+    while len(deduped) < min_keywords:
+        candidate = f"{base}_{len(deduped) + 1}"
+        if candidate not in deduped:
+            deduped.append(candidate)
     return deduped[: max(min_keywords, 16)]
 
 
@@ -102,8 +59,10 @@ def _heuristic_search_terms(
     host = (urlparse(url).hostname or "").strip().lower()
     terms: list[str] = []
     if host:
-        terms.append(f"site:{host} company overview")
-        terms.append(f"site:{host} products services")
+        combined = " ".join(f"{message} {goal}".split()).strip()[:120]
+        if combined:
+            terms.append(f"site:{host} {combined}")
+        terms.append(f"site:{host}")
     if keywords:
         terms.append(" ".join(keywords[:4]))
         if len(keywords) >= 8:
@@ -185,7 +144,7 @@ def build_research_blueprint(
     clean_goal = str(agent_goal or "").strip()
     target_url = _extract_url(clean_message, clean_goal)
 
-    keywords = _heuristic_keywords(
+    keywords = _seed_keywords(
         clean_message,
         clean_goal,
         min_keywords=target_min,
@@ -220,7 +179,7 @@ def build_research_blueprint(
                     rationale = candidate_rationale[:220]
 
     if len(keywords) < target_min:
-        refill = _heuristic_keywords(
+        refill = _seed_keywords(
             clean_message,
             clean_goal,
             min_keywords=target_min,

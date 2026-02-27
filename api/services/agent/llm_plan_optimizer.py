@@ -34,6 +34,10 @@ def optimize_plan_rows(
                 "tool_id": tool_id,
                 "title": str(row.get("title") or "").strip(),
                 "params": sanitize_json_value(row.get("params") if isinstance(row.get("params"), dict) else {}),
+                "why_this_step": " ".join(str(row.get("why_this_step") or "").split()).strip()[:240],
+                "expected_evidence": sanitize_json_value(
+                    row.get("expected_evidence") if isinstance(row.get("expected_evidence"), list) else []
+                ),
             }
         )
     if not current_steps:
@@ -51,7 +55,8 @@ def optimize_plan_rows(
         "Return JSON only in this schema:\n"
         "{\n"
         '  "steps": [\n'
-        '    {"tool_id": "tool.id", "title": "Step title", "params": {}}\n'
+        '    {"tool_id": "tool.id", "title": "Step title", "params": {}, '
+        '"why_this_step":"string", "expected_evidence":["..."]}\n'
         "  ]\n"
         "}\n"
         "Rules:\n"
@@ -59,6 +64,7 @@ def optimize_plan_rows(
         "- Add missing critical steps, remove redundant steps.\n"
         "- Fill obvious params (recipient, url, title, summary) when present in request.\n"
         "- If the user asks where a company is located/found, preserve or add location-evidence steps.\n"
+        "- If the user asks to submit a website contact form, preserve or add `browser.contact_form.send`.\n"
         "- In company_agent mode, keep server-side delivery and roadmap logging steps when available.\n"
         "- Do not include more than 10 steps.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
@@ -87,11 +93,23 @@ def optimize_plan_rows(
             continue
         title = str(candidate.get("title") or "").strip() or tool_id
         params = candidate.get("params")
+        why_this_step = " ".join(str(candidate.get("why_this_step") or "").split()).strip()[:240]
+        expected_evidence = [
+            " ".join(str(item).split()).strip()[:220]
+            for item in (
+                candidate.get("expected_evidence")
+                if isinstance(candidate.get("expected_evidence"), list)
+                else []
+            )
+            if " ".join(str(item).split()).strip()
+        ][:4]
         optimized.append(
             {
                 "tool_id": tool_id,
                 "title": title,
                 "params": sanitize_json_value(params) if isinstance(params, dict) else {},
+                "why_this_step": why_this_step,
+                "expected_evidence": expected_evidence,
             }
         )
         if len(optimized) >= 10:

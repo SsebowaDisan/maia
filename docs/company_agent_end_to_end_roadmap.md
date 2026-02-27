@@ -9,6 +9,8 @@ This roadmap is implementation-focused and slice-driven.
 ## Non-Negotiable Engineering Constraints
 - replay-safe state transitions
 - no file over 500 LOC
+- LLM-first intelligence across planning, decomposition, extraction, verification, and response shaping
+- no hardcoded words or keyword lists in task contracts or execution contracts
 ---
 ## Rules For Execution
 - Only one active slice at a time.
@@ -21,6 +23,27 @@ This roadmap is implementation-focused and slice-driven.
 - Maintain `tasks/todo.md` during execution; every active slice must have explicit, checkable tasks and verification notes.
 - After every user correction, append a lesson entry to `tasks/lessons.md` with root cause and prevention rule before closing the slice.
 - Going forward, a slice status cannot be `done` while any checklist item remains `todo` or `in_progress`.
+- Use LLM decisioning wherever possible for intent understanding and step decomposition; use deterministic heuristics only as safety fallback.
+## Execution Contract Addendum: Module Tree and File Naming
+- Refactors of large files must produce a professional package tree with clear domain boundaries and a stable public entrypoint (for example `<package>/app.py`).
+- Folder and module names must be domain-accurate and searchable; avoid vague names and avoid ad-hoc filenames.
+- Prefer nested structure over filename prefixes:
+ - `feature/history_compiler.py` over `feature_history.py`
+ - `feature/realtime_context.py` over `feature_now.py`
+- Every module must have one responsibility and remain under 500 LOC (preferred 350-450 LOC).
+- Shared types/contracts must be extracted first into dedicated modules (for example `core/types.py`, `domain/models.py`) before moving logic.
+- Move order for safety is mandatory:
+ - types/models first
+ - pure logic second
+ - side-effect adapters/integrations last
+- Backward compatibility is mandatory during migration:
+ - keep original file as a thin shim that re-exports the new public entrypoints
+ - include deprecation note pointing to the new entry module
+- Circular imports are contract violations:
+ - dependency direction must stay explicit
+ - shared abstractions should be lifted to neutral modules instead of cross-importing features
+- `utils.py` as a catch-all is prohibited in new slices; helper modules must be named by purpose (for example `text_normalization.py`, `token_budget.py`, `chunking.py`).
+- Any file move or rename must update all imports in the same slice and keep acceptance + regression tests green before marking `done`.
 ## Naming Rule (Mandatory)
 - Scope: these naming rules apply to all modules under `src/`, not only UI modules.
 - Structure must be domain-first, not prefix-first.
@@ -44,6 +67,7 @@ This roadmap is implementation-focused and slice-driven.
 - Work advances slice by slice with no skip-ahead.
 - The next slice starts automatically only after the active slice is validated `done`.
 - Re-planning is mandatory whenever the active slice fails acceptance tests twice without a code change that addresses root cause.
+- Planning and orchestration must prefer LLM-generated structure before any hardcoded keyword path.
 ## Global Slice Gate (Applies to Every Slice)
 1. Implement scope for the active slice only.
 2. Run slice acceptance tests.
@@ -417,6 +441,162 @@ This roadmap is implementation-focused and slice-driven.
 - [ ] personalization rules verified (`todo`)
 - [ ] safety and policy checks remain green (`todo`)
 ---
+## LLM Task Understanding and Delivery Excellence
+### Contract Schema Hardening
+**Status:** `done`
+**Objective**
+- make every run machine-checkable before execution begins
+**In Scope**
+- expand task contract schema with objective, required facts, required outputs, required actions, delivery target, constraints, missing requirements, and success checks
+- enforce mandatory rule in contract generation and validation: no hardcoded words or keyword lists
+- normalize contract fields for deterministic downstream checks
+**Deliverables**
+- strict contract schema and parser updates
+- contract normalization layer with mandatory constraints
+- contract serialization contract test fixtures
+**Acceptance Tests**
+- all contracts include required schema fields
+- mandatory no-hardcode constraint is always present in both planning and execution contracts
+- malformed contract payloads are normalized safely without crashes
+**Regression Slice**
+- Modes and Personalization Framework
+**Checklist**
+- [x] strict contract schema finalized (`done`)
+- [x] mandatory constraints enforcement validated (`done`)
+- [x] contract normalization tests pass (`done`)
+### Clarification Gate and Missing Requirement Detection
+**Status:** `in_progress`
+**Objective**
+- prevent wrong execution when user intent is underspecified
+**In Scope**
+- pre-execution gate that blocks action when critical requirements are missing
+- structured clarification prompts (recipient, target URL, required facts, output format)
+- event streaming for clarification lifecycle in theatre
+**Deliverables**
+- clarification gate in orchestrator
+- missing-requirements classifier and prompt templates
+- live events for clarification requested/resolved
+**Acceptance Tests**
+- external actions are blocked when critical requirements are missing
+- clarification questions are specific and bounded
+- resolved clarifications unblock execution deterministically
+**Regression Slice**
+- Contract Schema Hardening
+**Checklist**
+- [x] clarification gate integrated (`done`)
+- [ ] missing requirements classifier validated (`in_progress`)
+- [x] clarification event stream visible in theatre (`done`)
+### Evidence-Aware Planning Contract
+**Status:** `todo`
+**Objective**
+- guarantee plans are evidence-producing, not just action-producing
+**In Scope**
+- require planner rows to include rationale and expected evidence for required facts
+- enforce plan rejection when required facts have no evidence path
+- maintain LLM-first planning with deterministic schema checks
+**Deliverables**
+- upgraded planner step schema with evidence metadata
+- plan critic rules for fact coverage
+- plan quality tests for ambiguous prompts
+**Acceptance Tests**
+- each required fact maps to at least one evidence-producing step
+- plans without fact coverage are rejected and regenerated
+- no hardcoded keyword routing in planner decisions
+**Regression Slice**
+- Clarification Gate and Missing Requirement Detection
+**Checklist**
+- [ ] planner evidence schema implemented (`todo`)
+- [ ] plan critic coverage checks active (`todo`)
+- [ ] plan quality regression tests pass (`todo`)
+### Execution Verification and External Action Gating
+**Status:** `todo`
+**Objective**
+- block final responses and external actions until contract obligations are met
+**In Scope**
+- required-fact to evidence mapping validator
+- automated remediation step insertion for missing obligations
+- action gate for email/contact form/send operations
+**Deliverables**
+- execution verifier with structured missing-items output
+- remediation insertion flow
+- blocking logic for unsafe or incomplete external actions
+**Acceptance Tests**
+- external sends are blocked when required facts are unverified
+- verifier explains missing items with actionable remediation
+- remediation loop converges or exits with clear blocked reason
+**Regression Slice**
+- Evidence-Aware Planning Contract
+**Checklist**
+- [ ] execution verifier integrated (`todo`)
+- [ ] action-gate blocking validated (`todo`)
+- [ ] remediation loop tests pass (`todo`)
+### Evidence-Backed Value-Add Response Enhancer
+**Status:** `todo`
+**Objective**
+- exceed user expectations without hallucinating
+**In Scope**
+- post-verification value-add section generated only from verified evidence
+- recommendation ranking based on confidence and relevance
+- strict prohibition on unsupported claims
+**Deliverables**
+- value-add response module
+- confidence-aware recommendation formatter
+- citation-linked enhancement output
+**Acceptance Tests**
+- value-add content appears only when evidence coverage threshold is met
+- no unsupported claim appears in final response
+- response quality metrics improve without increasing contradiction rate
+**Regression Slice**
+- Execution Verification and External Action Gating
+**Checklist**
+- [ ] value-add generator implemented (`todo`)
+- [ ] confidence and citation rules enforced (`todo`)
+- [ ] hallucination guard tests pass (`todo`)
+### Theatre Transparency and Screen Transition Stability
+**Status:** `todo`
+**Objective**
+- make every planning and execution phase visibly understandable in real time
+**In Scope**
+- live streaming of phases: understanding, contract, clarification, planning, execution, verification, delivery
+- stable full-screen transitions between website, docs, and sheets
+- removal of noisy overlays that obscure primary work surface
+**Deliverables**
+- theatre phase timeline renderer
+- scene transition controller for website/docs/sheets
+- reduced-noise UI overlays and stable replay behavior
+**Acceptance Tests**
+- user can observe phase transitions live without flicker/blinking regressions
+- docs and sheets open as full screens when active
+- theatre replay preserves ordered phase history
+**Regression Slice**
+- Evidence-Backed Value-Add Response Enhancer
+**Checklist**
+- [ ] phase timeline streaming implemented (`todo`)
+- [ ] scene transitions stabilized (`todo`)
+- [ ] theatre replay regression tests pass (`todo`)
+### Continuous Agent Evals and Regression Guardrails
+**Status:** `todo`
+**Objective**
+- lock in gains and prevent understanding/delivery regressions
+**In Scope**
+- evaluation suite for ambiguity, multi-intent requests, delivery completeness, and contradiction risk
+- CI gating for contract, planner, verifier, and delivery behavior
+- regression fixtures from real production-like failures
+**Deliverables**
+- automated eval suite and score thresholds
+- CI policy for failing regressions
+- evaluation dashboard for trend monitoring
+**Acceptance Tests**
+- CI fails when understanding or delivery quality drops below threshold
+- eval suite covers representative real user task patterns
+- repeated failures produce documented lessons in `tasks/lessons.md`
+**Regression Slice**
+- Theatre Transparency and Screen Transition Stability
+**Checklist**
+- [ ] eval suite implemented (`todo`)
+- [ ] CI quality gates configured (`todo`)
+- [ ] regression fixtures maintained (`todo`)
+---
 ## Slice Execution Order
 1. Strategic Scope and Governance Alignment
 2. Architecture and Data Strategy Blueprint
@@ -435,5 +615,12 @@ This roadmap is implementation-focused and slice-driven.
 15. Systems Expansion and Performance Scale
 16. Cross-Module Workflow Orchestration
 17. Modes and Personalization Framework
-Current Active Slice: `none`
+18. Contract Schema Hardening
+19. Clarification Gate and Missing Requirement Detection
+20. Evidence-Aware Planning Contract
+21. Execution Verification and External Action Gating
+22. Evidence-Backed Value-Add Response Enhancer
+23. Theatre Transparency and Screen Transition Stability
+24. Continuous Agent Evals and Regression Guardrails
+Current Active Slice: `Clarification Gate and Missing Requirement Detection`
 

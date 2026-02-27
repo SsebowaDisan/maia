@@ -42,14 +42,15 @@ class GoogleDocsService:
             payload={"name": title},
         )
         doc_id = str(response.get("id") or "")
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else ""
         emit_google_event(
             user_id=self.session.user_id,
             run_id=self.session.run_id,
             event_type="docs.copy_completed",
             message="Google Docs template copied",
-            data={"doc_id": doc_id, "title": title},
+            data={"doc_id": doc_id, "title": title, "source_url": doc_url},
         )
-        return {"doc_id": doc_id, "title": title}
+        return {"doc_id": doc_id, "title": title, "doc_url": doc_url}
 
     def create_document(self, *, title: str) -> dict[str, Any]:
         emit_google_event(
@@ -65,14 +66,15 @@ class GoogleDocsService:
             payload={"title": title},
         )
         doc_id = str(response.get("documentId") or "")
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else ""
         emit_google_event(
             user_id=self.session.user_id,
             run_id=self.session.run_id,
             event_type="docs.create_completed",
             message="Google Doc created",
-            data={"doc_id": doc_id, "title": title},
+            data={"doc_id": doc_id, "title": title, "source_url": doc_url},
         )
-        return {"doc_id": doc_id, "title": title}
+        return {"doc_id": doc_id, "title": title, "doc_url": doc_url}
 
     def replace_placeholders(self, *, doc_id: str, mapping: dict[str, str]) -> dict[str, Any]:
         requests = []
@@ -103,7 +105,7 @@ class GoogleDocsService:
         emit_google_event(
             user_id=self.session.user_id,
             run_id=self.session.run_id,
-            event_type="docs.replace_done",
+            event_type="docs.replace_completed",
             message="Placeholder replacement completed",
             data={"doc_id": doc_id, "count": len(requests)},
         )
@@ -158,6 +160,13 @@ class GoogleDocsService:
         }
 
     def export_pdf(self, *, doc_id: str, folder_id: str | None = None) -> dict[str, Any]:
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.export_started",
+            message="Exporting Google Doc to PDF",
+            data={"doc_id": doc_id},
+        )
         pdf_bytes = self.drive.export_pdf_bytes(file_id=doc_id)
         uploaded = self.drive.upload_bytes(
             name=f"{doc_id}.pdf",
@@ -165,4 +174,13 @@ class GoogleDocsService:
             mime_type="application/pdf",
             folder_id=folder_id,
         )
-        return {"drive_file_id": uploaded["file_id"], "doc_id": doc_id}
+        file_id = str(uploaded.get("file_id") or "")
+        source_url = f"https://drive.google.com/file/d/{file_id}/view" if file_id else ""
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.export_completed",
+            message="Google Doc exported to PDF",
+            data={"doc_id": doc_id, "drive_file_id": file_id, "source_url": source_url},
+        )
+        return {"drive_file_id": file_id, "doc_id": doc_id, "source_url": source_url}

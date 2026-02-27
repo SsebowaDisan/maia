@@ -31,6 +31,7 @@ from ktem.utils.commands import WEB_SEARCH_COMMAND
 from api.context import ApiContext
 from api.schemas import ChatRequest
 from api.services.agent.events import EVENT_SCHEMA_VERSION, infer_stage, infer_status
+from api.services.agent.llm_execution_support import summarize_conversation_window
 from api.services.agent.orchestrator import get_orchestrator
 from api.services.settings_service import load_user_settings
 
@@ -224,6 +225,33 @@ def _chunk_text_for_stream(text: str, chunk_size: int = 220) -> list[str]:
         return []
     size = max(32, int(chunk_size or 220))
     return [text[idx: idx + size] for idx in range(0, len(text), size)]
+
+
+def _build_agent_context_window(
+    *,
+    chat_history: list[list[str]],
+    latest_message: str,
+    agent_goal: str | None,
+    max_turns: int = 6,
+) -> tuple[list[str], str]:
+    recent_rows = list(chat_history or [])[-max(1, int(max_turns)) :]
+    turns: list[dict[str, str]] = []
+    snippets: list[str] = []
+    for row in recent_rows:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split()).strip()
+        assistant_text = " ".join(str(row[1] or "").split()).strip()
+        if user_text:
+            snippets.append(f"User: {user_text[:260]}")
+        if assistant_text:
+            snippets.append(f"Assistant: {assistant_text[:320]}")
+        turns.append({"user": user_text, "assistant": assistant_text})
+    summary = summarize_conversation_window(
+        latest_user_message=f"{latest_message} {agent_goal or ''}".strip(),
+        turns=turns,
+    )
+    return snippets[-10:], summary
 
 
 def _create_pipeline(
@@ -1154,12 +1182,38 @@ def stream_chat_turn(
         orchestrator = get_orchestrator()
         agent_result = None
         last_activity_seq = 0
+        context_snippets, context_summary = _build_agent_context_window(
+            chat_history=chat_history,
+            latest_message=message,
+            agent_goal=request.agent_goal,
+        )
+        agent_goal_parts = []
+        existing_goal = " ".join(str(request.agent_goal or "").split()).strip()
+        if existing_goal:
+            agent_goal_parts.append(existing_goal)
+        if context_summary:
+            agent_goal_parts.append(f"Conversation context: {context_summary}")
+        contextual_goal = " ".join(agent_goal_parts).strip()[:900]
+        agent_request = request
+        if contextual_goal and contextual_goal != existing_goal:
+            try:
+                agent_request = request.model_copy(update={"agent_goal": contextual_goal})
+            except Exception:
+                request_payload = request.model_dump()
+                request_payload["agent_goal"] = contextual_goal
+                agent_request = ChatRequest(**request_payload)
+        agent_settings = dict(settings)
+        if context_snippets:
+            agent_settings["__conversation_snippets"] = context_snippets
+        if context_summary:
+            agent_settings["__conversation_summary"] = context_summary
+        agent_settings["__conversation_latest_user_message"] = message
         try:
             iterator = orchestrator.run_stream(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                request=request,
-                settings=settings,
+                request=agent_request,
+                settings=agent_settings,
             )
             while True:
                 event = next(iterator)

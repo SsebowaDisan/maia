@@ -38,7 +38,11 @@ class GoogleSheetsService:
             run_id=self.session.run_id,
             event_type="sheets.create_completed",
             message="Google Spreadsheet created",
-            data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "spreadsheet_url": spreadsheet_url,
+                "source_url": spreadsheet_url,
+            },
         )
         return {
             "spreadsheet_id": spreadsheet_id,
@@ -66,7 +70,12 @@ class GoogleSheetsService:
             run_id=self.session.run_id,
             event_type="sheets.read_completed",
             message="Google Sheets range loaded",
-            data={"spreadsheet_id": spreadsheet_id, "range": a1_range, "rows": len(rows)},
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "range": a1_range,
+                "rows": len(rows),
+                "source_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+            },
         )
         return {"values": rows}
 
@@ -100,6 +109,7 @@ class GoogleSheetsService:
                 "spreadsheet_id": spreadsheet_id,
                 "range": a1_range,
                 "updated_rows": updates.get("updatedRows", 0),
+                "source_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
             },
         )
         return {"update_info": updates}
@@ -129,6 +139,10 @@ class GoogleSheetsService:
             run_id=self.session.run_id,
             event_type="sheets.update_completed",
             message="Google Sheets range updated",
-            data={"spreadsheet_id": spreadsheet_id, "range": a1_range},
+            data={
+                "spreadsheet_id": spreadsheet_id,
+                "range": a1_range,
+                "source_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+            },
         )
         return {"update_info": response}

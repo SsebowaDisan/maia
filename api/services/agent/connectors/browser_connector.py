@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import random
 from typing import Any, Generator
-from urllib.parse import urlparse
 
 from .browser_live_utils import (
     excerpt,
@@ -85,10 +85,27 @@ class BrowserConnector(BaseConnector):
         visited_pages: list[dict[str, Any]] = []
 
         effective_highlight_color = "green" if str(highlight_color).strip().lower() == "green" else "yellow"
+        movement_rng = random.Random(datetime.now(timezone.utc).timestamp())
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1366, "height": 768})
+
+            def _jitter_target(
+                base_x: float,
+                base_y: float,
+                *,
+                spread: float = 22.0,
+            ) -> tuple[float, float]:
+                metrics = self._page_metrics(page=page)
+                viewport_width = max(1.0, to_number(metrics.get("viewport_width"), 1366.0))
+                viewport_height = max(1.0, to_number(metrics.get("viewport_height"), 768.0))
+                x = float(base_x) + movement_rng.uniform(-spread, spread)
+                y = float(base_y) + movement_rng.uniform(-spread * 0.52, spread * 0.52)
+                return (
+                    max(8.0, min(viewport_width - 8.0, x)),
+                    max(8.0, min(viewport_height - 8.0, y)),
+                )
 
             def _emit_extract_side_events(
                 *,
@@ -114,7 +131,34 @@ class BrowserConnector(BaseConnector):
                         rh = float(region.get("height", 0.0))
                         cursor_x = (rx + max(0.5, rw / 2.0)) / 100.0 * viewport_width
                         cursor_y = (ry + max(0.5, rh / 2.0)) / 100.0 * viewport_height
+                        cursor_x, cursor_y = _jitter_target(cursor_x, cursor_y, spread=18.0)
                         highlight_cursor = self._move_cursor(page=page, x=cursor_x, y=cursor_y)
+                    find_query = " ".join(keywords[:2]).strip() or keywords[0]
+                    if find_query:
+                        find_capture = self._capture_page_state(
+                            page=page,
+                            output_dir=output_dir,
+                            stamp_prefix=stamp_prefix,
+                            label=f"find-{page_index}",
+                        )
+                        yield {
+                            "event_type": "browser_find_in_page",
+                            "title": "Search terms on page",
+                            "detail": find_query,
+                            "data": {
+                                "url": find_capture["url"],
+                                "title": find_capture["title"],
+                                "page_index": page_index,
+                                "find_query": find_query,
+                                "keywords": keywords[:8],
+                                "match_count": len(regions),
+                                "highlight_regions": regions,
+                                "highlight_color": effective_highlight_color,
+                                **highlight_cursor,
+                                **self._page_metrics(page=page),
+                            },
+                            "snapshot_ref": find_capture["screenshot_path"],
+                        }
                     highlight_capture = self._capture_page_state(
                         page=page,
                         output_dir=output_dir,
@@ -131,6 +175,8 @@ class BrowserConnector(BaseConnector):
                             "page_index": page_index,
                             "keywords": keywords[:8],
                             "highlight_regions": regions,
+                            "find_query": find_query,
+                            "match_count": len(regions),
                             "highlight_color": effective_highlight_color,
                             **highlight_cursor,
                             **self._page_metrics(page=page),
@@ -139,6 +185,11 @@ class BrowserConnector(BaseConnector):
                     }
                 copied = excerpt(text_excerpt, limit=420)
                 if copied:
+                    copied_words = [
+                        token
+                        for token in (part.strip() for part in re.split(r"\s+", copied))
+                        if token
+                    ][:8]
                     yield {
                         "event_type": "browser_copy_selection",
                         "title": "Copy evidence snippet",
@@ -148,6 +199,7 @@ class BrowserConnector(BaseConnector):
                             "title": str(capture.get("title") or ""),
                             "page_index": page_index,
                             "clipboard_text": copied,
+                            "copied_words": copied_words,
                             "highlight_color": effective_highlight_color,
                             **cursor_payload,
                             **self._page_metrics(page=page),
@@ -162,7 +214,8 @@ class BrowserConnector(BaseConnector):
                 browser.close()
                 raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
 
-            open_cursor = self._move_cursor(page=page, x=124, y=88)
+            open_x, open_y = _jitter_target(124, 88, spread=14.0)
+            open_cursor = self._move_cursor(page=page, x=open_x, y=open_y)
             open_capture = self._capture_page_state(
                 page=page,
                 output_dir=output_dir,
@@ -219,7 +272,8 @@ class BrowserConnector(BaseConnector):
 
             # Always capture a fast first-pass extract before any scrolling/navigation so
             # the agent can ground an initial answer from the landing page immediately.
-            quick_cursor = self._move_cursor(page=page, x=220, y=192)
+            quick_x, quick_y = _jitter_target(220, 192, spread=20.0)
+            quick_cursor = self._move_cursor(page=page, x=quick_x, y=quick_y)
             quick_capture = self._capture_page_state(
                 page=page,
                 output_dir=output_dir,
@@ -275,7 +329,8 @@ class BrowserConnector(BaseConnector):
                         page.wait_for_timeout(max(200, wait_ms))
                     except Exception:
                         continue
-                    last_cursor = self._move_cursor(page=page, x=138, y=106)
+                    nav_x, nav_y = _jitter_target(138, 106, spread=16.0)
+                    last_cursor = self._move_cursor(page=page, x=nav_x, y=nav_y)
                     nav_capture = self._capture_page_state(
                         page=page,
                         output_dir=output_dir,
@@ -341,16 +396,22 @@ class BrowserConnector(BaseConnector):
                         viewport_width=float(viewport_width),
                         viewport_height=float(viewport_height),
                     )
+                    cursor_x_px, cursor_y_px = _jitter_target(cursor_x_px, cursor_y_px, spread=24.0)
                     last_cursor = self._move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
                     scroll_delta = smart_scroll_delta(
                         metrics_before=metrics_before,
                         pass_index=scroll_index,
                         total_passes=max(1, int(max_scroll_steps)),
                     )
+                    if abs(scroll_delta) >= 1:
+                        scroll_delta *= movement_rng.uniform(0.83, 1.19)
+                        max_delta = max(320.0, float(viewport_height) * 1.14)
+                        scroll_delta = max(-max_delta, min(max_delta, scroll_delta))
                     if abs(scroll_delta) < 1:
                         continue
                     page.mouse.wheel(0, scroll_delta)
-                    page.wait_for_timeout(max(200, wait_ms // 2))
+                    pause_ms = max(180, wait_ms // 2) + movement_rng.randint(0, 220)
+                    page.wait_for_timeout(pause_ms)
                     metrics_after = self._page_metrics(page=page)
                     scroll_capture = self._capture_page_state(
                         page=page,
@@ -459,7 +520,7 @@ class BrowserConnector(BaseConnector):
 
     def _move_cursor(self, *, page: Any, x: float, y: float) -> dict[str, float]:
         try:
-            page.mouse.move(float(x), float(y), steps=14)
+            page.mouse.move(float(x), float(y), steps=random.randint(8, 22))
         except Exception:
             pass
         metrics = self._page_metrics(page=page)

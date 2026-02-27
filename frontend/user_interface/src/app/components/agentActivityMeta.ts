@@ -35,6 +35,41 @@ const eventStyles: Record<string, EventStyle> = {
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
+  "llm.task_contract_started": {
+    label: "Contract Build",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.task_contract_completed": {
+    label: "Contract Ready",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "llm.clarification_requested": {
+    label: "Clarification Needed",
+    icon: TriangleAlert,
+    accent: "text-[#996f22]",
+  },
+  "llm.clarification_resolved": {
+    label: "Clarification Resolved",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "llm.delivery_check_started": {
+    label: "Contract Check",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.delivery_check_completed": {
+    label: "Contract Passed",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "llm.delivery_check_failed": {
+    label: "Contract Gaps",
+    icon: TriangleAlert,
+    accent: "text-[#996f22]",
+  },
   task_understanding_started: {
     label: "Understanding",
     icon: Sparkles,
@@ -110,6 +145,11 @@ const eventStyles: Record<string, EventStyle> = {
     icon: FileSearch,
     accent: "text-[#4c4c50]",
   },
+  browser_find_in_page: {
+    label: "Find In Page",
+    icon: Search,
+    accent: "text-[#4c4c50]",
+  },
   browser_keyword_highlight: {
     label: "Highlight Keywords",
     icon: Sparkles,
@@ -129,6 +169,41 @@ const eventStyles: Record<string, EventStyle> = {
     label: "Cookie Check",
     icon: Activity,
     accent: "text-[#4c4c50]",
+  },
+  browser_contact_form_detected: {
+    label: "Contact Form",
+    icon: Search,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_name: {
+    label: "Fill Name",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_email: {
+    label: "Fill Email",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_subject: {
+    label: "Fill Subject",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_message: {
+    label: "Fill Message",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_submit: {
+    label: "Submit Form",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  browser_contact_confirmation: {
+    label: "Confirm Submit",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
   },
   clipboard_copy: {
     label: "Copy",
@@ -175,6 +250,56 @@ const eventStyles: Record<string, EventStyle> = {
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },
+  "docs.create_started": {
+    label: "Doc Create",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "docs.create_completed": {
+    label: "Doc Ready",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "docs.copy_started": {
+    label: "Copy Template",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "docs.copy_completed": {
+    label: "Template Copied",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "docs.replace_started": {
+    label: "Replace Fields",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "docs.replace_completed": {
+    label: "Fields Replaced",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "docs.insert_started": {
+    label: "Insert Text",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "docs.insert_completed": {
+    label: "Text Inserted",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "docs.export_started": {
+    label: "Export PDF",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "docs.export_completed": {
+    label: "PDF Exported",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
   sheet_open: {
     label: "Open Sheet",
     icon: FileSearch,
@@ -194,6 +319,101 @@ const eventStyles: Record<string, EventStyle> = {
     label: "Save Sheet",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
+  },
+  "sheets.create_started": {
+    label: "Sheet Create",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "sheets.create_completed": {
+    label: "Sheet Ready",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "sheets.read_started": {
+    label: "Sheet Read",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "sheets.read_completed": {
+    label: "Read Complete",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "sheets.append_started": {
+    label: "Append Rows",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "sheets.append_completed": {
+    label: "Rows Appended",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "sheets.update_started": {
+    label: "Update Range",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "sheets.update_completed": {
+    label: "Range Updated",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "drive.go_to_doc": {
+    label: "Open Doc",
+    icon: Eye,
+    accent: "text-[#4c4c50]",
+  },
+  "drive.go_to_sheet": {
+    label: "Open Sheet",
+    icon: Eye,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.context_summary": {
+    label: "Context Summary",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.task_rewrite_started": {
+    label: "Rewrite Task",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.task_rewrite_completed": {
+    label: "Task Rewritten",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "llm.plan_decompose_started": {
+    label: "Break Into Steps",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.plan_decompose_completed": {
+    label: "Steps Ready",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "llm.plan_step": {
+    label: "Plan Step",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.location_brief": {
+    label: "Location Brief",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.intent_tags": {
+    label: "Intent Tags",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.step_summary": {
+    label: "Step Summary",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
   },
   email_draft_create: {
     label: "Email Draft",
@@ -420,8 +640,10 @@ export function tabForEventType(eventType: string): PreviewTab {
     normalized.startsWith("pdf.") ||
     normalized.startsWith("doc_") ||
     normalized.startsWith("doc.") ||
+    normalized.startsWith("docs.") ||
     normalized.startsWith("sheet_") ||
     normalized.startsWith("sheet.") ||
+    normalized.startsWith("sheets.") ||
     normalized.startsWith("drive.")
   ) {
     return "document";

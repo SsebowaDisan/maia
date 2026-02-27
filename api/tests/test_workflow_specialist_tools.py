@@ -165,6 +165,11 @@ def test_workspace_research_notes_tool_appends_note() -> None:
         )
     assert result.data["document_id"] == "doc-1"
     assert workspace.docs_insert_calls
+    event_types = [event.event_type for event in result.events]
+    assert "docs.create_started" in event_types
+    assert "docs.create_completed" in event_types
+    assert "docs.insert_started" in event_types
+    assert "docs.insert_completed" in event_types
 
 
 def test_workspace_sheets_track_step_tool_appends_rows() -> None:
@@ -178,6 +183,11 @@ def test_workspace_sheets_track_step_tool_appends_rows() -> None:
         )
     assert result.data["spreadsheet_id"] == "sheet-1"
     assert len(workspace.sheet_append_calls) >= 2  # header row + step row
+    event_types = [event.event_type for event in result.events]
+    assert "sheets.create_started" in event_types
+    assert "sheets.create_completed" in event_types
+    assert "sheets.append_started" in event_types
+    assert "sheets.append_completed" in event_types
 
 
 def test_report_generation_respects_location_objective_without_hardcoded_phrase() -> None:

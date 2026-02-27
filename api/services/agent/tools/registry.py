@@ -25,6 +25,7 @@ from api.services.agent.tools.base import (
 from api.services.agent.tools.browser_tools import PlaywrightInspectTool
 from api.services.agent.tools.calendar_tools import CalendarCreateEventTool
 from api.services.agent.tools.charts_tools import ChartGenerateTool
+from api.services.agent.tools.contact_form_tools import BrowserContactFormSendTool
 from api.services.agent.tools.data_tools import DataAnalysisTool, ReportGenerationTool
 from api.services.agent.tools.discovery_tools import LocalDiscoveryTool
 from api.services.agent.tools.document_tools import DocumentCreateTool
@@ -70,6 +71,7 @@ class ToolRegistry:
         self.register(SlackPostMessageTool())
         self.register(LocalDiscoveryTool())
         self.register(PlaywrightInspectTool())
+        self.register(BrowserContactFormSendTool())
         self.register(GmailDraftTool())
         self.register(GmailSendTool())
         self.register(GmailSearchTool())

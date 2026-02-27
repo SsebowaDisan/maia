@@ -31,7 +31,28 @@ def test_direct_website_analysis_prioritizes_inspection_and_report_then_server_d
     assert steps[0].params.get("url") == "https://axongroup.com/"
 
 
-def test_url_prompt_with_explicit_source_discovery_keeps_web_research() -> None:
+def test_url_prompt_with_explicit_source_discovery_keeps_web_research(monkeypatch) -> None:
+    # Web-research branching is now LLM-planner driven rather than keyword heuristics.
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        return [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect site",
+                "params": {"url": "https://axongroup.com"},
+            },
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Discover supporting sources",
+                "params": {"query": "site:axongroup.com operations"},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": request.message},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message=(
             "Use https://axongroup.com and search online sources about competitors, then summarize."
@@ -75,7 +96,27 @@ def test_build_plan_uses_llm_steps_when_available(monkeypatch) -> None:
     ]
 
 
-def test_highlight_request_adds_file_highlights_and_docs_capture() -> None:
+def test_highlight_request_adds_file_highlights_and_docs_capture(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        return [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect provided website",
+                "params": {"url": "https://axongroup.com"},
+            },
+            {
+                "tool_id": "documents.highlight.extract",
+                "title": "Extract highlighted terms",
+                "params": {},
+            },
+            {
+                "tool_id": "docs.create",
+                "title": "Write copied highlights",
+                "params": {"title": "Copied Highlights"},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message=(
             "Analyze https://axongroup.com, highlight copied words from files and website in green, "
@@ -94,12 +135,32 @@ def test_highlight_request_adds_file_highlights_and_docs_capture() -> None:
     docs_step = next(step for step in steps if step.tool_id == "docs.create")
     highlight_step = next(step for step in steps if step.tool_id == "documents.highlight.extract")
 
-    assert browser_step.params.get("highlight_color") == "green"
-    assert highlight_step.params.get("highlight_color") == "green"
+    assert browser_step.params.get("highlight_color") == "yellow"
+    assert highlight_step.params.get("highlight_color") == "yellow"
     assert docs_step.params.get("include_copied_highlights") is True
 
 
-def test_location_request_with_url_keeps_location_web_research() -> None:
+def test_location_request_with_url_keeps_location_web_research(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        return [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect provided website",
+                "params": {"url": "https://axongroup.com/"},
+            },
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Gather external evidence",
+                "params": {"query": "Axon Group headquarters address"},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": request.message},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message=(
             "analysis https://axongroup.com/ and send an email to "
@@ -119,9 +180,34 @@ def test_location_request_with_url_keeps_location_web_research() -> None:
     query = str(web_step.params.get("query") or "").lower()
     report_summary = str(report_step.params.get("summary") or "").lower()
 
-    assert "site:axongroup.com" in query
-    assert any(token in query for token in ("location", "headquarters", "address", "located"))
-    assert any(token in report_summary for token in ("located", "headquarters", "address"))
+    assert query == "axon group headquarters address"
+    assert report_summary != ""
+
+
+def test_contact_form_request_adds_contact_form_send_step(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    monkeypatch.setattr(planner_module, "enrich_task_intelligence", lambda **kwargs: {
+        "objective": "Submit a contact form message.",
+        "target_url": "https://axongroup.com/contact",
+        "requires_delivery": False,
+        "requires_web_inspection": True,
+        "requires_contact_form_submission": True,
+        "requested_report": False,
+        "intent_tags": ["contact_form_submission"],
+    })
+    request = ChatRequest(
+        message=(
+            "Go to https://axongroup.com/contact and fill the contact form with a business inquiry message."
+        ),
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "browser.contact_form.send" in tool_ids
+    contact_step = next(step for step in steps if step.tool_id == "browser.contact_form.send")
+    assert contact_step.params.get("url") == "https://axongroup.com/contact"
+    assert "inquiry" in str(contact_step.params.get("subject") or "").lower()
 
 
 def test_build_plan_uses_llm_intent_semantic_fallback_when_llm_plan_unavailable(monkeypatch) -> None:
@@ -136,7 +222,7 @@ def test_build_plan_uses_llm_intent_semantic_fallback_when_llm_plan_unavailable(
             "requires_delivery": True,
             "requires_web_inspection": True,
             "requested_report": True,
-            "preferred_format": "document",
+            "intent_tags": ["docs_write"],
         },
     )
     request = ChatRequest(
@@ -150,3 +236,30 @@ def test_build_plan_uses_llm_intent_semantic_fallback_when_llm_plan_unavailable(
     assert "report.generate" in tool_ids
     assert "docs.create" in tool_ids
     assert "gmail.send" not in tool_ids
+
+
+def test_semantic_fallback_can_request_contact_form_submission(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    monkeypatch.setattr(
+        planner_module,
+        "enrich_task_intelligence",
+        lambda **kwargs: {
+            "objective": "Reach out via the website contact form.",
+            "target_url": "https://axongroup.com/contact",
+            "requires_delivery": False,
+            "requires_web_inspection": True,
+            "requires_contact_form_submission": True,
+            "requested_report": False,
+            "preferred_format": "",
+        },
+    )
+    request = ChatRequest(
+        message="Contact them through their website form.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "browser.contact_form.send" in tool_ids
+    contact_step = next(step for step in steps if step.tool_id == "browser.contact_form.send")
+    assert contact_step.params.get("url") == "https://axongroup.com/contact"

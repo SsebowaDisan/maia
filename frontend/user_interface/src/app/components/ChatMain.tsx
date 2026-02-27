@@ -2,6 +2,7 @@ import {
   type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -89,6 +90,7 @@ export function ChatMain({
   const [editingText, setEditingText] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusTimerRef = useRef<number | null>(null);
+  const lastClipboardEventRef = useRef<string>("");
 
   const showActionStatus = (text: string) => {
     setMessageActionStatus(text);
@@ -127,6 +129,36 @@ export function ChatMain({
     });
     setAttachments([]);
   };
+
+  const latestHighlightSnippets = useMemo(() => {
+    const snippets: string[] = [];
+    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
+      const event = activityEvents[index];
+      const copied = event.data?.["copied_snippets"];
+      if (Array.isArray(copied)) {
+        for (const row of copied) {
+          const text = String(row || "").trim();
+          if (text && !snippets.includes(text)) {
+            snippets.push(text);
+          }
+          if (snippets.length >= 8) {
+            return snippets;
+          }
+        }
+      }
+      const clipboardText =
+        typeof event.data?.["clipboard_text"] === "string"
+          ? event.data["clipboard_text"].trim()
+          : "";
+      if (clipboardText && !snippets.includes(clipboardText)) {
+        snippets.push(clipboardText);
+      }
+      if (snippets.length >= 8) {
+        return snippets;
+      }
+    }
+    return snippets;
+  }, [activityEvents]);
 
   const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) => {
     return (turnAttachments || []).map((attachment, idx) => ({
@@ -216,6 +248,22 @@ export function ChatMain({
     onAgentModeChange("ask");
     onAccessModeChange("restricted");
     showActionStatus("Deep research enabled in Ask mode.");
+  };
+
+  const pasteHighlightsToComposer = () => {
+    if (!latestHighlightSnippets.length) {
+      showActionStatus("No copied highlights available yet.");
+      return;
+    }
+    const block = [
+      "Copied highlights:",
+      ...latestHighlightSnippets.slice(0, 6).map((snippet) => `- ${snippet}`),
+    ].join("\n");
+    setMessage((previous) => {
+      const current = previous.trim();
+      return current ? `${current}\n\n${block}` : block;
+    });
+    showActionStatus("Highlights pasted into the command bar.");
   };
 
   const quoteAssistant = (turn: ChatTurn) => {
@@ -329,6 +377,24 @@ export function ChatMain({
     }
     onSelectTurn(index);
   };
+
+  useEffect(() => {
+    if (!activityEvents.length) {
+      return;
+    }
+    const latest = activityEvents[activityEvents.length - 1];
+    if (!latest?.event_id || latest.event_id === lastClipboardEventRef.current) {
+      return;
+    }
+    if (
+      latest.event_type === "highlights_detected" ||
+      latest.event_type === "doc_copy_clipboard" ||
+      latest.event_type === "browser_copy_selection"
+    ) {
+      lastClipboardEventRef.current = latest.event_id;
+      showActionStatus("Highlights copied. Use + -> Paste highlights.");
+    }
+  }, [activityEvents]);
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col bg-white overflow-hidden">
@@ -591,6 +657,8 @@ export function ChatMain({
                   onUploadFile={() => fileInputRef.current?.click()}
                   onSelectAgent={enableAgentMode}
                   onSelectDeepResearch={enableDeepResearch}
+                  onPasteHighlights={pasteHighlightsToComposer}
+                  canPasteHighlights={latestHighlightSnippets.length > 0}
                   disableUpload={isUploading || isSending}
                   triggerClassName="composerAttachButton inline-flex items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f] disabled:opacity-40"
                 />
@@ -639,7 +707,11 @@ export function ChatMain({
             </div>
           </div>
           {messageActionStatus ? (
-            <p className="mt-2 px-1 text-[12px] text-[#6e6e73]">{messageActionStatus}</p>
+            <div className="pointer-events-none fixed bottom-5 right-6 z-[120]">
+              <div className="rounded-xl border border-black/[0.08] bg-white/95 px-3 py-2 text-[12px] text-[#4c4c50] shadow-[0_16px_34px_-24px_rgba(0,0,0,0.55)] backdrop-blur">
+                {messageActionStatus}
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
