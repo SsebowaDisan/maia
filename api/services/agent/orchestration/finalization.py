@@ -6,11 +6,13 @@ from collections.abc import Callable, Generator
 from typing import Any
 
 from api.schemas import ChatRequest
+from api.services.agent.critic import review_final_answer
 from api.services.agent.events import coverage_report
 from api.services.agent.intelligence import build_verification_report
 from api.services.agent.llm_execution_support import curate_next_steps_for_task
 from api.services.agent.llm_response_formatter import polish_final_response
 from api.services.agent.models import AgentActivityEvent, AgentRunResult
+from api.services.agent.observability import get_agent_observability
 
 from .answer_builder import compose_professional_answer
 from .contract_gate import action_rows_for_contract_check, run_contract_check_live
@@ -170,6 +172,38 @@ def finalize_run(
             "task_preferred_format": task_prep.task_intelligence.preferred_format,
         },
     )
+    source_urls = [
+        str(source.url or "").strip()
+        for source in state.all_sources
+        if str(source.url or "").strip()
+    ]
+    critic_result = review_final_answer(
+        request_message=request.message,
+        answer_text=answer,
+        source_urls=source_urls,
+    )
+    needs_human_review = bool(critic_result.get("needs_human_review"))
+    human_review_notes = " ".join(
+        str(critic_result.get("critic_note") or "").split()
+    ).strip()[:420]
+    if needs_human_review and human_review_notes:
+        critic_event = activity_event_factory(
+            event_type="verification_check",
+            title="Critic review flagged issues",
+            detail=human_review_notes,
+            metadata={"needs_human_review": True},
+        )
+        yield emit_event(critic_event)
+        if human_review_notes not in unique_next_steps:
+            unique_next_steps = [human_review_notes, *unique_next_steps][:8]
+    elif not needs_human_review:
+        critic_ok_event = activity_event_factory(
+            event_type="verification_check",
+            title="Critic review passed",
+            detail="No major factual or safety issues flagged.",
+            metadata={"needs_human_review": False},
+        )
+        yield emit_event(critic_ok_event)
 
     info_blocks: list[str] = []
     for idx, source in enumerate(state.all_sources, start=1):
@@ -198,6 +232,8 @@ def finalize_run(
         actions_taken=state.all_actions,
         sources_used=state.all_sources,
         next_recommended_steps=unique_next_steps[:8],
+        needs_human_review=needs_human_review,
+        human_review_notes=human_review_notes,
     )
     synthesis_completed_event = activity_event_factory(
         event_type="synthesis_completed",
@@ -250,8 +286,18 @@ def finalize_run(
             "actions_taken": [item.to_dict() for item in result.actions_taken],
             "sources_used": [item.to_dict() for item in result.sources_used],
             "next_recommended_steps": result.next_recommended_steps,
+            "needs_human_review": result.needs_human_review,
+            "human_review_notes": result.human_review_notes,
             "user_preferences": task_prep.user_preferences,
             "event_coverage": coverage,
         }
+    )
+    get_agent_observability().observe_run_completion(
+        run_id=run_id,
+        step_count=len(steps),
+        action_count=len(state.all_actions),
+        source_count=len(state.all_sources),
+        needs_human_review=result.needs_human_review,
+        reward_score=None,
     )
     return result

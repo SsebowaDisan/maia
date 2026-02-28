@@ -94,11 +94,12 @@ Maia API endpoints:
 
 Behavior:
 
-- Pulls model by name (e.g. `llama3.2:3b`) from Ollama.
+- Pulls model by name (e.g. `qwen3:8b`, `llama3.1:8b`, `deepseek-r1:8b`) from Ollama.
 - Streams pull progress as live events (`ollama.pull.started`, `ollama.pull.progress`, `ollama.pull.completed`).
 - Automatically creates/updates a Maia LLM entry using Ollama's OpenAI-compatible endpoint and sets it as default.
+- Includes a one-click setup flow in Settings that saves URL, starts Ollama, downloads recommended chat+embedding models, and activates both.
 - Supports one-click local startup from Settings (`Start Ollama`), including quickstart command hints.
-- Supports selecting an Ollama embedding model (recommended: `nomic-embed-text`) for local indexing.
+- Supports selecting an Ollama embedding model (recommended: `embeddinggemma`, `qwen3-embedding:0.6b`, `nomic-embed-text`) for local indexing.
 - Supports one-click embedding migration across all index collections and automatically queues full reindex jobs for existing files/URLs.
 
 ## Gmail Live Desktop (Playwright)

@@ -48,6 +48,7 @@ def run_contract_check_live(
     executed_steps: list[dict[str, Any]],
     actions: list[AgentAction],
     sources: list[AgentSource],
+    pending_action_tool_id: str = "",
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, dict[str, Any]]:
@@ -67,6 +68,7 @@ def run_contract_check_live(
         report_body=report_body,
         sources=source_rows_for_contract_check(sources),
         allowed_tool_ids=sorted(list(LLM_ALLOWED_TOOL_IDS)),
+        pending_action_tool_id=pending_action_tool_id,
     )
     execution_context.settings["__task_contract_check"] = check
     missing = (

@@ -8,15 +8,21 @@ from api.services.ollama.service import openai_compatible_base_url
 OLLAMA_MODEL_PREFIX = "ollama::"
 OLLAMA_EMBEDDING_PREFIX = "ollama-embed::"
 OLLAMA_RECOMMENDED_MODELS = [
-    "llama3.2:3b",
+    "qwen3:8b",
     "llama3.1:8b",
-    "qwen2.5:7b",
-    "mistral:7b",
+    "llama3:8b",
     "deepseek-r1:8b",
+    "qwen3:14b",
+    "llama3.2:3b",
 ]
 OLLAMA_RECOMMENDED_EMBEDDINGS = [
+    "embeddinggemma",
+    "qwen3-embedding:0.6b",
     "nomic-embed-text",
     "mxbai-embed-large",
+    "bge-m3",
+    "snowflake-arctic-embed2",
+    "all-minilm",
 ]
 
 

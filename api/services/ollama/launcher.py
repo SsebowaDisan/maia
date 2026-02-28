@@ -31,8 +31,8 @@ def quickstart_payload(*, base_url: str) -> dict[str, Any]:
         "commands": {
             "check": command_check,
             "start": command_start,
-            "pull_model": "ollama pull llama3.2:3b",
-            "pull_embedding": "ollama pull nomic-embed-text",
+            "pull_model": "ollama pull qwen3:8b",
+            "pull_embedding": "ollama pull embeddinggemma",
         },
         "tips": [
             "Install Ollama once, then keep it running in background.",

@@ -13,8 +13,8 @@ Install [ollama](https://github.com/ollama/ollama) and start the application.
 Pull your model (e.g):
 
 ```
-ollama pull llama3.1:8b
-ollama pull nomic-embed-text
+ollama pull qwen3:8b
+ollama pull embeddinggemma
 ```
 
 Setup LLM and Embedding model on Resources tab with type OpenAI. Set these model parameters to connect to Ollama:
@@ -22,7 +22,7 @@ Setup LLM and Embedding model on Resources tab with type OpenAI. Set these model
 ```
 api_key: ollama
 base_url: http://localhost:11434/v1/
-model: gemma2:2b (for llm) | nomic-embed-text (for embedding)
+model: qwen3:8b (for llm) | embeddinggemma (for embedding)
 ```
 
 ![Models](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/models.png)

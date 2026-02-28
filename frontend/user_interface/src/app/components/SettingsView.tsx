@@ -102,6 +102,7 @@ export function SettingsView() {
           setOllamaBaseUrlInput={controller.ollama.setOllamaBaseUrlInput}
           setOllamaModelInput={controller.ollama.setOllamaModelInput}
           setOllamaEmbeddingInput={controller.ollama.setOllamaEmbeddingInput}
+          onOneClickSetup={() => void controller.ollama.handleOneClickOllamaOnboarding()}
           onSaveConfig={() => void controller.ollama.handleSaveOllamaConfig()}
           onStartOllama={() => void controller.ollama.handleStartOllamaLocally()}
           onRefreshModels={() => void controller.ollama.handleRefreshOllamaModels()}

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.context import get_context
+from api.metrics import router as metrics_router
 from api.routers.agent import router as agent_router
 from api.routers.chat import router as chat_router
 from api.routers.conversations import router as conversations_router
@@ -38,6 +39,7 @@ app.include_router(uploads_router)
 app.include_router(chat_router)
 app.include_router(agent_router)
 app.include_router(integrations_router)
+app.include_router(metrics_router)
 
 
 @app.on_event("startup")

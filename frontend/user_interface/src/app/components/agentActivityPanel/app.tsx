@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Pause, Play, SkipBack, SkipForward, Timer } from "lucide-react";
+import { AlertTriangle, Pause, Play, SkipBack, SkipForward, Timer } from "lucide-react";
 import { exportAgentRunEvents } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
 import { derivePhaseTimeline, resolveEventSourceUrl } from "./helpers";
@@ -17,6 +17,8 @@ export function AgentActivityPanel({
   events,
   streaming,
   stageAttachment,
+  needsHumanReview,
+  humanReviewNotes,
   onJumpToEvent,
 }: AgentActivityPanelProps) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -311,6 +313,8 @@ export function AgentActivityPanel({
     return null;
   }
 
+  const trimmedReviewNotes = String(humanReviewNotes || "").trim();
+
   const runId = orderedEvents[0]?.run_id || activeEvent?.run_id || "";
 
   const exportRun = async () => {
@@ -385,6 +389,17 @@ export function AgentActivityPanel({
           <p className="text-[16px] font-semibold text-[#1d1d1f]">
             {streaming ? "Live execution feed" : "Replay timeline"}
           </p>
+          {needsHumanReview ? (
+            <div className="mt-1.5 inline-flex max-w-[520px] items-start gap-1.5 rounded-lg border border-[#f5a524]/40 bg-[#fff7e6] px-2.5 py-1.5 text-[11px] text-[#7a4a00]">
+              <AlertTriangle className="mt-[1px] h-3.5 w-3.5 shrink-0" />
+              <div className="space-y-0.5">
+                <p className="font-medium leading-tight">Needs human review</p>
+                {trimmedReviewNotes ? (
+                  <p className="leading-tight text-[#8e5710]">{trimmedReviewNotes}</p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="inline-flex items-center gap-1 rounded-xl border border-black/[0.08] bg-white/90 p-1 backdrop-blur">

@@ -68,6 +68,7 @@ def run_guard_checks(
             executed_steps=state.executed_steps,
             actions=state.all_actions,
             sources=state.all_sources,
+            pending_action_tool_id=step.tool_id,
             emit_event=emit_event,
             activity_event_factory=activity_event_factory,
         )

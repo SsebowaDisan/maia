@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from api.services.agent.contract_verification import (
     build_deterministic_contract_check,
@@ -13,6 +14,7 @@ from api.services.agent.llm_runtime import call_json_response, env_bool, sanitiz
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+MARKDOWN_LINK_URL_RE = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)", re.IGNORECASE)
 NO_HARDCODE_WORDS_CONSTRAINT = (
     "Never use hardcoded words or keyword lists; rely on LLM semantic understanding."
 )
@@ -41,8 +43,39 @@ def _enforce_contract_constraints(raw: Any) -> list[str]:
 
 def _extract_first_url(*chunks: str) -> str:
     joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
+    markdown_match = MARKDOWN_LINK_URL_RE.search(joined)
+    if markdown_match:
+        clean_markdown_url = _normalize_url_candidate(markdown_match.group(1))
+        if clean_markdown_url:
+            return clean_markdown_url
     match = URL_RE.search(joined)
-    return match.group(0).strip().rstrip(".,;)") if match else ""
+    if not match:
+        return ""
+    return _normalize_url_candidate(match.group(0))
+
+
+def _normalize_url_candidate(raw_url: str) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+
+    if "](" in text:
+        parts = [part.strip() for part in text.split("](") if part.strip()]
+        for part in parts:
+            normalized_part = _normalize_url_candidate(part)
+            if normalized_part:
+                return normalized_part
+        return ""
+
+    text = text.strip("<>[]()\"'")
+    text = text.rstrip(".,;)")
+    text = text.rstrip("]")
+    if not text.startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return text
 
 
 def _merge_text_rows(*rows: list[str], limit: int) -> list[str]:
@@ -128,6 +161,67 @@ def _classify_missing_requirements(
     return missing[:6]
 
 
+def _derive_required_facts(
+    *,
+    message: str,
+    agent_goal: str,
+    rewritten_task: str,
+    intent_tags: list[str],
+) -> list[str]:
+    joined = " ".join([message, agent_goal, rewritten_task]).lower()
+    tags = {str(item).strip().lower() for item in intent_tags if str(item).strip()}
+    facts: list[str] = []
+
+    location_hint = (
+        "location_lookup" in tags
+        or "location" in joined
+        or "located" in joined
+        or "where is" in joined
+        or "headquarter" in joined
+        or "headquarters" in joined
+        or "address" in joined
+    )
+    if location_hint:
+        facts.append("Company location details (city/country and address if available)")
+
+    if ("web_research" in tags or "report_generation" in tags) and not facts:
+        facts.append("Core factual findings required for the requested report")
+
+    return facts[:6]
+
+
+def _sanitize_missing_requirements(
+    *,
+    items: list[str],
+    delivery_target: str,
+    target_url: str,
+    required_facts: list[str],
+) -> list[str]:
+    cleaned = _clean_text_list(items, limit=12)
+    fact_rows = [str(item).strip().lower() for item in required_facts if str(item).strip()]
+    filtered: list[str] = []
+    for row in cleaned:
+        lowered = row.lower()
+        if delivery_target and ("recipient" in lowered and "email" in lowered):
+            continue
+        if target_url and (
+            "target website url" in lowered
+            or "target url" in lowered
+            or "website url" in lowered
+        ):
+            continue
+        if fact_rows and ("from analysis" in lowered or "from the analysis" in lowered):
+            continue
+        if fact_rows and any(fact and (fact in lowered or lowered in fact) for fact in fact_rows):
+            continue
+        if row in filtered:
+            continue
+        filtered.append(row)
+        if len(filtered) >= 6:
+            break
+    return filtered
+
+
 def _normalize_contract_for_execution(contract: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(contract, dict):
         return {
@@ -163,7 +257,12 @@ def build_task_contract(
         delivery_target = match.group(1).strip()
     target_url = _extract_first_url(clean_message, clean_goal, clean_rewrite)
 
-    heuristic_facts: list[str] = []
+    heuristic_facts = _derive_required_facts(
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
+        intent_tags=clean_intent_tags,
+    )
     heuristic_actions = _derive_required_actions(
         intent_tags=clean_intent_tags,
         delivery_target=delivery_target,
@@ -176,6 +275,12 @@ def build_task_contract(
         delivery_target=delivery_target,
         target_url=target_url,
         intent_tags=clean_intent_tags,
+    )
+    heuristic_missing_requirements = _sanitize_missing_requirements(
+        items=heuristic_missing_requirements,
+        delivery_target=delivery_target,
+        target_url=target_url,
+        required_facts=heuristic_facts,
     )
 
     if not env_bool("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", default=True):
@@ -250,6 +355,8 @@ def build_task_contract(
     ]
     required_outputs = _clean_text_list(response.get("required_outputs"), limit=6)
     required_facts = _clean_text_list(response.get("required_facts"), limit=6)
+    if not required_facts:
+        required_facts = heuristic_facts[:6]
     clean_target = " ".join(str(response.get("delivery_target") or "").split()).strip()
     if not clean_target:
         clean_target = delivery_target
@@ -262,6 +369,17 @@ def build_task_contract(
         target_url=target_url,
         intent_tags=clean_intent_tags,
     )
+    merged_missing_requirements = _merge_text_rows(
+        response_missing_requirements,
+        classifier_missing_requirements,
+        limit=6,
+    )
+    cleaned_missing_requirements = _sanitize_missing_requirements(
+        items=merged_missing_requirements,
+        delivery_target=clean_target,
+        target_url=target_url,
+        required_facts=required_facts,
+    )
     return {
         "objective": " ".join(str(response.get("objective") or clean_rewrite or clean_message).split()).strip()[:420],
         "required_outputs": required_outputs,
@@ -269,11 +387,7 @@ def build_task_contract(
         "required_actions": required_actions,
         "constraints": _enforce_contract_constraints(response.get("constraints")),
         "delivery_target": clean_target[:180],
-        "missing_requirements": _merge_text_rows(
-            response_missing_requirements,
-            classifier_missing_requirements,
-            limit=6,
-        ),
+        "missing_requirements": cleaned_missing_requirements,
         "success_checks": _clean_text_list(response.get("success_checks"), limit=8),
     }
 
@@ -287,6 +401,7 @@ def verify_task_contract_fulfillment(
     report_body: str,
     sources: list[dict[str, Any]],
     allowed_tool_ids: list[str],
+    pending_action_tool_id: str = "",
 ) -> dict[str, Any]:
     normalized_contract = _normalize_contract_for_execution(contract)
     deterministic_check = build_deterministic_contract_check(
@@ -297,7 +412,11 @@ def verify_task_contract_fulfillment(
         report_body=report_body,
         sources=sources,
         allowed_tool_ids=allowed_tool_ids,
+        pending_action_tool_id=pending_action_tool_id,
     )
+    clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
+    if clean_pending_action_tool_id:
+        return deterministic_check
     if not env_bool("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", default=True):
         return deterministic_check
     payload = {
@@ -310,6 +429,7 @@ def verify_task_contract_fulfillment(
         "allowed_tool_ids": list(dict.fromkeys([str(item).strip() for item in allowed_tool_ids if str(item).strip()]))[
             :40
         ],
+        "pending_action_tool_id": clean_pending_action_tool_id,
     }
     prompt = (
         "Check if the run satisfies the task contract before final response or external actions.\n"
@@ -324,6 +444,7 @@ def verify_task_contract_fulfillment(
         "- If this mandatory execution constraint is violated, set both readiness flags to false.\n"
         "- Keep reason concise and factual.\n"
         "- If no remediation is needed, return an empty list.\n\n"
+        "- If pending_action_tool_id is set, do not mark its mapped required action as missing.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     response = call_json_response(

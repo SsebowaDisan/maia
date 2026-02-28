@@ -221,4 +221,6 @@ class ChatResponse(BaseModel):
     actions_taken: list[AgentActionRecord] = Field(default_factory=list)
     sources_used: list[AgentSourceRecord] = Field(default_factory=list)
     next_recommended_steps: list[str] = Field(default_factory=list)
+    needs_human_review: bool = False
+    human_review_notes: str | None = None
     activity_run_id: str | None = None

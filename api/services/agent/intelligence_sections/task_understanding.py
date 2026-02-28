@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 from api.services.agent.llm_intent import classify_intent_tags, enrich_task_intelligence
@@ -7,6 +8,9 @@ from api.services.agent.llm_intent import classify_intent_tags, enrich_task_inte
 from .constants import EMAIL_RE, URL_RE
 from .models import TaskIntelligence
 from .text_utils import compact
+
+
+MARKDOWN_LINK_URL_RE = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)", re.IGNORECASE)
 
 
 def _extract_first_email(*chunks: str) -> str:
@@ -17,8 +21,39 @@ def _extract_first_email(*chunks: str) -> str:
 
 def _extract_first_url(*chunks: str) -> str:
     joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
+    markdown_match = MARKDOWN_LINK_URL_RE.search(joined)
+    if markdown_match:
+        clean_markdown_url = _normalize_url_candidate(markdown_match.group(1))
+        if clean_markdown_url:
+            return clean_markdown_url
     match = URL_RE.search(joined)
-    return match.group(0).strip().rstrip(".,;)") if match else ""
+    if not match:
+        return ""
+    return _normalize_url_candidate(match.group(0))
+
+
+def _normalize_url_candidate(raw_url: str) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+
+    if "](" in text:
+        parts = [part.strip() for part in text.split("](") if part.strip()]
+        for part in parts:
+            normalized_part = _normalize_url_candidate(part)
+            if normalized_part:
+                return normalized_part
+        return ""
+
+    text = text.strip("<>[]()\"'")
+    text = text.rstrip(".,;)")
+    text = text.rstrip("]")
+    if not text.startswith(("http://", "https://")):
+        return ""
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return text
 
 
 def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> TaskIntelligence:

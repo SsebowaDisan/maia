@@ -32,6 +32,7 @@ def enforce_delivery_contract_gate(
         executed_steps=state.executed_steps,
         actions=state.all_actions,
         sources=state.all_sources,
+        pending_action_tool_id=runtime.tool_id,
         emit_event=emit_event,
         activity_event_factory=activity_event_factory,
     )

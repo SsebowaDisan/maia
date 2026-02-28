@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AgentLiveEvent } from "../../../api/client";
 import {
@@ -17,6 +17,8 @@ import {
 } from "../../../api/integrations";
 
 type RefreshFn = () => Promise<void>;
+const DEFAULT_OLLAMA_CHAT_MODEL = "qwen3:8b";
+const DEFAULT_OLLAMA_EMBEDDING_MODEL = "embeddinggemma";
 
 export function useOllamaSettings() {
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>({
@@ -34,12 +36,17 @@ export function useOllamaSettings() {
   const [ollamaQuickstart, setOllamaQuickstart] = useState<OllamaQuickstart | null>(null);
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState("http://127.0.0.1:11434");
   const [ollamaModelInput, setOllamaModelInput] = useState("");
-  const [ollamaEmbeddingInput, setOllamaEmbeddingInput] = useState("nomic-embed-text");
+  const [ollamaEmbeddingInput, setOllamaEmbeddingInput] = useState(DEFAULT_OLLAMA_EMBEDDING_MODEL);
   const [ollamaBusyAction, setOllamaBusyAction] = useState<
-    "config" | "start" | "pull" | "select" | "select_embedding" | "apply_all" | "refresh" | null
+    "config" | "start" | "pull" | "select" | "select_embedding" | "apply_all" | "refresh" | "onboarding" | null
   >(null);
   const [ollamaProgress, setOllamaProgress] = useState<{ status: string; percent: number } | null>(null);
   const [ollamaMessage, setOllamaMessage] = useState("");
+  const onboardingFlowRef = useRef(false);
+
+  useEffect(() => {
+    onboardingFlowRef.current = ollamaBusyAction === "onboarding";
+  }, [ollamaBusyAction]);
 
   const syncFromStatus = (statusRow: OllamaStatus, quickstartRow: OllamaQuickstart | null) => {
     setOllamaStatus(statusRow);
@@ -47,13 +54,30 @@ export function useOllamaSettings() {
     setOllamaBaseUrlInput(statusRow.base_url || "http://127.0.0.1:11434");
     setOllamaQuickstart(quickstartRow);
     setOllamaEmbeddingInput(
-      (statusRow.active_embedding_model || statusRow.recommended_embedding_models?.[0] || "nomic-embed-text")
+      (
+        statusRow.active_embedding_model ||
+        statusRow.recommended_embedding_models?.[0] ||
+        DEFAULT_OLLAMA_EMBEDDING_MODEL
+      )
         .toString()
         .trim(),
     );
   };
 
+  const parseOllamaError = (error: unknown, quickstart?: OllamaQuickstart | null) => {
+    const raw = String(error || "");
+    const lower = raw.toLowerCase();
+    if (lower.includes("ollama_binary_missing")) {
+      return `Ollama is not installed. Install from ${quickstart?.install_url || "https://ollama.com/download"}, then click One-click setup again.`;
+    }
+    if (lower.includes("failed to fetch") || lower.includes("connection refused") || lower.includes("timeout")) {
+      return `Cannot reach Ollama runtime. Make sure Ollama is running and this URL is reachable: ${ollamaBaseUrlInput.trim() || "http://127.0.0.1:11434"}. If Maia is hosted online, localhost will not work.`;
+    }
+    return raw;
+  };
+
   const handleLiveEvent = (event: AgentLiveEvent, onRefreshIntegrations: RefreshFn) => {
+    const onboardingFlowActive = onboardingFlowRef.current;
     if (event.type === "ollama.pull.progress") {
       const percentValue = Number(event.data?.percent ?? 0);
       const statusValue = String(event.data?.status || event.message || "downloading");
@@ -63,20 +87,26 @@ export function useOllamaSettings() {
       });
     }
     if (event.type === "ollama.pull.completed") {
-      setOllamaBusyAction(null);
-      setOllamaProgress({ status: "success", percent: 100 });
-      void onRefreshIntegrations();
+      if (!onboardingFlowActive) {
+        setOllamaBusyAction(null);
+        setOllamaProgress({ status: "success", percent: 100 });
+        void onRefreshIntegrations();
+      }
     }
     if (
       event.type === "ollama.pull.failed" ||
       event.type === "ollama.start.failed" ||
       event.type === "ollama.embedding.apply_all.failed"
     ) {
-      setOllamaBusyAction(null);
+      if (!onboardingFlowActive) {
+        setOllamaBusyAction(null);
+      }
     }
     if (event.type === "ollama.start.completed" || event.type === "ollama.embedding.apply_all.completed") {
-      setOllamaBusyAction(null);
-      void onRefreshIntegrations();
+      if (!onboardingFlowActive) {
+        setOllamaBusyAction(null);
+        void onRefreshIntegrations();
+      }
     }
   };
 
@@ -115,7 +145,7 @@ export function useOllamaSettings() {
       }
       await handleRefreshOllamaModels();
     } catch (error) {
-      setOllamaMessage(`Failed to start Ollama: ${String(error)}`);
+      setOllamaMessage(`Failed to start Ollama: ${parseOllamaError(error, ollamaQuickstart)}`);
     } finally {
       setOllamaBusyAction(null);
     }
@@ -144,7 +174,7 @@ export function useOllamaSettings() {
     const model = (modelOverride || ollamaModelInput).trim();
     const baseUrl = ollamaBaseUrlInput.trim() || undefined;
     if (!model) {
-      setOllamaMessage("Enter an Ollama model, for example `llama3.2:3b`.");
+      setOllamaMessage(`Enter an Ollama model, for example \`${DEFAULT_OLLAMA_CHAT_MODEL}\`.`);
       return;
     }
     setOllamaBusyAction("pull");
@@ -168,7 +198,7 @@ export function useOllamaSettings() {
       setOllamaMessage(`Model ${model} downloaded and activated.`);
       setOllamaModelInput(model);
     } catch (error) {
-      setOllamaMessage(`Failed to download ${model}: ${String(error)}`);
+      setOllamaMessage(`Failed to download ${model}: ${parseOllamaError(error, ollamaQuickstart)}`);
     } finally {
       setOllamaBusyAction(null);
     }
@@ -189,7 +219,7 @@ export function useOllamaSettings() {
       setOllamaMessage(`Model ${cleanModel} is now active.`);
       await handleRefreshOllamaModels();
     } catch (error) {
-      setOllamaMessage(`Failed to activate ${cleanModel}: ${String(error)}`);
+      setOllamaMessage(`Failed to activate ${cleanModel}: ${parseOllamaError(error, ollamaQuickstart)}`);
     } finally {
       setOllamaBusyAction(null);
     }
@@ -211,7 +241,7 @@ export function useOllamaSettings() {
       setOllamaMessage(`Embedding model ${cleanModel} is now active for indexing.`);
       await handleRefreshOllamaModels();
     } catch (error) {
-      setOllamaMessage(`Failed to activate embedding model ${cleanModel}: ${String(error)}`);
+      setOllamaMessage(`Failed to activate embedding model ${cleanModel}: ${parseOllamaError(error, ollamaQuickstart)}`);
     } finally {
       setOllamaBusyAction(null);
     }
@@ -221,7 +251,7 @@ export function useOllamaSettings() {
     const model = (modelOverride || ollamaEmbeddingInput).trim();
     const baseUrl = ollamaBaseUrlInput.trim() || undefined;
     if (!model) {
-      setOllamaMessage("Enter an embedding model, for example `nomic-embed-text`.");
+      setOllamaMessage(`Enter an embedding model, for example \`${DEFAULT_OLLAMA_EMBEDDING_MODEL}\`.`);
       return;
     }
     setOllamaBusyAction("pull");
@@ -232,7 +262,7 @@ export function useOllamaSettings() {
       await handleSelectOllamaEmbeddingModel(model);
       setOllamaEmbeddingInput(model);
     } catch (error) {
-      setOllamaMessage(`Failed to download embedding model ${model}: ${String(error)}`);
+      setOllamaMessage(`Failed to download embedding model ${model}: ${parseOllamaError(error, ollamaQuickstart)}`);
       setOllamaBusyAction(null);
     }
   };
@@ -255,7 +285,80 @@ export function useOllamaSettings() {
       );
       await handleRefreshOllamaModels();
     } catch (error) {
-      setOllamaMessage(`Failed to apply embedding to collections: ${String(error)}`);
+      setOllamaMessage(`Failed to apply embedding to collections: ${parseOllamaError(error, ollamaQuickstart)}`);
+      setOllamaBusyAction(null);
+    }
+  };
+
+  const handleOneClickOllamaOnboarding = async () => {
+    const baseUrl = ollamaBaseUrlInput.trim() || "http://127.0.0.1:11434";
+
+    setOllamaBusyAction("onboarding");
+    setOllamaProgress({ status: "preparing", percent: 2 });
+    setOllamaMessage("One-click setup started. Preparing local runtime...");
+
+    try {
+      await saveOllamaIntegrationConfig(baseUrl);
+      const quickstart = await getOllamaQuickstart(baseUrl);
+      setOllamaQuickstart(quickstart);
+
+      const statusBefore = await getOllamaIntegrationStatus();
+      const chatModel = (
+        statusBefore.active_model ||
+        statusBefore.recommended_models?.[0] ||
+        ollamaModelInput ||
+        DEFAULT_OLLAMA_CHAT_MODEL
+      )
+        .toString()
+        .trim();
+      const embeddingModel = (
+        statusBefore.active_embedding_model ||
+        statusBefore.recommended_embedding_models?.[0] ||
+        ollamaEmbeddingInput ||
+        DEFAULT_OLLAMA_EMBEDDING_MODEL
+      )
+        .toString()
+        .trim();
+
+      if (!statusBefore.reachable) {
+        setOllamaProgress({ status: "starting runtime", percent: 10 });
+        await startLocalOllama({ baseUrl, waitSeconds: 12 });
+      }
+
+      setOllamaProgress({ status: `downloading ${chatModel}`, percent: 20 });
+      const pullChatResult = await pullOllamaModel({
+        model: chatModel,
+        baseUrl,
+        autoSelect: true,
+      });
+
+      setOllamaProgress({ status: `downloading ${embeddingModel}`, percent: 75 });
+      await pullOllamaModel({
+        model: embeddingModel,
+        baseUrl,
+        autoSelect: false,
+      });
+      await selectOllamaEmbeddingModel({
+        model: embeddingModel,
+        baseUrl,
+      });
+
+      const [statusRow, modelsRow] = await Promise.all([
+        getOllamaIntegrationStatus(),
+        listOllamaModels(baseUrl),
+      ]);
+      setOllamaStatus(statusRow);
+      setOllamaModels(modelsRow.models || []);
+      setOllamaBaseUrlInput(statusRow.base_url || baseUrl);
+      setOllamaModelInput(chatModel);
+      setOllamaEmbeddingInput(embeddingModel);
+      setOllamaProgress({ status: "ready", percent: 100 });
+      setOllamaMessage(
+        `Ready to chat. Active model: ${pullChatResult.active_model || chatModel}. Active embedding: ${embeddingModel}.`,
+      );
+    } catch (error) {
+      setOllamaMessage(`One-click setup failed: ${parseOllamaError(error, ollamaQuickstart)}`);
+    } finally {
       setOllamaBusyAction(null);
     }
   };
@@ -279,6 +382,7 @@ export function useOllamaSettings() {
     handleStartOllamaLocally,
     handleRefreshOllamaModels,
     handlePullOllamaModel,
+    handleOneClickOllamaOnboarding,
     handleSelectOllamaModel,
     handlePullOllamaEmbeddingModel,
     handleSelectOllamaEmbeddingModel,

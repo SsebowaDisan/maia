@@ -18,12 +18,14 @@ type ModelsSettingsProps = {
     | "select_embedding"
     | "apply_all"
     | "refresh"
+    | "onboarding"
     | null;
   ollamaProgress: { status: string; percent: number } | null;
   ollamaMessage: string;
   setOllamaBaseUrlInput: (value: string) => void;
   setOllamaModelInput: (value: string) => void;
   setOllamaEmbeddingInput: (value: string) => void;
+  onOneClickSetup: () => void;
   onSaveConfig: () => void;
   onStartOllama: () => void;
   onRefreshModels: () => void;
@@ -62,6 +64,7 @@ export function ModelsSettings({
   setOllamaBaseUrlInput,
   setOllamaModelInput,
   setOllamaEmbeddingInput,
+  onOneClickSetup,
   onSaveConfig,
   onStartOllama,
   onRefreshModels,
@@ -72,6 +75,8 @@ export function ModelsSettings({
   onApplyEmbeddingToAllCollections,
 }: ModelsSettingsProps) {
   const runtimeChip = toneFromBoolean(ollamaStatus.reachable, { trueLabel: "Online", falseLabel: "Offline" });
+  const isBusy = ollamaBusyAction !== null;
+  const isOnboarding = ollamaBusyAction === "onboarding";
 
   return (
     <>
@@ -81,6 +86,21 @@ export function ModelsSettings({
         actions={<StatusChip label={runtimeChip.label} tone={runtimeChip.tone} />}
       >
         <SettingsRow
+          title="One-click start chat"
+          description="Best for non-technical users. Starts Ollama, downloads recommended chat + embedding models, and activates them."
+          right={
+            <button
+              type="button"
+              onClick={onOneClickSetup}
+              disabled={isBusy}
+              className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
+            >
+              {isOnboarding ? "Setting up..." : "One-click setup"}
+            </button>
+          }
+        />
+
+        <SettingsRow
           title="Ollama host URL"
           description="Local endpoint where Maia discovers installed models."
           right={
@@ -88,7 +108,7 @@ export function ModelsSettings({
               <button
                 type="button"
                 onClick={onSaveConfig}
-                disabled={ollamaBusyAction === "config"}
+                disabled={isBusy}
                 className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:opacity-50"
               >
                 Save URL
@@ -96,7 +116,7 @@ export function ModelsSettings({
               <button
                 type="button"
                 onClick={onRefreshModels}
-                disabled={ollamaBusyAction === "refresh"}
+                disabled={isBusy}
                 className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:opacity-50"
               >
                 Refresh models
@@ -104,7 +124,7 @@ export function ModelsSettings({
               <button
                 type="button"
                 onClick={onStartOllama}
-                disabled={ollamaBusyAction === "start"}
+                disabled={isBusy}
                 className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
               >
                 Start
@@ -117,6 +137,7 @@ export function ModelsSettings({
             value={ollamaBaseUrlInput}
             onChange={(event) => setOllamaBaseUrlInput(event.target.value)}
             aria-label="Ollama host URL"
+            disabled={isBusy}
             className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] placeholder:text-[#a1a1a6] focus:outline-none focus:border-[#8e8e93]"
             placeholder="http://127.0.0.1:11434"
             autoComplete="off"
@@ -130,7 +151,7 @@ export function ModelsSettings({
             <button
               type="button"
               onClick={() => onPullModel()}
-              disabled={ollamaBusyAction === "pull"}
+              disabled={isBusy}
               className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
             >
               Download & Use
@@ -143,8 +164,9 @@ export function ModelsSettings({
               value={ollamaModelInput}
               onChange={(event) => setOllamaModelInput(event.target.value)}
               aria-label="Ollama model name"
+              disabled={isBusy}
               className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] placeholder:text-[#a1a1a6] focus:outline-none focus:border-[#8e8e93]"
-              placeholder="llama3.2:3b"
+              placeholder="qwen3:8b"
               autoComplete="off"
             />
             <div className="flex flex-wrap gap-2">
@@ -156,7 +178,7 @@ export function ModelsSettings({
                     setOllamaModelInput(modelName);
                     onPullModel(modelName);
                   }}
-                  disabled={ollamaBusyAction === "pull"}
+                  disabled={isBusy}
                   className="rounded-full border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-medium text-[#3a3a3c] hover:bg-[#f5f5f7] disabled:opacity-50"
                 >
                   {modelName}
@@ -205,7 +227,7 @@ export function ModelsSettings({
                     <button
                       type="button"
                       onClick={() => onSelectModel(model.name)}
-                      disabled={ollamaBusyAction === "select" || isActive}
+                      disabled={isBusy || isActive}
                       className={`rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition ${
                         isActive
                           ? "border-[#d2d2d7] bg-[#f5f5f7] text-[#6e6e73]"
@@ -234,7 +256,7 @@ export function ModelsSettings({
               <button
                 type="button"
                 onClick={() => onPullEmbeddingModel()}
-                disabled={ollamaBusyAction === "pull" || ollamaBusyAction === "select_embedding"}
+                disabled={isBusy}
                 className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
               >
                 Download & Use
@@ -242,7 +264,7 @@ export function ModelsSettings({
               <button
                 type="button"
                 onClick={() => onSelectEmbeddingModel(ollamaEmbeddingInput)}
-                disabled={ollamaBusyAction === "select_embedding"}
+                disabled={isBusy}
                 className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:opacity-50"
               >
                 Use existing
@@ -256,8 +278,9 @@ export function ModelsSettings({
               value={ollamaEmbeddingInput}
               onChange={(event) => setOllamaEmbeddingInput(event.target.value)}
               aria-label="Ollama embedding model name"
+              disabled={isBusy}
               className="w-full rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] placeholder:text-[#a1a1a6] focus:outline-none focus:border-[#8e8e93]"
-              placeholder="nomic-embed-text"
+              placeholder="embeddinggemma"
               autoComplete="off"
             />
             <div className="flex flex-wrap gap-2">
@@ -269,7 +292,7 @@ export function ModelsSettings({
                     setOllamaEmbeddingInput(modelName);
                     onPullEmbeddingModel(modelName);
                   }}
-                  disabled={ollamaBusyAction === "pull" || ollamaBusyAction === "select_embedding"}
+                  disabled={isBusy}
                   className="rounded-full border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-medium text-[#3a3a3c] hover:bg-[#f5f5f7] disabled:opacity-50"
                 >
                   {modelName}
@@ -286,7 +309,7 @@ export function ModelsSettings({
             <button
               type="button"
               onClick={onApplyEmbeddingToAllCollections}
-              disabled={ollamaBusyAction === "apply_all" || ollamaBusyAction === "pull"}
+              disabled={isBusy}
               className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:opacity-50"
             >
               Apply to all + Reindex
@@ -312,6 +335,16 @@ export function ModelsSettings({
             title="Start server"
             description={ollamaQuickstart.commands.start}
             right={<StatusChip label="Step 3" tone="neutral" />}
+          />
+          <SettingsRow
+            title="Pull chat model"
+            description={ollamaQuickstart.commands.pull_model}
+            right={<StatusChip label="Step 4" tone="neutral" />}
+          />
+          <SettingsRow
+            title="Pull embedding"
+            description={ollamaQuickstart.commands.pull_embedding}
+            right={<StatusChip label="Step 5" tone="neutral" />}
             noDivider
           />
         </SettingsSection>

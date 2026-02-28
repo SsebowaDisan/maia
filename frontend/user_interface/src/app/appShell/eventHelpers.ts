@@ -6,6 +6,8 @@ type ConversationMessageMeta = {
   actions_taken?: ChatTurn["actionsTaken"];
   sources_used?: ChatTurn["sourcesUsed"];
   next_recommended_steps?: string[];
+  needs_human_review?: boolean;
+  human_review_notes?: string | null;
   activity_run_id?: string | null;
 };
 
@@ -39,6 +41,8 @@ export function buildConversationTurns(
     actionsTaken: messageMeta[index]?.actions_taken || [],
     sourcesUsed: messageMeta[index]?.sources_used || [],
     nextRecommendedSteps: messageMeta[index]?.next_recommended_steps || [],
+    needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
+    humanReviewNotes: messageMeta[index]?.human_review_notes || null,
     activityRunId: messageMeta[index]?.activity_run_id || null,
   }));
   const runIds = Array.from(

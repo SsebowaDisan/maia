@@ -8,6 +8,8 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from api.services.agent.observability import get_agent_observability
+
 PLACEHOLDER_API_KEYS = {
     "",
     "your-key",
@@ -179,6 +181,15 @@ def call_openai_chat(
                     raw = response.read().decode("utf-8")
                     parsed = json.loads(raw)
                     if isinstance(parsed, dict):
+                        try:
+                            get_agent_observability().observe_llm_usage(
+                                model=model_name,
+                                usage=parsed.get("usage")
+                                if isinstance(parsed.get("usage"), dict)
+                                else {},
+                            )
+                        except Exception:
+                            pass
                         return parsed
                     break
             except HTTPError as exc:

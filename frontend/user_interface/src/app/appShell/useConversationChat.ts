@@ -266,6 +266,8 @@ export function useConversationChat({
           info: "",
           mode: effectiveMode,
           activityEvents: [],
+          needsHumanReview: false,
+          humanReviewNotes: null,
         },
       ]);
 
@@ -406,6 +408,8 @@ export function useConversationChat({
             actionsTaken: response.actions_taken || [],
             sourcesUsed: response.sources_used || [],
             nextRecommendedSteps: response.next_recommended_steps || [],
+            needsHumanReview: Boolean(response.needs_human_review),
+            humanReviewNotes: response.human_review_notes || null,
             activityRunId: response.activity_run_id || null,
             activityEvents: streamedEventsLocal,
           };
@@ -425,6 +429,8 @@ export function useConversationChat({
             assistant: `Error: ${String(error)}`,
             info: "",
             mode: effectiveMode,
+            needsHumanReview: false,
+            humanReviewNotes: null,
           };
           return next;
         });

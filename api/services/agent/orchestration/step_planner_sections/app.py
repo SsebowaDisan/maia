@@ -5,6 +5,7 @@ from typing import Any
 
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent
+from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep, build_plan
 
 from ..models import PlanPreparation, TaskPreparation
@@ -160,6 +161,9 @@ def build_execution_steps(
         )
     )
     yield emit_event(plan_ready_event(activity_event_factory=activity_event_factory, steps=steps))
+    get_agent_observability().observe_plan_steps(
+        tool_ids=[item.tool_id for item in steps],
+    )
 
     return PlanPreparation(
         steps=steps,

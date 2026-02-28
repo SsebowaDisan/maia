@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -119,6 +120,88 @@ class AgentMemoryService:
 
     def list_playbooks(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.playbooks.list(limit=limit)
+
+    def retrieve_context_snippets(
+        self,
+        *,
+        query: str,
+        limit: int = 4,
+    ) -> list[str]:
+        query_tokens = _tokenize(query)
+        if not query_tokens:
+            return []
+
+        candidates: list[tuple[float, str]] = []
+        for row in self.runs.list(limit=120):
+            snippet = _run_snippet(row)
+            if not snippet:
+                continue
+            score = _score_overlap(query_tokens=query_tokens, text=snippet)
+            if score <= 0.0:
+                continue
+            candidates.append((score, snippet))
+        for row in self.playbooks.list(limit=80):
+            snippet = _playbook_snippet(row)
+            if not snippet:
+                continue
+            score = _score_overlap(query_tokens=query_tokens, text=snippet)
+            if score <= 0.0:
+                continue
+            candidates.append((score, snippet))
+
+        if not candidates:
+            return []
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        output: list[str] = []
+        seen: set[str] = set()
+        for _, snippet in candidates:
+            key = snippet.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append(snippet)
+            if len(output) >= max(1, int(limit)):
+                break
+        return output
+
+
+_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+
+
+def _tokenize(text: str) -> set[str]:
+    return {match.group(0) for match in _WORD_RE.finditer(str(text or "").lower())}
+
+
+def _score_overlap(*, query_tokens: set[str], text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    text_tokens = _tokenize(text)
+    if not text_tokens:
+        return 0.0
+    overlap = len(query_tokens.intersection(text_tokens))
+    return overlap / float(max(1, len(query_tokens)))
+
+
+def _run_snippet(row: dict[str, Any]) -> str:
+    message = " ".join(str(row.get("message") or "").split()).strip()
+    goal = " ".join(str(row.get("agent_goal") or "").split()).strip()
+    answer = " ".join(str(row.get("answer") or "").split()).strip()
+    joined = " | ".join([item for item in [message, goal, answer] if item]).strip()
+    return joined[:420]
+
+
+def _playbook_snippet(row: dict[str, Any]) -> str:
+    name = " ".join(str(row.get("name") or "").split()).strip()
+    prompt_template = " ".join(str(row.get("prompt_template") or "").split()).strip()
+    tools_raw = row.get("tool_ids")
+    tools = ", ".join(
+        str(item).strip()
+        for item in tools_raw
+        if str(item).strip()
+    ) if isinstance(tools_raw, list) else ""
+    joined = " | ".join([item for item in [name, prompt_template, tools] if item]).strip()
+    return joined[:420]
 
 
 _memory_service: AgentMemoryService | None = None

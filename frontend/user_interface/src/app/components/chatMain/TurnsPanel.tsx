@@ -181,6 +181,8 @@ function TurnsPanel({
                     events={turnActivityEvents}
                     streaming={isLatestTurn && isActivityStreaming}
                     stageAttachment={stageAttachment}
+                    needsHumanReview={Boolean(turn.needsHumanReview)}
+                    humanReviewNotes={turn.humanReviewNotes || null}
                   />
                 </div>
               </div>

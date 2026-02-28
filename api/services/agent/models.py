@@ -112,6 +112,8 @@ class AgentRunResult:
     actions_taken: list[AgentAction]
     sources_used: list[AgentSource]
     next_recommended_steps: list[str]
+    needs_human_review: bool = False
+    human_review_notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,4 +123,6 @@ class AgentRunResult:
             "actions_taken": [item.to_dict() for item in self.actions_taken],
             "sources_used": [item.to_dict() for item in self.sources_used],
             "next_recommended_steps": self.next_recommended_steps,
+            "needs_human_review": self.needs_human_review,
+            "human_review_notes": self.human_review_notes,
         }

@@ -65,6 +65,8 @@ type ChatResponse = {
   actions_taken: AgentActionRecord[];
   sources_used: AgentSourceRecord[];
   next_recommended_steps: string[];
+  needs_human_review: boolean;
+  human_review_notes: string | null;
   activity_run_id: string | null;
 };
 

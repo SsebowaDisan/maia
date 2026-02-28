@@ -82,6 +82,7 @@ export type SharedSettingsState = {
     | "select_embedding"
     | "apply_all"
     | "refresh"
+    | "onboarding"
     | null;
   ollamaProgress: { status: string; percent: number } | null;
   ollamaMessage: string;

@@ -8,7 +8,7 @@ from api.services.agent.planner import PlannedStep
 from api.services.agent.policy import ACCESS_MODE_FULL
 
 from ..models import ExecutionState
-from ..text_helpers import compact, extract_action_artifact_metadata
+from ..text_helpers import extract_action_artifact_metadata
 
 
 def run_workspace_shadow_logging(
@@ -30,51 +30,6 @@ def run_workspace_shadow_logging(
     ):
         return
 
-    keyword_rows = result.data.get("keywords") if isinstance(result.data, dict) else None
-    keywords = (
-        [str(item).strip() for item in keyword_rows if str(item).strip()]
-        if isinstance(keyword_rows, list)
-        else []
-    )
-    keyword_line = f"Keywords: {', '.join(keywords[:12])}" if keywords else ""
-    copied_rows = result.data.get("copied_snippets") if isinstance(result.data, dict) else None
-    copied_snippets = (
-        [str(item).strip() for item in copied_rows if str(item).strip()]
-        if isinstance(copied_rows, list)
-        else []
-    )
-    copied_line = (
-        f"Copied snippets: {' | '.join(copied_snippets[:3])}" if copied_snippets else ""
-    )
-    highlighted_rows = (
-        result.data.get("highlighted_words") if isinstance(result.data, dict) else None
-    )
-    highlighted_words: list[str] = []
-    if isinstance(highlighted_rows, list):
-        for row in highlighted_rows:
-            if not isinstance(row, dict):
-                continue
-            word = str(row.get("word") or "").strip()
-            if word:
-                highlighted_words.append(word)
-    highlight_line = (
-        f"Highlighted words: {', '.join(list(dict.fromkeys(highlighted_words))[:12])}"
-        if highlighted_words
-        else ""
-    )
-    compact_content = compact(result.content, 560)
-    note_body = "\n".join(
-        part
-        for part in [
-            f"Step {index}: {step.title}",
-            f"Summary: {result.summary}",
-            keyword_line,
-            highlight_line,
-            copied_line,
-            compact_content,
-        ]
-        if part
-    )
     log_steps = [
         PlannedStep(
             tool_id="workspace.sheets.track_step",
@@ -85,11 +40,6 @@ def run_workspace_shadow_logging(
                 "detail": result.summary,
                 "source_url": (result.sources[0].url if result.sources else ""),
             },
-        ),
-        PlannedStep(
-            tool_id="workspace.docs.research_notes",
-            title=f"Log findings: {step.title}",
-            params={"note": note_body},
         ),
     ]
     for shadow_step in log_steps:

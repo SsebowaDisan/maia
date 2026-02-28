@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Generator
 from typing import Any
 
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent, utc_now
+from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
 
 from ..models import ExecutionState, TaskPreparation
@@ -87,12 +89,18 @@ def execute_planned_steps(
             step_cursor += 1
             continue
 
+        tool_started_clock = time.perf_counter()
         try:
             result = yield from run_tool_live(
                 step=step,
                 step_index=index,
                 prompt=execution_prompt,
                 params=guard_outcome.params,
+            )
+            get_agent_observability().observe_tool_execution(
+                tool_id=step.tool_id,
+                status="success",
+                duration_seconds=time.perf_counter() - tool_started_clock,
             )
             yield from handle_step_success(
                 access_context=access_context,
@@ -111,6 +119,11 @@ def execute_planned_steps(
                 activity_event_factory=activity_event_factory,
             )
         except Exception as exc:
+            get_agent_observability().observe_tool_execution(
+                tool_id=step.tool_id,
+                status="failed",
+                duration_seconds=time.perf_counter() - tool_started_clock,
+            )
             yield from handle_step_failure(
                 execution_prompt=execution_prompt,
                 state=state,

@@ -24,6 +24,7 @@ class TaskPreparation:
     contract_target: str
     contract_missing_requirements: list[str]
     contract_success_checks: list[str]
+    memory_context_snippets: list[str]
     clarification_blocked: bool
     clarification_questions: list[str]
 

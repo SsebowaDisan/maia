@@ -34,6 +34,45 @@ from .streaming import (
 )
 
 
+def _read_persisted_workspace_ids(chat_state: dict[str, Any]) -> dict[str, str]:
+    app_state = chat_state.get("app") if isinstance(chat_state, dict) else None
+    app_rows = app_state if isinstance(app_state, dict) else {}
+    return {
+        "deep_research_doc_id": str(app_rows.get("deep_research_doc_id") or "").strip(),
+        "deep_research_doc_url": str(app_rows.get("deep_research_doc_url") or "").strip(),
+        "deep_research_sheet_id": str(app_rows.get("deep_research_sheet_id") or "").strip(),
+        "deep_research_sheet_url": str(app_rows.get("deep_research_sheet_url") or "").strip(),
+    }
+
+
+def _capture_workspace_ids_from_actions(actions: list[Any]) -> dict[str, str]:
+    captured = {
+        "deep_research_doc_id": "",
+        "deep_research_doc_url": "",
+        "deep_research_sheet_id": "",
+        "deep_research_sheet_url": "",
+    }
+    for action in reversed(actions or []):
+        tool_id = str(getattr(action, "tool_id", "") or "").strip()
+        status = str(getattr(action, "status", "") or "").strip().lower()
+        if status != "success":
+            continue
+        metadata = getattr(action, "metadata", {})
+        meta = metadata if isinstance(metadata, dict) else {}
+        if not captured["deep_research_doc_id"] and tool_id == "workspace.docs.research_notes":
+            captured["deep_research_doc_id"] = str(meta.get("document_id") or "").strip()
+            captured["deep_research_doc_url"] = str(meta.get("document_url") or "").strip()
+        if not captured["deep_research_sheet_id"] and tool_id in (
+            "workspace.sheets.track_step",
+            "workspace.sheets.append",
+        ):
+            captured["deep_research_sheet_id"] = str(meta.get("spreadsheet_id") or "").strip()
+            captured["deep_research_sheet_url"] = str(meta.get("spreadsheet_url") or "").strip()
+        if all(captured.values()):
+            break
+    return captured
+
+
 def stream_chat_turn(
     context: ApiContext,
     user_id: str,
@@ -51,6 +90,7 @@ def stream_chat_turn(
 
     chat_history = deepcopy(data_source.get("messages", []))
     chat_state = deepcopy(data_source.get("state", STATE))
+    persisted_workspace_ids = _read_persisted_workspace_ids(chat_state)
     selected_payload = build_selected_payload(
         context=context,
         user_id=user_id,
@@ -88,6 +128,15 @@ def stream_chat_turn(
         if context_summary:
             agent_settings["__conversation_summary"] = context_summary
         agent_settings["__conversation_latest_user_message"] = message
+        if persisted_workspace_ids["deep_research_doc_id"]:
+            agent_settings["__deep_research_doc_id"] = persisted_workspace_ids["deep_research_doc_id"]
+        if persisted_workspace_ids["deep_research_doc_url"]:
+            agent_settings["__deep_research_doc_url"] = persisted_workspace_ids["deep_research_doc_url"]
+        if persisted_workspace_ids["deep_research_sheet_id"]:
+            agent_settings["__deep_research_sheet_id"] = persisted_workspace_ids["deep_research_sheet_id"]
+        if persisted_workspace_ids["deep_research_sheet_url"]:
+            agent_settings["__deep_research_sheet_url"] = persisted_workspace_ids["deep_research_sheet_url"]
+            agent_settings["__deep_research_sheet_header_written"] = True
         try:
             iterator = orchestrator.run_stream(
                 user_id=user_id,
@@ -122,6 +171,8 @@ def stream_chat_turn(
                     "actions_taken": [],
                     "sources_used": [],
                     "next_recommended_steps": [],
+                    "needs_human_review": False,
+                    "human_review_notes": "",
                 },
             )()
 
@@ -165,6 +216,15 @@ def stream_chat_turn(
 
         chat_state.setdefault("app", {})
         chat_state["app"]["last_agent_run_id"] = agent_result.run_id
+        captured_workspace_ids = _capture_workspace_ids_from_actions(agent_result.actions_taken)
+        if captured_workspace_ids["deep_research_doc_id"]:
+            chat_state["app"]["deep_research_doc_id"] = captured_workspace_ids["deep_research_doc_id"]
+        if captured_workspace_ids["deep_research_doc_url"]:
+            chat_state["app"]["deep_research_doc_url"] = captured_workspace_ids["deep_research_doc_url"]
+        if captured_workspace_ids["deep_research_sheet_id"]:
+            chat_state["app"]["deep_research_sheet_id"] = captured_workspace_ids["deep_research_sheet_id"]
+        if captured_workspace_ids["deep_research_sheet_url"]:
+            chat_state["app"]["deep_research_sheet_url"] = captured_workspace_ids["deep_research_sheet_url"]
 
         messages = chat_history + [[message, answer_text]]
         retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
@@ -179,6 +239,8 @@ def stream_chat_turn(
                 "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
                 "sources_used": [item.to_dict() for item in agent_result.sources_used],
                 "next_recommended_steps": agent_result.next_recommended_steps,
+                "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
+                "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
             }
         )
 
@@ -190,6 +252,8 @@ def stream_chat_turn(
                 "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
                 "sources_used": [item.to_dict() for item in agent_result.sources_used],
                 "next_recommended_steps": agent_result.next_recommended_steps,
+                "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
+                "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
                 "date_created": datetime.now(get_localzone()).isoformat(),
             }
         )
@@ -218,6 +282,8 @@ def stream_chat_turn(
             "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
             "sources_used": [item.to_dict() for item in agent_result.sources_used],
             "next_recommended_steps": agent_result.next_recommended_steps,
+            "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
+            "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
             "activity_run_id": agent_result.run_id,
         }
 
@@ -301,6 +367,8 @@ def stream_chat_turn(
             "actions_taken": [],
             "sources_used": [],
             "next_recommended_steps": [],
+            "needs_human_review": False,
+            "human_review_notes": None,
         }
     )
 
@@ -327,6 +395,8 @@ def stream_chat_turn(
         "actions_taken": [],
         "sources_used": [],
         "next_recommended_steps": [],
+        "needs_human_review": False,
+        "human_review_notes": None,
         "activity_run_id": None,
     }
 
@@ -377,6 +447,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "actions_taken": [],
                 "sources_used": [],
                 "next_recommended_steps": [],
+                "needs_human_review": False,
+                "human_review_notes": None,
             }
         )
 
@@ -403,6 +475,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "actions_taken": [],
             "sources_used": [],
             "next_recommended_steps": [],
+            "needs_human_review": False,
+            "human_review_notes": None,
             "activity_run_id": None,
         }
     finally:

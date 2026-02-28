@@ -188,7 +188,13 @@ class AgentOrchestrator:
             if isinstance(snippets_raw, list)
             else []
         )
-        if not context_summary and not snippets:
+        memory_raw = settings.get("__memory_context_snippets")
+        memory_snippets = (
+            [str(item).strip() for item in memory_raw if str(item).strip()]
+            if isinstance(memory_raw, list)
+            else []
+        )
+        if not context_summary and not snippets and not memory_snippets:
             return base
         lines = [base]
         if context_summary:
@@ -196,6 +202,9 @@ class AgentOrchestrator:
         if snippets:
             lines.append("Recent snippets:")
             lines.extend(f"- {snippet}" for snippet in snippets[-6:])
+        if memory_snippets:
+            lines.append("Relevant past memory:")
+            lines.extend(f"- {snippet}" for snippet in memory_snippets[:4])
         prompt = "\n".join(lines).strip()
         return prompt[:2400]
 
@@ -330,6 +339,7 @@ class AgentOrchestrator:
                         if isinstance(settings.get("__conversation_snippets"), list)
                         else []
                     ),
+                    "__memory_context_snippets": list(task_prep.memory_context_snippets[:6]),
                 },
             )
             state = ExecutionState(

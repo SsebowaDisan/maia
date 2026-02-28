@@ -52,32 +52,6 @@ def prepend_workspace_roadmap_steps(
 ) -> list[PlannedStep]:
     search_preview = ", ".join(planned_search_terms[:4]) if planned_search_terms else "n/a"
     keyword_preview = ", ".join(planned_keywords[:10]) if planned_keywords else "n/a"
-    blueprint_search_terms = planned_search_terms[:8]
-    blueprint_keywords = planned_keywords[:12]
-    blueprint_lines: list[str] = [
-        "# Execution Blueprint",
-        "",
-        "## Objective",
-        f"- {task_prep.contract_objective or task_prep.rewritten_task or request.message}",
-        "",
-        "## Search Terms",
-    ]
-    if blueprint_search_terms:
-        blueprint_lines.extend([f"- {term}" for term in blueprint_search_terms])
-    else:
-        blueprint_lines.append("- n/a")
-    blueprint_lines.extend(["", "## Keywords"])
-    if blueprint_keywords:
-        blueprint_lines.extend([f"- {keyword}" for keyword in blueprint_keywords])
-    else:
-        blueprint_lines.append("- n/a")
-    blueprint_lines.extend(["", "## Planned Workflow"])
-    if steps:
-        for plan_index, planned in enumerate(steps[:10], start=1):
-            blueprint_lines.append(f"- {plan_index}. {planned.title} (`{planned.tool_id}`)")
-    else:
-        blueprint_lines.append("- n/a")
-    planning_blueprint_note = "\n".join(blueprint_lines).strip()
     roadmap_steps: list[PlannedStep] = [
         PlannedStep(
             tool_id="workspace.sheets.track_step",
@@ -89,11 +63,6 @@ def prepend_workspace_roadmap_steps(
                     f"Search terms: {search_preview} | Keywords: {keyword_preview}"
                 ),
             },
-        ),
-        PlannedStep(
-            tool_id="workspace.docs.research_notes",
-            title="Write planning blueprint to Google Docs",
-            params={"note": planning_blueprint_note},
         ),
     ]
     for idx, planned_step in enumerate(steps, start=1):

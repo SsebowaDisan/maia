@@ -188,6 +188,7 @@ def build_deterministic_contract_check(
     report_body: str,
     sources: list[dict[str, Any]],
     allowed_tool_ids: list[str],
+    pending_action_tool_id: str = "",
 ) -> dict[str, Any]:
     required_facts = _clean_text_list(contract.get("required_facts"), limit=6)
     required_actions = _clean_text_list(contract.get("required_actions"), limit=6, max_item_len=64)
@@ -233,6 +234,7 @@ def build_deterministic_contract_check(
         )
 
     successful_tools = _successful_action_tool_ids(actions)
+    clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
     for action in required_actions:
         action_key = str(action).strip()
         if not action_key:
@@ -240,6 +242,10 @@ def build_deterministic_contract_check(
         mapped_tools = ACTION_TOOL_IDS.get(action_key, set())
         if action_key == "send_email" and not delivery_target:
             missing_items.append("Missing delivery target for required action: send_email")
+        if clean_pending_action_tool_id and clean_pending_action_tool_id in mapped_tools:
+            # When checking contract readiness right before executing this action,
+            # avoid self-blocking on "required action not completed".
+            continue
         if mapped_tools and successful_tools.intersection(mapped_tools):
             continue
         if action_key in {"send_email", "submit_contact_form", "post_message"}:

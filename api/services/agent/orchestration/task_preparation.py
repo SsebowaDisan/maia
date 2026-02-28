@@ -7,6 +7,7 @@ from api.schemas import ChatRequest
 from api.services.agent.intelligence import derive_task_intelligence
 from api.services.agent.llm_contracts import build_task_contract
 from api.services.agent.llm_execution_support import rewrite_task_for_execution
+from api.services.agent.memory import get_memory_service
 from api.services.agent.llm_personalization import infer_user_preferences
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.preferences import get_user_preference_store
@@ -82,6 +83,32 @@ def prepare_task_context(
             metadata={"conversation_summary": conversation_summary_text},
         )
         yield emit_event(llm_context_event)
+
+    memory_context_snippets: list[str] = []
+    if truthy(settings.get("agent.memory_context_enabled"), default=True):
+        memory_query = " ".join(
+            [
+                str(request.message or "").strip(),
+                str(request.agent_goal or "").strip(),
+                conversation_summary_text,
+            ]
+        ).strip()
+        if memory_query:
+            try:
+                memory_context_snippets = get_memory_service().retrieve_context_snippets(
+                    query=memory_query,
+                    limit=4,
+                )
+            except Exception:
+                memory_context_snippets = []
+    if memory_context_snippets:
+        memory_event = activity_event_factory(
+            event_type="llm.context_memory",
+            title="Loaded relevant memory context",
+            detail=f"Retrieved {len(memory_context_snippets)} similar memory snippet(s)",
+            metadata={"memory_context_snippets": memory_context_snippets[:4]},
+        )
+        yield emit_event(memory_event)
 
     if task_intelligence.intent_tags:
         llm_intent_event = activity_event_factory(
@@ -291,6 +318,7 @@ def prepare_task_context(
         contract_target=contract_target,
         contract_missing_requirements=contract_missing_requirements,
         contract_success_checks=contract_success_checks,
+        memory_context_snippets=memory_context_snippets,
         clarification_blocked=clarification_blocked,
         clarification_questions=clarification_questions,
     )

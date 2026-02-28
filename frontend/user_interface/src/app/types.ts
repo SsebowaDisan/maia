@@ -14,6 +14,8 @@ export type ChatTurn = {
   nextRecommendedSteps?: string[];
   activityRunId?: string | null;
   activityEvents?: AgentActivityEvent[];
+  needsHumanReview?: boolean;
+  humanReviewNotes?: string | null;
 };
 
 export type AgentActionRecord = {

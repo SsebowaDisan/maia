@@ -25,6 +25,47 @@ interface UseAgentActivityDerivedParams {
   streaming: boolean;
 }
 
+const EMAIL_TOOL_IDS = new Set([
+  "mailer.report_send",
+  "email.draft",
+  "email.send",
+  "gmail.draft",
+  "gmail.send",
+]);
+
+function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
+  if (!event) {
+    return "system";
+  }
+  const byType = tabForEventType(event.event_type || "");
+  if (byType !== "system") {
+    return byType;
+  }
+  const toolId =
+    eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
+  if (!toolId) {
+    return byType;
+  }
+  if (EMAIL_TOOL_IDS.has(toolId)) {
+    return "email";
+  }
+  if (
+    toolId.startsWith("workspace.docs.") ||
+    toolId.startsWith("workspace.sheets.") ||
+    toolId === "docs.create"
+  ) {
+    return "document";
+  }
+  if (
+    toolId.startsWith("browser.") ||
+    toolId.startsWith("marketing.web_research") ||
+    toolId.startsWith("documents.highlight.")
+  ) {
+    return "browser";
+  }
+  return byType;
+}
+
 function useAgentActivityDerived({
   events,
   cursor,
@@ -67,45 +108,45 @@ function useAgentActivityDerived({
     [orderedEvents, safeCursor],
   );
   const activeEvent = orderedEvents[safeCursor] || null;
-  const activeTab = tabForEventType(activeEvent?.event_type || "");
+  const activeTab = tabForEvent(activeEvent);
 
   const sceneEvent = useMemo(() => {
     if (!activeEvent) {
       return null;
     }
-    const activeEventTab = tabForEventType(activeEvent.event_type || "");
+    const activeEventTab = tabForEvent(activeEvent);
     if (activeEventTab !== "system") {
       return activeEvent;
     }
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const candidate = visibleEvents[idx];
-      if (tabForEventType(candidate.event_type || "") !== "system") {
+      if (tabForEvent(candidate) !== "system") {
         return candidate;
       }
     }
     return activeEvent;
   }, [activeEvent, visibleEvents]);
 
-  const sceneTab = tabForEventType(sceneEvent?.event_type || activeEvent?.event_type || "");
+  const sceneTab = tabForEvent(sceneEvent || activeEvent);
   const progressPercent =
     orderedEvents.length <= 1
       ? 100
       : Math.round((safeCursor / (orderedEvents.length - 1)) * 100);
 
   const browserEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEventType(event.event_type) === "browser"),
+    () => visibleEvents.filter((event) => tabForEvent(event) === "browser"),
     [visibleEvents],
   );
   const documentEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEventType(event.event_type) === "document"),
+    () => visibleEvents.filter((event) => tabForEvent(event) === "document"),
     [visibleEvents],
   );
   const emailEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEventType(event.event_type) === "email"),
+    () => visibleEvents.filter((event) => tabForEvent(event) === "email"),
     [visibleEvents],
   );
   const systemEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEventType(event.event_type) === "system"),
+    () => visibleEvents.filter((event) => tabForEvent(event) === "system"),
     [visibleEvents],
   );
 
