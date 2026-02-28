@@ -171,7 +171,15 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
             params.setdefault("message", request.message)
         if step.tool_id == "docs.create" and has_highlight_extract:
             params.setdefault("include_copied_highlights", True)
-        normalized.append(PlannedStep(tool_id=step.tool_id, title=step.title, params=params))
+        normalized.append(
+            PlannedStep(
+                tool_id=step.tool_id,
+                title=step.title,
+                params=params,
+                why_this_step=step.why_this_step,
+                expected_evidence=step.expected_evidence,
+            )
+        )
 
     if company_agent_mode:
         normalized = [

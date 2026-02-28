@@ -465,7 +465,7 @@ This roadmap is implementation-focused and slice-driven.
 - [x] mandatory constraints enforcement validated (`done`)
 - [x] contract normalization tests pass (`done`)
 ### Clarification Gate and Missing Requirement Detection
-**Status:** `in_progress`
+**Status:** `done`
 **Objective**
 - prevent wrong execution when user intent is underspecified
 **In Scope**
@@ -484,10 +484,10 @@ This roadmap is implementation-focused and slice-driven.
 - Contract Schema Hardening
 **Checklist**
 - [x] clarification gate integrated (`done`)
-- [ ] missing requirements classifier validated (`in_progress`)
+- [x] missing requirements classifier validated (`done`)
 - [x] clarification event stream visible in theatre (`done`)
 ### Evidence-Aware Planning Contract
-**Status:** `todo`
+**Status:** `done`
 **Objective**
 - guarantee plans are evidence-producing, not just action-producing
 **In Scope**
@@ -505,11 +505,11 @@ This roadmap is implementation-focused and slice-driven.
 **Regression Slice**
 - Clarification Gate and Missing Requirement Detection
 **Checklist**
-- [ ] planner evidence schema implemented (`todo`)
-- [ ] plan critic coverage checks active (`todo`)
-- [ ] plan quality regression tests pass (`todo`)
+- [x] planner evidence schema implemented (`done`)
+- [x] plan critic coverage checks active (`done`)
+- [x] plan quality regression tests pass (`done`)
 ### Execution Verification and External Action Gating
-**Status:** `todo`
+**Status:** `done`
 **Objective**
 - block final responses and external actions until contract obligations are met
 **In Scope**
@@ -527,11 +527,11 @@ This roadmap is implementation-focused and slice-driven.
 **Regression Slice**
 - Evidence-Aware Planning Contract
 **Checklist**
-- [ ] execution verifier integrated (`todo`)
-- [ ] action-gate blocking validated (`todo`)
-- [ ] remediation loop tests pass (`todo`)
+- [x] execution verifier integrated (`done`)
+- [x] action-gate blocking validated (`done`)
+- [x] remediation loop tests pass (`done`)
 ### Evidence-Backed Value-Add Response Enhancer
-**Status:** `todo`
+**Status:** `done`
 **Objective**
 - exceed user expectations without hallucinating
 **In Scope**
@@ -549,11 +549,11 @@ This roadmap is implementation-focused and slice-driven.
 **Regression Slice**
 - Execution Verification and External Action Gating
 **Checklist**
-- [ ] value-add generator implemented (`todo`)
-- [ ] confidence and citation rules enforced (`todo`)
-- [ ] hallucination guard tests pass (`todo`)
+- [x] value-add generator implemented (`done`)
+- [x] confidence and citation rules enforced (`done`)
+- [x] hallucination guard tests pass (`done`)
 ### Theatre Transparency and Screen Transition Stability
-**Status:** `todo`
+**Status:** `done`
 **Objective**
 - make every planning and execution phase visibly understandable in real time
 **In Scope**
@@ -571,11 +571,11 @@ This roadmap is implementation-focused and slice-driven.
 **Regression Slice**
 - Evidence-Backed Value-Add Response Enhancer
 **Checklist**
-- [ ] phase timeline streaming implemented (`todo`)
-- [ ] scene transitions stabilized (`todo`)
-- [ ] theatre replay regression tests pass (`todo`)
+- [x] phase timeline streaming implemented (`done`)
+- [x] scene transitions stabilized (`done`)
+- [x] theatre replay regression tests pass (`done`)
 ### Continuous Agent Evals and Regression Guardrails
-**Status:** `todo`
+**Status:** `done`
 **Objective**
 - lock in gains and prevent understanding/delivery regressions
 **In Scope**
@@ -593,9 +593,9 @@ This roadmap is implementation-focused and slice-driven.
 **Regression Slice**
 - Theatre Transparency and Screen Transition Stability
 **Checklist**
-- [ ] eval suite implemented (`todo`)
-- [ ] CI quality gates configured (`todo`)
-- [ ] regression fixtures maintained (`todo`)
+- [x] eval suite implemented (`done`)
+- [x] CI quality gates configured (`done`)
+- [x] regression fixtures maintained (`done`)
 ---
 ## Slice Execution Order
 1. Strategic Scope and Governance Alignment
@@ -622,5 +622,88 @@ This roadmap is implementation-focused and slice-driven.
 22. Evidence-Backed Value-Add Response Enhancer
 23. Theatre Transparency and Screen Transition Stability
 24. Continuous Agent Evals and Regression Guardrails
-Current Active Slice: `Clarification Gate and Missing Requirement Detection`
+Current Active Slice: `None (All Roadmap Slices Complete)`
+
+---
+## Repository-Wide Refactorization Program (One File Per Slice)
+### Activation Rule
+- Start this queue only after the current active slice is marked `done`.
+- Execute exactly one file slice at a time until the queue is fully complete.
+- A file slice cannot be marked `done` if the source file still exceeds 500 LOC.
+
+### Universal File Slice Definition of Done
+- legacy file is reduced below 500 LOC and becomes a thin coordinator/shim where needed
+- extracted modules are domain-named and each under 500 LOC (preferred 350-450 LOC)
+- all imports are updated in the same slice, with no circular imports introduced
+- acceptance tests for touched behavior pass
+- assigned regression slice tests pass
+- `tasks/todo.md` is updated with verification evidence
+- if any user correction occurred, a lesson is appended to `tasks/lessons.md`
+
+### File-By-File Slice Queue (Do Not Skip)
+#### Hard Size Violations (`>500` LOC)
+1. `api/services/chat_service.py` (1362 LOC) -> split into `api/services/chat/` package modules (`pipeline`, `fast_qa`, `streaming`, `citations`, `conversation_store`, `app`)
+2. `api/services/agent/tools/workspace_tools.py` (868 LOC) -> split tool classes into per-tool modules under `api/services/agent/tools/workspace/`
+3. `api/routers/integrations.py` (728 LOC) -> split into connector-focused routers (`maps`, `ollama`, `web_search`) + shared router helpers
+4. `api/routers/agent.py` (622 LOC) -> split by domain (`oauth`, `credentials`, `runs`, `playbooks`, `schedules`, `governance`, `sse`)
+5. `api/services/ingestion_service.py` (547 LOC) -> split manager into `jobs`, `worker`, `progress`, `cleanup`, and persistence helpers
+6. `api/services/agent/connectors/browser_connector.py` (537 LOC) -> split live stream flow, page capture, and interaction helpers into dedicated modules
+7. `api/services/google/auth.py` (537 LOC) -> split OAuth lifecycle, token refresh/session HTTP client, and state management
+8. `api/services/upload_service.py` (526 LOC) -> split upload/indexing, file-group management, and deletion/move operations
+9. `frontend/user_interface/src/app/components/InfoPanel.tsx` (1625 LOC) -> split cards and render blocks into focused components
+10. `frontend/user_interface/src/app/components/FilesView.tsx` (1508 LOC) -> split file table, grouping actions, dialogs, and shared formatters/hooks
+11. `frontend/user_interface/src/app/components/AgentActivityPanel.tsx` (1400 LOC) -> split timeline rows, metadata renderers, scene mapping, and filters
+12. `frontend/user_interface/src/app/App.tsx` (1197 LOC) -> split layout shell, panel state hooks, chat orchestration, and persistence utilities
+13. `frontend/user_interface/src/app/components/AgentDesktopScene.tsx` (921 LOC) -> split scene renderer, transitions, controls, and event adapters
+14. `frontend/user_interface/src/api/client.ts` (830 LOC) -> split API surface by domain (`conversations`, `files`, `ingestion`, `agent`, `oauth`, `sse`)
+15. `frontend/user_interface/src/app/components/ChatMain.tsx` (687 LOC) -> split message list, composer, attachment actions, and stream handlers
+16. `frontend/user_interface/src/app/components/ui/sidebar.tsx` (672 LOC) -> split primitives into item/group/header/footer modules
+17. `frontend/user_interface/src/app/components/agentActivityMeta.ts` (668 LOC) -> split metadata serializers by event domain
+18. `frontend/user_interface/src/app/utils/infoInsights.ts` (664 LOC) -> split insight transforms, scoring, graph assembly, and formatting helpers
+19. `frontend/user_interface/src/app/components/ResourcesView.tsx` (587 LOC) -> split resource list, tool sections, and interaction handlers
+20. `libs/ktem/ktem/index/file/ui.py` (1574 LOC) -> split views, handlers, and formatting/rendering helpers
+21. `libs/ktem/ktem/pages/chat/__init__.py` (1274 LOC) -> split page state, event handlers, and page composition
+22. `libs/ktem/ktem/index/file/pipelines.py` (826 LOC) -> split pipeline registry, builders, and execution adapters
+23. `libs/ktem/ktem/reasoning/simple.py` (527 LOC) -> split reasoning stages and response formatting
+
+#### Complexity Hotspots (Mandatory After Size Queue)
+24. `api/services/agent/orchestration/answer_builder.py` (C901=55) -> split section builders (`understanding`, `plan`, `summary`, `delivery`, `verification`, `artifacts`)
+25. `api/services/agent/orchestration/step_planner.py` (C901=45) -> split contract shaping, intent enrichments, evidence enforcement, and event emission
+26. `api/services/agent/orchestration/step_execution.py` (C901=28) -> split guard checks, tool execution loop, workspace shadow logging, and failure recovery
+27. `api/services/agent/llm_execution_support.py` (496 LOC, C901=21) -> split rewriting, recovery, summarization, and next-step curation
+28. `api/services/agent/connectors/browser_contact_connector.py` (C901=39) -> split form detection, field mapping, and submit/retry flow
+29. `api/services/agent/orchestration/delivery.py` (C901=17) -> split delivery decisioning, send path, and remediation handling
+30. `api/services/agent/intelligence.py` (459 LOC, C901 hotspots) -> split claim extraction, verification scoring, and contradiction analysis
+
+### Refactor Slice Status Board
+- [x] Slice 01 complete (`done`)
+- [x] Slice 02 complete (`done`)
+- [x] Slice 03 complete (`done`)
+- [x] Slice 04 complete (`done`)
+- [x] Slice 05 complete (`done`)
+- [x] Slice 06 complete (`done`)
+- [x] Slice 07 complete (`done`)
+- [x] Slice 08 complete (`done`)
+- [x] Slice 09 complete (`done`)
+- [x] Slice 10 complete (`done`)
+- [x] Slice 11 complete (`done`)
+- [x] Slice 12 complete (`done`)
+- [x] Slice 13 complete (`done`)
+- [x] Slice 14 complete (`done`)
+- [x] Slice 15 complete (`done`)
+- [x] Slice 16 complete (`done`)
+- [x] Slice 17 complete (`done`)
+- [x] Slice 18 complete (`done`)
+- [x] Slice 19 complete (`done`)
+- [x] Slice 20 complete (`done`)
+- [x] Slice 21 complete (`done`)
+- [x] Slice 22 complete (`done`)
+- [x] Slice 23 complete (`done`)
+- [x] Slice 24 complete (`done`)
+- [x] Slice 25 complete (`done`)
+- [x] Slice 26 complete (`done`)
+- [x] Slice 27 complete (`done`)
+- [x] Slice 28 complete (`done`)
+- [x] Slice 29 complete (`done`)
+- [x] Slice 30 complete (`done`)
 

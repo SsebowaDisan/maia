@@ -1,0 +1,33 @@
+name: agent-quality-gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  agent-quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pydantic
+
+      - name: Run eval threshold test
+        run: |
+          python -m pytest api/tests/test_agent_eval_suite.py
+
+      - name: Run eval suite report gate
+        run: |
+          python scripts/run_agent_eval_suite.py

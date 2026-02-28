@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import mimetypes
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+
+from api.auth import get_current_user_id
+from api.services.agent.activity import get_activity_store
+from api.services.agent.memory import get_memory_service
+
+router = APIRouter(tags=["agent"])
+
+
+@router.get("/runs")
+def list_agent_runs(limit: int = 50) -> list[dict[str, Any]]:
+    return get_memory_service().list_runs(limit=limit)
+
+
+@router.get("/runs/{run_id}")
+def get_agent_run(run_id: str) -> dict[str, Any]:
+    row = get_memory_service().runs.get(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return row
+
+
+@router.get("/runs/{run_id}/events")
+def get_agent_run_events(run_id: str) -> list[dict[str, Any]]:
+    rows = get_activity_store().load_events(run_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Run events not found.")
+    return rows
+
+
+@router.get("/runs/{run_id}/events/{event_id}/snapshot")
+def get_agent_event_snapshot(
+    run_id: str,
+    event_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    del user_id  # Current run store is user-scoped at write time; keep endpoint signature auth-guarded.
+
+    rows = get_activity_store().load_events(run_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Run events not found.")
+
+    snapshot_ref = ""
+    for row in rows:
+        if row.get("type") != "event":
+            continue
+        payload = row.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("event_id") or "") != event_id:
+            continue
+        snapshot_ref = str(payload.get("snapshot_ref") or "").strip()
+        break
+
+    if not snapshot_ref:
+        raise HTTPException(status_code=404, detail="Snapshot not found for this event.")
+
+    candidate = Path(snapshot_ref).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    allowed_roots = [
+        (Path.cwd() / ".maia_agent").resolve(),
+        (Path.cwd() / "flow_tmp").resolve(),
+    ]
+    if not any(candidate == root or root in candidate.parents for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Snapshot path is outside allowed directories.")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Snapshot file is missing.")
+
+    media_type, _ = mimetypes.guess_type(str(candidate))
+    return FileResponse(
+        path=str(candidate),
+        media_type=media_type or "application/octet-stream",
+        filename=candidate.name,
+    )
+
+
+@router.get("/runs/{run_id}/events/export")
+def export_agent_run_events(run_id: str) -> dict[str, Any]:
+    rows = get_activity_store().load_events(run_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Run events not found.")
+    run_started = next((row.get("payload", {}) for row in rows if row.get("type") == "run_started"), {})
+    run_completed = next(
+        (row.get("payload", {}) for row in reversed(rows) if row.get("type") == "run_completed"),
+        {},
+    )
+    events = [row.get("payload", {}) for row in rows if row.get("type") == "event"]
+    return {
+        "run_id": run_id,
+        "run_started": run_started,
+        "run_completed": run_completed,
+        "total_rows": len(rows),
+        "total_events": len(events),
+        "events": events,
+    }

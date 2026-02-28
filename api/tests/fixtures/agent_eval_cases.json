@@ -1,0 +1,27 @@
+[
+  {
+    "id": "ambiguity_missing_requirements",
+    "category": "ambiguity",
+    "description": "Ambiguous delivery/report requests must produce clarification blockers."
+  },
+  {
+    "id": "multi_intent_fact_coverage",
+    "category": "multi_intent",
+    "description": "Multi-intent plans must map required facts to evidence-producing steps."
+  },
+  {
+    "id": "external_action_block_unverified_facts",
+    "category": "delivery_completeness",
+    "description": "External actions must be blocked when required facts are unverified."
+  },
+  {
+    "id": "delivery_ready_when_contract_satisfied",
+    "category": "delivery_completeness",
+    "description": "Delivery should proceed when facts and required send actions are complete."
+  },
+  {
+    "id": "contradiction_risk_signal",
+    "category": "contradiction_risk",
+    "description": "Contradictory evidence should emit detectable contradiction risk signals."
+  }
+]

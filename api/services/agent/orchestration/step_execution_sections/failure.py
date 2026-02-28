@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Generator
+from typing import Any
+
+from api.services.agent.llm_execution_support import suggest_failure_recovery
+from api.services.agent.models import AgentActivityEvent
+from api.services.agent.planner import PlannedStep
+
+from ..models import ExecutionState
+
+
+def handle_step_failure(
+    *,
+    execution_prompt: str,
+    state: ExecutionState,
+    registry: Any,
+    step: PlannedStep,
+    index: int,
+    step_started: str,
+    exc: Exception,
+    emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
+    activity_event_factory: Callable[..., AgentActivityEvent],
+) -> Generator[dict[str, Any], None, None]:
+    if (
+        step.tool_id in ("workspace.docs.research_notes", "workspace.sheets.track_step")
+        and any(
+            marker in str(exc).lower()
+            for marker in ("google_tokens_missing", "oauth", "refresh_token")
+        )
+    ):
+        state.deep_workspace_logging_enabled = False
+    action = registry.get(step.tool_id).to_action(
+        status="failed",
+        summary=str(exc),
+        started_at=step_started,
+        metadata={"step": index},
+    )
+    state.all_actions.append(action)
+    state.executed_steps.append(
+        {
+            "step": index,
+            "tool_id": step.tool_id,
+            "title": step.title,
+            "status": "failed",
+            "summary": str(exc),
+        }
+    )
+    exc_text = str(exc)
+    if "requires confirmation" in exc_text.lower():
+        approval_event = activity_event_factory(
+            event_type="approval_required",
+            title=f"Approval required: {step.title}",
+            detail=exc_text,
+            metadata={"tool_id": step.tool_id, "step": index},
+        )
+        yield emit_event(approval_event)
+        policy_event = activity_event_factory(
+            event_type="policy_blocked",
+            title=f"Policy blocked: {step.title}",
+            detail="Execution blocked in restricted mode until confirmation",
+            metadata={"tool_id": step.tool_id, "step": index},
+        )
+        yield emit_event(policy_event)
+    fail_event = activity_event_factory(
+        event_type="tool_failed",
+        title=f"Failed: {step.title}",
+        detail=exc_text,
+        metadata={"tool_id": step.tool_id, "step": index},
+    )
+    yield emit_event(fail_event)
+    recovery_hint = suggest_failure_recovery(
+        request_message=execution_prompt,
+        tool_id=step.tool_id,
+        step_title=step.title,
+        error_text=exc_text,
+        recent_steps=state.executed_steps[-8:],
+    )
+    if recovery_hint:
+        state.next_steps.append(recovery_hint)
+        recovery_event = activity_event_factory(
+            event_type="tool_progress",
+            title="Recovery suggestion generated",
+            detail=recovery_hint,
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "recovery_hint": recovery_hint,
+            },
+        )
+        yield emit_event(recovery_event)

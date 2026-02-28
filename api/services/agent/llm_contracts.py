@@ -4,9 +4,15 @@ import json
 import re
 from typing import Any
 
+from api.services.agent.contract_verification import (
+    build_deterministic_contract_check,
+    merge_contract_checks,
+    parse_llm_contract_check,
+)
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 NO_HARDCODE_WORDS_CONSTRAINT = (
     "Never use hardcoded words or keyword lists; rely on LLM semantic understanding."
 )
@@ -31,6 +37,95 @@ def _enforce_contract_constraints(raw: Any) -> list[str]:
     if NO_HARDCODE_WORDS_CONSTRAINT in rows:
         return rows[:6]
     return [NO_HARDCODE_WORDS_CONSTRAINT, *rows][:6]
+
+
+def _extract_first_url(*chunks: str) -> str:
+    joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
+    match = URL_RE.search(joined)
+    return match.group(0).strip().rstrip(".,;)") if match else ""
+
+
+def _merge_text_rows(*rows: list[str], limit: int) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for row_list in rows:
+        for item in row_list:
+            text = " ".join(str(item or "").split()).strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(text)
+            if len(merged) >= max(1, int(limit)):
+                return merged
+    return merged
+
+
+def _derive_required_actions(*, intent_tags: list[str], delivery_target: str) -> list[str]:
+    action_map = {
+        "email_delivery": "send_email",
+        "contact_form_submission": "submit_contact_form",
+        "docs_write": "create_document",
+        "sheets_update": "update_sheet",
+    }
+    actions: list[str] = []
+    for tag in intent_tags:
+        mapped = action_map.get(str(tag or "").strip().lower())
+        if mapped and mapped not in actions:
+            actions.append(mapped)
+    if delivery_target and "send_email" not in actions:
+        actions.append("send_email")
+    return actions[:6]
+
+
+def _classify_missing_requirements(
+    *,
+    required_actions: list[str],
+    required_outputs: list[str],
+    required_facts: list[str],
+    delivery_target: str,
+    target_url: str,
+    intent_tags: list[str],
+) -> list[str]:
+    actions = {str(item).strip() for item in required_actions if str(item).strip()}
+    tags = {str(item).strip().lower() for item in intent_tags if str(item).strip()}
+    missing: list[str] = []
+
+    needs_delivery_target = "send_email" in actions or "email_delivery" in tags
+    if needs_delivery_target and not delivery_target:
+        missing.append("Recipient email address for delivery")
+
+    needs_target_url = (
+        "submit_contact_form" in actions
+        or "contact_form_submission" in tags
+        or "web_research" in tags
+        or "location_lookup" in tags
+    )
+    if needs_target_url and not target_url:
+        missing.append("Target website URL")
+
+    needs_required_facts = (
+        needs_target_url
+        or bool(required_outputs)
+        or "report_generation" in tags
+        or "location_lookup" in tags
+    )
+    if needs_required_facts and not required_facts:
+        missing.append("Required facts to verify in the final answer")
+
+    needs_output_format = (
+        "create_document" in actions
+        or "update_sheet" in actions
+        or "report_generation" in tags
+        or "docs_write" in tags
+        or "sheets_update" in tags
+    )
+    if needs_output_format and not required_outputs:
+        missing.append("Preferred output format or artifact type")
+
+    return missing[:6]
 
 
 def _normalize_contract_for_execution(contract: dict[str, Any] | None) -> dict[str, Any]:
@@ -61,23 +156,37 @@ def build_task_contract(
     clean_goal = " ".join(str(agent_goal or "").split()).strip()
     clean_rewrite = " ".join(str(rewritten_task or "").split()).strip()
     clean_context = " ".join(str(conversation_summary or "").split()).strip()
+    clean_intent_tags = _clean_text_list(intent_tags or [], limit=8, max_item_len=64)
     delivery_target = ""
     match = EMAIL_RE.search(" ".join([clean_message, clean_goal]))
     if match:
         delivery_target = match.group(1).strip()
+    target_url = _extract_first_url(clean_message, clean_goal, clean_rewrite)
 
     heuristic_facts: list[str] = []
-    heuristic_actions: list[str] = ["send_email"] if delivery_target else []
+    heuristic_actions = _derive_required_actions(
+        intent_tags=clean_intent_tags,
+        delivery_target=delivery_target,
+    )
+    heuristic_outputs = _clean_text_list(deliverables or [], limit=6)
+    heuristic_missing_requirements = _classify_missing_requirements(
+        required_actions=heuristic_actions,
+        required_outputs=heuristic_outputs,
+        required_facts=heuristic_facts[:6],
+        delivery_target=delivery_target,
+        target_url=target_url,
+        intent_tags=clean_intent_tags,
+    )
 
     if not env_bool("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", default=True):
         return {
             "objective": clean_rewrite or clean_message,
-            "required_outputs": _clean_text_list(deliverables or [], limit=6),
+            "required_outputs": heuristic_outputs,
             "required_facts": heuristic_facts[:4],
             "required_actions": list(dict.fromkeys(heuristic_actions))[:6],
             "constraints": _enforce_contract_constraints(constraints or []),
             "delivery_target": delivery_target,
-            "missing_requirements": [],
+            "missing_requirements": heuristic_missing_requirements,
             "success_checks": [
                 "All required outputs are generated.",
                 "All required facts are supported by evidence.",
@@ -88,10 +197,11 @@ def build_task_contract(
         "message": clean_message,
         "agent_goal": clean_goal,
         "rewritten_task": clean_rewrite,
-        "deliverables": _clean_text_list(deliverables or [], limit=6),
+        "deliverables": heuristic_outputs,
         "constraints": _clean_text_list(constraints or [], limit=6),
-        "intent_tags": _clean_text_list(intent_tags or [], limit=8, max_item_len=64),
+        "intent_tags": clean_intent_tags,
         "conversation_summary": clean_context,
+        "target_url_hint": target_url,
     }
     prompt = (
         "Build a strict task contract for an enterprise agent run.\n"
@@ -105,6 +215,7 @@ def build_task_contract(
         "- required_facts should include mandatory facts the final answer/action must contain.\n"
         "- constraints must include: Never use hardcoded words or keyword lists; rely on LLM semantic understanding.\n"
         "- delivery_target must be empty when unspecified.\n\n"
+        "- missing_requirements should include concrete blockers such as recipient, target URL, required facts, or output format.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     response = call_json_response(
@@ -120,12 +231,12 @@ def build_task_contract(
     if not isinstance(response, dict):
         return {
             "objective": clean_rewrite or clean_message,
-            "required_outputs": _clean_text_list(deliverables or [], limit=6),
+            "required_outputs": heuristic_outputs,
             "required_facts": heuristic_facts[:4],
             "required_actions": list(dict.fromkeys(heuristic_actions))[:6],
             "constraints": _enforce_contract_constraints(constraints or []),
             "delivery_target": delivery_target,
-            "missing_requirements": [],
+            "missing_requirements": heuristic_missing_requirements,
             "success_checks": [
                 "All required outputs are generated.",
                 "All required facts are supported by evidence.",
@@ -137,17 +248,32 @@ def build_task_contract(
         for value in _clean_text_list(response.get("required_actions"), limit=6, max_item_len=64)
         if value in allowed_actions
     ]
+    required_outputs = _clean_text_list(response.get("required_outputs"), limit=6)
+    required_facts = _clean_text_list(response.get("required_facts"), limit=6)
     clean_target = " ".join(str(response.get("delivery_target") or "").split()).strip()
     if not clean_target:
         clean_target = delivery_target
+    response_missing_requirements = _clean_text_list(response.get("missing_requirements"), limit=6)
+    classifier_missing_requirements = _classify_missing_requirements(
+        required_actions=required_actions,
+        required_outputs=required_outputs,
+        required_facts=required_facts,
+        delivery_target=clean_target,
+        target_url=target_url,
+        intent_tags=clean_intent_tags,
+    )
     return {
         "objective": " ".join(str(response.get("objective") or clean_rewrite or clean_message).split()).strip()[:420],
-        "required_outputs": _clean_text_list(response.get("required_outputs"), limit=6),
-        "required_facts": _clean_text_list(response.get("required_facts"), limit=6),
+        "required_outputs": required_outputs,
+        "required_facts": required_facts,
         "required_actions": required_actions,
         "constraints": _enforce_contract_constraints(response.get("constraints")),
         "delivery_target": clean_target[:180],
-        "missing_requirements": _clean_text_list(response.get("missing_requirements"), limit=6),
+        "missing_requirements": _merge_text_rows(
+            response_missing_requirements,
+            classifier_missing_requirements,
+            limit=6,
+        ),
         "success_checks": _clean_text_list(response.get("success_checks"), limit=8),
     }
 
@@ -162,15 +288,18 @@ def verify_task_contract_fulfillment(
     sources: list[dict[str, Any]],
     allowed_tool_ids: list[str],
 ) -> dict[str, Any]:
-    if not env_bool("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", default=True):
-        return {
-            "ready_for_final_response": True,
-            "ready_for_external_actions": True,
-            "missing_items": [],
-            "reason": "",
-            "recommended_remediation": [],
-        }
     normalized_contract = _normalize_contract_for_execution(contract)
+    deterministic_check = build_deterministic_contract_check(
+        contract=normalized_contract,
+        request_message=request_message,
+        executed_steps=executed_steps,
+        actions=actions,
+        report_body=report_body,
+        sources=sources,
+        allowed_tool_ids=allowed_tool_ids,
+    )
+    if not env_bool("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", default=True):
+        return deterministic_check
     payload = {
         "contract": sanitize_json_value(normalized_contract),
         "request_message": " ".join(str(request_message or "").split()).strip()[:480],
@@ -208,52 +337,9 @@ def verify_task_contract_fulfillment(
         max_tokens=520,
     )
     if not isinstance(response, dict):
-        return {
-            "ready_for_final_response": True,
-            "ready_for_external_actions": True,
-            "missing_items": [],
-            "reason": "",
-            "recommended_remediation": [],
-        }
-
-    def _as_bool(raw: Any, default: bool) -> bool:
-        if isinstance(raw, bool):
-            return raw
-        text = str(raw or "").strip().lower()
-        if text in {"1", "true", "yes", "on"}:
-            return True
-        if text in {"0", "false", "no", "off"}:
-            return False
-        return default
-
-    allowed = {str(item).strip() for item in allowed_tool_ids if str(item).strip()}
-    remediation_rows: list[dict[str, Any]] = []
-    raw_remediation = response.get("recommended_remediation")
-    if isinstance(raw_remediation, list):
-        for row in raw_remediation:
-            if not isinstance(row, dict):
-                continue
-            tool_id = str(row.get("tool_id") or "").strip()
-            if not tool_id or tool_id not in allowed:
-                continue
-            title = " ".join(str(row.get("title") or tool_id).split()).strip()[:120]
-            params = row.get("params")
-            remediation_rows.append(
-                {
-                    "tool_id": tool_id,
-                    "title": title or tool_id,
-                    "params": dict(params) if isinstance(params, dict) else {},
-                }
-            )
-            if len(remediation_rows) >= 4:
-                break
-    return {
-        "ready_for_final_response": _as_bool(response.get("ready_for_final_response"), True),
-        "ready_for_external_actions": _as_bool(response.get("ready_for_external_actions"), True),
-        "missing_items": _clean_text_list(response.get("missing_items"), limit=8),
-        "reason": " ".join(str(response.get("reason") or "").split()).strip()[:320],
-        "recommended_remediation": remediation_rows,
-    }
+        return deterministic_check
+    llm_check = parse_llm_contract_check(response=response, allowed_tool_ids=allowed_tool_ids)
+    return merge_contract_checks(deterministic=deterministic_check, llm=llm_check)
 
 
 def propose_fact_probe_steps(

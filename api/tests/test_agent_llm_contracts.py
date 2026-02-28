@@ -22,7 +22,8 @@ def test_build_task_contract_disabled_uses_minimal_fallback(monkeypatch) -> None
     assert "send_email" in row["required_actions"]
     assert row["required_facts"] == []
     assert row["constraints"][0] == NO_HARDCODE_WORDS_CONSTRAINT
-    assert row["missing_requirements"] == []
+    assert "Target website URL" in row["missing_requirements"]
+    assert "Required facts to verify in the final answer" in row["missing_requirements"]
     assert len(row["success_checks"]) >= 2
 
 
@@ -58,6 +59,51 @@ def test_build_task_contract_parses_json(monkeypatch) -> None:
     assert row["success_checks"] == ["Delivery confirmed", "Required facts present"]
 
 
+def test_build_task_contract_classifier_flags_missing_recipient_and_output_format(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "0")
+    row = build_task_contract(
+        message="Send the final report when ready",
+        agent_goal=None,
+        rewritten_task="",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["email_delivery", "report_generation"],
+        conversation_summary="",
+    )
+    assert "Recipient email address for delivery" in row["missing_requirements"]
+    assert "Required facts to verify in the final answer" in row["missing_requirements"]
+    assert "Preferred output format or artifact type" in row["missing_requirements"]
+
+
+def test_build_task_contract_merges_classifier_missing_requirements_with_llm_response(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Send report",
+            "required_outputs": [],
+            "required_facts": [],
+            "required_actions": ["send_email"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": [],
+            "success_checks": ["Delivered"],
+        },
+    )
+    row = build_task_contract(
+        message="Send report",
+        agent_goal=None,
+        rewritten_task="Send report",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["email_delivery", "report_generation"],
+        conversation_summary="",
+    )
+    assert "Recipient email address for delivery" in row["missing_requirements"]
+    assert "Preferred output format or artifact type" in row["missing_requirements"]
+
+
 def test_verify_task_contract_disabled_returns_ready(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
     row = verify_task_contract_fulfillment(
@@ -71,6 +117,62 @@ def test_verify_task_contract_disabled_returns_ready(monkeypatch) -> None:
     )
     assert row["ready_for_final_response"] is True
     assert row["ready_for_external_actions"] is True
+
+
+def test_verify_task_contract_disabled_blocks_unverified_required_facts(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Find headquarters and email summary",
+            "required_facts": ["Headquarters city and country"],
+            "required_actions": ["send_email"],
+            "delivery_target": "ops@example.com",
+        },
+        request_message="Analyze website and send summary",
+        executed_steps=[
+            {
+                "tool_id": "marketing.web_research",
+                "status": "success",
+                "summary": "Collected company overview details.",
+            }
+        ],
+        actions=[{"tool_id": "marketing.web_research", "status": "success", "summary": "overview collected"}],
+        report_body="General company profile information only.",
+        sources=[{"url": "https://example.com", "label": "Example", "metadata": {"excerpt": "Company profile"}}],
+        allowed_tool_ids=["marketing.web_research", "browser.playwright.inspect", "gmail.draft"],
+    )
+    assert row["ready_for_final_response"] is False
+    assert row["ready_for_external_actions"] is False
+    assert any("Unverified required fact" in item for item in row["missing_items"])
+    assert any(item.get("tool_id") in {"marketing.web_research", "browser.playwright.inspect"} for item in row["recommended_remediation"])
+
+
+def test_verify_task_contract_disabled_blocks_missing_required_external_action(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Email summary",
+            "required_facts": [],
+            "required_actions": ["send_email"],
+            "delivery_target": "ops@example.com",
+        },
+        request_message="Send summary to ops@example.com",
+        executed_steps=[],
+        actions=[{"tool_id": "gmail.draft", "status": "success", "summary": "draft created"}],
+        report_body="Summary ready.",
+        sources=[],
+        allowed_tool_ids=["gmail.draft", "gmail.send"],
+    )
+    assert row["ready_for_final_response"] is False
+    assert row["ready_for_external_actions"] is False
+    assert "Required action not completed: send_email" in row["missing_items"]
+    assert row["recommended_remediation"] == [
+        {
+            "tool_id": "gmail.draft",
+            "title": "Draft email delivery content",
+            "params": {"to": "ops@example.com"},
+        }
+    ]
 
 
 def test_verify_task_contract_parses_json_and_filters_remediation(monkeypatch) -> None:

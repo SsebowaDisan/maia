@@ -1,0 +1,336 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import type { ChatAttachment, ChatTurn } from "../../types";
+import type { ChatMainProps, ComposerAttachment } from "./types";
+
+type UseChatMainInteractionsParams = Pick<
+  ChatMainProps,
+  | "accessMode"
+  | "activityEvents"
+  | "agentMode"
+  | "chatTurns"
+  | "citationMode"
+  | "isSending"
+  | "onAccessModeChange"
+  | "onAgentModeChange"
+  | "onSendMessage"
+  | "onUpdateUserTurn"
+  | "onUploadFiles"
+>;
+
+function useChatMainInteractions({
+  accessMode,
+  activityEvents,
+  agentMode,
+  chatTurns,
+  citationMode,
+  isSending,
+  onAccessModeChange,
+  onAgentModeChange,
+  onSendMessage,
+  onUpdateUserTurn,
+  onUploadFiles,
+}: UseChatMainInteractionsParams) {
+  const [message, setMessage] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [agentControlsVisible, setAgentControlsVisible] = useState(false);
+  const [messageActionStatus, setMessageActionStatus] = useState("");
+  const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const statusTimerRef = useRef<number | null>(null);
+  const lastClipboardEventRef = useRef<string>("");
+
+  const showActionStatus = (text: string) => {
+    setMessageActionStatus(text);
+    if (statusTimerRef.current) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+    statusTimerRef.current = window.setTimeout(() => {
+      setMessageActionStatus("");
+      statusTimerRef.current = null;
+    }, 2500);
+  };
+
+  useEffect(
+    () => () => {
+      if (statusTimerRef.current) {
+        window.clearTimeout(statusTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const latestHighlightSnippets = useMemo(() => {
+    const snippets: string[] = [];
+    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
+      const event = activityEvents[index];
+      const copied = event.data?.["copied_snippets"];
+      if (Array.isArray(copied)) {
+        for (const row of copied) {
+          const text = String(row || "").trim();
+          if (text && !snippets.includes(text)) {
+            snippets.push(text);
+          }
+          if (snippets.length >= 8) {
+            return snippets;
+          }
+        }
+      }
+      const clipboardText =
+        typeof event.data?.["clipboard_text"] === "string"
+          ? event.data["clipboard_text"].trim()
+          : "";
+      if (clipboardText && !snippets.includes(clipboardText)) {
+        snippets.push(clipboardText);
+      }
+      if (snippets.length >= 8) {
+        return snippets;
+      }
+    }
+    return snippets;
+  }, [activityEvents]);
+
+  const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) => {
+    return (turnAttachments || []).map((attachment, idx) => ({
+      id: `compose-${Date.now()}-${idx}-${attachment.name}`,
+      name: attachment.name,
+      status: "indexed" as const,
+      fileId: attachment.fileId,
+    }));
+  };
+
+  const submit = async () => {
+    const payload = message.trim();
+    if (!payload || isSending) {
+      return;
+    }
+    const turnAttachments: ChatAttachment[] = attachments
+      .filter((item) => item.status !== "error")
+      .map((item) => ({ name: item.name, fileId: item.fileId }));
+    setMessage("");
+    await onSendMessage(payload, turnAttachments, {
+      citationMode,
+      useMindmap: false,
+      agentMode,
+      accessMode,
+    });
+    setAttachments([]);
+  };
+
+  const copyPlainText = async (text: string, label: string) => {
+    const value = text.trim();
+    if (!value) {
+      showActionStatus(`Nothing to copy from ${label}.`);
+      return;
+    }
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const fallback = document.createElement("textarea");
+        fallback.value = value;
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        document.execCommand("copy");
+        document.body.removeChild(fallback);
+      }
+      showActionStatus(`${label} copied.`);
+    } catch {
+      showActionStatus(`Unable to copy ${label.toLowerCase()}.`);
+    }
+  };
+
+  const beginInlineEdit = (turn: ChatTurn, turnIndex: number) => {
+    setEditingTurnIndex(turnIndex);
+    setEditingText(turn.user);
+    showActionStatus("Editing message inline.");
+  };
+
+  const cancelInlineEdit = () => {
+    setEditingTurnIndex(null);
+    setEditingText("");
+  };
+
+  const saveInlineEdit = async () => {
+    if (editingTurnIndex === null) {
+      return;
+    }
+    if (isSending) {
+      return;
+    }
+    const value = editingText.trim();
+    if (!value) {
+      showActionStatus("Message cannot be empty.");
+      return;
+    }
+    const editedTurn = chatTurns[editingTurnIndex];
+    onUpdateUserTurn(editingTurnIndex, value);
+    setEditingTurnIndex(null);
+    setEditingText("");
+    showActionStatus("Message updated. Generating response...");
+    await onSendMessage(value, editedTurn?.attachments, {
+      citationMode,
+      useMindmap: false,
+      agentMode,
+      accessMode,
+    });
+  };
+
+  const retryTurn = (turn: ChatTurn) => {
+    setMessage(turn.user);
+    setAttachments(mapTurnAttachments(turn.attachments));
+    showActionStatus("Retry prompt loaded into the command bar.");
+  };
+
+  const enableAgentMode = () => {
+    setAgentControlsVisible(true);
+    onAgentModeChange("company_agent");
+    showActionStatus("Agent mode enabled.");
+  };
+
+  const enableDeepResearch = () => {
+    setAgentControlsVisible(false);
+    onAgentModeChange("ask");
+    onAccessModeChange("restricted");
+    showActionStatus("Deep research enabled in Ask mode.");
+  };
+
+  const pasteHighlightsToComposer = () => {
+    if (!latestHighlightSnippets.length) {
+      showActionStatus("No copied highlights available yet.");
+      return;
+    }
+    const block = [
+      "Copied highlights:",
+      ...latestHighlightSnippets.slice(0, 6).map((snippet) => `- ${snippet}`),
+    ].join("\n");
+    setMessage((previous) => {
+      const current = previous.trim();
+      return current ? `${current}\n\n${block}` : block;
+    });
+    showActionStatus("Highlights pasted into the command bar.");
+  };
+
+  const quoteAssistant = (turn: ChatTurn) => {
+    const quoteSource = turn.assistant.replace(/\s+/g, " ").trim();
+    if (!quoteSource) {
+      return;
+    }
+    const quoted = `> ${quoteSource.slice(0, 350)}`;
+    setMessage((previous) => {
+      const base = previous.trim();
+      return base ? `${base}\n${quoted}` : quoted;
+    });
+    showActionStatus("Quoted answer loaded into the command bar.");
+  };
+
+  const onFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = event.target.files;
+    if (!selectedFiles || !selectedFiles.length) {
+      return;
+    }
+
+    const pending = Array.from(selectedFiles).map((file, idx) => ({
+      id: `${Date.now()}-${idx}-${file.name}`,
+      name: file.name,
+      status: "uploading" as const,
+    }));
+    setAttachments((prev) => [...prev, ...pending]);
+
+    setIsUploading(true);
+    try {
+      const response = await onUploadFiles(selectedFiles);
+      let successCursor = 0;
+      setAttachments((prev) =>
+        prev.map((attachment) => {
+          const pendingIdx = pending.findIndex((item) => item.id === attachment.id);
+          if (pendingIdx === -1) {
+            return attachment;
+          }
+          const item = response.items[pendingIdx];
+          if (item?.status === "success") {
+            const mappedFileId = item.file_id || response.file_ids[successCursor] || undefined;
+            successCursor += 1;
+            return {
+              ...attachment,
+              status: "indexed",
+              message: undefined,
+              fileId: mappedFileId,
+            };
+          }
+          return {
+            ...attachment,
+            status: "error",
+            message: item?.message || response.errors[0] || "Upload failed.",
+          };
+        }),
+      );
+    } catch (error) {
+      setAttachments((prev) =>
+        prev.map((attachment) =>
+          pending.some((item) => item.id === attachment.id)
+            ? {
+                ...attachment,
+                status: "error",
+                message: String(error),
+              }
+            : attachment,
+        ),
+      );
+    } finally {
+      setIsUploading(false);
+      event.target.value = "";
+    }
+  };
+
+  useEffect(() => {
+    if (!activityEvents.length) {
+      return;
+    }
+    const latest = activityEvents[activityEvents.length - 1];
+    if (!latest?.event_id || latest.event_id === lastClipboardEventRef.current) {
+      return;
+    }
+    if (
+      latest.event_type === "highlights_detected" ||
+      latest.event_type === "doc_copy_clipboard" ||
+      latest.event_type === "browser_copy_selection"
+    ) {
+      lastClipboardEventRef.current = latest.event_id;
+      showActionStatus("Highlights copied. Use + -> Paste highlights.");
+    }
+  }, [activityEvents]);
+
+  return {
+    agentControlsVisible,
+    attachments,
+    beginInlineEdit,
+    cancelInlineEdit,
+    copyPlainText,
+    editingText,
+    editingTurnIndex,
+    enableAgentMode,
+    enableDeepResearch,
+    fileInputRef,
+    isUploading,
+    latestHighlightSnippets,
+    message,
+    messageActionStatus,
+    onFileChange,
+    pasteHighlightsToComposer,
+    quoteAssistant,
+    saveInlineEdit,
+    setAttachments,
+    setEditingText,
+    setMessage,
+    showActionStatus,
+    submit,
+    retryTurn,
+  };
+}
+
+export { useChatMainInteractions };

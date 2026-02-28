@@ -1,0 +1,409 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from copy import deepcopy
+from datetime import datetime
+from typing import Any, Generator
+
+from fastapi import HTTPException
+from theflow.settings import settings as flowsettings
+from tzlocal import get_localzone
+
+from maia.base import Document
+
+from ktem.pages.chat.common import STATE
+
+from api.context import ApiContext
+from api.schemas import ChatRequest
+from api.services.agent.orchestrator import get_orchestrator
+from api.services.settings_service import load_user_settings
+
+from .constants import API_CHAT_FAST_PATH, logger
+from .conversation_store import (
+    build_selected_payload,
+    get_or_create_conversation,
+    persist_conversation,
+)
+from .fallbacks import build_extractive_timeout_answer, fallback_answer_from_exception
+from .fast_qa import run_fast_chat_turn
+from .pipeline import create_pipeline
+from .streaming import (
+    build_agent_context_window,
+    chunk_text_for_stream,
+    make_activity_stream_event,
+)
+
+
+def stream_chat_turn(
+    context: ApiContext,
+    user_id: str,
+    request: ChatRequest,
+) -> Generator[dict[str, Any], None, dict[str, Any]]:
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is empty.")
+
+    settings = load_user_settings(context, user_id)
+    conversation_id, conversation_name, data_source = get_or_create_conversation(
+        user_id=user_id,
+        conversation_id=request.conversation_id,
+    )
+
+    chat_history = deepcopy(data_source.get("messages", []))
+    chat_state = deepcopy(data_source.get("state", STATE))
+    selected_payload = build_selected_payload(
+        context=context,
+        user_id=user_id,
+        existing_selected=data_source.get("selected", {}),
+        requested_selected=request.index_selection,
+    )
+
+    if request.agent_mode == "company_agent":
+        orchestrator = get_orchestrator()
+        agent_result = None
+        last_activity_seq = 0
+        context_snippets, context_summary = build_agent_context_window(
+            chat_history=chat_history,
+            latest_message=message,
+            agent_goal=request.agent_goal,
+        )
+        agent_goal_parts = []
+        existing_goal = " ".join(str(request.agent_goal or "").split()).strip()
+        if existing_goal:
+            agent_goal_parts.append(existing_goal)
+        if context_summary:
+            agent_goal_parts.append(f"Conversation context: {context_summary}")
+        contextual_goal = " ".join(agent_goal_parts).strip()[:900]
+        agent_request = request
+        if contextual_goal and contextual_goal != existing_goal:
+            try:
+                agent_request = request.model_copy(update={"agent_goal": contextual_goal})
+            except Exception:
+                request_payload = request.model_dump()
+                request_payload["agent_goal"] = contextual_goal
+                agent_request = ChatRequest(**request_payload)
+        agent_settings = dict(settings)
+        if context_snippets:
+            agent_settings["__conversation_snippets"] = context_snippets
+        if context_summary:
+            agent_settings["__conversation_summary"] = context_summary
+        agent_settings["__conversation_latest_user_message"] = message
+        try:
+            iterator = orchestrator.run_stream(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                request=agent_request,
+                settings=agent_settings,
+            )
+            while True:
+                event = next(iterator)
+                if isinstance(event, dict):
+                    if event.get("type") == "activity":
+                        payload = event.get("event")
+                        if isinstance(payload, dict):
+                            seq_raw = payload.get("seq")
+                            if isinstance(seq_raw, int):
+                                last_activity_seq = max(last_activity_seq, seq_raw)
+                            elif isinstance(seq_raw, str) and seq_raw.isdigit():
+                                last_activity_seq = max(last_activity_seq, int(seq_raw))
+                    yield event
+        except StopIteration as stop:
+            agent_result = stop.value
+        except Exception as exc:
+            logger.exception("Company agent execution failed: %s", exc)
+            fallback = fallback_answer_from_exception(exc)
+            agent_result = type(
+                "_FallbackAgentResult",
+                (),
+                {
+                    "run_id": "",
+                    "answer": fallback,
+                    "info_html": "",
+                    "actions_taken": [],
+                    "sources_used": [],
+                    "next_recommended_steps": [],
+                },
+            )()
+
+        run_id_value = str(getattr(agent_result, "run_id", "") or "")
+        if run_id_value:
+            last_activity_seq += 1
+            yield {
+                "type": "activity",
+                "event": make_activity_stream_event(
+                    run_id=run_id_value,
+                    event_type="response_writing",
+                    title="Writing final response",
+                    detail="Composing grounded answer from executed tool outputs",
+                    seq=last_activity_seq,
+                ),
+            }
+
+        answer_text = ""
+        for delta in chunk_text_for_stream(agent_result.answer):
+            answer_text += delta
+            yield {
+                "type": "chat_delta",
+                "delta": delta,
+                "text": answer_text,
+            }
+
+        if run_id_value:
+            last_activity_seq += 1
+            yield {
+                "type": "activity",
+                "event": make_activity_stream_event(
+                    run_id=run_id_value,
+                    event_type="response_written",
+                    title="Response draft completed",
+                    detail=f"Prepared {len(answer_text)} characters for delivery",
+                    seq=last_activity_seq,
+                ),
+            }
+        if agent_result.info_html:
+            yield {"type": "info_delta", "delta": agent_result.info_html}
+
+        chat_state.setdefault("app", {})
+        chat_state["app"]["last_agent_run_id"] = agent_result.run_id
+
+        messages = chat_history + [[message, answer_text]]
+        retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
+        retrieval_history.append(agent_result.info_html)
+        plot_history = deepcopy(data_source.get("plot_history", []))
+        plot_history.append(None)
+        message_meta = deepcopy(data_source.get("message_meta", []))
+        message_meta.append(
+            {
+                "mode": "company_agent",
+                "activity_run_id": agent_result.run_id or None,
+                "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
+                "sources_used": [item.to_dict() for item in agent_result.sources_used],
+                "next_recommended_steps": agent_result.next_recommended_steps,
+            }
+        )
+
+        agent_runs = deepcopy(data_source.get("agent_runs", []))
+        agent_runs.append(
+            {
+                "run_id": agent_result.run_id,
+                "mode": request.agent_mode,
+                "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
+                "sources_used": [item.to_dict() for item in agent_result.sources_used],
+                "next_recommended_steps": agent_result.next_recommended_steps,
+                "date_created": datetime.now(get_localzone()).isoformat(),
+            }
+        )
+
+        conversation_payload = {
+            "selected": selected_payload,
+            "messages": messages,
+            "retrieval_messages": retrieval_history,
+            "plot_history": plot_history,
+            "message_meta": message_meta,
+            "state": chat_state,
+            "likes": deepcopy(data_source.get("likes", [])),
+            "agent_runs": agent_runs,
+        }
+        persist_conversation(conversation_id, conversation_payload)
+
+        return {
+            "conversation_id": conversation_id,
+            "conversation_name": conversation_name,
+            "message": message,
+            "answer": answer_text,
+            "info": agent_result.info_html,
+            "plot": None,
+            "state": chat_state,
+            "mode": "company_agent",
+            "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
+            "sources_used": [item.to_dict() for item in agent_result.sources_used],
+            "next_recommended_steps": agent_result.next_recommended_steps,
+            "activity_run_id": agent_result.run_id,
+        }
+
+    pipeline, reasoning_state, reasoning_id = create_pipeline(
+        context=context,
+        settings=settings,
+        request=request,
+        user_id=user_id,
+        state=chat_state,
+        selected_by_index=selected_payload,
+    )
+
+    answer_text = ""
+    info_text = ""
+    plot_data: dict[str, Any] | None = None
+
+    pipeline_error: Exception | None = None
+    try:
+        for response in pipeline.stream(message, conversation_id, chat_history):
+            if not isinstance(response, Document) or response.channel is None:
+                continue
+
+            if response.channel == "chat":
+                delta = response.content if response.content else ""
+                if delta:
+                    answer_text += delta
+                    yield {
+                        "type": "chat_delta",
+                        "delta": delta,
+                        "text": answer_text,
+                    }
+
+            elif response.channel == "info":
+                delta = response.content if response.content else ""
+                if delta:
+                    info_text += delta
+                    yield {
+                        "type": "info_delta",
+                        "delta": delta,
+                    }
+
+            elif response.channel == "plot":
+                plot_data = response.content
+                yield {"type": "plot", "plot": plot_data}
+
+            elif response.channel == "debug":
+                text = response.text if response.text else str(response.content)
+                if text:
+                    yield {"type": "debug", "message": text}
+    except HTTPException as exc:
+        pipeline_error = exc
+    except Exception as exc:
+        pipeline_error = exc
+
+    if pipeline_error is not None and not answer_text:
+        answer_text = fallback_answer_from_exception(pipeline_error)
+        yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
+
+    if not answer_text:
+        answer_text = getattr(
+            flowsettings,
+            "KH_CHAT_EMPTY_MSG_PLACEHOLDER",
+            "(Sorry, I don't know)",
+        )
+        yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
+
+    chat_state.setdefault("app", {})
+    chat_state["app"].update(reasoning_state.get("app", {}))
+    chat_state[reasoning_id] = reasoning_state.get("pipeline", {})
+
+    messages = chat_history + [[message, answer_text]]
+    retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
+    retrieval_history.append(info_text)
+    plot_history = deepcopy(data_source.get("plot_history", []))
+    plot_history.append(plot_data)
+    message_meta = deepcopy(data_source.get("message_meta", []))
+    message_meta.append(
+        {
+            "mode": "ask",
+            "activity_run_id": None,
+            "actions_taken": [],
+            "sources_used": [],
+            "next_recommended_steps": [],
+        }
+    )
+
+    conversation_payload = {
+        "selected": selected_payload,
+        "messages": messages,
+        "retrieval_messages": retrieval_history,
+        "plot_history": plot_history,
+        "message_meta": message_meta,
+        "state": chat_state,
+        "likes": deepcopy(data_source.get("likes", [])),
+    }
+    persist_conversation(conversation_id, conversation_payload)
+
+    return {
+        "conversation_id": conversation_id,
+        "conversation_name": conversation_name,
+        "message": message,
+        "answer": answer_text,
+        "info": info_text,
+        "plot": plot_data,
+        "state": chat_state,
+        "mode": "ask",
+        "actions_taken": [],
+        "sources_used": [],
+        "next_recommended_steps": [],
+        "activity_run_id": None,
+    }
+
+
+def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> dict[str, Any]:
+    if API_CHAT_FAST_PATH and request.agent_mode != "company_agent":
+        fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
+        if fast_result is not None:
+            return fast_result
+
+    timeout_seconds = int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45)
+
+    def consume_stream() -> dict[str, Any]:
+        iterator = stream_chat_turn(context=context, user_id=user_id, request=request)
+        try:
+            while True:
+                next(iterator)
+        except StopIteration as stop:
+            return stop.value
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(consume_stream)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError:
+        message = request.message.strip()
+        conversation_id, conversation_name, data_source = get_or_create_conversation(
+            user_id=user_id,
+            conversation_id=request.conversation_id,
+        )
+        timeout_answer, timeout_info = build_extractive_timeout_answer(
+            context=context,
+            user_id=user_id,
+        )
+
+        messages = deepcopy(data_source.get("messages", []))
+        if message:
+            messages.append([message, timeout_answer])
+        retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
+        retrieval_history.append(timeout_info)
+        plot_history = deepcopy(data_source.get("plot_history", []))
+        plot_history.append(None)
+        message_meta = deepcopy(data_source.get("message_meta", []))
+        message_meta.append(
+            {
+                "mode": "ask",
+                "activity_run_id": None,
+                "actions_taken": [],
+                "sources_used": [],
+                "next_recommended_steps": [],
+            }
+        )
+
+        conversation_payload = {
+            "selected": deepcopy(data_source.get("selected", {})),
+            "messages": messages,
+            "retrieval_messages": retrieval_history,
+            "plot_history": plot_history,
+            "message_meta": message_meta,
+            "state": deepcopy(data_source.get("state", STATE)),
+            "likes": deepcopy(data_source.get("likes", [])),
+        }
+        persist_conversation(conversation_id, conversation_payload)
+
+        return {
+            "conversation_id": conversation_id,
+            "conversation_name": conversation_name,
+            "message": message,
+            "answer": timeout_answer,
+            "info": timeout_info,
+            "plot": None,
+            "state": deepcopy(data_source.get("state", STATE)),
+            "mode": "ask",
+            "actions_taken": [],
+            "sources_used": [],
+            "next_recommended_steps": [],
+            "activity_run_id": None,
+        }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)

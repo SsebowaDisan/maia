@@ -9,30 +9,38 @@ Use this file as the live tracker for the active slice only.
 - `blocked` needs decision or prerequisite
 
 ## Active Slice
-- Name: `Clarification Gate and Missing Requirement Detection`
-- Status: `in_progress`
+- Name: `Continuous Agent Evals and Regression Guardrails`
+- Status: `done`
 
 ## Checklist
-- [x] scope implemented (`done`)
-- [ ] acceptance tests passed (`in_progress`)
-- [ ] regression slice tests passed (`in_progress`)
-- [x] verification evidence captured (`done`)
-- [x] roadmap checklist updated to `done` (`done`)
+- [x] eval suite implemented (`done`)
+- [x] CI quality gates configured (`done`)
+- [x] regression fixtures maintained (`done`)
 
 ## Verification Evidence
 - Commands run:
-- `.\\.venv311\\Scripts\\python.exe -m pytest api/tests/test_agent_llm_contracts.py api/tests/test_agent_llm_planner.py api/tests/test_agent_llm_plan_optimizer.py api/tests/test_agent_planner.py api/tests/test_agent_llm_execution_support.py -q`
-- `npm run build` (in `frontend/user_interface`)
+- `python -m compileall api/services/agent/eval_suite.py api/tests/test_agent_eval_suite.py scripts/run_agent_eval_suite.py`
+- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_agent_eval_suite.py`
+- `.venv311\\Scripts\\python.exe scripts/run_agent_eval_suite.py`
+- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_agent_answer_builder_value_add.py api/tests/test_agent_llm_contracts.py api/tests/test_agent_step_planner_evidence.py api/tests/test_agent_planner.py api/tests/test_agent_intelligence.py`
+- `npm -C frontend/user_interface run build`
 - Test output summary:
-- Python tests: `31 passed`
-- Frontend build: `vite build` succeeded
-- Logs reviewed:
-- Theatre event metadata and scene switching behavior for docs/sheets/browser transitions
-- Replay-safety notes:
-- Clarification gate blocks execution/delivery when contract missing requirements are present.
+- Eval suite threshold test passed (`1 passed`).
+- Eval suite CLI report gate passed with all gates `true`.
+- Combined regression suite passed (`30 passed`).
+- Frontend build passed (`vite build`).
+- LOC gate:
+- `api/services/agent/eval_suite.py` `264`
+- `api/services/agent/llm_contracts.py` `389`
+- `api/services/agent/contract_verification.py` `334`
+- `frontend/user_interface/src/app/components/agentActivityPanel/app.tsx` `475`
 
 ## Handoff Notes
-- Risks:
-- Full orchestrator integration still relies on large legacy file; add dedicated clarification/e2e tests before marking this slice done.
-- Follow-ups:
-- Add targeted orchestrator tests for `llm.clarification_requested` blocking and unblocking flows.
+- Completed in this step:
+- Added deterministic eval suite (`api/services/agent/eval_suite.py`) with threshold gates for ambiguity, multi-intent fact coverage, delivery completeness, and contradiction risk.
+- Added regression fixtures (`api/tests/fixtures/agent_eval_cases.json`) and enforced fixture-sync in gates.
+- Added eval test (`api/tests/test_agent_eval_suite.py`) and CLI gate script (`scripts/run_agent_eval_suite.py`).
+- Added CI quality-gate workflow (`.github/workflows/agent-quality-gate.yaml`).
+- Prior slices (21-23) remain validated with passing regression and frontend build checks.
+- Overall status:
+- End-to-end roadmap slices are complete.

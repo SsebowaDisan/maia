@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,6 +6,12 @@ import re
 import random
 from typing import Any, Generator
 
+from .browser_page_state import (
+    capture_page_state,
+    move_cursor,
+    page_metrics,
+    playwright_available,
+)
 from .browser_live_utils import (
     excerpt,
     extract_keywords,
@@ -21,15 +27,8 @@ from .base import BaseConnector, ConnectorError, ConnectorHealth
 class BrowserConnector(BaseConnector):
     connector_id = "playwright_browser"
 
-    def _playwright_available(self) -> bool:
-        try:
-            import playwright.sync_api  # noqa: F401
-            return True
-        except Exception:
-            return False
-
     def health_check(self) -> ConnectorHealth:
-        if not self._playwright_available():
+        if not playwright_available():
             return ConnectorHealth(
                 self.connector_id,
                 False,
@@ -72,7 +71,7 @@ class BrowserConnector(BaseConnector):
         auto_accept_cookies: bool = True,
         highlight_color: str = "yellow",
     ) -> Generator[dict[str, Any], None, dict[str, Any]]:
-        if not self._playwright_available():
+        if not playwright_available():
             raise ConnectorError(
                 "Playwright is not installed. Run `pip install playwright` and `playwright install`."
             )
@@ -97,7 +96,7 @@ class BrowserConnector(BaseConnector):
                 *,
                 spread: float = 22.0,
             ) -> tuple[float, float]:
-                metrics = self._page_metrics(page=page)
+                metrics = page_metrics(page=page)
                 viewport_width = max(1.0, to_number(metrics.get("viewport_width"), 1366.0))
                 viewport_height = max(1.0, to_number(metrics.get("viewport_height"), 768.0))
                 x = float(base_x) + movement_rng.uniform(-spread, spread)
@@ -119,7 +118,7 @@ class BrowserConnector(BaseConnector):
                     regions = keyword_regions(page=page, keywords=keywords, limit=8)
                     if regions:
                         regions = [{**dict(row), "color": effective_highlight_color} for row in regions]
-                    metrics = self._page_metrics(page=page)
+                    metrics = page_metrics(page=page)
                     viewport_width = max(1.0, to_number(metrics.get("viewport_width"), 1366.0))
                     viewport_height = max(1.0, to_number(metrics.get("viewport_height"), 768.0))
                     highlight_cursor = dict(cursor_payload)
@@ -132,10 +131,10 @@ class BrowserConnector(BaseConnector):
                         cursor_x = (rx + max(0.5, rw / 2.0)) / 100.0 * viewport_width
                         cursor_y = (ry + max(0.5, rh / 2.0)) / 100.0 * viewport_height
                         cursor_x, cursor_y = _jitter_target(cursor_x, cursor_y, spread=18.0)
-                        highlight_cursor = self._move_cursor(page=page, x=cursor_x, y=cursor_y)
+                        highlight_cursor = move_cursor(page=page, x=cursor_x, y=cursor_y)
                     find_query = " ".join(keywords[:2]).strip() or keywords[0]
                     if find_query:
-                        find_capture = self._capture_page_state(
+                        find_capture = capture_page_state(
                             page=page,
                             output_dir=output_dir,
                             stamp_prefix=stamp_prefix,
@@ -155,11 +154,11 @@ class BrowserConnector(BaseConnector):
                                 "highlight_regions": regions,
                                 "highlight_color": effective_highlight_color,
                                 **highlight_cursor,
-                                **self._page_metrics(page=page),
+                                **page_metrics(page=page),
                             },
                             "snapshot_ref": find_capture["screenshot_path"],
                         }
-                    highlight_capture = self._capture_page_state(
+                    highlight_capture = capture_page_state(
                         page=page,
                         output_dir=output_dir,
                         stamp_prefix=stamp_prefix,
@@ -179,7 +178,7 @@ class BrowserConnector(BaseConnector):
                             "match_count": len(regions),
                             "highlight_color": effective_highlight_color,
                             **highlight_cursor,
-                            **self._page_metrics(page=page),
+                            **page_metrics(page=page),
                         },
                         "snapshot_ref": highlight_capture["screenshot_path"],
                     }
@@ -202,7 +201,7 @@ class BrowserConnector(BaseConnector):
                             "copied_words": copied_words,
                             "highlight_color": effective_highlight_color,
                             **cursor_payload,
-                            **self._page_metrics(page=page),
+                            **page_metrics(page=page),
                         },
                         "snapshot_ref": str(capture.get("screenshot_path") or ""),
                     }
@@ -215,14 +214,14 @@ class BrowserConnector(BaseConnector):
                 raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
 
             open_x, open_y = _jitter_target(124, 88, spread=14.0)
-            open_cursor = self._move_cursor(page=page, x=open_x, y=open_y)
-            open_capture = self._capture_page_state(
+            open_cursor = move_cursor(page=page, x=open_x, y=open_y)
+            open_capture = capture_page_state(
                 page=page,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
                 label="open",
             )
-            open_metrics = self._page_metrics(page=page)
+            open_metrics = page_metrics(page=page)
             yield {
                 "event_type": "browser_open",
                 "title": "Start Playwright browser session",
@@ -239,7 +238,7 @@ class BrowserConnector(BaseConnector):
 
             if auto_accept_cookies:
                 consent = accept_cookie_banner(page=page, wait_ms=wait_ms)
-                consent_capture = self._capture_page_state(
+                consent_capture = capture_page_state(
                     page=page,
                     output_dir=output_dir,
                     stamp_prefix=stamp_prefix,
@@ -273,8 +272,8 @@ class BrowserConnector(BaseConnector):
             # Always capture a fast first-pass extract before any scrolling/navigation so
             # the agent can ground an initial answer from the landing page immediately.
             quick_x, quick_y = _jitter_target(220, 192, spread=20.0)
-            quick_cursor = self._move_cursor(page=page, x=quick_x, y=quick_y)
-            quick_capture = self._capture_page_state(
+            quick_cursor = move_cursor(page=page, x=quick_x, y=quick_y)
+            quick_capture = capture_page_state(
                 page=page,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
@@ -300,7 +299,7 @@ class BrowserConnector(BaseConnector):
                     "characters": len(str(quick_capture["text_excerpt"] or "")),
                     "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
                     **quick_cursor,
-                    **self._page_metrics(page=page),
+                    **page_metrics(page=page),
                 },
                 "snapshot_ref": quick_capture["screenshot_path"],
             }
@@ -330,14 +329,14 @@ class BrowserConnector(BaseConnector):
                     except Exception:
                         continue
                     nav_x, nav_y = _jitter_target(138, 106, spread=16.0)
-                    last_cursor = self._move_cursor(page=page, x=nav_x, y=nav_y)
-                    nav_capture = self._capture_page_state(
+                    last_cursor = move_cursor(page=page, x=nav_x, y=nav_y)
+                    nav_capture = capture_page_state(
                         page=page,
                         output_dir=output_dir,
                         stamp_prefix=stamp_prefix,
                         label=f"nav-{page_index}",
                     )
-                    nav_metrics = self._page_metrics(page=page)
+                    nav_metrics = page_metrics(page=page)
                     yield {
                         "event_type": "browser_navigate",
                         "title": f"Navigate to page {page_index}",
@@ -353,7 +352,7 @@ class BrowserConnector(BaseConnector):
                     }
                     if auto_accept_cookies:
                         consent = accept_cookie_banner(page=page, wait_ms=wait_ms)
-                        consent_capture = self._capture_page_state(
+                        consent_capture = capture_page_state(
                             page=page,
                             output_dir=output_dir,
                             stamp_prefix=stamp_prefix,
@@ -387,7 +386,7 @@ class BrowserConnector(BaseConnector):
                             }
 
                 for scroll_index in range(max(1, int(max_scroll_steps))):
-                    metrics_before = self._page_metrics(page=page)
+                    metrics_before = page_metrics(page=page)
                     viewport_width = int(metrics_before.get("viewport_width") or 1366)
                     viewport_height = int(metrics_before.get("viewport_height") or 768)
                     cursor_x_px, cursor_y_px = safe_focus_point(
@@ -397,7 +396,7 @@ class BrowserConnector(BaseConnector):
                         viewport_height=float(viewport_height),
                     )
                     cursor_x_px, cursor_y_px = _jitter_target(cursor_x_px, cursor_y_px, spread=24.0)
-                    last_cursor = self._move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
+                    last_cursor = move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
                     scroll_delta = smart_scroll_delta(
                         metrics_before=metrics_before,
                         pass_index=scroll_index,
@@ -412,8 +411,8 @@ class BrowserConnector(BaseConnector):
                     page.mouse.wheel(0, scroll_delta)
                     pause_ms = max(180, wait_ms // 2) + movement_rng.randint(0, 220)
                     page.wait_for_timeout(pause_ms)
-                    metrics_after = self._page_metrics(page=page)
-                    scroll_capture = self._capture_page_state(
+                    metrics_after = page_metrics(page=page)
+                    scroll_capture = capture_page_state(
                         page=page,
                         output_dir=output_dir,
                         stamp_prefix=stamp_prefix,
@@ -436,7 +435,7 @@ class BrowserConnector(BaseConnector):
                         "snapshot_ref": scroll_capture["screenshot_path"],
                     }
 
-                extract_capture = self._capture_page_state(
+                extract_capture = capture_page_state(
                     page=page,
                     output_dir=output_dir,
                     stamp_prefix=stamp_prefix,
@@ -461,7 +460,7 @@ class BrowserConnector(BaseConnector):
                         "characters": len(str(extract_capture["text_excerpt"] or "")),
                         "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
                         **last_cursor,
-                        **self._page_metrics(page=page),
+                        **page_metrics(page=page),
                     },
                     "snapshot_ref": extract_capture["screenshot_path"],
                 }
@@ -497,69 +496,4 @@ class BrowserConnector(BaseConnector):
             "pages": visited_pages,
         }
 
-    def _capture_page_state(
-        self,
-        *,
-        page: Any,
-        output_dir: Path,
-        stamp_prefix: str,
-        label: str,
-    ) -> dict[str, str]:
-        safe_label = "".join(char if char.isalnum() or char in ("-", "_") else "-" for char in label)[:40]
-        suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
-        screenshot_path = output_dir / f"{stamp_prefix}-{safe_label}-{suffix}.png"
-        page.screenshot(path=str(screenshot_path), full_page=False)
-        raw_text = page.evaluate("() => document.body ? document.body.innerText : ''")
-        text_excerpt = " ".join(str(raw_text or "").split())[:4000]
-        return {
-            "url": str(page.url or ""),
-            "title": str(page.title() or ""),
-            "text_excerpt": text_excerpt,
-            "screenshot_path": str(screenshot_path.resolve()),
-        }
 
-    def _move_cursor(self, *, page: Any, x: float, y: float) -> dict[str, float]:
-        try:
-            page.mouse.move(float(x), float(y), steps=random.randint(8, 22))
-        except Exception:
-            pass
-        metrics = self._page_metrics(page=page)
-        viewport_width = max(1.0, float(metrics.get("viewport_width") or 1366.0))
-        viewport_height = max(1.0, float(metrics.get("viewport_height") or 768.0))
-        return {
-            "cursor_x": round((float(x) / viewport_width) * 100.0, 2),
-            "cursor_y": round((float(y) / viewport_height) * 100.0, 2),
-        }
-
-    def _page_metrics(self, *, page: Any) -> dict[str, float]:
-        try:
-            raw = page.evaluate(
-                """() => {
-                    const doc = document.documentElement || {};
-                    const body = document.body || {};
-                    const scrollTop = Number(window.scrollY || doc.scrollTop || body.scrollTop || 0);
-                    const scrollHeight = Number(doc.scrollHeight || body.scrollHeight || 0);
-                    const viewportHeight = Number(window.innerHeight || doc.clientHeight || 0);
-                    const viewportWidth = Number(window.innerWidth || doc.clientWidth || 0);
-                    const maxScrollable = Math.max(1, scrollHeight - viewportHeight);
-                    const scrollPercent = Math.max(0, Math.min(100, (scrollTop / maxScrollable) * 100));
-                    return {
-                        scroll_top: scrollTop,
-                        scroll_height: scrollHeight,
-                        viewport_height: viewportHeight,
-                        viewport_width: viewportWidth,
-                        scroll_percent: scrollPercent,
-                    };
-                }"""
-            )
-            if isinstance(raw, dict):
-                result: dict[str, float] = {}
-                for key, value in raw.items():
-                    try:
-                        result[str(key)] = float(value)
-                    except Exception:
-                        continue
-                return result
-        except Exception:
-            return {}
-        return {}

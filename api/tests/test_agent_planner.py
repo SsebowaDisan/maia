@@ -96,6 +96,29 @@ def test_build_plan_uses_llm_steps_when_available(monkeypatch) -> None:
     ]
 
 
+def test_build_plan_preserves_llm_evidence_metadata(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        return [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect provided website",
+                "params": {"url": "https://example.com"},
+                "why_this_step": "Need direct source evidence for required facts.",
+                "expected_evidence": ["Headquarters city", "Primary services"],
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    request = ChatRequest(
+        message="Inspect https://example.com and summarize.",
+        agent_mode="ask",
+    )
+    steps = build_plan(request)
+    inspect_step = next(step for step in steps if step.tool_id == "browser.playwright.inspect")
+    assert inspect_step.why_this_step.startswith("Need direct source evidence")
+    assert list(inspect_step.expected_evidence) == ["Headquarters city", "Primary services"]
+
+
 def test_highlight_request_adds_file_highlights_and_docs_capture(monkeypatch) -> None:
     def _fake_plan_with_llm(*, request, allowed_tool_ids):
         return [
