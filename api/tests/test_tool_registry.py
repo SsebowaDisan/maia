@@ -25,6 +25,10 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("marketing.web_research", ids)
         self.assertIn("invoice.create", ids)
         self.assertIn("email.draft", ids)
+        self.assertIn("business.route_plan", ids)
+        self.assertIn("business.invoice_workflow", ids)
+        self.assertIn("business.meeting_scheduler", ids)
+        self.assertIn("business.proposal_workflow", ids)
 
     def test_execute_draft_tool(self) -> None:
         access = build_access_context(
@@ -39,6 +43,7 @@ class ToolRegistryTests(unittest.TestCase):
             params={"to": "ops@example.com", "subject": "Weekly update"},
         )
         self.assertIn("To: ops@example.com", result.content)
+        self.assertGreaterEqual(len(result.events), 1)
 
     def test_restricted_execute_requires_confirmation(self) -> None:
         access = build_access_context(

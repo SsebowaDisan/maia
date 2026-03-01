@@ -46,3 +46,15 @@ check-filenames = ""
 
 [tool.isort]
 known_first_party = ["maia"]
+
+[tool.pytest.ini_options]
+testpaths = ["api/tests", "libs/maia/tests", "libs/ktem/ktem_tests"]
+norecursedirs = [
+    ".venv",
+    ".venv311",
+    "venv",
+    "env",
+    ".git",
+    ".pytest_cache",
+    "__pycache__",
+]

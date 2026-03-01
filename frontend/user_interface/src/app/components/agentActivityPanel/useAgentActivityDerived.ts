@@ -33,9 +33,50 @@ const EMAIL_TOOL_IDS = new Set([
   "gmail.send",
 ]);
 
+function tabForSceneSurface(surface: string): PreviewTab | null {
+  const normalized = String(surface || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized === "browser" ||
+    normalized === "website" ||
+    normalized === "web" ||
+    normalized === "maps"
+  ) {
+    return "browser";
+  }
+  if (
+    normalized === "document" ||
+    normalized === "google_docs" ||
+    normalized === "google_sheets" ||
+    normalized === "docs" ||
+    normalized === "sheets"
+  ) {
+    return "document";
+  }
+  if (normalized === "email" || normalized === "gmail") {
+    return "email";
+  }
+  if (normalized === "system" || normalized === "workspace") {
+    return "system";
+  }
+  return null;
+}
+
 function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
   if (!event) {
     return "system";
+  }
+  const sceneSurface =
+    eventMetadataString(event, "scene_surface") ||
+    readStringField(event.data?.["scene_surface"]);
+  const surfaceTab = tabForSceneSurface(sceneSurface);
+  if (surfaceTab) {
+    return surfaceTab;
   }
   const byType = tabForEventType(event.event_type || "");
   if (byType !== "system") {

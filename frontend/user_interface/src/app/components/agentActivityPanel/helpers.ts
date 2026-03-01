@@ -117,6 +117,7 @@ function mergeLiveSceneData(
       "status",
       "tool_id",
       "path",
+      "scene_surface",
       "pdf_path",
     ].forEach((key) => assignString(key, payload[key]));
 

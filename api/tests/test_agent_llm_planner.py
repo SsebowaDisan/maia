@@ -45,3 +45,22 @@ def test_plan_with_llm_filters_unknown_tools_and_sanitizes(monkeypatch) -> None:
     ]
     assert rows[0]["title"]
     assert len(str(rows[0]["params"].get("summary") or "")) <= 1200
+
+
+def test_plan_with_llm_passes_preferred_tool_ids_to_prompt_builder(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    captured: dict[str, object] = {}
+
+    def _fake_request_openai_plan(**kwargs):
+        captured.update(kwargs)
+        return {"steps": []}
+
+    monkeypatch.setattr(llm_planner, "_request_openai_plan", _fake_request_openai_plan)
+    request = ChatRequest(message="Prepare research and docs update", agent_mode="company_agent")
+    _ = plan_with_llm(
+        request=request,
+        allowed_tool_ids={"marketing.web_research", "workspace.docs.research_notes"},
+        preferred_tool_ids={"workspace.docs.research_notes", "unknown.tool"},
+    )
+
+    assert captured.get("preferred_tool_ids") == ["workspace.docs.research_notes"]

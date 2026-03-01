@@ -1,3 +1,5 @@
+from importlib.util import find_spec
+
 import pytest
 
 
@@ -16,67 +18,31 @@ def mock_google_search(monkeypatch):
 
 
 def if_haystack_not_installed():
-    try:
-        import haystack  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("haystack") is None
 
 
 def if_sentence_bert_not_installed():
-    try:
-        import sentence_transformers  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("sentence_transformers") is None
 
 
 def if_sentence_fastembed_not_installed():
-    try:
-        import fastembed  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("fastembed") is None
 
 
 def if_unstructured_pdf_not_installed():
-    try:
-        import unstructured  # noqa: F401
-        from unstructured.partition.pdf import partition_pdf  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("unstructured") is None or find_spec("unstructured.partition.pdf") is None
 
 
 def if_cohere_not_installed():
-    try:
-        import cohere  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("cohere") is None
 
 
 def if_llama_cpp_not_installed():
-    try:
-        import llama_cpp  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("llama_cpp") is None
 
 
 def if_voyageai_not_installed():
-    try:
-        import voyageai  # noqa: F401
-    except ImportError:
-        return True
-    else:
-        return False
+    return find_spec("voyageai") is None
 
 
 skip_when_haystack_not_installed = pytest.mark.skipif(

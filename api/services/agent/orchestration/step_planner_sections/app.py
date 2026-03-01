@@ -15,8 +15,10 @@ from .contracts import (
     collect_probe_allowed_tool_ids,
     insert_contract_probe_steps,
 )
+from .capability_planning import analyze_capability_plan
 from .evidence import enforce_evidence_path, summarize_fact_coverage
 from .events import (
+    plan_capability_event,
     plan_candidate_event,
     plan_decompose_completed_event,
     plan_decompose_started_event,
@@ -50,6 +52,20 @@ def build_execution_steps(
         request=request,
         task_prep=task_prep,
     )
+    capability_analysis = analyze_capability_plan(
+        request=request,
+        task_prep=task_prep,
+        registry=registry,
+    )
+    yield emit_event(
+        plan_capability_event(
+            activity_event_factory=activity_event_factory,
+            required_domains=capability_analysis.required_domains,
+            preferred_tool_ids=capability_analysis.preferred_tool_ids,
+            matched_signals=capability_analysis.matched_signals,
+            rationale=capability_analysis.rationale,
+        )
+    )
 
     yield emit_event(
         plan_decompose_started_event(
@@ -59,7 +75,10 @@ def build_execution_steps(
             request_message=request.message,
         )
     )
-    steps = build_plan(planning_request)
+    steps = build_plan(
+        planning_request,
+        preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
+    )
     yield emit_event(
         plan_decompose_completed_event(
             activity_event_factory=activity_event_factory,

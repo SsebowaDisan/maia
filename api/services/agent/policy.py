@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_SPECS
+
 ACTION_CLASS_READ = "read"
 ACTION_CLASS_DRAFT = "draft"
 ACTION_CLASS_EXECUTE = "execute"
@@ -86,6 +88,30 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         minimum_role=USER_ROLE_ANALYST,
         description="Compute route distance/time with Google Distance Matrix API.",
         execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.route_plan",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Build customer/ops route plans with travel-time ranking and optional Sheets logging.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.invoice_workflow",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_ADMIN,
+        description="Create invoice documents and optionally dispatch through finance connector.",
+        execution_policy="confirm_before_execute",
+    ),
+    AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.meeting_scheduler",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_ADMIN,
+        description="Schedule meetings with agenda generation and attendee context.",
+        execution_policy="confirm_before_execute",
     ),
     AgentToolCapability(
         domain="marketing_research",
@@ -192,6 +218,22 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         execution_policy="auto_execute",
     ),
     AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.ga4_kpi_sheet_report",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Generate GA4 KPI summary and write it to Google Sheets.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.proposal_workflow",
+        action_class=ACTION_CLASS_DRAFT,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Generate proposal docs and optional stakeholder email drafts.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
         domain="document_ops",
         tool_id="docs.create",
         action_class=ACTION_CLASS_DRAFT,
@@ -279,11 +321,31 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         description="Post insights/alerts to Slack channels.",
         execution_policy="confirm_before_execute",
     ),
+    AgentToolCapability(
+        domain="business_workflow",
+        tool_id="business.cloud_incident_digest_email",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_ADMIN,
+        description="Summarize cloud incidents from logs and deliver digest via email.",
+        execution_policy="confirm_before_execute",
+    ),
+)
+
+_GOOGLE_API_CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = tuple(
+    AgentToolCapability(
+        domain=spec.domain,
+        tool_id=spec.tool_id,
+        action_class=spec.action_class,
+        minimum_role=spec.minimum_role if spec.minimum_role in _ROLE_PRIORITY else USER_ROLE_MEMBER,
+        description=spec.description,
+        execution_policy=spec.execution_policy,
+    )
+    for spec in GOOGLE_API_TOOL_SPECS
 )
 
 
 def get_capability_matrix() -> tuple[AgentToolCapability, ...]:
-    return _CAPABILITY_MATRIX
+    return _CAPABILITY_MATRIX + _GOOGLE_API_CAPABILITY_MATRIX
 
 
 def _safe_role(value: Any) -> UserRole:

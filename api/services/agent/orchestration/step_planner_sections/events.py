@@ -6,6 +6,30 @@ from api.services.agent.planner import PlannedStep
 from ..models import TaskPreparation
 
 
+def plan_capability_event(
+    *,
+    activity_event_factory,
+    required_domains: list[str],
+    preferred_tool_ids: list[str],
+    matched_signals: list[str],
+    rationale: list[str],
+) -> AgentActivityEvent:
+    return activity_event_factory(
+        event_type="llm.capability_plan",
+        title="Capability-based planner analysis",
+        detail=(
+            f"Matched {len(required_domains)} domain(s) and "
+            f"{len(preferred_tool_ids)} preferred tool(s)."
+        ),
+        metadata={
+            "required_domains": required_domains[:12],
+            "preferred_tool_ids": preferred_tool_ids[:24],
+            "matched_signals": matched_signals[:24],
+            "rationale": rationale[:6],
+        },
+    )
+
+
 def plan_decompose_started_event(
     *,
     activity_event_factory,

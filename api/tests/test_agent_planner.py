@@ -286,3 +286,112 @@ def test_semantic_fallback_can_request_contact_form_submission(monkeypatch) -> N
     assert "browser.contact_form.send" in tool_ids
     contact_step = next(step for step in steps if step.tool_id == "browser.contact_form.send")
     assert contact_step.params.get("url") == "https://axongroup.com/contact"
+
+
+def test_business_route_plan_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Please create a route plan from Kampala office to Entebbe Airport and Jinja for today visits.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.route_plan" in tool_ids
+    route_step = next(step for step in steps if step.tool_id == "business.route_plan")
+    assert str(route_step.params.get("origin") or "").lower().startswith("kampala office")
+    destinations = route_step.params.get("destinations")
+    assert isinstance(destinations, list)
+    assert len(destinations) >= 1
+
+
+def test_business_ga4_weekly_sheet_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Create a weekly GA4 KPI report and put it in Google Sheets.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.ga4_kpi_sheet_report" in tool_ids
+
+
+def test_business_cloud_incident_digest_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Send a cloud incident digest email to ops@example.com from cloud logging.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.cloud_incident_digest_email" in tool_ids
+    digest_step = next(step for step in steps if step.tool_id == "business.cloud_incident_digest_email")
+    assert digest_step.params.get("to") == "ops@example.com"
+
+
+def test_business_invoice_workflow_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Create and send invoice INV-2026-001 to client for USD 1200 and email it to billing@example.com.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.invoice_workflow" in tool_ids
+    invoice_step = next(step for step in steps if step.tool_id == "business.invoice_workflow")
+    assert invoice_step.params.get("invoice_number") == "INV-2026-001"
+    assert invoice_step.params.get("to") == "billing@example.com"
+    assert invoice_step.params.get("send") is True
+
+
+def test_business_meeting_scheduler_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Schedule a meeting with opslead@example.com to review Q2 rollout.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.meeting_scheduler" in tool_ids
+    meeting_step = next(step for step in steps if step.tool_id == "business.meeting_scheduler")
+    attendees = meeting_step.params.get("attendees")
+    assert isinstance(attendees, list)
+    assert "opslead@example.com" in attendees
+
+
+def test_business_proposal_workflow_fallback_for_non_technical_prompt() -> None:
+    request = ChatRequest(
+        message="Create an RFP proposal draft and send to ceo@example.com for review.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "business.proposal_workflow" in tool_ids
+    proposal_step = next(step for step in steps if step.tool_id == "business.proposal_workflow")
+    assert proposal_step.params.get("to") == "ceo@example.com"
+
+
+def test_build_plan_scopes_allowed_tools_when_preferred_tools_are_provided(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("MAIA_AGENT_LLM_WIDE_TOOLSET_ENABLED", "0")
+
+    def _fake_plan_with_llm(*, request, allowed_tool_ids, preferred_tool_ids):
+        _ = request
+        captured["allowed_tool_ids"] = set(allowed_tool_ids)
+        captured["preferred_tool_ids"] = set(preferred_tool_ids)
+        return []
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    monkeypatch.setattr(planner_module, "optimize_plan_rows", lambda **kwargs: kwargs["rows"])
+    request = ChatRequest(
+        message="Use Google Sheets API to update KPI rows.",
+        agent_mode="company_agent",
+    )
+    _ = build_plan(request, preferred_tool_ids={"google.api.google_sheets"})
+    allowed = captured.get("allowed_tool_ids")
+    assert isinstance(allowed, set)
+    assert "google.api.google_sheets" in allowed
+    assert "workspace.sheets.track_step" in allowed
+    assert "workspace.docs.research_notes" in allowed
+    assert "report.generate" in allowed
+    assert "invoice.send" not in allowed

@@ -1,0 +1,414 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import re
+from typing import Any
+
+from api.schemas import ChatRequest
+from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_SPECS
+from api.services.agent.llm_runtime import call_json_response, env_bool
+from api.services.agent.policy import AgentToolCapability, get_capability_matrix
+
+from ..models import TaskPreparation
+
+_INTENT_TAG_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
+    "web_research": ("marketing_research",),
+    "location_lookup": ("marketing_research",),
+    "report_generation": ("reporting",),
+    "docs_write": ("document_ops",),
+    "sheets_update": ("document_ops",),
+    "highlight_extract": ("document_ops",),
+    "email_delivery": ("email_ops",),
+    "contact_form_submission": ("outreach",),
+}
+
+_CONTRACT_ACTION_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
+    "send_email": ("email_ops",),
+    "create_document": ("document_ops", "reporting"),
+    "update_sheet": ("document_ops",),
+    "send_invoice": ("invoice",),
+    "create_invoice": ("invoice",),
+}
+
+_KEYWORD_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
+    "route plan": ("business_workflow",),
+    "travel time": ("business_workflow",),
+    "distance matrix": ("business_workflow",),
+    "incident digest": ("business_workflow",),
+    "weekly ga4": ("business_workflow",),
+    "invoice workflow": ("business_workflow",),
+    "schedule meeting": ("business_workflow",),
+    "calendar invite": ("business_workflow",),
+    "proposal workflow": ("business_workflow",),
+    "rfp": ("business_workflow",),
+    "bigquery": ("data_analysis",),
+    "warehouse": ("data_analysis",),
+    "dataset": ("data_analysis",),
+    "sql": ("data_analysis",),
+    "invoice": ("invoice",),
+    "billing": ("invoice",),
+    "payment": ("invoice",),
+    "calendar": ("scheduling",),
+    "meeting": ("scheduling",),
+    "task": ("scheduling",),
+    "slack": ("workplace",),
+    "ga4": ("analytics",),
+    "analytics": ("analytics",),
+    "google ads": ("ads_analysis",),
+    "monitoring": ("analytics",),
+    "logging": ("analytics",),
+    "trace": ("analytics",),
+    "cloud storage": ("document_ops",),
+    "drive": ("document_ops",),
+    "docs": ("document_ops",),
+    "sheets": ("document_ops",),
+    "chart": ("analytics", "reporting"),
+    "report": ("reporting",),
+    "research": ("marketing_research",),
+    "website": ("marketing_research",),
+    "web": ("marketing_research",),
+}
+
+_DOMAIN_PRIORITY: dict[str, int] = {
+    "marketing_research": 10,
+    "analytics": 20,
+    "ads_analysis": 25,
+    "data_analysis": 30,
+    "business_workflow": 35,
+    "reporting": 40,
+    "document_ops": 50,
+    "email_ops": 60,
+    "invoice": 70,
+    "outreach": 80,
+    "scheduling": 90,
+    "workplace": 100,
+}
+
+_ACTION_PRIORITY: dict[str, int] = {
+    "read": 10,
+    "draft": 20,
+    "execute": 30,
+}
+
+_SPACE_RE = re.compile(r"[^a-z0-9]+")
+_GOOGLE_SPEC_BY_TOOL_ID = {spec.tool_id: spec for spec in GOOGLE_API_TOOL_SPECS}
+
+
+@dataclass(frozen=True)
+class CapabilityPlanningAnalysis:
+    required_domains: list[str]
+    preferred_tool_ids: list[str]
+    matched_signals: list[str]
+    rationale: list[str]
+
+
+def _domain_sort_key(domain: str) -> tuple[int, str]:
+    return (_DOMAIN_PRIORITY.get(domain, 999), domain)
+
+
+def _extract_available_tool_ids(registry: Any) -> set[str]:
+    try:
+        rows = registry.list_tools()
+    except Exception:
+        return set()
+    output: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tool_id = str(row.get("tool_id") or "").strip()
+        if tool_id:
+            output.add(tool_id)
+    return output
+
+
+def _capabilities_for_available_tools(available_tool_ids: set[str]) -> list[AgentToolCapability]:
+    if not available_tool_ids:
+        return []
+    return [
+        capability
+        for capability in get_capability_matrix()
+        if capability.tool_id in available_tool_ids
+    ]
+
+
+def _append_domains(
+    *,
+    domains: set[str],
+    matched_signals: list[str],
+    reason: str,
+    candidate_domains: tuple[str, ...],
+) -> None:
+    added = False
+    for domain in candidate_domains:
+        if domain not in domains:
+            domains.add(domain)
+            added = True
+    if added:
+        matched_signals.append(reason)
+
+
+def _build_preferred_tools(
+    *,
+    domains: list[str],
+    capabilities: list[AgentToolCapability],
+    request: ChatRequest,
+) -> list[str]:
+    domain_map: dict[str, list[AgentToolCapability]] = {}
+    for capability in capabilities:
+        domain_map.setdefault(capability.domain, []).append(capability)
+
+    preferred: list[str] = []
+    for domain in domains:
+        rows = sorted(
+            domain_map.get(domain, []),
+            key=lambda item: (
+                _ACTION_PRIORITY.get(item.action_class, 999),
+                item.tool_id,
+            ),
+        )
+        for capability in rows[:4]:
+            preferred.append(capability.tool_id)
+
+    if request.agent_mode == "company_agent":
+        for sticky_tool in ("workspace.sheets.track_step", "workspace.docs.research_notes"):
+            if any(cap.tool_id == sticky_tool for cap in capabilities):
+                preferred.append(sticky_tool)
+
+    return list(dict.fromkeys(preferred))
+
+
+def _normalize_phrase(value: str) -> str:
+    text = _SPACE_RE.sub(" ", str(value or "").strip().lower())
+    return " ".join(text.split()).strip()
+
+
+def _match_explicit_google_api_tools(
+    *,
+    raw_text: str,
+    available_tool_ids: set[str],
+) -> tuple[list[str], list[str]]:
+    normalized = _normalize_phrase(raw_text)
+    if not normalized:
+        return [], []
+
+    haystack = f" {normalized} "
+    matched_tool_ids: list[str] = []
+    matched_signals: list[str] = []
+    for spec in GOOGLE_API_TOOL_SPECS:
+        if spec.tool_id not in available_tool_ids:
+            continue
+        api_name = _normalize_phrase(spec.api_name)
+        api_name_without_suffix = _normalize_phrase(
+            spec.api_name.removesuffix(" API").removesuffix(" api")
+        )
+        tool_suffix = _normalize_phrase(
+            spec.tool_id.replace("google.api.", "").replace("_", " ")
+        )
+        candidates = [
+            api_name,
+            api_name_without_suffix,
+            f"{api_name_without_suffix} api" if api_name_without_suffix else "",
+            tool_suffix,
+            f"{tool_suffix} api" if tool_suffix else "",
+        ]
+        matched_phrase = ""
+        for phrase in candidates:
+            clean = _normalize_phrase(phrase)
+            if not clean or len(clean) < 4:
+                continue
+            if f" {clean} " in haystack:
+                matched_phrase = clean
+                break
+        if not matched_phrase:
+            continue
+        matched_tool_ids.append(spec.tool_id)
+        matched_signals.append(f"explicit_google_api:{matched_phrase}")
+        if len(matched_tool_ids) >= 6:
+            break
+    return list(dict.fromkeys(matched_tool_ids)), matched_signals[:10]
+
+
+def _infer_domains_with_llm(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+    available_domains: list[str],
+) -> list[str]:
+    if not available_domains:
+        return []
+    if not env_bool("MAIA_AGENT_LLM_CAPABILITY_ROUTING_ENABLED", default=True):
+        return []
+
+    payload = {
+        "message": str(request.message or "").strip(),
+        "agent_goal": str(request.agent_goal or "").strip(),
+        "rewritten_task": str(task_prep.rewritten_task or "").strip(),
+        "contract_objective": str(task_prep.contract_objective or "").strip(),
+        "contract_outputs": list(task_prep.contract_outputs[:8]),
+        "contract_facts": list(task_prep.contract_facts[:8]),
+        "contract_actions": list(task_prep.contract_actions[:8]),
+        "intent_tags": [str(tag).strip() for tag in task_prep.task_intelligence.intent_tags[:8]],
+        "available_domains": available_domains,
+    }
+    prompt = (
+        "Select capability domains for planning based on the task brief.\n"
+        "Return JSON only in this schema:\n"
+        '{ "required_domains": ["domain_a", "domain_b"] }\n'
+        "Rules:\n"
+        "- Use only available_domains.\n"
+        "- Pick 1-6 domains.\n"
+        "- User does not need to name APIs; infer required domains from business intent.\n"
+        "- Favor non-technical workflow domains when they can satisfy the request.\n\n"
+        f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+    )
+    response = call_json_response(
+        system_prompt=(
+            "You route enterprise agent tasks to capability domains. "
+            "Return strict JSON only."
+        ),
+        user_prompt=prompt,
+        temperature=0.0,
+        timeout_seconds=12,
+        max_tokens=180,
+    )
+    if not isinstance(response, dict):
+        return []
+    raw = response.get("required_domains")
+    if not isinstance(raw, list):
+        return []
+    selected: list[str] = []
+    allowed = set(available_domains)
+    for item in raw:
+        value = str(item).strip()
+        if not value or value not in allowed or value in selected:
+            continue
+        selected.append(value)
+        if len(selected) >= 6:
+            break
+    return selected
+
+
+def analyze_capability_plan(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+    registry: Any,
+) -> CapabilityPlanningAnalysis:
+    available_tool_ids = _extract_available_tool_ids(registry)
+    capabilities = _capabilities_for_available_tools(available_tool_ids)
+    available_domains = sorted(
+        {capability.domain for capability in capabilities if str(capability.domain).strip()},
+        key=_domain_sort_key,
+    )
+    domains: set[str] = set()
+    matched_signals: list[str] = []
+
+    intent_tags = {
+        str(tag).strip().lower()
+        for tag in task_prep.task_intelligence.intent_tags
+        if str(tag).strip()
+    }
+    for tag in sorted(intent_tags):
+        mapped = _INTENT_TAG_DOMAIN_MAP.get(tag)
+        if mapped:
+            _append_domains(
+                domains=domains,
+                matched_signals=matched_signals,
+                reason=f"intent_tag:{tag}",
+                candidate_domains=mapped,
+            )
+
+    for action in task_prep.contract_actions:
+        action_text = str(action).strip().lower()
+        mapped = _CONTRACT_ACTION_DOMAIN_MAP.get(action_text)
+        if mapped:
+            _append_domains(
+                domains=domains,
+                matched_signals=matched_signals,
+                reason=f"contract_action:{action_text}",
+                candidate_domains=mapped,
+            )
+
+    raw_text = " ".join(
+        [
+            str(request.message or "").strip().lower(),
+            str(request.agent_goal or "").strip().lower(),
+            str(task_prep.contract_objective or "").strip().lower(),
+        ]
+    ).strip()
+    for keyword, mapped in _KEYWORD_DOMAIN_MAP.items():
+        if keyword in raw_text:
+            _append_domains(
+                domains=domains,
+                matched_signals=matched_signals,
+                reason=f"keyword:{keyword}",
+                candidate_domains=mapped,
+            )
+    llm_domains = _infer_domains_with_llm(
+        request=request,
+        task_prep=task_prep,
+        available_domains=available_domains,
+    )
+    for domain in llm_domains:
+        _append_domains(
+            domains=domains,
+            matched_signals=matched_signals,
+            reason=f"llm_domain:{domain}",
+            candidate_domains=(domain,),
+        )
+
+    if request.agent_mode == "company_agent":
+        _append_domains(
+            domains=domains,
+            matched_signals=matched_signals,
+            reason="company_agent_mode",
+            candidate_domains=("document_ops",),
+        )
+
+    if not domains:
+        domains.update(("marketing_research", "reporting"))
+        matched_signals.append("fallback:default_domains")
+
+    ordered_domains = sorted(domains, key=_domain_sort_key)
+    preferred_tool_ids = _build_preferred_tools(
+        domains=ordered_domains,
+        capabilities=capabilities,
+        request=request,
+    )
+    explicit_google_tools, explicit_google_signals = _match_explicit_google_api_tools(
+        raw_text=raw_text,
+        available_tool_ids=available_tool_ids,
+    )
+    if explicit_google_tools:
+        preferred_tool_ids = [*explicit_google_tools, *preferred_tool_ids]
+        for tool_id in explicit_google_tools:
+            spec = _GOOGLE_SPEC_BY_TOOL_ID.get(tool_id)
+            if not spec:
+                continue
+            _append_domains(
+                domains=domains,
+                matched_signals=matched_signals,
+                reason=f"explicit_google_api_domain:{spec.domain}",
+                candidate_domains=(spec.domain,),
+            )
+        ordered_domains = sorted(domains, key=_domain_sort_key)
+        matched_signals.extend(explicit_google_signals)
+    preferred_tool_ids = [tool_id for tool_id in preferred_tool_ids if tool_id in available_tool_ids]
+    preferred_tool_ids = list(dict.fromkeys(preferred_tool_ids))
+
+    rationale = [
+        f"Selected {len(ordered_domains)} capability domain(s) from {len(matched_signals)} signal(s).",
+        "Planner should prioritize preferred tools while keeping execution policy constraints.",
+    ]
+    if request.agent_mode == "company_agent":
+        rationale.append(
+            "Company Agent mode keeps workspace tracking tools in preferred set for theatre-first visibility."
+        )
+
+    return CapabilityPlanningAnalysis(
+        required_domains=ordered_domains,
+        preferred_tool_ids=preferred_tool_ids[:20],
+        matched_signals=matched_signals[:24],
+        rationale=rationale[:6],
+    )

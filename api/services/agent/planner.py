@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from typing import Any
-from urllib.parse import urlparse
 
+from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_IDS
 from api.schemas import ChatRequest
 from api.services.agent.llm_intent import enrich_task_intelligence
 from api.services.agent.llm_planner import plan_with_llm
 from api.services.agent.llm_plan_optimizer import optimize_plan_rows, rewrite_search_query
-
-URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+from api.services.agent.llm_runtime import env_bool
+from api.services.agent.planner_business_fallback import build_business_fallback_rows
+from api.services.agent.planner_helpers import intent_signals, sanitize_search_query
 LLM_ALLOWED_TOOL_IDS = {
     "ads.google.performance",
     "analytics.chart.generate",
     "analytics.ga4.report",
+    "business.cloud_incident_digest_email",
+    "business.ga4_kpi_sheet_report",
+    "business.invoice_workflow",
+    "business.meeting_scheduler",
+    "business.proposal_workflow",
+    "business.route_plan",
     "browser.contact_form.send",
     "browser.playwright.inspect",
     "calendar.create_event",
@@ -42,6 +47,16 @@ LLM_ALLOWED_TOOL_IDS = {
     "workspace.drive.search",
     "workspace.sheets.append",
     "workspace.sheets.track_step",
+}.union(GOOGLE_API_TOOL_IDS)
+
+_CORE_FLOW_TOOL_IDS = {
+    "browser.playwright.inspect",
+    "documents.highlight.extract",
+    "docs.create",
+    "marketing.web_research",
+    "report.generate",
+    "workspace.docs.research_notes",
+    "workspace.sheets.track_step",
 }
 
 
@@ -58,82 +73,42 @@ def is_deep_research_request(request: ChatRequest) -> bool:
     return request.agent_mode == "company_agent" and bool(str(request.agent_goal or "").strip())
 
 
-def _extract_url(text: str) -> str:
-    match = URL_RE.search(text)
-    return match.group(0).strip() if match else ""
-
-
-def _extract_email(text: str) -> str:
-    match = EMAIL_RE.search(text)
-    return match.group(1).strip() if match else ""
-
-
-def _sanitize_search_query(text: str, *, fallback_url: str = "") -> str:
-    sanitized = EMAIL_RE.sub("", text or "")
-    sanitized = URL_RE.sub("", sanitized)
-    sanitized = " ".join(sanitized.split())
-    if sanitized:
-        return sanitized
-    if fallback_url:
-        host = (urlparse(fallback_url).hostname or "").strip()
-        if host:
-            return f"site:{host} company overview services"
-    return "company overview services"
-
-
-def _preferred_highlight_color(text: str) -> str:
-    return "yellow"
-
-
-def _intent_signals(request: ChatRequest) -> dict[str, Any]:
-    message = str(request.message or "").strip()
-    goal = str(request.agent_goal or "").strip()
-    combined = f"{message} {goal}".strip()
-    url = _extract_url(combined)
-    recipient = _extract_email(combined)
-    return {
-        "url": url,
-        "recipient_email": recipient,
-        "explicit_web_discovery": False,
-        "wants_location_info": False,
-        "wants_send": bool(recipient),
-        "wants_report": False,
-        "wants_highlight_words": False,
-        "wants_contact_form": False,
-        "wants_docs_output": False,
-        "wants_file_scope": False,
-        "highlight_color": _preferred_highlight_color(combined),
-    }
-
-
-def _sort_steps(steps: list[PlannedStep]) -> list[PlannedStep]:
+def _sort_steps(steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
     priorities = {
         "browser.playwright.inspect": 5,
         "documents.highlight.extract": 8,
         "workspace.docs.research_notes": 10,
         "workspace.sheets.track_step": 15,
+        "business.route_plan": 24,
         "marketing.web_research": 30,
         "marketing.local_discovery": 35,
         "marketing.competitor_profile": 40,
+        "business.ga4_kpi_sheet_report": 42,
+        "business.invoice_workflow": 43,
+        "business.meeting_scheduler": 44,
+        "business.proposal_workflow": 46,
         "data.dataset.analyze": 45,
         "report.generate": 70,
         "docs.create": 72,
         "workspace.docs.fill_template": 74,
         "gmail.draft": 82,
         "email.draft": 82,
+        "business.cloud_incident_digest_email": 84,
         "browser.contact_form.send": 86,
         "gmail.send": 88,
         "email.send": 88,
     }
     decorated = []
+    preferred = {str(item).strip() for item in (preferred_tool_ids or set()) if str(item).strip()}
     for idx, step in enumerate(steps):
-        decorated.append((priorities.get(step.tool_id, 60), idx, step))
+        preferred_bias = -20 if step.tool_id in preferred else 0
+        decorated.append((priorities.get(step.tool_id, 60) + preferred_bias, idx, step))
     decorated.sort(key=lambda item: (item[0], item[1]))
     return [item[2] for item in decorated]
 
 
-def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[PlannedStep]:
-    signals = _intent_signals(request)
+def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
+    signals = intent_signals(request)
     url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
     highlight_color = str(signals.get("highlight_color") or "yellow")
@@ -150,7 +125,7 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
         if step.tool_id == "documents.highlight.extract":
             params.setdefault("highlight_color", highlight_color)
         if step.tool_id == "marketing.web_research":
-            query = _sanitize_search_query(
+            query = sanitize_search_query(
                 str(params.get("query") or request.message),
                 fallback_url=url,
             )
@@ -164,6 +139,19 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
             params.setdefault("summary", request.message)
         if step.tool_id in ("gmail.draft", "gmail.send", "email.draft", "email.send") and recipient:
             params.setdefault("to", recipient)
+        if step.tool_id == "business.cloud_incident_digest_email" and recipient:
+            params.setdefault("to", recipient)
+            params.setdefault("send", True)
+        if step.tool_id == "business.invoice_workflow" and recipient:
+            params.setdefault("to", recipient)
+        if step.tool_id == "business.meeting_scheduler" and recipient:
+            params.setdefault("attendees", [recipient])
+        if step.tool_id == "business.proposal_workflow" and recipient:
+            params.setdefault("to", recipient)
+        if step.tool_id == "business.route_plan":
+            params.setdefault("mode", "driving")
+        if step.tool_id == "business.ga4_kpi_sheet_report":
+            params.setdefault("sheet_range", "Tracker!A1")
         if step.tool_id == "browser.contact_form.send":
             if url:
                 params.setdefault("url", url)
@@ -200,15 +188,15 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep]) -> list[Pla
         seen.add(signature)
         deduped.append(step)
 
-    return _sort_steps(deduped)
+    return _sort_steps(deduped, preferred_tool_ids=preferred_tool_ids)
 
 
-def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -> list[PlannedStep]:
+def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
     if not is_deep_research_request(request):
-        return _normalize_steps(request, steps)
+        return _normalize_steps(request, steps, preferred_tool_ids=preferred_tool_ids)
 
     enriched = list(steps)
-    intent = _intent_signals(request)
+    intent = intent_signals(request)
     direct_url = str(intent.get("url") or "")
 
     has_web = any(step.tool_id == "marketing.web_research" for step in enriched)
@@ -243,12 +231,12 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep]) -
             ),
         )
 
-    return _normalize_steps(request, enriched)
+    return _normalize_steps(request, enriched, preferred_tool_ids=preferred_tool_ids)
 
 
 def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
     """LLM-intent fallback when the dedicated planner returns no rows."""
-    heuristic = _intent_signals(request)
+    heuristic = intent_signals(request)
     llm_intent = enrich_task_intelligence(
         message=request.message,
         agent_goal=request.agent_goal,
@@ -347,15 +335,61 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
         )
 
     return steps
-def build_plan(request: ChatRequest) -> list[PlannedStep]:
+
+
+def _planning_allowed_tool_ids(
+    *,
+    preferred_tool_ids: set[str] | None,
+) -> set[str]:
+    if env_bool("MAIA_AGENT_LLM_WIDE_TOOLSET_ENABLED", default=True):
+        # LLM-first planning: allow the model to choose the best APIs/tools from full catalog.
+        return set(LLM_ALLOWED_TOOL_IDS)
+    if not preferred_tool_ids:
+        return set(LLM_ALLOWED_TOOL_IDS)
+    preferred = {
+        str(item).strip()
+        for item in preferred_tool_ids
+        if str(item).strip() in LLM_ALLOWED_TOOL_IDS
+    }
+    if not preferred:
+        return set(LLM_ALLOWED_TOOL_IDS)
+    constrained = set(preferred).union(_CORE_FLOW_TOOL_IDS)
+    # Keep all execution in the current company-agent flow even when scoping the tool set.
+    constrained = {
+        tool_id
+        for tool_id in constrained
+        if tool_id in LLM_ALLOWED_TOOL_IDS
+    }
+    return constrained or set(LLM_ALLOWED_TOOL_IDS)
+
+
+def build_plan(
+    request: ChatRequest,
+    *,
+    preferred_tool_ids: set[str] | None = None,
+) -> list[PlannedStep]:
     steps: list[PlannedStep] = []
     company_agent_mode = request.agent_mode == "company_agent"
-    llm_rows = plan_with_llm(request=request, allowed_tool_ids=LLM_ALLOWED_TOOL_IDS)
+    planning_allowed_tool_ids = _planning_allowed_tool_ids(
+        preferred_tool_ids=preferred_tool_ids,
+    )
+    llm_rows = (
+        plan_with_llm(
+            request=request,
+            allowed_tool_ids=planning_allowed_tool_ids,
+            preferred_tool_ids=preferred_tool_ids,
+        )
+        if preferred_tool_ids is not None
+        else plan_with_llm(
+            request=request,
+            allowed_tool_ids=planning_allowed_tool_ids,
+        )
+    )
     if llm_rows:
         llm_rows = optimize_plan_rows(
             request=request,
             rows=llm_rows,
-            allowed_tool_ids=LLM_ALLOWED_TOOL_IDS,
+            allowed_tool_ids=planning_allowed_tool_ids,
         )
         llm_steps: list[PlannedStep] = []
         for row in llm_rows:
@@ -386,13 +420,39 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
                 )
             )
         if llm_steps:
-            return _augment_for_deep_research(request, llm_steps)
+            return _augment_for_deep_research(
+                request,
+                llm_steps,
+                preferred_tool_ids=preferred_tool_ids,
+            )
+
+    business_fallback_rows = build_business_fallback_rows(request)
+    if business_fallback_rows:
+        business_fallback_steps = [
+            PlannedStep(
+                tool_id=str(row.get("tool_id") or "").strip(),
+                title=str(row.get("title") or row.get("tool_id") or "Business workflow").strip()
+                or "Business workflow",
+                params=dict(row.get("params")) if isinstance(row.get("params"), dict) else {},
+            )
+            for row in business_fallback_rows
+            if str(row.get("tool_id") or "").strip()
+        ]
+        return _normalize_steps(
+            request,
+            business_fallback_steps,
+            preferred_tool_ids=preferred_tool_ids,
+        )
 
     semantic_fallback_steps = _build_semantic_fallback_steps(request)
     if semantic_fallback_steps:
-        return _augment_for_deep_research(request, semantic_fallback_steps)
+        return _augment_for_deep_research(
+            request,
+            semantic_fallback_steps,
+            preferred_tool_ids=preferred_tool_ids,
+        )
 
-    signals = _intent_signals(request)
+    signals = intent_signals(request)
     target_url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
     if target_url:
@@ -447,7 +507,7 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
     optimized_rows = optimize_plan_rows(
         request=request,
         rows=candidate_rows,
-        allowed_tool_ids=LLM_ALLOWED_TOOL_IDS,
+        allowed_tool_ids=planning_allowed_tool_ids,
     )
     if optimized_rows:
         steps = [
@@ -471,7 +531,13 @@ def build_plan(request: ChatRequest) -> list[PlannedStep]:
             for row in optimized_rows
             if str(row.get("tool_id") or "").strip()
         ] or steps
-    return _augment_for_deep_research(request, steps)
+    return _augment_for_deep_research(
+        request,
+        steps,
+        preferred_tool_ids=preferred_tool_ids,
+    )
+
+
 def build_browser_followup_steps(
     web_result_data: dict[str, Any] | None,
     *,

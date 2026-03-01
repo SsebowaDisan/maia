@@ -30,15 +30,47 @@ def run_workspace_shadow_logging(
     ):
         return
 
+    completed_at = utc_now().isoformat()
+    evidence_url = (
+        result.sources[0].url
+        if getattr(result, "sources", None)
+        else ""
+    ) or ""
+    completion_detail = " | ".join(
+        [
+            f"DONE at {completed_at}",
+            f"Tool={step.tool_id}",
+            f"Summary={str(result.summary or '').strip()[:360]}",
+            f"Evidence={evidence_url or 'n/a'}",
+        ]
+    )
+    note_lines = [
+        f"Step {index} completed",
+        f"Title: {step.title}",
+        f"Tool: {step.tool_id}",
+        f"Completed at: {completed_at}",
+        f"Summary: {str(result.summary or '').strip() or 'No summary provided.'}",
+    ]
+    if evidence_url:
+        note_lines.append(f"Evidence URL: {evidence_url}")
+
     log_steps = [
+        PlannedStep(
+            tool_id="workspace.docs.research_notes",
+            title=f"Capture step notes: {step.title}",
+            params={
+                "note": "\n".join(note_lines),
+                "include_copied_highlights": False,
+            },
+        ),
         PlannedStep(
             tool_id="workspace.sheets.track_step",
             title=f"Track completion: {step.title}",
             params={
-                "step_name": step.title,
-                "status": "completed",
-                "detail": result.summary,
-                "source_url": (result.sources[0].url if result.sources else ""),
+                "step_name": f"{index}. {step.title}",
+                "status": "DONE",
+                "detail": completion_detail,
+                "source_url": evidence_url,
             },
         ),
     ]

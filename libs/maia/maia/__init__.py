@@ -1,23 +1,37 @@
-# Disable telemetry with monkey patching
+"""Package bootstrap for Maia.
+
+Keep import-time work minimal: set telemetry flags and patch already-loaded
+modules without importing heavy optional dependencies.
+"""
+
+from __future__ import annotations
+
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
-try:
-    import posthog
+
+
+def _patch_posthog_if_loaded() -> None:
+    posthog_module = sys.modules.get("posthog")
+    if posthog_module is None:
+        return
 
     def capture(*args, **kwargs):
         logger.info("posthog.capture called with args: %s, kwargs: %s", args, kwargs)
 
-    posthog.capture = capture
-except ImportError:
-    pass
+    posthog_module.capture = capture
 
-try:
-    import os
 
-    os.environ["HAYSTACK_TELEMETRY_ENABLED"] = "False"
-    import haystack.telemetry
+def _disable_haystack_telemetry_if_loaded() -> None:
+    telemetry_module = sys.modules.get("haystack.telemetry")
+    if telemetry_module is None:
+        return
 
-    haystack.telemetry.telemetry = None
-except ImportError:
-    pass
+    telemetry_module.telemetry = None
+
+
+os.environ["HAYSTACK_TELEMETRY_ENABLED"] = "False"
+_patch_posthog_if_loaded()
+_disable_haystack_telemetry_if_loaded()

@@ -12,6 +12,7 @@ from .browser_connector import BrowserConnector
 from .email_validation_connector import EmailValidationConnector
 from .google_ads_connector import GoogleAdsConnector
 from .google_analytics_connector import GoogleAnalyticsConnector
+from .google_api_hub_connector import GoogleApiHubConnector
 from .google_calendar_connector import GoogleCalendarConnector
 from .google_maps_connector import GoogleMapsConnector
 from .google_workspace_connector import GoogleWorkspaceConnector
@@ -31,6 +32,7 @@ class ConnectorRegistry:
             "google_maps": GoogleMapsConnector,
             "google_calendar": GoogleCalendarConnector,
             "google_analytics": GoogleAnalyticsConnector,
+            "google_api_hub": GoogleApiHubConnector,
             "gmail": GmailConnector,
             "gmail_playwright": GmailPlaywrightConnector,
             "bing_search": BingSearchConnector,

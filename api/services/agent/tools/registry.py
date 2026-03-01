@@ -15,6 +15,16 @@ from api.services.agent.policy import (
 )
 from api.services.agent.tools.ads_tools import GoogleAdsPerformanceTool
 from api.services.agent.tools.analytics_tools import GA4ReportTool
+from api.services.agent.tools.business_workflow_tools import (
+    BusinessCloudIncidentDigestEmailTool,
+    BusinessGa4KpiSheetReportTool,
+    BusinessRoutePlanTool,
+)
+from api.services.agent.tools.business_office_tools import (
+    BusinessInvoiceWorkflowTool,
+    BusinessMeetingSchedulerTool,
+    BusinessProposalWorkflowTool,
+)
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -32,6 +42,7 @@ from api.services.agent.tools.document_tools import DocumentCreateTool
 from api.services.agent.tools.document_highlight_tools import DocumentHighlightExtractTool
 from api.services.agent.tools.email_tools import EmailDraftTool, EmailSendTool
 from api.services.agent.tools.gmail_tools import GmailDraftTool, GmailSearchTool, GmailSendTool
+from api.services.agent.tools.google_api_tools import build_google_api_tools
 from api.services.agent.tools.invoice_tools import InvoiceCreateTool, InvoiceSendTool
 from api.services.agent.tools.maps_tools import MapsDistanceTool, MapsGeocodeTool
 from api.services.agent.tools.research_tools import CompetitorProfileTool, WebResearchTool
@@ -77,10 +88,18 @@ class ToolRegistry:
         self.register(GmailSearchTool())
         self.register(CalendarCreateEventTool())
         self.register(GA4ReportTool())
+        self.register(BusinessRoutePlanTool())
+        self.register(BusinessGa4KpiSheetReportTool())
+        self.register(BusinessCloudIncidentDigestEmailTool())
+        self.register(BusinessInvoiceWorkflowTool())
+        self.register(BusinessMeetingSchedulerTool())
+        self.register(BusinessProposalWorkflowTool())
         self.register(ChartGenerateTool())
         self.register(EmailValidationTool())
         self.register(MapsGeocodeTool())
         self.register(MapsDistanceTool())
+        for google_api_tool in build_google_api_tools():
+            self.register(google_api_tool)
 
     def register(self, tool: AgentTool) -> None:
         self._tools[tool.metadata.tool_id] = tool
@@ -153,7 +172,23 @@ class ToolRegistry:
             access=access,
             params=params,
         )
-        result = yield from tool.execute_stream(context=context, prompt=prompt, params=params)
+        stream = tool.execute_stream(context=context, prompt=prompt, params=params)
+        observed_trace = False
+        while True:
+            try:
+                trace = next(stream)
+            except StopIteration as stop:
+                result = stop.value
+                break
+            observed_trace = True
+            yield trace
+        if not observed_trace:
+            yield ToolTraceEvent(
+                event_type="tool_progress",
+                title=f"Execute {tool_id}",
+                detail="Server-side action visible in theatre",
+                data={"tool_id": tool_id, "scene_surface": "system"},
+            )
         get_audit_logger().write(
             user_id=context.user_id,
             tenant_id=context.tenant_id,
