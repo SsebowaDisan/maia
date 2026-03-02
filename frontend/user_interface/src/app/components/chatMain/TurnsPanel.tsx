@@ -1,9 +1,11 @@
-import { Copy, FileText, PenLine, RotateCcw } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent } from "react";
+import { Copy, ExternalLink, FileText, PenLine, RotateCcw, X } from "lucide-react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from "react";
+import { buildRawFileUrl } from "../../../api/client";
 import type { AgentActivityEvent, ChatTurn } from "../../types";
 import { renderRichText } from "../../utils/richText";
 import { AgentActivityPanel } from "../AgentActivityPanel";
 import { ChatTurnPlot } from "./ChatTurnPlot";
+import type { FilePreviewAttachment } from "./types";
 
 type TurnsPanelProps = {
   activityEvents: AgentActivityEvent[];
@@ -45,6 +47,26 @@ function TurnsPanel({
   selectedTurnIndex,
   setEditingText,
 }: TurnsPanelProps) {
+  const [previewAttachment, setPreviewAttachment] = useState<FilePreviewAttachment | null>(null);
+  const previewUrl = useMemo(() => {
+    if (!previewAttachment?.fileId) return "";
+    return buildRawFileUrl(previewAttachment.fileId);
+  }, [previewAttachment]);
+  const previewNameLower = String(previewAttachment?.name || "").toLowerCase();
+  const previewIsImage = /\.(png|jpe?g|gif|bmp|webp|svg|tiff?)$/i.test(previewNameLower);
+  const previewIsPdf = previewNameLower.endsWith(".pdf");
+
+  useEffect(() => {
+    if (!previewAttachment) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewAttachment(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewAttachment]);
+
   return (
     <div className="mx-auto w-full max-w-[1800px] space-y-4">
       {chatTurns.map((turn, index) => {
@@ -79,9 +101,19 @@ function TurnsPanel({
                 {turn.attachments && turn.attachments.length > 0 ? (
                   <div className="space-y-1">
                     {turn.attachments.map((attachment, attachmentIdx) => (
-                      <div
+                      <button
                         key={`${attachment.name}-${attachmentIdx}`}
+                        type="button"
+                        onClick={(event) => {
+                          stopBubbleAction(event);
+                          setPreviewAttachment({
+                            name: attachment.name,
+                            fileId: attachment.fileId,
+                            status: "indexed",
+                          });
+                        }}
                         className="bg-white border border-black/[0.08] rounded-xl px-3 py-2 shadow-sm"
+                        title={attachment.fileId ? "Open file preview" : "Preview unavailable"}
                       >
                         <div className="flex items-center gap-2">
                           <FileText className="w-3.5 h-3.5 text-[#6e6e73] shrink-0" />
@@ -89,7 +121,7 @@ function TurnsPanel({
                             {attachment.name}
                           </span>
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 ) : null}
@@ -249,6 +281,65 @@ function TurnsPanel({
           </div>
         );
       })}
+
+      {previewAttachment ? (
+        <div className="fixed inset-0 z-[140] bg-black/45 backdrop-blur-[2px] px-4 py-6" onClick={() => setPreviewAttachment(null)}>
+          <div
+            className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_24px_70px_-28px_rgba(0,0,0,0.65)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-black/[0.06] px-4 py-3">
+              <p className="min-w-0 truncate text-[14px] font-medium text-[#1d1d1f]" title={previewAttachment.name}>
+                {previewAttachment.name}
+              </p>
+              <div className="ml-3 flex items-center gap-2">
+                {previewUrl ? (
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-full border border-black/[0.1] px-3 py-1.5 text-[11px] text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setPreviewAttachment(null)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.1] text-[#6e6e73] hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"
+                  aria-label="Close preview"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto bg-[#f5f5f7] p-4">
+              {!previewUrl ? (
+                <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-black/[0.12] bg-white text-[13px] text-[#6e6e73]">
+                  Preview unavailable for this file.
+                </div>
+              ) : previewIsImage ? (
+                <div className="flex min-h-full items-start justify-center">
+                  <img src={previewUrl} alt={previewAttachment.name} className="h-auto max-w-full rounded-xl border border-black/[0.08] bg-white" />
+                </div>
+              ) : previewIsPdf ? (
+                <iframe
+                  src={previewUrl}
+                  title={`Preview ${previewAttachment.name}`}
+                  className="h-full min-h-[420px] w-full rounded-xl border border-black/[0.08] bg-white"
+                />
+              ) : (
+                <iframe
+                  src={previewUrl}
+                  title={`Preview ${previewAttachment.name}`}
+                  className="h-full min-h-[420px] w-full rounded-xl border border-black/[0.08] bg-white"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

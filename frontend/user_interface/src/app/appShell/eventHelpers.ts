@@ -10,6 +10,7 @@ type ConversationMessageMeta = {
   human_review_notes?: string | null;
   activity_run_id?: string | null;
   web_summary?: Record<string, unknown>;
+  info_panel?: Record<string, unknown>;
 };
 
 export function isAgentActivityEvent(payload: unknown): payload is AgentActivityEvent {
@@ -47,6 +48,7 @@ export function buildConversationTurns(
     needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
     humanReviewNotes: messageMeta[index]?.human_review_notes || null,
     webSummary: messageMeta[index]?.web_summary || {},
+    infoPanel: messageMeta[index]?.info_panel || {},
     activityRunId: messageMeta[index]?.activity_run_id || null,
   }));
   const runIds = Array.from(

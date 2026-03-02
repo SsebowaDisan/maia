@@ -28,6 +28,7 @@ from .conversation_store import (
 )
 from .fallbacks import build_extractive_timeout_answer, fallback_answer_from_exception
 from .fast_qa import run_fast_chat_turn
+from .info_panel_copy import build_info_panel_copy
 from .pipeline import create_pipeline
 from .streaming import (
     build_agent_context_window,
@@ -237,9 +238,27 @@ def stream_chat_turn(
             }
         if agent_result.info_html:
             yield {"type": "info_delta", "delta": agent_result.info_html}
+        answer_text = enforce_required_citations(
+            answer=answer_text,
+            info_html=str(getattr(agent_result, "info_html", "") or ""),
+            citation_mode=request.citation,
+        )
         plot_data = _extract_plot_from_actions(agent_result.actions_taken)
         if plot_data:
             yield {"type": "plot", "plot": plot_data}
+        agent_web_summary = (
+            dict(getattr(agent_result, "web_summary", {}))
+            if isinstance(getattr(agent_result, "web_summary", {}), dict)
+            else {}
+        )
+        info_panel = build_info_panel_copy(
+            request_message=message,
+            answer_text=answer_text,
+            info_html=str(getattr(agent_result, "info_html", "") or ""),
+            mode="company_agent",
+            next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
+            web_summary=agent_web_summary,
+        )
 
         chat_state.setdefault("app", {})
         chat_state["app"]["last_agent_run_id"] = agent_result.run_id
@@ -268,11 +287,8 @@ def stream_chat_turn(
                 "next_recommended_steps": agent_result.next_recommended_steps,
                 "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
-                "web_summary": (
-                    dict(getattr(agent_result, "web_summary", {}))
-                    if isinstance(getattr(agent_result, "web_summary", {}), dict)
-                    else {}
-                ),
+                "web_summary": agent_web_summary,
+                "info_panel": info_panel,
             }
         )
 
@@ -286,11 +302,7 @@ def stream_chat_turn(
                 "next_recommended_steps": agent_result.next_recommended_steps,
                 "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
-                "web_summary": (
-                    dict(getattr(agent_result, "web_summary", {}))
-                    if isinstance(getattr(agent_result, "web_summary", {}), dict)
-                    else {}
-                ),
+                "web_summary": agent_web_summary,
                 "date_created": datetime.now(get_localzone()).isoformat(),
             }
         )
@@ -321,12 +333,9 @@ def stream_chat_turn(
             "next_recommended_steps": agent_result.next_recommended_steps,
             "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
             "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
-            "web_summary": (
-                dict(getattr(agent_result, "web_summary", {}))
-                if isinstance(getattr(agent_result, "web_summary", {}), dict)
-                else {}
-            ),
+            "web_summary": agent_web_summary,
             "activity_run_id": agent_result.run_id,
+            "info_panel": info_panel,
         }
 
     pipeline, reasoning_state, reasoning_id = create_pipeline(
@@ -402,6 +411,14 @@ def stream_chat_turn(
         else:
             answer_text = answer_with_citation_suffix
             yield {"type": "chat_delta", "delta": f"\n\n{answer_text}", "text": answer_text}
+    info_panel = build_info_panel_copy(
+        request_message=message,
+        answer_text=answer_text,
+        info_html=info_text,
+        mode="ask",
+        next_steps=[],
+        web_summary={},
+    )
 
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))
@@ -423,6 +440,7 @@ def stream_chat_turn(
             "needs_human_review": False,
             "human_review_notes": None,
             "web_summary": {},
+            "info_panel": info_panel,
         }
     )
 
@@ -453,14 +471,18 @@ def stream_chat_turn(
         "human_review_notes": None,
         "web_summary": {},
         "activity_run_id": None,
+        "info_panel": info_panel,
     }
 
 
 def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> dict[str, Any]:
     if API_CHAT_FAST_PATH and request.agent_mode != "company_agent":
-        fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
-        if fast_result is not None:
-            return fast_result
+        try:
+            fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
+            if fast_result is not None:
+                return fast_result
+        except Exception as exc:
+            logger.exception("Fast ask path failed; falling back to streaming pipeline: %s", exc)
 
     timeout_seconds = int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45)
 
@@ -498,6 +520,14 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             info_html=timeout_info,
             citation_mode=request.citation,
         )
+        timeout_info_panel = build_info_panel_copy(
+            request_message=message,
+            answer_text=timeout_answer,
+            info_html=timeout_info,
+            mode="ask",
+            next_steps=[],
+            web_summary={},
+        )
 
         messages = deepcopy(data_source.get("messages", []))
         if message:
@@ -517,6 +547,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "needs_human_review": False,
                 "human_review_notes": None,
                 "web_summary": {},
+                "info_panel": timeout_info_panel,
             }
         )
 
@@ -547,6 +578,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "human_review_notes": None,
             "web_summary": {},
             "activity_run_id": None,
+            "info_panel": timeout_info_panel,
         }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)

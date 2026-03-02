@@ -3,13 +3,19 @@ import type { PreviewTab } from "./types";
 function tabForEventType(eventType: string): PreviewTab {
   const normalized = String(eventType || "").toLowerCase();
   if (
+    normalized === "web_kpi_summary" ||
+    normalized === "web_evidence_summary" ||
+    normalized === "web_release_gate"
+  ) {
+    return "system";
+  }
+  if (
     normalized.startsWith("browser_") ||
     normalized.startsWith("browser.") ||
     normalized.startsWith("web_") ||
     normalized.startsWith("web.") ||
     normalized.startsWith("brave.") ||
-    normalized.startsWith("bing.") ||
-    normalized.includes("search")
+    normalized.startsWith("bing.")
   ) {
     return "browser";
   }

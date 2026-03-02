@@ -224,4 +224,5 @@ class ChatResponse(BaseModel):
     needs_human_review: bool = False
     human_review_notes: str | None = None
     web_summary: dict[str, Any] = Field(default_factory=dict)
+    info_panel: dict[str, Any] = Field(default_factory=dict)
     activity_run_id: str | None = None

@@ -1,5 +1,11 @@
+function normalizeApiBase(raw: string | null | undefined): string {
+  return String(raw || "").trim().replace(/\/+$/, "");
+}
+
 function inferApiBase() {
-  const envBase = (import.meta as { env?: Record<string, string> }).env?.VITE_API_BASE_URL;
+  const envBase = normalizeApiBase(
+    (import.meta as { env?: Record<string, string> }).env?.VITE_API_BASE_URL,
+  );
   if (envBase) {
     return envBase;
   }
@@ -8,9 +14,10 @@ function inferApiBase() {
     return "";
   }
 
-  const { hostname, port } = window.location;
+  const { port } = window.location;
+  // In local Vite dev, prefer same-origin `/api` so proxy handles routing/CORS.
   if (port === "5173" || port === "4173") {
-    return `http://${hostname || "127.0.0.1"}:8000`;
+    return "";
   }
 
   return "";
@@ -59,11 +66,87 @@ function withUserIdQuery(path: string) {
 const API_BASE = inferApiBase();
 const ACTIVE_USER_ID = inferUserId();
 
+function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const name = String((error as { name?: string }).name || "").toLowerCase();
+  const message = String(error.message || "").toLowerCase();
+  if (name === "aborterror") {
+    return false;
+  }
+  return (
+    name === "typeerror" ||
+    message.includes("failed to fetch") ||
+    message.includes("networkerror")
+  );
+}
+
+function buildApiBaseCandidates(): string[] {
+  const bases: string[] = [];
+  if (API_BASE) {
+    bases.push(API_BASE);
+  }
+  if (typeof window !== "undefined") {
+    const { hostname, port } = window.location;
+    if (port === "5173" || port === "4173") {
+      bases.push("");
+      bases.push(`http://${hostname || "127.0.0.1"}:8000`);
+      bases.push("http://127.0.0.1:8000");
+      bases.push("http://localhost:8000");
+    } else {
+      bases.push("");
+    }
+  } else {
+    bases.push(API_BASE || "");
+  }
+  return Array.from(
+    new Set(
+      bases
+        .map((value) => normalizeApiBase(value))
+        .filter((value, index, rows) => rows.indexOf(value) === index),
+    ),
+  );
+}
+
+function buildRequestUrl(path: string, base: string): string {
+  const suffix = withUserIdQuery(path);
+  return `${base}${suffix}`;
+}
+
+function buildNetworkError(path: string, candidates: string[], cause: unknown): Error {
+  const tested = candidates
+    .map((base) => (base ? `${base}${path}` : path))
+    .join(" | ");
+  const causeText = cause instanceof Error ? cause.message : String(cause || "Unknown network failure");
+  return new Error(
+    `Unable to reach Maia backend. Start/restart API server and retry. Endpoint(s): ${tested}. Cause: ${causeText}`,
+  );
+}
+
+async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
+  const candidates = buildApiBaseCandidates();
+  let lastError: unknown = null;
+
+  for (const base of candidates) {
+    try {
+      return await fetch(buildRequestUrl(path, base), {
+        ...init,
+        headers: withUserIdHeaders(init?.headers),
+      });
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw buildNetworkError(path, candidates, lastError);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${withUserIdQuery(path)}`, {
-    ...init,
-    headers: withUserIdHeaders(init?.headers),
-  });
+  const response = await fetchApi(path, init);
 
   if (!response.ok) {
     const text = await response.text();
@@ -73,4 +156,4 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export { ACTIVE_USER_ID, API_BASE, request, withUserIdHeaders, withUserIdQuery };
+export { ACTIVE_USER_ID, API_BASE, fetchApi, request, withUserIdHeaders, withUserIdQuery };

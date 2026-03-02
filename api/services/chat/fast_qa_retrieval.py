@@ -12,6 +12,25 @@ from api.context import ApiContext
 from .constants import API_FAST_QA_MAX_CHUNKS_PER_SOURCE, API_FAST_QA_MAX_SOURCES
 
 
+def _page_label_sort_key(raw: Any) -> int:
+    text = " ".join(str(raw or "").split()).strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        try:
+            return max(0, int(text))
+        except Exception:
+            return 0
+    # Accept labels like "Page 3", "p.12", "12/40", etc.
+    matches = re.findall(r"\d+", text)
+    if not matches:
+        return 0
+    try:
+        return max(0, int(matches[0]))
+    except Exception:
+        return 0
+
+
 def load_recent_chunks_for_fast_qa(
     context: ApiContext,
     user_id: str,
@@ -89,12 +108,6 @@ def load_recent_chunks_for_fast_qa(
     except Exception:
         return []
 
-    summary_intent = bool(
-        re.search(
-            r"\b(about|summary|summarize|overview|describe|explain|what is|what's)\b",
-            query.lower(),
-        )
-    )
     stopwords = {
         "about",
         "document",
@@ -115,6 +128,7 @@ def load_recent_chunks_for_fast_qa(
     query_terms = [
         t for t in re.findall(r"[a-zA-Z0-9]+", query.lower()) if len(t) > 2 and t not in stopwords
     ][:16]
+    broad_query = len(query_terms) <= 2
 
     scored_text: list[dict[str, Any]] = []
     image_by_source: dict[str, dict[str, Any]] = {}
@@ -165,7 +179,7 @@ def load_recent_chunks_for_fast_qa(
             score += 2
         elif doc_type == "image":
             score += 2
-        if summary_intent:
+        if broad_query:
             score += min(len(text) // 80, 10)
         if "pdf" in query_terms and source_name_lower.endswith(".pdf"):
             score += 8
@@ -200,7 +214,7 @@ def load_recent_chunks_for_fast_qa(
         scored_text.sort(
             key=lambda item: (
                 item.get("source_name", ""),
-                int(item.get("page_label") or 0),
+                _page_label_sort_key(item.get("page_label")),
                 -len(str(item.get("text", ""))),
             )
         )

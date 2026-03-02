@@ -11,14 +11,19 @@ from ktem.db.models import Conversation, engine
 from api.services.chat.conversation_naming import (
     extract_conversation_icon,
     generate_conversation_name,
+    is_legacy_fallback_icon,
     is_placeholder_conversation_name,
     normalize_conversation_name,
+    strip_icon_prefix,
 )
 
 AUTONAME_BACKFILL_LIMIT = 8
+ICON_REFRESH_BACKFILL_LIMIT = 8
 
 
 def _first_user_message(data_source: dict) -> str:
+    if not isinstance(data_source, dict):
+        return ""
     messages = data_source.get("messages", [])
     if not isinstance(messages, list):
         return ""
@@ -32,6 +37,8 @@ def _first_user_message(data_source: dict) -> str:
 
 
 def _agent_mode_from_state(data_source: dict) -> str:
+    if not isinstance(data_source, dict):
+        return "ask"
     state = data_source.get("state")
     if isinstance(state, dict):
         mode = str(state.get("mode") or "").strip()
@@ -41,8 +48,9 @@ def _agent_mode_from_state(data_source: dict) -> str:
 
 
 def _to_summary(conv: Conversation) -> dict:
-    data_source = conv.data_source or {}
-    messages = data_source.get("messages", [])
+    data_source = conv.data_source if isinstance(conv.data_source, dict) else {}
+    messages_raw = data_source.get("messages", [])
+    message_count = len(messages_raw) if isinstance(messages_raw, list) else 0
     return {
         "id": conv.id,
         "name": normalize_conversation_name(conv.name),
@@ -50,7 +58,7 @@ def _to_summary(conv: Conversation) -> dict:
         "is_public": conv.is_public,
         "date_created": conv.date_created,
         "date_updated": conv.date_updated,
-        "message_count": len(messages),
+        "message_count": message_count,
     }
 
 
@@ -63,24 +71,54 @@ def list_conversations(user_id: str) -> list[dict]:
         ).all()
 
         backfilled = 0
+        icon_refreshed = 0
         for row in rows:
-            if backfilled >= AUTONAME_BACKFILL_LIMIT:
+            if backfilled >= AUTONAME_BACKFILL_LIMIT and icon_refreshed >= ICON_REFRESH_BACKFILL_LIMIT:
                 break
-            if not is_placeholder_conversation_name(row.name):
-                continue
-            data_source = row.data_source or {}
+            data_source = row.data_source if isinstance(row.data_source, dict) else {}
             first_message = _first_user_message(data_source)
-            if not first_message:
-                continue
-            row.name = generate_conversation_name(
-                first_message,
-                agent_mode=_agent_mode_from_state(data_source),
-            )
-            row.date_updated = datetime.now(get_localzone())
-            session.add(row)
-            backfilled += 1
+            agent_mode = _agent_mode_from_state(data_source)
+            updated = False
 
-        if backfilled:
+            if backfilled < AUTONAME_BACKFILL_LIMIT and is_placeholder_conversation_name(row.name) and first_message:
+                try:
+                    row.name = generate_conversation_name(
+                        first_message,
+                        agent_mode=agent_mode,
+                    )
+                except Exception:
+                    # Conversation listing must stay reliable even if LLM naming fails.
+                    row.name = normalize_conversation_name(first_message)
+                backfilled += 1
+                updated = True
+
+            current_icon = extract_conversation_icon(row.name)
+            if (
+                icon_refreshed < ICON_REFRESH_BACKFILL_LIMIT
+                and is_legacy_fallback_icon(current_icon)
+                and first_message
+            ):
+                suggested_icon = None
+                try:
+                    regenerated = generate_conversation_name(first_message, agent_mode=agent_mode)
+                    suggested_icon = extract_conversation_icon(regenerated)
+                except Exception:
+                    suggested_icon = None
+
+                refreshed_name = normalize_conversation_name(
+                    strip_icon_prefix(row.name),
+                    icon=suggested_icon,
+                )
+                if refreshed_name != row.name:
+                    row.name = refreshed_name
+                    icon_refreshed += 1
+                    updated = True
+
+            if updated:
+                row.date_updated = datetime.now(get_localzone())
+                session.add(row)
+
+        if backfilled or icon_refreshed:
             session.commit()
     return [_to_summary(row) for row in rows]
 

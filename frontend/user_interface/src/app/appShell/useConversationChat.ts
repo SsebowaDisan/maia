@@ -269,6 +269,7 @@ export function useConversationChat({
           activityEvents: [],
           needsHumanReview: false,
           humanReviewNotes: null,
+          infoPanel: {},
         },
       ]);
 
@@ -429,6 +430,7 @@ export function useConversationChat({
             needsHumanReview: Boolean(response.needs_human_review),
             humanReviewNotes: response.human_review_notes || null,
             webSummary: response.web_summary || {},
+            infoPanel: response.info_panel || {},
             activityRunId: response.activity_run_id || null,
             activityEvents: streamedEventsLocal,
           };
@@ -436,8 +438,23 @@ export function useConversationChat({
         });
         setActivityEvents(streamedEventsLocal);
         setSelectedTurnIndex(pendingTurnIndex);
-        await refreshConversations();
+        try {
+          await refreshConversations();
+        } catch (refreshError) {
+          const refreshMessage =
+            refreshError instanceof Error
+              ? refreshError.message
+              : String(refreshError || "Unable to refresh conversation list.");
+          console.warn("Conversation refresh failed after successful response:", refreshMessage);
+          setInfoText((previous) =>
+            previous
+              ? `${previous}\n\n[Notice] ${refreshMessage}`
+              : `[Notice] ${refreshMessage}`,
+          );
+        }
       } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error || "Unknown request failure");
         clearDelayedPendingTimer();
         setChatTurns((prev) => {
           const next = [...prev];
@@ -445,12 +462,13 @@ export function useConversationChat({
           next[next.length - 1] = {
             ...(last || {}),
             user: message,
-            assistant: `Error: ${String(error)}`,
+            assistant: `Error: ${errorMessage}`,
             info: "",
             plot: null,
             mode: effectiveMode,
             needsHumanReview: false,
             humanReviewNotes: null,
+            infoPanel: {},
           };
           return next;
         });

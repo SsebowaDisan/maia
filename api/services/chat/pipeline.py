@@ -21,6 +21,12 @@ from api.schemas import ChatRequest
 from .citations import resolve_required_citation_mode
 from .constants import DEFAULT_SETTING, PLACEHOLDER_KEYS, logger
 
+NON_TEMPLATED_RESPONSE_GUARD = (
+    "Respond in a natural assistant style adapted to the user request and evidence. "
+    "Avoid fixed/canned section templates and avoid repeating the same heading pattern across turns. "
+    "Use headings, bullets, or tables only when they materially improve clarity."
+)
+
 
 @lru_cache(maxsize=1)
 def get_web_search_cls():
@@ -118,6 +124,13 @@ def create_pipeline(
 
     if request.language not in (None, DEFAULT_SETTING, ""):
         effective_settings["reasoning.lang"] = request.language
+
+    system_prompt_key = f"reasoning.options.{reasoning_id}.system_prompt"
+    existing_system_prompt = str(effective_settings.get(system_prompt_key, "") or "").strip()
+    if NON_TEMPLATED_RESPONSE_GUARD.lower() not in existing_system_prompt.lower():
+        effective_settings[system_prompt_key] = (
+            f"{existing_system_prompt}\n{NON_TEMPLATED_RESPONSE_GUARD}".strip()
+        )
 
     # Prevent background reranking threads from failing when configured
     # LLM uses placeholder API keys.

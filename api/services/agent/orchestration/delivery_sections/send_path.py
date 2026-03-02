@@ -25,14 +25,14 @@ def run_delivery_send_path(
     task_intelligence = task_prep.task_intelligence
     queued_delivery = activity_event_factory(
         event_type="tool_queued",
-        title=f"Queued: {runtime.title}",
+        title=runtime.title,
         detail=runtime.tool_id,
         metadata={"tool_id": runtime.tool_id, "step": runtime.step},
     )
     yield emit_event(queued_delivery)
     started_delivery = activity_event_factory(
         event_type="tool_started",
-        title=f"Step {runtime.step}: {runtime.title}",
+        title=runtime.title,
         detail=task_intelligence.delivery_email,
         metadata={"tool_id": runtime.tool_id, "step": runtime.step},
     )
@@ -135,7 +135,7 @@ def run_delivery_send_path(
         yield emit_event(sent_event)
         completed_delivery = activity_event_factory(
             event_type="tool_completed",
-            title=f"Completed: {runtime.title}",
+            title=runtime.title,
             detail=send_summary,
             metadata={"tool_id": runtime.tool_id, "step": runtime.step},
         )
@@ -166,7 +166,7 @@ def run_delivery_send_path(
         )
         failed_delivery = activity_event_factory(
             event_type="tool_failed",
-            title=f"Failed: {runtime.title}",
+            title=runtime.title,
             detail=summary,
             metadata={"tool_id": runtime.tool_id, "step": runtime.step},
         )

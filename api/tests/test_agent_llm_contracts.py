@@ -59,6 +59,36 @@ def test_build_task_contract_parses_json(monkeypatch) -> None:
     assert row["success_checks"] == ["Delivery confirmed", "Required facts present"]
 
 
+def test_build_task_contract_filters_unaligned_send_email_action(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Research local sellers",
+            "required_outputs": ["Company list"],
+            "required_facts": ["Company name and source"],
+            "required_actions": ["send_email", "create_document"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": [],
+            "success_checks": ["Evidence captured"],
+        },
+    )
+    row = build_task_contract(
+        message="search for companies in kortrijk that sell office chairs",
+        agent_goal=None,
+        rewritten_task="Find local office chair sellers and summarize results.",
+        deliverables=["Company list"],
+        constraints=[],
+        intent_tags=["web_research", "report_generation"],
+        conversation_summary="Earlier run asked for an email follow-up.",
+    )
+    assert row["required_actions"] == ["create_document"]
+    assert "send_email" not in row["required_actions"]
+    assert row["delivery_target"] == ""
+
+
 def test_build_task_contract_classifier_flags_missing_recipient_and_output_format(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "0")
     row = build_task_contract(
@@ -227,6 +257,28 @@ def test_verify_task_contract_disabled_blocks_missing_required_external_action(m
             "params": {"to": "ops@example.com"},
         }
     ]
+
+
+def test_verify_task_contract_missing_delivery_target_avoids_email_remediation(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Send summary",
+            "required_facts": [],
+            "required_actions": ["send_email"],
+            "delivery_target": "",
+        },
+        request_message="Send summary",
+        executed_steps=[],
+        actions=[],
+        report_body="Summary ready.",
+        sources=[],
+        allowed_tool_ids=["gmail.draft", "gmail.send"],
+    )
+    assert row["ready_for_final_response"] is False
+    assert row["ready_for_external_actions"] is False
+    assert "Missing delivery target for required action: send_email" in row["missing_items"]
+    assert row["recommended_remediation"] == []
 
 
 def test_verify_task_contract_pre_send_gate_does_not_self_block_pending_send_action(monkeypatch) -> None:

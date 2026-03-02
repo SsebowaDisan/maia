@@ -40,6 +40,21 @@ function useChatMainInteractions({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statusTimerRef = useRef<number | null>(null);
   const lastClipboardEventRef = useRef<string>("");
+  const attachmentsRef = useRef<ComposerAttachment[]>([]);
+
+  const revokeAttachmentUrl = (attachment: ComposerAttachment) => {
+    const url = String(attachment.localUrl || "");
+    if (url.startsWith("blob:")) {
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const clearAttachments = () => {
+    setAttachments((previous) => {
+      previous.forEach(revokeAttachmentUrl);
+      return [];
+    });
+  };
 
   const showActionStatus = (text: string) => {
     setMessageActionStatus(text);
@@ -100,6 +115,20 @@ function useChatMainInteractions({
     }));
   };
 
+  const removeAttachment = (attachmentId: string) => {
+    setAttachments((previous) => {
+      const next: ComposerAttachment[] = [];
+      previous.forEach((item) => {
+        if (item.id === attachmentId) {
+          revokeAttachmentUrl(item);
+          return;
+        }
+        next.push(item);
+      });
+      return next;
+    });
+  };
+
   const submit = async () => {
     const payload = message.trim();
     if (!payload || isSending) {
@@ -115,7 +144,7 @@ function useChatMainInteractions({
       agentMode,
       accessMode,
     });
-    setAttachments([]);
+    clearAttachments();
   };
 
   const copyPlainText = async (text: string, label: string) => {
@@ -182,7 +211,10 @@ function useChatMainInteractions({
 
   const retryTurn = (turn: ChatTurn) => {
     setMessage(turn.user);
-    setAttachments(mapTurnAttachments(turn.attachments));
+    setAttachments((previous) => {
+      previous.forEach(revokeAttachmentUrl);
+      return mapTurnAttachments(turn.attachments);
+    });
     showActionStatus("Retry prompt loaded into the command bar.");
   };
 
@@ -238,6 +270,8 @@ function useChatMainInteractions({
       id: `${Date.now()}-${idx}-${file.name}`,
       name: file.name,
       status: "uploading" as const,
+      localUrl: URL.createObjectURL(file),
+      mimeType: String(file.type || ""),
     }));
     setAttachments((prev) => [...prev, ...pending]);
 
@@ -270,13 +304,15 @@ function useChatMainInteractions({
         }),
       );
     } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error || "Upload failed.");
       setAttachments((prev) =>
         prev.map((attachment) =>
           pending.some((item) => item.id === attachment.id)
             ? {
                 ...attachment,
                 status: "error",
-                message: String(error),
+                message: errorMessage,
               }
             : attachment,
         ),
@@ -305,6 +341,17 @@ function useChatMainInteractions({
     }
   }, [activityEvents]);
 
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(
+    () => () => {
+      attachmentsRef.current.forEach(revokeAttachmentUrl);
+    },
+    [],
+  );
+
   return {
     agentControlsVisible,
     attachments,
@@ -323,7 +370,9 @@ function useChatMainInteractions({
     onFileChange,
     pasteHighlightsToComposer,
     quoteAssistant,
+    removeAttachment,
     saveInlineEdit,
+    clearAttachments,
     setAttachments,
     setEditingText,
     setMessage,

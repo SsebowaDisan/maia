@@ -65,7 +65,7 @@ function AgentDesktopScene({
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
-  const emailBodyPreview = String(emailBodyHint || "").trim() || "Composing message body...";
+  const emailBodyPreview = String(emailBodyHint || "").trim();
   const rawDocBodyPreview = String(docBodyHint || "").trim();
   const rawSheetBodyPreview = String(sheetBodyHint || "").trim();
 

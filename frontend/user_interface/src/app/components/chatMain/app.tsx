@@ -7,6 +7,34 @@ import type { ChatMainProps } from "./types";
 import { TurnsPanel } from "./TurnsPanel";
 import { useChatMainInteractions } from "./useChatMainInteractions";
 
+function normalizePageLabel(...candidates: Array<string | undefined | null>): string | undefined {
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) {
+      continue;
+    }
+    const match = raw.match(/(\d{1,4})/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+function normalizeCitationExtract(...candidates: Array<string | undefined | null>): string {
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (!raw) {
+      continue;
+    }
+    if (/^\[\d{1,4}\]$/.test(raw)) {
+      continue;
+    }
+    return raw;
+  }
+  return "No extract available for this citation.";
+}
+
 function ChatMain({
   chatTurns,
   selectedTurnIndex,
@@ -44,7 +72,9 @@ function ChatMain({
     index: number,
   ) => {
     const target = event.target as HTMLElement;
-    const citationAnchor = target.closest("a.citation") as HTMLAnchorElement | null;
+    const citationAnchor = target.closest(
+      "a.citation, a[href^='#evidence-'], a[data-file-id]",
+    ) as HTMLAnchorElement | null;
     if (citationAnchor) {
       event.preventDefault();
       event.stopPropagation();
@@ -56,16 +86,26 @@ function ChatMain({
       const matchedEvidence = evidenceCards.find((card) => card.id === evidenceId) || null;
       const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
       const pageAttr = citationAnchor.getAttribute("data-page") || "";
+      const phraseAttr =
+        citationAnchor.getAttribute("data-phrase") ||
+        citationAnchor.getAttribute("data-search") ||
+        "";
+      const attachmentFileId =
+        (turn.attachments || []).find((attachment) => Boolean(attachment.fileId))?.fileId || "";
       const sourceName = (matchedEvidence?.source || "Indexed source").replace(
         /^\[\d+\]\s*/,
         "",
       );
 
       onCitationClick({
-        fileId: fileIdAttr || matchedEvidence?.fileId,
+        fileId: fileIdAttr || matchedEvidence?.fileId || attachmentFileId,
         sourceName,
-        page: pageAttr || matchedEvidence?.page,
-        extract: matchedEvidence?.extract || "No extract available for this citation.",
+        page: normalizePageLabel(pageAttr, matchedEvidence?.page),
+        extract: normalizeCitationExtract(
+          phraseAttr,
+          matchedEvidence?.extract,
+          citationAnchor.textContent?.trim(),
+        ),
         evidenceId: evidenceId || undefined,
       });
       return;
@@ -104,7 +144,8 @@ function ChatMain({
         agentControlsVisible={interactions.agentControlsVisible}
         agentMode={agentMode}
         attachments={interactions.attachments}
-        clearAttachments={() => interactions.setAttachments([])}
+        clearAttachments={interactions.clearAttachments}
+        removeAttachment={interactions.removeAttachment}
         enableAgentMode={interactions.enableAgentMode}
         enableDeepResearch={interactions.enableDeepResearch}
         fileInputRef={interactions.fileInputRef}

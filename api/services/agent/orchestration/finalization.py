@@ -21,6 +21,41 @@ from .web_evidence import summarize_web_evidence
 from .web_kpi import evaluate_web_kpi_gate, summarize_web_kpi
 
 
+def _source_metadata(source: Any) -> dict[str, Any]:
+    payload = getattr(source, "metadata", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _source_page_label(source: Any) -> str:
+    metadata = _source_metadata(source)
+    for key in ("page_label", "page", "page_number", "page_index"):
+        value = " ".join(str(metadata.get(key) or "").split()).strip()
+        if value:
+            return value[:24]
+    return ""
+
+
+def _source_extract(source: Any) -> str:
+    metadata = _source_metadata(source)
+    for key in ("extract", "excerpt", "snippet", "quote", "text_excerpt", "text"):
+        value = " ".join(str(metadata.get(key) or "").split()).strip()
+        if value:
+            return value[:1200]
+    return ""
+
+
+def _source_file_id(source: Any) -> str:
+    direct = " ".join(str(getattr(source, "file_id", "") or "").split()).strip()
+    if direct:
+        return direct
+    metadata = _source_metadata(source)
+    for key in ("file_id", "source_id"):
+        value = " ".join(str(metadata.get(key) or "").split()).strip()
+        if value:
+            return value
+    return ""
+
+
 def finalize_run(
     *,
     run_id: str,
@@ -265,19 +300,31 @@ def finalize_run(
     for idx, source in enumerate(state.all_sources, start=1):
         label = html.escape(source.label)
         url = html.escape(source.url or "")
+        page_label = html.escape(_source_page_label(source))
+        source_extract = html.escape(_source_extract(source))
+        file_id = html.escape(_source_file_id(source), quote=True)
         detail = (
             f"<a href='{url}' target='_blank' rel='noopener noreferrer'>{url}</a>"
             if url
             else "Internal source"
         )
+        details_file_attr = f" data-file-id='{file_id}'" if file_id else ""
+        details_page_attr = f" data-page='{page_label}'" if page_label else ""
+        extract_block = (
+            f"<div class='evidence-content'><b>Extract:</b> {source_extract}</div>"
+            if source_extract
+            else ""
+        )
+        info_block = (
+            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_page_attr} {'open' if idx == 1 else ''}>"
+            f"<summary><i>Evidence [{idx}]</i></summary>"
+            f"<div><b>Source:</b> [{idx}] {label}</div>"
+            f"{extract_block}"
+            f"<div class='evidence-content'><b>Link:</b> {detail}</div>"
+            "</details>"
+        )
         info_blocks.append(
-            (
-                f"<details class='evidence' id='evidence-{idx}' {'open' if idx == 1 else ''}>"
-                f"<summary><i>Evidence [{idx}]</i></summary>"
-                f"<div><b>Source:</b> [{idx}] {label}</div>"
-                f"<div class='evidence-content'><b>Link:</b> {detail}</div>"
-                "</details>"
-            )
+            info_block
         )
     info_html = "".join(info_blocks)
 

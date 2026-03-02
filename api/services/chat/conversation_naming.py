@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import unicodedata
@@ -6,7 +6,7 @@ from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, call_text_response
 
-FALLBACK_CONVERSATION_ICON = "💬"
+LEGACY_FALLBACK_CONVERSATION_ICON = "\U0001F4AC"
 DEFAULT_CONVERSATION_LABEL = "New chat"
 MAX_CONVERSATION_NAME_LEN = 72
 
@@ -90,17 +90,15 @@ def normalize_conversation_name(
     icon: str | None = None,
 ) -> str:
     raw = _clean_text(name)
-    final_icon = (
-        extract_conversation_icon(raw)
-        or _extract_icon_candidate(icon)
-        or FALLBACK_CONVERSATION_ICON
-    )
+    final_icon = extract_conversation_icon(raw) or _extract_icon_candidate(icon)
     core = strip_icon_prefix(raw)
     if not core or is_placeholder_conversation_name(core):
         core = _clean_text(fallback or DEFAULT_CONVERSATION_LABEL)
     core = _truncate_words(core)
     if not core:
         core = DEFAULT_CONVERSATION_LABEL
+    if not final_icon:
+        return core
     return f"{final_icon} {core}"
 
 
@@ -178,3 +176,8 @@ def generate_conversation_name(message: str, *, agent_mode: str = "ask") -> str:
     if not icon:
         icon = _llm_icon_from_message(user_message, agent_mode=agent_mode, title=candidate)
     return normalize_conversation_name(candidate, icon=icon)
+
+
+def is_legacy_fallback_icon(icon: str | None) -> bool:
+    return str(icon or "").strip() == LEGACY_FALLBACK_CONVERSATION_ICON
+

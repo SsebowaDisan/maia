@@ -38,7 +38,181 @@ from .conversation_store import (
     persist_conversation,
 )
 from .fast_qa_retrieval import load_recent_chunks_for_fast_qa
+from .info_panel_copy import build_info_panel_copy
 from .pipeline import is_placeholder_api_key
+
+
+def _extract_text_content(raw_content: Any) -> str:
+    if isinstance(raw_content, str):
+        return raw_content.strip()
+    if not isinstance(raw_content, list):
+        return ""
+    parts: list[str] = []
+    for item in raw_content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "text":
+            continue
+        text_value = str(item.get("text") or "").strip()
+        if text_value:
+            parts.append(text_value)
+    return "\n".join(parts).strip()
+
+
+def _call_openai_chat_text(
+    *,
+    api_key: str,
+    base_url: str,
+    request_payload: dict[str, Any],
+    timeout_seconds: int = 20,
+) -> str | None:
+    request = Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(request_payload).encode("utf-8"),
+    )
+    with urlopen(request, timeout=max(8, int(timeout_seconds))) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return None
+    return _extract_text_content(message.get("content")) or None
+
+
+def _parse_json_object(raw_text: str) -> dict[str, Any] | None:
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
+    fallback = {
+        "style": "adaptive-detailed",
+        "detail_level": "high",
+        "sections": [
+            {
+                "title": "Answer",
+                "goal": "Respond directly with evidence-grounded detail.",
+                "format": "mixed",
+            }
+        ],
+        "tone": "professional",
+    }
+    if not isinstance(raw_outline, dict):
+        return fallback
+
+    style = " ".join(str(raw_outline.get("style") or "").split()).strip()[:80] or fallback["style"]
+    detail_level = (
+        " ".join(str(raw_outline.get("detail_level") or "").split()).strip()[:40] or fallback["detail_level"]
+    )
+    tone = " ".join(str(raw_outline.get("tone") or "").split()).strip()[:40] or fallback["tone"]
+    sections_raw = raw_outline.get("sections")
+    sections: list[dict[str, str]] = []
+    if isinstance(sections_raw, list):
+        for row in sections_raw[:6]:
+            if not isinstance(row, dict):
+                continue
+            title = " ".join(str(row.get("title") or "").split()).strip()[:120]
+            goal = " ".join(str(row.get("goal") or "").split()).strip()[:220]
+            fmt = " ".join(str(row.get("format") or "").split()).strip()[:40]
+            if not title and not goal:
+                continue
+            sections.append(
+                {
+                    "title": title or "Section",
+                    "goal": goal or "Explain relevant evidence-backed details.",
+                    "format": fmt or "paragraphs",
+                }
+            )
+    if not sections:
+        sections = fallback["sections"]
+
+    return {
+        "style": style,
+        "detail_level": detail_level,
+        "sections": sections,
+        "tone": tone,
+    }
+
+
+def _plan_adaptive_outline(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    temperature: float,
+    question: str,
+    history_text: str,
+    refs_text: str,
+    context_text: str,
+) -> dict[str, Any]:
+    planner_prompt = (
+        "Create an answer blueprint for a retrieval-grounded assistant reply.\n"
+        "Return one JSON object only with keys:\n"
+        '{ "style": "string", "detail_level": "high", "sections": [{"title":"string","goal":"string","format":"paragraphs|bullets|table|mixed"}], "tone": "string" }\n'
+        "Rules:\n"
+        "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
+        "- Keep the final answer detailed.\n"
+        "- Use 2-6 sections.\n"
+        "- Section titles must be specific, professional, and tied to concrete entities in the request/evidence.\n"
+        "- Do not default to reusable company-profile or marketing-report skeletons unless explicitly requested.\n"
+        "- If user intent is unclear/noisy, produce one section focused on a clarifying question instead of assumptions.\n"
+        "- Do not invent facts.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Recent chat history:\n{history_text}\n\n"
+        f"Source index:\n{refs_text or '(none)'}\n\n"
+        f"Evidence excerpt (truncated):\n{context_text[:6000]}"
+    )
+    planner_payload = {
+        "model": model,
+        "temperature": max(0.0, min(1.0, float(temperature) * 0.5)),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You design response structures for professional assistants. "
+                    "Return JSON only."
+                ),
+            },
+            {"role": "user", "content": planner_prompt},
+        ],
+    }
+    try:
+        planned_raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=planner_payload,
+            timeout_seconds=16,
+        )
+        return _normalize_outline(_parse_json_object(str(planned_raw or "")))
+    except Exception:
+        return _normalize_outline(None)
 
 
 def call_openai_fast_qa(
@@ -93,12 +267,6 @@ def call_openai_fast_qa(
     history_text = "\n\n".join(history_blocks) if history_blocks else "(none)"
     context_text = "\n\n".join(context_blocks)
     refs_text = "\n".join([f"[{ref['id']}] {ref['label']}" for ref in refs[: min(len(refs), 20)]])
-    overview_intent = bool(
-        re.search(
-            r"\b(what\s+is\s+this\s+(pdf|document)\s+about|what'?s\s+this\s+(pdf|document)\s+about|summary|summarize|overview)\b",
-            question.lower(),
-        )
-    )
     mode = resolve_required_citation_mode(citation_mode)
     if mode == "footnote":
         citation_instruction = (
@@ -110,31 +278,35 @@ def call_openai_fast_qa(
             "Cite factual claims with source refs in square brackets like [1], [2]. "
             "Every major claim should have at least one citation."
         )
-    if overview_intent:
-        output_instruction = (
-            "Output format rules:\n"
-            "- Start with a direct 1-2 sentence summary.\n"
-            "- Choose the most useful structure for this question (short paragraphs, bullets, or a compact table).\n"
-            "- Vary phrasing and headings naturally; do not force a repeated section template.\n"
-            "- For transactional documents (receipt/invoice/statement), extract explicit fields first, then add a brief interpretation.\n"
-            "- Distinguish confirmed facts from inference when confidence is limited.\n"
-            "- If data is missing, say: Not visible in indexed content.\n"
-            "- Use clean markdown and avoid malformed formatting."
-        )
-    else:
-        output_instruction = (
-            "Output format rules:\n"
-            "- Answer directly in a concise professional style.\n"
-            "- Use headings/bullets only when they improve clarity.\n"
-            "- Avoid repeated template phrasing across turns.\n"
-            "- Use clean markdown and avoid malformed formatting."
-        )
+    temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
+    outline = _plan_adaptive_outline(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        temperature=temperature,
+        question=question,
+        history_text=history_text,
+        refs_text=refs_text,
+        context_text=context_text,
+    )
+    output_instruction = (
+        "Output format rules:\n"
+        "- Follow the provided response blueprint while adapting when evidence is missing.\n"
+        "- Keep the answer detailed, specific, and professional.\n"
+        "- Use natural prose by default; use headings, bullets, or tables only when they improve clarity.\n"
+        "- Keep section titles specific to the request domain; avoid generic reusable labels and reusable report skeletons.\n"
+        "- If intent is unclear, ask one focused clarifying question and avoid speculative summaries.\n"
+        "- Distinguish confirmed facts from inference when confidence is limited.\n"
+        "- If information is missing, say: Not visible in indexed content.\n"
+        "- Use clean markdown and avoid malformed formatting."
+    )
     prompt = (
         "Use the provided indexed context to answer the user question in detail. "
         "When multiple sources are relevant, synthesize across them and call out agreements or differences. "
         "When a question asks what a PDF/image is about, adapt the structure to the document type and available evidence instead of a fixed template. "
         "If visual evidence is provided, use it to improve detail while clearly signaling assumptions. "
         f"{citation_instruction}\n\n"
+        f"Response blueprint (generated by Maia planner):\n{json.dumps(outline, ensure_ascii=True)}\n\n"
         f"{output_instruction}\n\n"
         f"Source index:\n{refs_text or '(none)'}\n\n"
         f"Recent chat history:\n{history_text}\n\n"
@@ -148,8 +320,6 @@ def call_openai_fast_qa(
             label += f" (page {page_label})"
         user_content.append({"type": "text", "text": label})
         user_content.append({"type": "image_url", "image_url": {"url": image_origin}})
-
-    temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
 
     try:
         request_payload = {
@@ -167,28 +337,15 @@ def call_openai_fast_qa(
                 {"role": "user", "content": user_content},
             ],
         }
-        request = Request(
-            f"{base_url.rstrip('/')}/chat/completions",
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(request_payload).encode("utf-8"),
-        )
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        raw_answer = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if isinstance(raw_answer, list):
-            answer_parts = []
-            for part in raw_answer:
-                if not isinstance(part, dict):
-                    continue
-                if part.get("type") == "text" and part.get("text"):
-                    answer_parts.append(str(part.get("text")))
-            answer = "\n".join(answer_parts).strip()
-        else:
-            answer = str(raw_answer or "").strip()
+        answer = str(
+            _call_openai_chat_text(
+                api_key=api_key,
+                base_url=base_url,
+                request_payload=request_payload,
+                timeout_seconds=20,
+            )
+            or ""
+        ).strip()
         return answer or None
     except HTTPError:
         return None
@@ -262,6 +419,14 @@ def run_fast_chat_turn(
         info_html=info_text,
         citation_mode=resolved_citation_mode,
     )
+    info_panel = build_info_panel_copy(
+        request_message=message,
+        answer_text=answer,
+        info_html=info_text,
+        mode="ask",
+        next_steps=[],
+        web_summary={},
+    )
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
@@ -276,6 +441,7 @@ def run_fast_chat_turn(
             "actions_taken": [],
             "sources_used": [],
             "next_recommended_steps": [],
+            "info_panel": info_panel,
         }
     )
 
@@ -303,4 +469,5 @@ def run_fast_chat_turn(
         "sources_used": [],
         "next_recommended_steps": [],
         "activity_run_id": None,
+        "info_panel": info_panel,
     }

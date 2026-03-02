@@ -48,20 +48,20 @@ def execute_planned_steps(
 
         queued_event = activity_event_factory(
             event_type="tool_queued",
-            title=f"Queued: {step.title}",
+            title=step.title,
             detail=step.tool_id,
             metadata={"tool_id": step.tool_id, "step": index},
         )
         yield emit_event(queued_event)
         step_event = activity_event_factory(
             event_type="tool_started",
-            title=f"Step {index}: {step.title}",
+            title=step.title,
             detail=step.tool_id,
         )
         yield emit_event(step_event)
         progress_event = activity_event_factory(
             event_type="tool_progress",
-            title=f"Step {index}: Running {step.title}",
+            title=step.title,
             detail="Tool execution in progress",
             metadata={"tool_id": step.tool_id, "step": index, "progress": 0.5},
         )

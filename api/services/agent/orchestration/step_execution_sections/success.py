@@ -97,7 +97,7 @@ def handle_step_success(
         yield emit_event(llm_step_event)
     completed_event = activity_event_factory(
         event_type="tool_completed",
-        title=f"Completed: {step.title}",
+        title=step.title,
         detail=llm_step_summary or result.summary,
         metadata={
             "tool_id": step.tool_id,

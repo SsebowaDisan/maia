@@ -136,19 +136,6 @@ export default function App() {
             {layout.isInfoPanelOpen ? (
               <InfoPanel
                 width={layout.infoPanelWidth}
-                messageCount={chatState.chatTurns.length}
-                sourceCount={fileLibrary.fileCount}
-                infoText={chatState.infoText}
-                answerText={
-                  chatState.selectedTurnIndex !== null
-                    ? chatState.chatTurns[chatState.selectedTurnIndex]?.assistant || ""
-                    : ""
-                }
-                questionText={
-                  chatState.selectedTurnIndex !== null
-                    ? chatState.chatTurns[chatState.selectedTurnIndex]?.user || ""
-                    : ""
-                }
                 citationFocus={chatState.citationFocus}
                 indexId={fileLibrary.defaultIndexId}
                 onClearCitationFocus={() => chatState.setCitationFocus(null)}

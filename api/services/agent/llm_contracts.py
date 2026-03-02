@@ -113,6 +113,35 @@ def _derive_required_actions(*, intent_tags: list[str], delivery_target: str) ->
     return actions[:6]
 
 
+def _align_required_actions_with_intent(
+    *,
+    required_actions: list[str],
+    intent_tags: list[str],
+    delivery_target: str,
+    target_url: str,
+) -> list[str]:
+    tags = {
+        str(item).strip().lower()
+        for item in intent_tags
+        if str(item).strip()
+    }
+    aligned: list[str] = []
+    for action in required_actions:
+        action_key = str(action).strip().lower()
+        if not action_key:
+            continue
+        if action_key == "send_email":
+            if delivery_target or "email_delivery" in tags:
+                aligned.append(action_key)
+            continue
+        if action_key == "submit_contact_form":
+            if target_url or "contact_form_submission" in tags:
+                aligned.append(action_key)
+            continue
+        aligned.append(action_key)
+    return list(dict.fromkeys(aligned))[:6]
+
+
 def _classify_missing_requirements(
     *,
     required_actions: list[str],
@@ -267,6 +296,12 @@ def build_task_contract(
         intent_tags=clean_intent_tags,
         delivery_target=delivery_target,
     )
+    heuristic_actions = _align_required_actions_with_intent(
+        required_actions=heuristic_actions,
+        intent_tags=clean_intent_tags,
+        delivery_target=delivery_target,
+        target_url=target_url,
+    )
     heuristic_outputs = _clean_text_list(deliverables or [], limit=6)
     heuristic_missing_requirements = _classify_missing_requirements(
         required_actions=heuristic_actions,
@@ -317,6 +352,9 @@ def build_task_contract(
         '"missing_requirements":["..."], "success_checks":["..."] }\n'
         "Rules:\n"
         "- Preserve only user-requested outcomes; do not invent objectives.\n"
+        "- Use message/agent_goal as the authoritative scope for required_actions.\n"
+        "- conversation_summary is context-only and must not add new required_actions.\n"
+        "- Do not include send_email unless email delivery is explicitly requested.\n"
         "- required_facts should include mandatory facts the final answer/action must contain.\n"
         "- constraints must include: Never use hardcoded words or keyword lists; rely on LLM semantic understanding.\n"
         "- delivery_target must be empty when unspecified.\n\n"
@@ -360,6 +398,12 @@ def build_task_contract(
     clean_target = " ".join(str(response.get("delivery_target") or "").split()).strip()
     if not clean_target:
         clean_target = delivery_target
+    required_actions = _align_required_actions_with_intent(
+        required_actions=required_actions,
+        intent_tags=clean_intent_tags,
+        delivery_target=clean_target,
+        target_url=target_url,
+    )
     response_missing_requirements = _clean_text_list(response.get("missing_requirements"), limit=6)
     classifier_missing_requirements = _classify_missing_requirements(
         required_actions=required_actions,

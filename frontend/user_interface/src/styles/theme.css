@@ -214,9 +214,11 @@
 }
 
 .citation-pdf mark.citation-pdf-hit {
-  background: rgba(255, 219, 77, 0.55);
-  border-radius: 2px;
+  background: rgba(255, 214, 10, 0.82);
+  border-radius: 3px;
   padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(166, 119, 0, 0.32);
+  color: inherit;
 }
 
 @keyframes command-dock-reveal {

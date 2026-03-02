@@ -25,12 +25,16 @@ interface UseAgentActivityDerivedParams {
   streaming: boolean;
 }
 
-const EMAIL_TOOL_IDS = new Set([
-  "mailer.report_send",
-  "email.draft",
-  "email.send",
-  "gmail.draft",
-  "gmail.send",
+const EMAIL_SCENE_EVENT_TYPES = new Set([
+  "email_open_compose",
+  "email_draft_create",
+  "email_set_to",
+  "email_set_subject",
+  "email_set_body",
+  "email_type_body",
+  "email_ready_to_send",
+  "email_click_send",
+  "email_sent",
 ]);
 
 function tabForSceneSurface(surface: string): PreviewTab | null {
@@ -82,25 +86,19 @@ function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
   if (byType !== "system") {
     return byType;
   }
-  const toolId =
-    eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
-  if (!toolId) {
-    return byType;
-  }
-  if (EMAIL_TOOL_IDS.has(toolId)) {
-    return "email";
-  }
+  const toolId = eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
+  if (!toolId) return byType;
   if (
     toolId.startsWith("workspace.docs.") ||
     toolId.startsWith("workspace.sheets.") ||
-    toolId === "docs.create"
+    toolId === "docs.create" ||
+    toolId.startsWith("documents.highlight.")
   ) {
     return "document";
   }
   if (
     toolId.startsWith("browser.") ||
-    toolId.startsWith("marketing.web_research") ||
-    toolId.startsWith("documents.highlight.")
+    toolId.startsWith("marketing.web_research")
   ) {
     return "browser";
   }
@@ -215,7 +213,21 @@ function useAgentActivityDerived({
 
   const sceneEventType = String(sceneEvent?.event_type || activeEvent?.event_type || "").toLowerCase();
   const isBrowserScene = previewTab === "browser";
-  const isEmailScene = previewTab === "email";
+  const hasEmailSceneSignal = useMemo(() => {
+    for (const event of visibleEvents) {
+      const eventType = String(event.event_type || "").toLowerCase();
+      if (EMAIL_SCENE_EVENT_TYPES.has(eventType)) {
+        return true;
+      }
+      const surface =
+        eventMetadataString(event, "scene_surface") || readStringField(event.data?.["scene_surface"]);
+      if (tabForSceneSurface(surface) === "email") {
+        return true;
+      }
+    }
+    return false;
+  }, [visibleEvents]);
+  const isEmailScene = previewTab === "email" && hasEmailSceneSignal;
   const isDocumentScene = previewTab === "document";
   const isSystemScene = previewTab === "system";
   const currentSceneSourceUrl =
@@ -336,7 +348,7 @@ function useAgentActivityDerived({
         return event.detail;
       }
     }
-    return "recipient@company.com";
+    return "";
   }, [visibleEvents]);
 
   const emailSubject = useMemo(() => {
@@ -349,7 +361,7 @@ function useAgentActivityDerived({
         return event.detail;
       }
     }
-    return "Company update";
+    return "";
   }, [visibleEvents]);
 
   const emailBodyHint = useMemo(() => {
@@ -373,7 +385,7 @@ function useAgentActivityDerived({
         return event.detail;
       }
     }
-    return "Composing message body...";
+    return "";
   }, [visibleEvents]);
 
   const docBodyHint = useMemo(() => {

@@ -18,6 +18,7 @@ export type ChatTurn = {
   needsHumanReview?: boolean;
   humanReviewNotes?: string | null;
   webSummary?: Record<string, unknown>;
+  infoPanel?: Record<string, unknown>;
 };
 
 export type AgentActionRecord = {

@@ -82,7 +82,7 @@ def handle_step_failure(
         yield emit_event(policy_event)
     fail_event = activity_event_factory(
         event_type="tool_failed",
-        title=f"Failed: {step.title}",
+        title=step.title,
         detail=exc_text,
         metadata={"tool_id": step.tool_id, "step": index},
     )

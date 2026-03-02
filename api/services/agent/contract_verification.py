@@ -242,6 +242,9 @@ def build_deterministic_contract_check(
         mapped_tools = ACTION_TOOL_IDS.get(action_key, set())
         if action_key == "send_email" and not delivery_target:
             missing_items.append("Missing delivery target for required action: send_email")
+            reason_parts.append("Email delivery is requested but recipient is missing.")
+            # Avoid drafting/sending remediation without an explicit recipient target.
+            continue
         if clean_pending_action_tool_id and clean_pending_action_tool_id in mapped_tools:
             # When checking contract readiness right before executing this action,
             # avoid self-blocking on "required action not completed".

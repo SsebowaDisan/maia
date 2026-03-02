@@ -53,6 +53,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     }
 
     const imageSrc = details.querySelector("img")?.getAttribute("src") || undefined;
+    const pageAttr = (details.getAttribute("data-page") || "").trim();
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
 
@@ -60,7 +61,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
       id: detailsId || `evidence-${index + 1}`,
       title: summary,
       source,
-      page: pageMatch?.[1],
+      page: pageAttr || pageMatch?.[1],
       fileId,
       extract,
       imageSrc,

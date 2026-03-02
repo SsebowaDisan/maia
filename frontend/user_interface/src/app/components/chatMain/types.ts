@@ -41,6 +41,22 @@ type ComposerAttachment = {
   status: AttachmentStatus;
   message?: string;
   fileId?: string;
+  localUrl?: string;
+  mimeType?: string;
 };
 
-export type { AttachmentStatus, ChatMainProps, ComposerAttachment };
+type FilePreviewAttachment = {
+  name: string;
+  fileId?: string;
+  localUrl?: string;
+  mimeType?: string;
+  status?: AttachmentStatus;
+  message?: string;
+};
+
+export type {
+  AttachmentStatus,
+  ChatMainProps,
+  ComposerAttachment,
+  FilePreviewAttachment,
+};
