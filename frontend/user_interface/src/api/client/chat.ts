@@ -1,4 +1,4 @@
-import { API_BASE, request } from "./core";
+import { API_BASE, request, withUserIdHeaders, withUserIdQuery } from "./core";
 import type {
   ChatResponse,
   ChatStreamEvent,
@@ -128,11 +128,11 @@ async function sendChatStream(
   };
   armTimeout();
 
-  const response = await fetch(`${API_BASE}/api/chat/stream`, {
+  const response = await fetch(`${API_BASE}${withUserIdQuery("/api/chat/stream")}`, {
     method: "POST",
-    headers: {
+    headers: withUserIdHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     signal: controller.signal,
     body: JSON.stringify({
       message,

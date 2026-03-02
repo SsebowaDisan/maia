@@ -4,6 +4,10 @@ import html
 import re
 from typing import Any
 
+CITATION_MODE_INLINE = "inline"
+CITATION_MODE_FOOTNOTE = "footnote"
+ALLOWED_CITATION_MODES = {"highlight", CITATION_MODE_INLINE, CITATION_MODE_FOOTNOTE}
+
 
 def assign_fast_source_refs(
     snippets: list[dict[str, Any]],
@@ -41,6 +45,13 @@ def assign_fast_source_refs(
     return enriched, refs
 
 
+def resolve_required_citation_mode(citation_mode: str | None) -> str:
+    mode = (citation_mode or "").strip().lower()
+    if mode in ALLOWED_CITATION_MODES:
+        return mode
+    return CITATION_MODE_INLINE
+
+
 def render_fast_citation_links(
     answer: str,
     refs: list[dict[str, Any]],
@@ -49,9 +60,7 @@ def render_fast_citation_links(
     if not answer.strip():
         return answer
 
-    mode = (citation_mode or "").strip().lower()
-    if mode == "off":
-        return answer
+    mode = resolve_required_citation_mode(citation_mode)
 
     ref_by_id: dict[int, dict[str, Any]] = {
         int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
@@ -100,6 +109,98 @@ def render_fast_citation_links(
         ]
     )
     return f"{enriched}\n\nEvidence: {fallback_refs}"
+
+
+def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
+    text = str(info_html or "")
+    if not text:
+        return []
+
+    refs: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for match in re.finditer(r"<details\b[^>]*>", text, flags=re.IGNORECASE):
+        tag = match.group(0)
+        id_match = re.search(r"id=['\"]evidence-(\d{1,4})['\"]", tag, flags=re.IGNORECASE)
+        if not id_match:
+            continue
+        ref_id = int(id_match.group(1))
+        if ref_id <= 0 or ref_id in seen_ids:
+            continue
+        seen_ids.add(ref_id)
+        source_id_match = re.search(r"data-file-id=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
+        page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
+        refs.append(
+            {
+                "id": ref_id,
+                "source_id": source_id_match.group(1).strip() if source_id_match else "",
+                "page_label": page_match.group(1).strip() if page_match else "",
+                "label": f"Evidence {ref_id}",
+            }
+        )
+    refs.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return refs
+
+
+def enforce_required_citations(
+    *,
+    answer: str,
+    info_html: str,
+    citation_mode: str | None,
+) -> str:
+    text = (answer or "").strip()
+    if not text:
+        return text
+
+    mode = resolve_required_citation_mode(citation_mode)
+    refs = _extract_info_refs(info_html)
+    enriched = render_fast_citation_links(answer=text, refs=refs, citation_mode=mode)
+    if "class='citation'" in enriched or 'class="citation"' in enriched:
+        return enriched
+    if refs:
+        return enriched
+    return (
+        f"{enriched}\n\n"
+        "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
+    )
+
+
+def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
+    raw_text = str(answer or "")
+    if not raw_text.strip():
+        return ""
+    if (
+        "class='citation'" in raw_text
+        or 'class="citation"' in raw_text
+        or re.search(r"\[\d{1,3}\]", raw_text)
+    ):
+        return raw_text
+
+    refs = _extract_info_refs(info_html)
+    if refs:
+        fallback_refs = " ".join(
+            [
+                (
+                    f"<a class='citation' href='#evidence-{ref['id']}' id='citation-{ref['id']}'"
+                    + (
+                        f" data-file-id='{html.escape(str(ref.get('source_id', '') or ''), quote=True)}'"
+                        if str(ref.get("source_id", "") or "").strip()
+                        else ""
+                    )
+                    + (
+                        f" data-page='{html.escape(str(ref.get('page_label', '') or ''), quote=True)}'"
+                        if str(ref.get("page_label", "") or "").strip()
+                        else ""
+                    )
+                    + f">[{ref['id']}]</a>"
+                )
+                for ref in refs[: min(3, len(refs))]
+            ]
+        )
+        return f"{raw_text}\n\nEvidence: {fallback_refs}"
+    return (
+        f"{raw_text}\n\n"
+        "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
+    )
 
 
 def normalize_fast_answer(answer: str) -> str:

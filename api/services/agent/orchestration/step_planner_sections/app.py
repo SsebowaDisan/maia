@@ -6,7 +6,7 @@ from typing import Any
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.observability import get_agent_observability
-from api.services.agent.planner import PlannedStep, build_plan
+from api.services.agent.planner import PlannedStep, build_plan, resolve_web_routing
 
 from ..models import PlanPreparation, TaskPreparation
 from ..text_helpers import extract_first_email
@@ -25,6 +25,7 @@ from .events import (
     plan_fact_coverage_event,
     plan_ready_event,
     plan_refined_event,
+    plan_web_routing_event,
     plan_step_event,
 )
 from .intent_enrichment import apply_intent_enrichment
@@ -75,9 +76,17 @@ def build_execution_steps(
             request_message=request.message,
         )
     )
+    web_routing = resolve_web_routing(planning_request)
+    yield emit_event(
+        plan_web_routing_event(
+            activity_event_factory=activity_event_factory,
+            web_routing=web_routing,
+        )
+    )
     steps = build_plan(
         planning_request,
         preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
+        web_routing=web_routing,
     )
     yield emit_event(
         plan_decompose_completed_event(

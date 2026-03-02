@@ -38,3 +38,43 @@ def test_agent_event_dict_contains_schema_and_legacy_keys() -> None:
     assert payload["event_type"] == "document_opened"
     assert payload["timestamp"] == payload["ts"]
     assert payload["metadata"]["file_id"] == "file_1"
+
+
+def test_web_routing_event_is_planning_stage() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    event = emitter.emit(
+        event_type="llm.web_routing_decision",
+        title="Web routing decision ready",
+        data={"routing_mode": "online_research"},
+    )
+    assert event.stage == "plan"
+    assert event.status == "info"
+
+
+def test_web_kpi_summary_event_is_result_stage() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    event = emitter.emit(
+        event_type="web_kpi_summary",
+        title="Web reliability summary",
+        data={"web_steps_total": 3},
+    )
+    assert event.stage == "result"
+    assert event.status == "info"
+
+
+def test_web_release_and_evidence_events_are_result_stage() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    evidence_event = emitter.emit(
+        event_type="web_evidence_summary",
+        title="Web evidence summary",
+        data={"web_evidence_total": 4},
+    )
+    gate_event = emitter.emit(
+        event_type="web_release_gate",
+        title="Web rollout gate evaluation",
+        data={"ready_for_scale": True},
+    )
+    assert evidence_event.stage == "result"
+    assert evidence_event.status == "info"
+    assert gate_event.stage == "result"
+    assert gate_event.status == "info"

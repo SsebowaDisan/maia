@@ -11,6 +11,15 @@ from maia.storages import (
     QdrantVectorStore,
     SimpleFileVectorStore,
 )
+from .conftest import skip_when_milvus_lite_not_installed
+
+
+def require_qdrant_client():
+    try:
+        from qdrant_client import QdrantClient
+    except Exception as exc:
+        pytest.skip(f"qdrant_client is unavailable: {exc}")
+    return QdrantClient
 
 
 class TestChromaVectorStore:
@@ -159,6 +168,7 @@ class TestSimpleFileVectorStore:
         os.remove(tmp_path / collection_name)
 
 
+@skip_when_milvus_lite_not_installed
 class TestMilvusVectorStore:
     def test_add(self, tmp_path):
         """Test that the DB add correctly"""
@@ -255,7 +265,7 @@ class TestMilvusVectorStore:
 
 class TestQdrantVectorStore:
     def test_add(self):
-        from qdrant_client import QdrantClient
+        QdrantClient = require_qdrant_client()
 
         db = QdrantVectorStore(collection_name="test", client=QdrantClient(":memory:"))
 
@@ -271,7 +281,7 @@ class TestQdrantVectorStore:
         assert db.count() == 2, "Expected 2 added entries"
 
     def test_add_from_docs(self, tmp_path):
-        from qdrant_client import QdrantClient
+        QdrantClient = require_qdrant_client()
 
         db = QdrantVectorStore(collection_name="test", client=QdrantClient(":memory:"))
 
@@ -287,7 +297,7 @@ class TestQdrantVectorStore:
         assert db.count() == 2, "Expected 2 added entries"
 
     def test_delete(self, tmp_path):
-        from qdrant_client import QdrantClient
+        QdrantClient = require_qdrant_client()
 
         db = QdrantVectorStore(collection_name="test", client=QdrantClient(":memory:"))
 
@@ -312,7 +322,7 @@ class TestQdrantVectorStore:
         assert db.count() == 0, "Expected 0 remaining entry"
 
     def test_query(self, tmp_path):
-        from qdrant_client import QdrantClient
+        QdrantClient = require_qdrant_client()
 
         db = QdrantVectorStore(collection_name="test", client=QdrantClient(":memory:"))
 
@@ -342,7 +352,7 @@ class TestQdrantVectorStore:
             "90aba5d3-f4f8-47c6-bad9-5ea457442e07",
             "6bed07c3-d284-47a3-a711-c3f9186755b8",
         ]
-        from qdrant_client import QdrantClient
+        QdrantClient = require_qdrant_client()
 
         db = QdrantVectorStore(
             collection_name="test", client=QdrantClient(path=tmp_path)

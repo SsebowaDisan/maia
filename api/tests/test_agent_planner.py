@@ -10,6 +10,7 @@ def _disable_llm_paths(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_PLANNER_ENABLED", "0")
     monkeypatch.setenv("MAIA_AGENT_LLM_PLAN_CRITIC_ENABLED", "0")
     monkeypatch.setenv("MAIA_AGENT_LLM_QUERY_REWRITE_ENABLED", "0")
+    monkeypatch.setenv("MAIA_AGENT_LLM_WEB_ROUTING_ENABLED", "0")
 
 
 def test_direct_website_analysis_prioritizes_inspection_and_report_then_server_delivery() -> None:
@@ -33,6 +34,12 @@ def test_direct_website_analysis_prioritizes_inspection_and_report_then_server_d
 
 def test_url_prompt_with_explicit_source_discovery_keeps_web_research(monkeypatch) -> None:
     # Web-research branching is now LLM-planner driven rather than keyword heuristics.
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
+
     def _fake_plan_with_llm(*, request, allowed_tool_ids):
         return [
             {
@@ -65,6 +72,9 @@ def test_url_prompt_with_explicit_source_discovery_keeps_web_research(monkeypatc
     assert "marketing.web_research" in tool_ids
     assert "browser.playwright.inspect" in tool_ids
     assert "report.generate" in tool_ids
+    web_step = next(step for step in steps if step.tool_id == "marketing.web_research")
+    assert web_step.params.get("provider") == "brave_search"
+    assert web_step.params.get("allow_provider_fallback") is False
 
 
 def test_build_plan_uses_llm_steps_when_available(monkeypatch) -> None:
@@ -164,6 +174,12 @@ def test_highlight_request_adds_file_highlights_and_docs_capture(monkeypatch) ->
 
 
 def test_location_request_with_url_keeps_location_web_research(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
+
     def _fake_plan_with_llm(*, request, allowed_tool_ids):
         return [
             {
@@ -205,6 +221,45 @@ def test_location_request_with_url_keeps_location_web_research(monkeypatch) -> N
 
     assert query == "axon group headquarters address"
     assert report_summary != ""
+
+
+def test_llm_routing_url_scrape_removes_web_research(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "url_scrape", "llm_used": True},
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect site",
+                "params": {"url": "https://axongroup.com"},
+            },
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Search online sources",
+                "params": {"query": "axon group overview"},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": "check site"},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Please scrape https://axongroup.com and summarize the page.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+    assert "browser.playwright.inspect" in tool_ids
+    assert "marketing.web_research" not in tool_ids
+    browser_step = next(step for step in steps if step.tool_id == "browser.playwright.inspect")
+    assert browser_step.params.get("web_provider") == "playwright_browser"
 
 
 def test_contact_form_request_adds_contact_form_send_step(monkeypatch) -> None:
@@ -288,7 +343,22 @@ def test_semantic_fallback_can_request_contact_form_submission(monkeypatch) -> N
     assert contact_step.params.get("url") == "https://axongroup.com/contact"
 
 
-def test_business_route_plan_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_route_plan(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.route_plan" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.route_plan",
+                "title": "Create business route plan",
+                "params": {
+                    "origin": "Kampala office",
+                    "destinations": ["Entebbe Airport", "Jinja"],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Please create a route plan from Kampala office to Entebbe Airport and Jinja for today visits.",
         agent_mode="company_agent",
@@ -304,7 +374,19 @@ def test_business_route_plan_fallback_for_non_technical_prompt() -> None:
     assert len(destinations) >= 1
 
 
-def test_business_ga4_weekly_sheet_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_ga4_workflow(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.ga4_kpi_sheet_report" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.ga4_kpi_sheet_report",
+                "title": "Generate GA4 KPI report in Google Sheets",
+                "params": {"sheet_range": "Tracker!A1"},
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Create a weekly GA4 KPI report and put it in Google Sheets.",
         agent_mode="company_agent",
@@ -315,7 +397,19 @@ def test_business_ga4_weekly_sheet_fallback_for_non_technical_prompt() -> None:
     assert "business.ga4_kpi_sheet_report" in tool_ids
 
 
-def test_business_cloud_incident_digest_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_cloud_incident_workflow(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.cloud_incident_digest_email" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.cloud_incident_digest_email",
+                "title": "Send cloud incident digest email",
+                "params": {"to": "ops@example.com", "send": True},
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Send a cloud incident digest email to ops@example.com from cloud logging.",
         agent_mode="company_agent",
@@ -328,7 +422,23 @@ def test_business_cloud_incident_digest_fallback_for_non_technical_prompt() -> N
     assert digest_step.params.get("to") == "ops@example.com"
 
 
-def test_business_invoice_workflow_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_invoice_workflow(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.invoice_workflow" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.invoice_workflow",
+                "title": "Run invoice workflow",
+                "params": {
+                    "invoice_number": "INV-2026-001",
+                    "to": "billing@example.com",
+                    "send": True,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Create and send invoice INV-2026-001 to client for USD 1200 and email it to billing@example.com.",
         agent_mode="company_agent",
@@ -343,7 +453,19 @@ def test_business_invoice_workflow_fallback_for_non_technical_prompt() -> None:
     assert invoice_step.params.get("send") is True
 
 
-def test_business_meeting_scheduler_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_meeting_scheduler(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.meeting_scheduler" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.meeting_scheduler",
+                "title": "Schedule meeting workflow",
+                "params": {"attendees": ["opslead@example.com"]},
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Schedule a meeting with opslead@example.com to review Q2 rollout.",
         agent_mode="company_agent",
@@ -358,7 +480,19 @@ def test_business_meeting_scheduler_fallback_for_non_technical_prompt() -> None:
     assert "opslead@example.com" in attendees
 
 
-def test_business_proposal_workflow_fallback_for_non_technical_prompt() -> None:
+def test_llm_plan_can_select_business_proposal_workflow(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "business.proposal_workflow" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "business.proposal_workflow",
+                "title": "Create proposal workflow",
+                "params": {"to": "ceo@example.com"},
+            }
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
     request = ChatRequest(
         message="Create an RFP proposal draft and send to ceo@example.com for review.",
         agent_mode="company_agent",
@@ -369,6 +503,48 @@ def test_business_proposal_workflow_fallback_for_non_technical_prompt() -> None:
     assert "business.proposal_workflow" in tool_ids
     proposal_step = next(step for step in steps if step.tool_id == "business.proposal_workflow")
     assert proposal_step.params.get("to") == "ceo@example.com"
+
+
+def test_data_science_plan_can_be_llm_driven_without_keyword_fallback(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = request
+        assert "data.science.profile" in allowed_tool_ids
+        assert "data.science.ml.train" in allowed_tool_ids
+        assert "data.science.visualize" in allowed_tool_ids
+        return [
+            {
+                "tool_id": "data.science.profile",
+                "title": "Profile dataset",
+                "params": {},
+            },
+            {
+                "tool_id": "data.science.ml.train",
+                "title": "Train ML model",
+                "params": {"target": "churn"},
+            },
+            {
+                "tool_id": "data.science.visualize",
+                "title": "Visualize results",
+                "params": {"chart_type": "histogram"},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    request = ChatRequest(
+        message=(
+            "Analyze this dataset, train a machine learning model to predict churn "
+            "target: churn, and show a chart."
+        ),
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "data.science.profile" in tool_ids
+    assert "data.science.ml.train" in tool_ids
+    assert "data.science.visualize" in tool_ids
+    ml_step = next(step for step in steps if step.tool_id == "data.science.ml.train")
+    assert ml_step.params.get("target") == "churn"
 
 
 def test_build_plan_scopes_allowed_tools_when_preferred_tools_are_provided(monkeypatch) -> None:

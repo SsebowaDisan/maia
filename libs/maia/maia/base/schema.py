@@ -1,10 +1,8 @@
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar
 
-from langchain.schema.messages import AIMessage as LCAIMessage
-from langchain.schema.messages import HumanMessage as LCHumanMessage
-from langchain.schema.messages import SystemMessage as LCSystemMessage
 from llama_index.core.bridge.pydantic import Field
 from llama_index.core.schema import Document as BaseDocument
 
@@ -16,6 +14,50 @@ if TYPE_CHECKING:
 
 IO_Type = TypeVar("IO_Type", "Document", str)
 SAMPLE_TEXT = "A sample Document from maia"
+
+
+class _FallbackSystemMessageBase:
+    pass
+
+
+class _FallbackAIMessageBase:
+    pass
+
+
+class _FallbackHumanMessageBase:
+    pass
+
+
+def _resolve_langchain_message_bases() -> tuple[type, type, type]:
+    # Avoid importing LangChain during module import. Reuse already-loaded classes only.
+    module = sys.modules.get("langchain_core.messages") or sys.modules.get(
+        "langchain.schema.messages"
+    )
+    if module is None:
+        return (
+            _FallbackSystemMessageBase,
+            _FallbackAIMessageBase,
+            _FallbackHumanMessageBase,
+        )
+    return (
+        getattr(module, "SystemMessage", _FallbackSystemMessageBase),
+        getattr(module, "AIMessage", _FallbackAIMessageBase),
+        getattr(module, "HumanMessage", _FallbackHumanMessageBase),
+    )
+
+
+def _import_langchain_message_classes():
+    try:
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    except Exception:
+        from langchain.schema.messages import AIMessage, HumanMessage, SystemMessage
+
+    return SystemMessage, AIMessage, HumanMessage
+
+
+_LC_SYSTEM_MESSAGE_BASE, _LC_AI_MESSAGE_BASE, _LC_HUMAN_MESSAGE_BASE = (
+    _resolve_langchain_message_bases()
+)
 
 
 class Document(BaseDocument):
@@ -102,20 +144,47 @@ class BaseMessage(Document):
     def to_openai_format(self) -> "ChatCompletionMessageParam":
         raise NotImplementedError
 
+    def to_langchain_format(self):
+        raise NotImplementedError
 
-class SystemMessage(BaseMessage, LCSystemMessage):
+
+class SystemMessage(BaseMessage, _LC_SYSTEM_MESSAGE_BASE):
     def to_openai_format(self) -> "ChatCompletionMessageParam":
         return {"role": "system", "content": self.content}
 
+    def to_langchain_format(self):
+        LCSysMessage, _, _ = _import_langchain_message_classes()
+        return LCSysMessage(content=self.content)
 
-class AIMessage(BaseMessage, LCAIMessage):
+    @classmethod
+    def from_langchain_format(cls, message: Any) -> "SystemMessage":
+        return cls(content=getattr(message, "content", ""))
+
+
+class AIMessage(BaseMessage, _LC_AI_MESSAGE_BASE):
     def to_openai_format(self) -> "ChatCompletionMessageParam":
         return {"role": "assistant", "content": self.content}
 
+    def to_langchain_format(self):
+        _, LCAssistantMessage, _ = _import_langchain_message_classes()
+        return LCAssistantMessage(content=self.content)
 
-class HumanMessage(BaseMessage, LCHumanMessage):
+    @classmethod
+    def from_langchain_format(cls, message: Any) -> "AIMessage":
+        return cls(content=getattr(message, "content", ""))
+
+
+class HumanMessage(BaseMessage, _LC_HUMAN_MESSAGE_BASE):
     def to_openai_format(self) -> "ChatCompletionMessageParam":
         return {"role": "user", "content": self.content}
+
+    def to_langchain_format(self):
+        _, _, LCHumanMessage = _import_langchain_message_classes()
+        return LCHumanMessage(content=self.content)
+
+    @classmethod
+    def from_langchain_format(cls, message: Any) -> "HumanMessage":
+        return cls(content=getattr(message, "content", ""))
 
 
 class RetrievedDocument(Document):

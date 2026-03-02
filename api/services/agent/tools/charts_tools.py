@@ -81,6 +81,21 @@ class ChartGenerateTool(AgentTool):
                 "title": title,
                 "points": len(safe_values),
                 "renderer": "matplotlib" if used_matplotlib else "fallback-text",
+                "labels": safe_labels,
+                "values": safe_values,
+                "plot": {
+                    "kind": "chart",
+                    "library": "recharts",
+                    "chart_type": "line",
+                    "title": title,
+                    "x": "label",
+                    "y": "value",
+                    "row_count": len(safe_values),
+                    "points": [
+                        {"x": str(label), "y": float(value)}
+                        for label, value in zip(safe_labels[:500], safe_values[:500])
+                    ],
+                },
             },
             sources=[],
             next_steps=[
@@ -96,4 +111,3 @@ class ChartGenerateTool(AgentTool):
                 )
             ],
         )
-

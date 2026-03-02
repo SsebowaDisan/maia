@@ -17,6 +17,39 @@ import {
 } from "lucide-react";
 import type { ConversationSummary } from "../../api/client";
 
+const LETTER_OR_NUMBER_RE = /^[\p{L}\p{N}]$/u;
+const EXTENDED_PICTOGRAPHIC_RE = /^\p{Extended_Pictographic}$/u;
+
+function startsWithIcon(text: string) {
+  const chars = Array.from(text);
+  if (!chars.length) {
+    return false;
+  }
+  const first = chars[0] || "";
+  if (!first || LETTER_OR_NUMBER_RE.test(first)) {
+    return false;
+  }
+  const codePoint = first.codePointAt(0) || 0;
+  return EXTENDED_PICTOGRAPHIC_RE.test(first) || codePoint >= 0x2600;
+}
+
+function displayConversationName(name: string) {
+  const cleaned = String(name || "").trim();
+  if (!cleaned) {
+    return "New chat";
+  }
+  return cleaned;
+}
+
+function stripChatIcon(name: string) {
+  const cleaned = String(name || "").trim();
+  const chars = Array.from(cleaned);
+  if (chars.length >= 2 && startsWithIcon(cleaned) && chars[1] === " ") {
+    return chars.slice(2).join("").trim();
+  }
+  return cleaned;
+}
+
 interface SidebarProject {
   id: string;
   name: string;
@@ -135,7 +168,7 @@ export function ChatSidebar({
 
   const startRenameConversation = (conversation: ConversationSummary) => {
     setRenamingConversationId(conversation.id);
-    setRenamingConversationDraft(conversation.name);
+    setRenamingConversationDraft(stripChatIcon(conversation.name));
     setMovingConversationId(null);
   };
 
@@ -162,7 +195,9 @@ export function ChatSidebar({
   };
 
   const requestDeleteConversation = async (conversation: ConversationSummary) => {
-    const confirmed = window.confirm(`Delete chat \"${conversation.name}\"?`);
+    const confirmed = window.confirm(
+      `Delete chat \"${displayConversationName(conversation.name)}\"?`,
+    );
     if (!confirmed) {
       return;
     }
@@ -380,7 +415,7 @@ export function ChatSidebar({
                                     onClick={() => onSelectConversation(conversation.id)}
                                     className="flex-1 min-w-0 text-left"
                                   >
-                                    <p className="text-[14px] text-[#1d1d1f] truncate">{conversation.name}</p>
+                                    <p className="text-[14px] text-[#1d1d1f] truncate">{displayConversationName(conversation.name)}</p>
                                   </button>
                                   <button
                                     onClick={() => startRenameConversation(conversation)}

@@ -24,11 +24,7 @@ class BaseConversation(SQLModel):
     id: str = Field(
         default_factory=lambda: uuid.uuid4().hex, primary_key=True, index=True
     )
-    name: str = Field(
-        default_factory=lambda: "Untitled - {}".format(
-            datetime.datetime.now(get_localzone()).strftime("%Y-%m-%d %H:%M:%S")
-        )
-    )
+    name: str = Field(default_factory=lambda: "💬 New chat")
     user: str = Field(default="")  # For now we only have one user
 
     is_public: bool = Field(default=False)

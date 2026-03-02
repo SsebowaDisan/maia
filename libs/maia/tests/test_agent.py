@@ -57,59 +57,66 @@ def generate_chat_completion_obj(text):
     )
 
 
-_openai_chat_completion_responses_rewoo = [
-    generate_chat_completion_obj(text=text)
-    for text in [REWOO_VALID_PLAN, FINAL_RESPONSE_TEXT]
-]
-
-_openai_chat_completion_responses_rewoo_error = [
-    generate_chat_completion_obj(text=text)
-    for text in [REWOO_INVALID_PLAN, FINAL_RESPONSE_TEXT]
-]
-
-_openai_chat_completion_responses_react = [
-    generate_chat_completion_obj(text=text)
-    for text in [
-        (
-            "I don't have prior knowledge about Cinnamon AI company, "
-            "so I should gather information about it.\n"
-            "Action: wikipedia\n"
-            "Action Input: Cinnamon AI company\n"
-        ),
-        (
-            "The information retrieved from Wikipedia is not "
-            "about Cinnamon AI company, but about Blue Prism, "
-            "a British multinational software corporation. "
-            "I need to try another source to gather information "
-            "about Cinnamon AI company.\n"
-            "Action: google_search\n"
-            "Action Input: Cinnamon AI company\n"
-        ),
-        FINAL_RESPONSE_TEXT,
+def rewoo_responses():
+    return [
+        generate_chat_completion_obj(text=text)
+        for text in [REWOO_VALID_PLAN, FINAL_RESPONSE_TEXT]
     ]
-]
 
-_openai_chat_completion_responses_react_langchain_tool = [
-    generate_chat_completion_obj(text=text)
-    for text in [
-        (
-            "I don't have prior knowledge about Cinnamon AI company, "
-            "so I should gather information about it.\n"
-            "Action: wikipedia\n"
-            "Action Input: Cinnamon AI company\n"
-        ),
-        # (
-        #     "The information retrieved from Wikipedia is not "
-        #     "about Cinnamon AI company, but about Blue Prism, "
-        #     "a British multinational software corporation. "
-        #     "I need to try another source to gather information "
-        #     "about Cinnamon AI company.\n"
-        #     "Action: duckduckgo_search\n"
-        #     "Action Input: Cinnamon AI company\n"
-        # ),
-        FINAL_RESPONSE_TEXT,
+
+def rewoo_error_responses():
+    return [
+        generate_chat_completion_obj(text=text)
+        for text in [REWOO_INVALID_PLAN, FINAL_RESPONSE_TEXT]
     ]
-]
+
+
+def react_responses():
+    return [
+        generate_chat_completion_obj(text=text)
+        for text in [
+            (
+                "I don't have prior knowledge about Cinnamon AI company, "
+                "so I should gather information about it.\n"
+                "Action: wikipedia\n"
+                "Action Input: Cinnamon AI company\n"
+            ),
+            (
+                "The information retrieved from Wikipedia is not "
+                "about Cinnamon AI company, but about Blue Prism, "
+                "a British multinational software corporation. "
+                "I need to try another source to gather information "
+                "about Cinnamon AI company.\n"
+                "Action: google_search\n"
+                "Action Input: Cinnamon AI company\n"
+            ),
+            FINAL_RESPONSE_TEXT,
+        ]
+    ]
+
+
+def react_langchain_tool_responses():
+    return [
+        generate_chat_completion_obj(text=text)
+        for text in [
+            (
+                "I don't have prior knowledge about Cinnamon AI company, "
+                "so I should gather information about it.\n"
+                "Action: wikipedia\n"
+                "Action Input: Cinnamon AI company\n"
+            ),
+            # (
+            #     "The information retrieved from Wikipedia is not "
+            #     "about Cinnamon AI company, but about Blue Prism, "
+            #     "a British multinational software corporation. "
+            #     "I need to try another source to gather information "
+            #     "about Cinnamon AI company.\n"
+            #     "Action: duckduckgo_search\n"
+            #     "Action Input: Cinnamon AI company\n"
+            # ),
+            FINAL_RESPONSE_TEXT,
+        ]
+    ]
 
 
 @pytest.fixture
@@ -122,66 +129,59 @@ def llm():
     )
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_rewoo_error,
-)
-def test_agent_fail(openai_completion, llm, mock_google_search):
+def test_agent_fail(llm, mock_google_search):
     plugins = [
         GoogleSearchTool(),
         WikipediaTool(),
         LLMTool(llm=llm),
     ]
 
-    agent = RewooAgent(planner_llm=llm, solver_llm=llm, plugins=plugins)
-
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=rewoo_error_responses(),
+    ) as openai_completion:
+        agent = RewooAgent(planner_llm=llm, solver_llm=llm, plugins=plugins)
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert not response
     assert response.status == "failed"
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_rewoo,
-)
-def test_rewoo_agent(openai_completion, llm, mock_google_search):
+def test_rewoo_agent(llm, mock_google_search):
     plugins = [
         GoogleSearchTool(),
         WikipediaTool(),
         LLMTool(llm=llm),
     ]
 
-    agent = RewooAgent(planner_llm=llm, solver_llm=llm, plugins=plugins)
-
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=rewoo_responses(),
+    ) as openai_completion:
+        agent = RewooAgent(planner_llm=llm, solver_llm=llm, plugins=plugins)
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert response.text == FINAL_RESPONSE_TEXT
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_react,
-)
-def test_react_agent(openai_completion, llm, mock_google_search):
+def test_react_agent(llm, mock_google_search):
     plugins = [
         GoogleSearchTool(),
         WikipediaTool(),
         LLMTool(llm=llm),
     ]
-    agent = ReactAgent(llm=llm, plugins=plugins, max_iterations=4)
-
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=react_responses(),
+    ) as openai_completion:
+        agent = ReactAgent(llm=llm, plugins=plugins, max_iterations=4)
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert response.text == FINAL_RESPONSE_TEXT
 
 
 @skip_openai_lc_wrapper_test
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_react,
-)
-def test_react_agent_langchain(openai_completion, llm, mock_google_search):
+def test_react_agent_langchain(llm, mock_google_search):
     from langchain.agents import AgentType, initialize_agent
 
     plugins = [
@@ -196,17 +196,17 @@ def test_react_agent_langchain(openai_completion, llm, mock_google_search):
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=True,
     )
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=react_responses(),
+    ) as openai_completion:
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert response
 
 
 @skip_openai_lc_wrapper_test
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_react,
-)
-def test_wrapper_agent_langchain(openai_completion, llm, mock_google_search):
+def test_wrapper_agent_langchain(llm, mock_google_search):
     plugins = [
         GoogleSearchTool(),
         WikipediaTool(),
@@ -217,16 +217,16 @@ def test_wrapper_agent_langchain(openai_completion, llm, mock_google_search):
         plugins=plugins,
         agent_type=AgentType.react,
     )
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=react_responses(),
+    ) as openai_completion:
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert response
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_responses_react_langchain_tool,
-)
-def test_react_agent_with_langchain_tools(openai_completion, llm):
+def test_react_agent_with_langchain_tools(llm):
     from langchain_community.tools import DuckDuckGoSearchRun, WikipediaQueryRun
     from langchain_community.utilities import WikipediaAPIWrapper
 
@@ -235,8 +235,11 @@ def test_react_agent_with_langchain_tools(openai_completion, llm):
 
     langchain_plugins = [wikipedia, search]
     plugins = [BaseTool.from_langchain_format(tool) for tool in langchain_plugins]
-    agent = ReactAgent(llm=llm, plugins=plugins, max_iterations=4)
-
-    response = agent("Tell me about Cinnamon AI company")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=react_langchain_tool_responses(),
+    ) as openai_completion:
+        agent = ReactAgent(llm=llm, plugins=plugins, max_iterations=4)
+        response = agent("Tell me about Cinnamon AI company")
     openai_completion.assert_called()
     assert response.text == FINAL_RESPONSE_TEXT

@@ -151,7 +151,7 @@ class App(BaseApp):
                                 else gr.update(visible=False)
                             )
                             for k in self._tabs.keys()
-                        )
+                        ) + [gr.update(selected="login-tab")]
 
                     is_admin = user.admin
 

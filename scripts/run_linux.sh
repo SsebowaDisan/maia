@@ -171,7 +171,7 @@ function download_and_unzip() {
 
 function launch_ui() {
     local pdfjs_prebuilt_dir=$1
-    PDFJS_PREBUILT_DIR="$pdfjs_prebuilt_dir" python $(pwd)/app.py || {
+    PDFJS_PREBUILT_DIR="$pdfjs_prebuilt_dir" python $(pwd)/run_api.py || {
         echo "" && echo "Will exit now..."
         exit 1
     }
@@ -217,7 +217,7 @@ download_and_unzip $pdf_js_dist_url $target_pdf_js_dir
 print_highlight "Setting up a local model"
 setup_local_model
 
-print_highlight "Launching Maia in your browser, please wait..."
+print_highlight "Launching Maia API (React UI runs separately on port 5173 in dev)..."
 launch_ui $target_pdf_js_dir
 
 deactivate_conda_env

@@ -105,9 +105,9 @@ def build_extractive_timeout_answer(
         f"Based on the latest indexed file '{source_name}', the content indicates: {snippet}"
     )
     info_html = (
-        "<details class='evidence' open>"
+        "<details class='evidence' id='evidence-1' open>"
         "<summary><i>Fallback retrieval</i></summary>"
-        f"<div><b>Source:</b> {source_name}</div>"
+        f"<div><b>Source:</b> [1] {source_name}</div>"
         f"<div><b>Extract:</b> {snippet}</div>"
         "</details>"
     )

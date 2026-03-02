@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import re
 from typing import Any
 
 from api.schemas import ChatRequest
-from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_SPECS
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.agent.policy import AgentToolCapability, get_capability_matrix
 
@@ -31,45 +29,6 @@ _CONTRACT_ACTION_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
     "create_invoice": ("invoice",),
 }
 
-_KEYWORD_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
-    "route plan": ("business_workflow",),
-    "travel time": ("business_workflow",),
-    "distance matrix": ("business_workflow",),
-    "incident digest": ("business_workflow",),
-    "weekly ga4": ("business_workflow",),
-    "invoice workflow": ("business_workflow",),
-    "schedule meeting": ("business_workflow",),
-    "calendar invite": ("business_workflow",),
-    "proposal workflow": ("business_workflow",),
-    "rfp": ("business_workflow",),
-    "bigquery": ("data_analysis",),
-    "warehouse": ("data_analysis",),
-    "dataset": ("data_analysis",),
-    "sql": ("data_analysis",),
-    "invoice": ("invoice",),
-    "billing": ("invoice",),
-    "payment": ("invoice",),
-    "calendar": ("scheduling",),
-    "meeting": ("scheduling",),
-    "task": ("scheduling",),
-    "slack": ("workplace",),
-    "ga4": ("analytics",),
-    "analytics": ("analytics",),
-    "google ads": ("ads_analysis",),
-    "monitoring": ("analytics",),
-    "logging": ("analytics",),
-    "trace": ("analytics",),
-    "cloud storage": ("document_ops",),
-    "drive": ("document_ops",),
-    "docs": ("document_ops",),
-    "sheets": ("document_ops",),
-    "chart": ("analytics", "reporting"),
-    "report": ("reporting",),
-    "research": ("marketing_research",),
-    "website": ("marketing_research",),
-    "web": ("marketing_research",),
-}
-
 _DOMAIN_PRIORITY: dict[str, int] = {
     "marketing_research": 10,
     "analytics": 20,
@@ -90,10 +49,6 @@ _ACTION_PRIORITY: dict[str, int] = {
     "draft": 20,
     "execute": 30,
 }
-
-_SPACE_RE = re.compile(r"[^a-z0-9]+")
-_GOOGLE_SPEC_BY_TOOL_ID = {spec.tool_id: spec for spec in GOOGLE_API_TOOL_SPECS}
-
 
 @dataclass(frozen=True)
 class CapabilityPlanningAnalysis:
@@ -176,57 +131,6 @@ def _build_preferred_tools(
                 preferred.append(sticky_tool)
 
     return list(dict.fromkeys(preferred))
-
-
-def _normalize_phrase(value: str) -> str:
-    text = _SPACE_RE.sub(" ", str(value or "").strip().lower())
-    return " ".join(text.split()).strip()
-
-
-def _match_explicit_google_api_tools(
-    *,
-    raw_text: str,
-    available_tool_ids: set[str],
-) -> tuple[list[str], list[str]]:
-    normalized = _normalize_phrase(raw_text)
-    if not normalized:
-        return [], []
-
-    haystack = f" {normalized} "
-    matched_tool_ids: list[str] = []
-    matched_signals: list[str] = []
-    for spec in GOOGLE_API_TOOL_SPECS:
-        if spec.tool_id not in available_tool_ids:
-            continue
-        api_name = _normalize_phrase(spec.api_name)
-        api_name_without_suffix = _normalize_phrase(
-            spec.api_name.removesuffix(" API").removesuffix(" api")
-        )
-        tool_suffix = _normalize_phrase(
-            spec.tool_id.replace("google.api.", "").replace("_", " ")
-        )
-        candidates = [
-            api_name,
-            api_name_without_suffix,
-            f"{api_name_without_suffix} api" if api_name_without_suffix else "",
-            tool_suffix,
-            f"{tool_suffix} api" if tool_suffix else "",
-        ]
-        matched_phrase = ""
-        for phrase in candidates:
-            clean = _normalize_phrase(phrase)
-            if not clean or len(clean) < 4:
-                continue
-            if f" {clean} " in haystack:
-                matched_phrase = clean
-                break
-        if not matched_phrase:
-            continue
-        matched_tool_ids.append(spec.tool_id)
-        matched_signals.append(f"explicit_google_api:{matched_phrase}")
-        if len(matched_tool_ids) >= 6:
-            break
-    return list(dict.fromkeys(matched_tool_ids)), matched_signals[:10]
 
 
 def _infer_domains_with_llm(
@@ -337,14 +241,6 @@ def analyze_capability_plan(
             str(task_prep.contract_objective or "").strip().lower(),
         ]
     ).strip()
-    for keyword, mapped in _KEYWORD_DOMAIN_MAP.items():
-        if keyword in raw_text:
-            _append_domains(
-                domains=domains,
-                matched_signals=matched_signals,
-                reason=f"keyword:{keyword}",
-                candidate_domains=mapped,
-            )
     llm_domains = _infer_domains_with_llm(
         request=request,
         task_prep=task_prep,
@@ -357,6 +253,9 @@ def analyze_capability_plan(
             reason=f"llm_domain:{domain}",
             candidate_domains=(domain,),
         )
+        llm_signal = f"llm_domain:{domain}"
+        if llm_signal not in matched_signals:
+            matched_signals.append(llm_signal)
 
     if request.agent_mode == "company_agent":
         _append_domains(
@@ -376,24 +275,6 @@ def analyze_capability_plan(
         capabilities=capabilities,
         request=request,
     )
-    explicit_google_tools, explicit_google_signals = _match_explicit_google_api_tools(
-        raw_text=raw_text,
-        available_tool_ids=available_tool_ids,
-    )
-    if explicit_google_tools:
-        preferred_tool_ids = [*explicit_google_tools, *preferred_tool_ids]
-        for tool_id in explicit_google_tools:
-            spec = _GOOGLE_SPEC_BY_TOOL_ID.get(tool_id)
-            if not spec:
-                continue
-            _append_domains(
-                domains=domains,
-                matched_signals=matched_signals,
-                reason=f"explicit_google_api_domain:{spec.domain}",
-                candidate_domains=(spec.domain,),
-            )
-        ordered_domains = sorted(domains, key=_domain_sort_key)
-        matched_signals.extend(explicit_google_signals)
     preferred_tool_ids = [tool_id for tool_id in preferred_tool_ids if tool_id in available_tool_ids]
     preferred_tool_ids = list(dict.fromkeys(preferred_tool_ids))
 

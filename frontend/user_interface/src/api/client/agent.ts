@@ -1,4 +1,4 @@
-import { API_BASE, request } from "./core";
+import { API_BASE, request, withUserIdQuery } from "./core";
 import type { AgentLiveEvent, ConnectorCredentialRecord } from "./types";
 
 function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
@@ -69,7 +69,7 @@ function subscribeAgentEvents(options?: {
     query.set("replay", String(options.replay));
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const eventSource = new EventSource(`${API_BASE}/api/agent/events${suffix}`);
+  const eventSource = new EventSource(`${API_BASE}${withUserIdQuery(`/api/agent/events${suffix}`)}`);
 
   eventSource.addEventListener("ready", (event) => {
     try {

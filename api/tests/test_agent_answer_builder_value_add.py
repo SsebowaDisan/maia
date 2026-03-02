@@ -1,4 +1,5 @@
 from api.schemas import ChatRequest
+from api.services.agent.models import AgentSource
 from api.services.agent.orchestration.answer_builder import compose_professional_answer
 
 
@@ -39,6 +40,8 @@ def test_value_add_section_is_included_when_evidence_support_is_strong() -> None
     assert "## Evidence-Backed Value Add" in answer
     assert "Source: https://example.com/about" in answer or "Source: https://example.com/services" in answer
     assert "confidence:" in answer
+    assert "## Evidence Citations" in answer
+    assert "https://example.com/about" in answer
 
 
 def test_value_add_section_is_hidden_when_contradictions_exist() -> None:
@@ -112,3 +115,47 @@ def test_value_add_section_is_hidden_when_support_coverage_is_low() -> None:
         },
     )
     assert "## Evidence-Backed Value Add" not in answer
+
+
+def test_answer_always_includes_evidence_citations_with_deduplicated_sources() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(message="Summarize findings.", agent_mode="company_agent"),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[
+            AgentSource(
+                source_type="web",
+                label="Company About",
+                url="https://example.com/about",
+                metadata={"snippet": "Company profile details."},
+            ),
+            AgentSource(
+                source_type="web",
+                label="Company About duplicate",
+                url="https://example.com/about",
+                metadata={"snippet": "Duplicate row should not create a second citation."},
+            ),
+        ],
+        next_steps=[],
+        runtime_settings={},
+        verification_report=None,
+    )
+    assert "## Evidence Citations" in answer
+    assert "- [1] Company About | https://example.com/about" in answer
+    assert "Duplicate row should not create a second citation." not in answer
+
+
+def test_answer_includes_evidence_citations_section_when_no_sources_exist() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(message="Summarize findings.", agent_mode="company_agent"),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={},
+        verification_report=None,
+    )
+    assert "## Evidence Citations" in answer
+    assert "No external evidence sources were captured in this run" in answer

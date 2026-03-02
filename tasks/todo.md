@@ -9,58 +9,43 @@ Use this file as the live tracker for the active slice only.
 - `blocked` needs decision or prerequisite
 
 ## Active Slice
-- Name: `Google API Capability Expansion (Theatre-First)`
-- Status: `done`
+- Name: `React UI Unification (Gradio Sunset Program)`
+- Status: `in_progress`
 
 ## Checklist
-- [x] capability planner analysis module integrated (`done`)
-- [x] roadmap updated with production API expansion phases (`done`)
-- [x] Google API catalog + tool pack registered (`done`)
-- [x] unified Google API hub connector implemented (`done`)
-- [x] governance/policy coverage validated (`done`)
-- [x] end-to-end theatre event visibility validated (`done`)
-- [x] explicit theatre surface routing for `api_call_*` events (`done`)
-- [x] non-technical business wrapper tools added (route plan / GA4 KPI sheet report / cloud incident digest email) (`done`)
-- [x] non-technical business wrapper tools added (invoice workflow / meeting scheduler / proposal workflow) (`done`)
-- [x] planner fallback upgraded for non-technical prompts to wrapper tools (`done`)
-- [x] registry fallback trace event added to prevent silent tool executions (`done`)
-- [x] regression suite green for touched agent modules (`done`)
+- [x] roadmap section added with final phase = full Gradio deletion (`done`)
+- [x] migration inventory for dual UI stack entrypoints captured (`done`)
+- [x] React-first local dev scripts added (`done`)
+- [x] README updated to make React UI the primary local workflow (`done`)
+- [x] frontend env template for API base URL and user identity added (`done`)
+- [x] deployment/runtime cutover implemented (`done`)
+- [x] Gradio runtime entrypoints deleted (`done`)
+- [x] CI guard added to block legacy Gradio entrypoint reintroduction (`done`)
+- [x] remaining docs/CI references to legacy runtime cleaned up (`done`)
+- [ ] React UI auth/session error states (401/403) surfaced in UX (`todo`)
 
 ## Verification Evidence
 - Commands run:
-- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_agent_capability_planning.py api/tests/test_agent_llm_planner.py api/tests/test_agent_planner.py`
-- `.venv311\\Scripts\\python.exe -m compileall api/services/agent/orchestration/step_planner_sections/capability_planning.py api/services/agent/orchestration/step_planner_sections/app.py api/services/agent/orchestration/step_planner_sections/events.py api/services/agent/planner.py api/services/agent/llm_planner.py api/services/agent/orchestration/step_execution_sections/workspace_shadow.py api/services/agent/events.py`
-- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_google_api_hub_connector.py api/tests/test_google_api_tools.py api/tests/test_tool_registry.py api/tests/test_agent_capability_planning.py api/tests/test_agent_llm_planner.py api/tests/test_agent_planner.py`
-- `.venv311\\Scripts\\python.exe -m compileall api/services/agent/google_api_catalog.py api/services/agent/connectors/google_api_hub_connector.py api/services/agent/connectors/registry.py api/services/agent/tools/google_api_tools.py api/services/agent/tools/registry.py api/services/agent/policy.py api/services/agent/planner.py api/services/agent/events.py`
+- `rg -n "python app.py|sso_app|sso_app_demo|localhost:7860|GRADIO_SERVER_PORT" README.md launch.sh fly.toml scripts docs`
+- `rg -n "app.py|sso_app.py|sso_app_demo.py" .github/workflows/unit-test.yaml`
+- `rg -n "port: 5173|proxy|/api" frontend/user_interface/vite.config.ts frontend/user_interface/package.json`
+- `rg -n "createRoot|App" frontend/user_interface/src/main.tsx frontend/user_interface/src/app/App.tsx frontend/user_interface/src/app/appShell/app.tsx`
+- `.venv311\Scripts\python.exe -m pytest -q api/tests/test_auth_identity.py`
 - `npm run build` (from `frontend/user_interface`)
-- `python -m py_compile api/services/agent/tools/google_api_tools.py api/tests/test_google_api_tools.py`
-- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_business_workflow_tools.py api/tests/test_agent_planner.py api/tests/test_agent_capability_planning.py api/tests/test_tool_registry.py api/tests/test_google_api_tools.py api/tests/test_agent_llm_planner.py`
-- `.venv311\\Scripts\\python.exe -m compileall api/services/agent/tools/business_workflow_tools.py api/services/agent/tools/registry.py api/services/agent/planner.py api/services/agent/llm_planner.py api/services/agent/policy.py api/services/agent/orchestration/step_planner_sections/capability_planning.py api/tests/test_business_workflow_tools.py`
-- `.venv311\\Scripts\\python.exe -m pytest api/tests/test_business_workflow_tools.py api/tests/test_business_office_tools.py api/tests/test_agent_planner.py api/tests/test_agent_capability_planning.py api/tests/test_tool_registry.py api/tests/test_google_api_tools.py api/tests/test_agent_llm_planner.py`
-- `.venv311\\Scripts\\python.exe -m compileall api/services/agent/tools/business_office_tools.py api/services/agent/tools/business_workflow_tools.py api/services/agent/tools/business_workflow_helpers.py api/services/agent/planner_helpers.py api/services/agent/planner_business_fallback.py api/services/agent/planner.py api/services/agent/tools/registry.py api/services/agent/policy.py api/services/agent/llm_planner.py api/services/agent/orchestration/step_planner_sections/capability_planning.py api/tests/test_business_office_tools.py`
+- `Invoke-WebRequest http://127.0.0.1:8000/api/health`
 - Test output summary:
-- Capability planning and planner suite passed (`14 passed`).
-- API hub/catalog/tool/registry/planner suite passed (`23 passed`).
-- Frontend build passed after `scene_surface` tab routing changes.
-- Wrapper + planner + capability + registry + llm planner validation passed (`29 passed`) using `.venv311`.
-- Wrapper + planner + capability + registry + llm planner validation passed (`35 passed`) using `.venv311`.
+- Targeted auth identity suite passed (`4 passed`).
+- Frontend production build passed.
+- API health endpoint responded with `{"status":"ok"}`.
 - LOC gate:
-- `api/services/agent/orchestration/step_planner_sections/capability_planning.py` `220`
-- `api/services/agent/planner.py` `487`
-- `api/services/agent/orchestration/step_execution_sections/workspace_shadow.py` `141`
-- `api/services/agent/tools/business_workflow_tools.py` `489`
-- `api/services/agent/tools/business_workflow_helpers.py` `35`
-- `api/services/agent/tools/business_office_tools.py` `466`
-- `api/services/agent/planner_helpers.py` `44`
+- N/A for this slice.
 
 ## Handoff Notes
 - Completed in this step:
-- Added capability planner routing analysis with theatre-visible `llm.capability_plan` events.
-- Extended planner preference flow with `preferred_tool_ids` to bias tool selection by capability domain.
-- Added theatre-first per-step shadow sync: append Docs notes + mark Sheets `DONE` with timestamp/evidence.
-- Added production API expansion roadmap section to `docs/company_agent_end_to_end_roadmap.md`.
-- Added Google API catalog, unified connector, and broad API tool pack scaffolding (in progress validation).
-- Added policy + planner allowlist integration for `google.api.*` tool family.
-- Added theatre-visible API trace events (`api_call_started`, `api_call_completed`) for live execution transparency.
+- Implemented React-first startup scripts and docs.
+- Cut runtime/deploy defaults to FastAPI + React (`launch.sh`, `fly.toml`, Docker frontend build stage).
+- Added explicit user identity propagation from React client to API plus strict-mode backend guard.
+- Deleted legacy Gradio runtime entrypoints (`app.py`, `sso_app.py`, `sso_app_demo.py`).
+- Added CI guard to fail if legacy Gradio runtime entrypoints are reintroduced.
 - Overall status:
-- Active API expansion slice validations are complete and ready for next production slice.
+- React unification is mostly complete; remaining work is documentation/CI hardening for full legacy reference cleanup.

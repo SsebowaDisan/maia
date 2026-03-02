@@ -262,6 +262,7 @@ export function useConversationChat({
         {
           user: message,
           assistant: "",
+          plot: null,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           info: "",
           mode: effectiveMode,
@@ -331,6 +332,22 @@ export function useConversationChat({
                 if (event.type === "info_delta") {
                   streamedInfo += String(event.delta || "");
                   setInfoText(streamedInfo);
+                  return;
+                }
+                if (event.type === "plot") {
+                  const plotPayload =
+                    event.plot && typeof event.plot === "object"
+                      ? (event.plot as Record<string, unknown>)
+                      : null;
+                  setChatTurns((prev) => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    next[next.length - 1] = {
+                      ...(last || {}),
+                      plot: plotPayload,
+                    };
+                    return next;
+                  });
                   return;
                 }
                 if (event.type === "activity" && event.event) {
@@ -404,12 +421,14 @@ export function useConversationChat({
               ? `${response.answer || ""}\n\n[Notice] Backend is not running Agent mode. Restart the API server and try again.`
               : response.answer || "",
             info: response.info || "",
+            plot: response.plot || null,
             mode: effectiveReturnedMode,
             actionsTaken: response.actions_taken || [],
             sourcesUsed: response.sources_used || [],
             nextRecommendedSteps: response.next_recommended_steps || [],
             needsHumanReview: Boolean(response.needs_human_review),
             humanReviewNotes: response.human_review_notes || null,
+            webSummary: response.web_summary || {},
             activityRunId: response.activity_run_id || null,
             activityEvents: streamedEventsLocal,
           };
@@ -428,6 +447,7 @@ export function useConversationChat({
             user: message,
             assistant: `Error: ${String(error)}`,
             info: "",
+            plot: null,
             mode: effectiveMode,
             needsHumanReview: false,
             humanReviewNotes: null,

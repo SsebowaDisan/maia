@@ -16,6 +16,12 @@ ALLOWED_INTENT_TAGS = (
     "contact_form_submission",
 )
 
+ALLOWED_WEB_ROUTING_MODES = (
+    "online_research",
+    "url_scrape",
+    "none",
+)
+
 
 def _coerce_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
@@ -182,3 +188,74 @@ def classify_intent_tags(
         return heuristic_tags[:8]
     merged = list(dict.fromkeys([*heuristic_tags, *llm_tags]))
     return merged[:8]
+
+
+def detect_web_routing_mode(
+    *,
+    message: str,
+    agent_goal: str | None,
+    heuristic: dict[str, Any],
+) -> dict[str, Any]:
+    heuristic_url = str(heuristic.get("url") or "").strip() if isinstance(heuristic, dict) else ""
+    fallback_mode = "url_scrape" if heuristic_url else "none"
+    if not env_bool("MAIA_AGENT_LLM_WEB_ROUTING_ENABLED", default=True):
+        return {
+            "routing_mode": fallback_mode,
+            "llm_used": False,
+            "reasoning": "llm_web_routing_disabled",
+            "target_url": heuristic_url,
+        }
+
+    input_payload = {
+        "message": str(message or "").strip(),
+        "agent_goal": str(agent_goal or "").strip(),
+        "heuristic": sanitize_json_value(heuristic if isinstance(heuristic, dict) else {}),
+        "allowed_routing_modes": list(ALLOWED_WEB_ROUTING_MODES),
+    }
+    prompt = (
+        "Classify web execution routing for the user request.\n"
+        "Return strict JSON only.\n"
+        "Schema:\n"
+        "{\n"
+        '  "routing_mode": "online_research|url_scrape|none",\n'
+        '  "reasoning": "short explanation",\n'
+        '  "target_url": "string"\n'
+        "}\n"
+        "Rules:\n"
+        "- `online_research`: user wants general web research / source discovery.\n"
+        "- `url_scrape`: user wants inspection/scraping of a specific provided URL.\n"
+        "- `none`: web actions are not required.\n"
+        "- Never invent URLs; only reuse URLs from input.\n\n"
+        f"Input:\n{json.dumps(input_payload, ensure_ascii=True)}"
+    )
+    payload = call_json_response(
+        system_prompt=(
+            "You are a routing classifier for enterprise web-execution workflows. "
+            "Output strict JSON only."
+        ),
+        user_prompt=prompt,
+        temperature=0.0,
+        timeout_seconds=10,
+        max_tokens=220,
+    )
+    if not isinstance(payload, dict):
+        return {
+            "routing_mode": fallback_mode,
+            "llm_used": False,
+            "reasoning": "llm_unavailable",
+            "target_url": heuristic_url,
+        }
+
+    mode = str(payload.get("routing_mode") or "").strip().lower()
+    if mode not in ALLOWED_WEB_ROUTING_MODES:
+        mode = fallback_mode
+    target_url = str(payload.get("target_url") or heuristic_url).strip()
+    if heuristic_url and not target_url:
+        target_url = heuristic_url
+    reasoning = " ".join(str(payload.get("reasoning") or "").split()).strip()[:260]
+    return {
+        "routing_mode": mode,
+        "llm_used": True,
+        "reasoning": reasoning,
+        "target_url": target_url,
+    }

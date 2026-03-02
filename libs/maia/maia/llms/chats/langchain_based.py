@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncGenerator, Iterator
 
-from maia.base import BaseMessage, HumanMessage, LLMInterface, Param
+from maia.base import AIMessage, BaseMessage, HumanMessage, LLMInterface, Param
 
 from .base import ChatLLM
 
@@ -38,6 +38,7 @@ class LCChatMixin:
 
     def prepare_message(self, messages: str | BaseMessage | list[BaseMessage]):
         input_: list[BaseMessage] = []
+        output_: list = []
 
         if isinstance(messages, str):
             input_ = [HumanMessage(content=messages)]
@@ -46,11 +47,17 @@ class LCChatMixin:
         else:
             input_ = messages
 
-        return input_
+        for message in input_:
+            if isinstance(message, BaseMessage):
+                output_.append(message.to_langchain_format())
+            else:
+                output_.append(message)
+
+        return output_
 
     def prepare_response(self, pred):
         all_text = [each.text for each in pred.generations[0]]
-        all_messages = [each.message for each in pred.generations[0]]
+        all_messages = [AIMessage.from_langchain_format(each.message) for each in pred.generations[0]]
 
         completion_tokens, total_tokens, prompt_tokens = 0, 0, 0
         try:
@@ -119,13 +126,15 @@ class LCChatMixin:
     def stream(
         self, messages: str | BaseMessage | list[BaseMessage], **kwargs
     ) -> Iterator[LLMInterface]:
-        for response in self._obj.stream(input=messages, **kwargs):
+        input_ = self.prepare_message(messages)
+        for response in self._obj.stream(input=input_, **kwargs):
             yield LLMInterface(content=response.content)
 
     async def astream(
         self, messages: str | BaseMessage | list[BaseMessage], **kwargs
     ) -> AsyncGenerator[LLMInterface, None]:
-        async for response in self._obj.astream(input=messages, **kwargs):
+        input_ = self.prepare_message(messages)
+        async for response in self._obj.astream(input=input_, **kwargs):
             yield LLMInterface(content=response.content)
 
     def to_langchain_format(self):

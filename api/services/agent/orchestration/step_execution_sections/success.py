@@ -9,6 +9,8 @@ from api.services.agent.planner import PlannedStep, build_browser_followup_steps
 
 from ..models import ExecutionState
 from ..text_helpers import extract_action_artifact_metadata
+from ..web_evidence import record_web_evidence
+from ..web_kpi import is_web_tool, record_web_kpi
 from .workspace_shadow import run_workspace_shadow_logging
 
 
@@ -24,11 +26,27 @@ def handle_step_success(
     step: PlannedStep,
     index: int,
     step_started: str,
+    duration_seconds: float,
     result: Any,
     run_tool_live: Callable[..., Generator[dict[str, Any], None, Any]],
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, None]:
+    if is_web_tool(step.tool_id):
+        record_web_kpi(
+            settings=state.execution_context.settings,
+            tool_id=step.tool_id,
+            status="success",
+            duration_seconds=duration_seconds,
+            data=result.data if isinstance(result.data, dict) else {},
+        )
+        record_web_evidence(
+            settings=state.execution_context.settings,
+            tool_id=step.tool_id,
+            status="success",
+            data=result.data if isinstance(result.data, dict) else {},
+            sources=result.sources if isinstance(result.sources, list) else [],
+        )
     action_metadata = extract_action_artifact_metadata(result.data, step=index)
     action = registry.get(step.tool_id).to_action(
         status="success",

@@ -8,6 +8,7 @@ export type ChatTurn = {
   assistant: string;
   attachments?: ChatAttachment[];
   info?: string;
+  plot?: Record<string, unknown> | null;
   mode?: "ask" | "company_agent";
   actionsTaken?: AgentActionRecord[];
   sourcesUsed?: AgentSourceRecord[];
@@ -16,6 +17,7 @@ export type ChatTurn = {
   activityEvents?: AgentActivityEvent[];
   needsHumanReview?: boolean;
   humanReviewNotes?: string | null;
+  webSummary?: Record<string, unknown>;
 };
 
 export type AgentActionRecord = {

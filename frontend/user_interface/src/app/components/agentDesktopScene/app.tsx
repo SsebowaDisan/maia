@@ -57,6 +57,11 @@ function AgentDesktopScene({
   const docsFrameUrl = asHttpUrl(documentUrl);
   const sheetsFrameUrl = asHttpUrl(spreadsheetUrl);
   const canRenderLiveUrl = Boolean(asHttpUrl(browserUrl));
+  const providerLabel = compactValue(activeSceneData["provider"]) || compactValue(activeSceneData["web_provider"]);
+  const renderQualityLabel = compactValue(activeSceneData["render_quality"]);
+  const blockedSignal = Boolean(activeSceneData["blocked_signal"]);
+  const densityRaw = Number(activeSceneData["content_density"]);
+  const contentDensityLabel = Number.isFinite(densityRaw) ? densityRaw.toFixed(2) : "";
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
@@ -95,6 +100,7 @@ function AgentDesktopScene({
         activeDetail={activeDetail}
         activeTitle={activeTitle}
         browserUrl={browserUrl}
+        blockedSignal={blockedSignal}
         canRenderLiveUrl={canRenderLiveUrl}
         copyPulseText={copyPulseText}
         copyPulseVisible={copyPulseVisible}
@@ -103,6 +109,9 @@ function AgentDesktopScene({
         findQuery={findQuery}
         highlightRegions={highlightRegions}
         onSnapshotError={onSnapshotError}
+        providerLabel={providerLabel}
+        renderQualityLabel={renderQualityLabel}
+        contentDensityLabel={contentDensityLabel}
         sceneText={sceneText}
         scrollPercent={scrollPercent}
         showFindOverlay={showFindOverlay}

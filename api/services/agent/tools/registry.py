@@ -37,6 +37,12 @@ from api.services.agent.tools.calendar_tools import CalendarCreateEventTool
 from api.services.agent.tools.charts_tools import ChartGenerateTool
 from api.services.agent.tools.contact_form_tools import BrowserContactFormSendTool
 from api.services.agent.tools.data_tools import DataAnalysisTool, ReportGenerationTool
+from api.services.agent.tools.data_science_tools import (
+    DataScienceDeepLearningTrainTool,
+    DataScienceModelTrainTool,
+    DataScienceProfileTool,
+    DataScienceVisualizationTool,
+)
 from api.services.agent.tools.discovery_tools import LocalDiscoveryTool
 from api.services.agent.tools.document_tools import DocumentCreateTool
 from api.services.agent.tools.document_highlight_tools import DocumentHighlightExtractTool
@@ -47,6 +53,8 @@ from api.services.agent.tools.invoice_tools import InvoiceCreateTool, InvoiceSen
 from api.services.agent.tools.maps_tools import MapsDistanceTool, MapsGeocodeTool
 from api.services.agent.tools.research_tools import CompetitorProfileTool, WebResearchTool
 from api.services.agent.tools.validation_tools import EmailValidationTool
+from api.services.agent.tools.web_adapter_tools import WebDatasetAdapterTool
+from api.services.agent.tools.web_extract_tools import WebStructuredExtractTool
 from api.services.agent.tools.workplace_tools import SlackPostMessageTool
 from api.services.agent.tools.workspace_tools import (
     WorkspaceDocsTemplateTool,
@@ -69,6 +77,10 @@ class ToolRegistry:
         self.register(EmailSendTool())
         self.register(GoogleAdsPerformanceTool())
         self.register(DataAnalysisTool())
+        self.register(DataScienceProfileTool())
+        self.register(DataScienceVisualizationTool())
+        self.register(DataScienceModelTrainTool())
+        self.register(DataScienceDeepLearningTrainTool())
         self.register(DocumentHighlightExtractTool())
         self.register(ReportGenerationTool())
         self.register(DocumentCreateTool())
@@ -82,6 +94,8 @@ class ToolRegistry:
         self.register(SlackPostMessageTool())
         self.register(LocalDiscoveryTool())
         self.register(PlaywrightInspectTool())
+        self.register(WebStructuredExtractTool())
+        self.register(WebDatasetAdapterTool())
         self.register(BrowserContactFormSendTool())
         self.register(GmailDraftTool())
         self.register(GmailSendTool())

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 
@@ -59,6 +61,33 @@ def plan_decompose_completed_event(
         title="Step decomposition ready",
         detail=f"Generated {len(steps)} initial step(s).",
         metadata={"step_count": len(steps), "tool_ids": [step.tool_id for step in steps]},
+    )
+
+
+def plan_web_routing_event(
+    *,
+    activity_event_factory,
+    web_routing: dict[str, Any],
+) -> AgentActivityEvent:
+    routing_mode = str(web_routing.get("routing_mode") or "none").strip().lower() or "none"
+    target_url = str(web_routing.get("target_url") or "").strip()
+    llm_used = bool(web_routing.get("llm_used"))
+    reasoning = " ".join(str(web_routing.get("reasoning") or "").split()).strip()[:200]
+    detail_parts = [f"Route: {routing_mode}"]
+    if target_url:
+        detail_parts.append(f"URL: {target_url[:120]}")
+    if reasoning:
+        detail_parts.append(reasoning)
+    return activity_event_factory(
+        event_type="llm.web_routing_decision",
+        title="Web routing decision ready",
+        detail=" | ".join(detail_parts),
+        metadata={
+            "routing_mode": routing_mode,
+            "target_url": target_url,
+            "llm_used": llm_used,
+            "reasoning": reasoning,
+        },
     )
 
 

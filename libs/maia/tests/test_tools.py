@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 
 from maia.agents.tools import ComponentTool, GoogleSearchTool, WikipediaTool
@@ -10,8 +11,11 @@ from maia.embeddings import AzureOpenAIEmbeddings
 from maia.indices.vectorindex import VectorIndexing, VectorRetrieval
 from maia.storages import ChromaVectorStore, InMemoryDocumentStore
 
-with open(Path(__file__).parent / "resources" / "embedding_openai.json") as f:
-    openai_embedding = CreateEmbeddingResponse.model_validate(json.load(f))
+
+@pytest.fixture(scope="session")
+def openai_embedding():
+    with open(Path(__file__).parent / "resources" / "embedding_openai.json") as f:
+        return CreateEmbeddingResponse.model_validate(json.load(f))
 
 
 def test_google_tool(mock_google_search):
@@ -30,11 +34,7 @@ def test_wikipedia_tool():
     assert output
 
 
-@patch(
-    "openai.resources.embeddings.Embeddings.create",
-    side_effect=lambda *args, **kwargs: openai_embedding,
-)
-def test_pipeline_tool(tmp_path):
+def test_pipeline_tool(tmp_path, openai_embedding):
     db = ChromaVectorStore(path=str(tmp_path))
     doc_store = InMemoryDocumentStore()
     embedding = AzureOpenAIEmbeddings(
@@ -56,12 +56,20 @@ def test_pipeline_tool(tmp_path):
         description="A tool to use to index a document to be searched later",
         component=index_pipeline,
     )
-    output = index_tool({"text": Document(text="Cinnamon AI")})
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=lambda *args, **kwargs: openai_embedding,
+    ):
+        output = index_tool({"text": Document(text="Cinnamon AI")})
 
     retrieval_tool = ComponentTool(
         name="search_document",
         description="A tool to use to search a document in a vectorstore",
         component=retrieval_pipeline,
     )
-    output = retrieval_tool("Cinnamon AI")
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=lambda *args, **kwargs: openai_embedding,
+    ):
+        output = retrieval_tool("Cinnamon AI")
     assert output

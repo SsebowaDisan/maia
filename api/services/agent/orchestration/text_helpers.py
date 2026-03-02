@@ -55,12 +55,162 @@ def extract_action_artifact_metadata(data: dict[str, Any] | None, *, step: int) 
         if not text:
             continue
         metadata[key] = text[:320]
+    for key in (
+        "provider",
+        "provider_requested",
+        "provider_fallback_enabled",
+        "web_provider",
+        "quality_band",
+        "render_quality",
+        "blocked_signal",
+        "blocked_reason",
+        "routing_mode",
+        "adapter",
+    ):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if isinstance(value, bool):
+            metadata[key] = value
+            continue
+        if isinstance(value, (int, float)):
+            metadata[key] = value
+            continue
+        text = str(value or "").strip()
+        if text:
+            metadata[key] = text[:120]
+    if "content_density" in data:
+        try:
+            metadata["content_density"] = round(float(data.get("content_density") or 0.0), 4)
+        except Exception:
+            pass
+    for numeric_key in ("quality_score", "schema_coverage", "confidence"):
+        if numeric_key not in data:
+            continue
+        try:
+            metadata[numeric_key] = round(float(data.get(numeric_key) or 0.0), 4)
+        except Exception:
+            continue
+    items = data.get("items")
+    if isinstance(items, list):
+        evidence_rows: list[dict[str, str]] = []
+        for row in items[:5]:
+            if not isinstance(row, dict):
+                continue
+            label = str(row.get("label") or "").strip()[:120]
+            url = str(row.get("url") or "").strip()[:220]
+            if not label and not url:
+                continue
+            evidence_rows.append({"label": label, "url": url})
+        if evidence_rows:
+            metadata["evidence_items"] = evidence_rows
     copied = data.get("copied_snippets")
     if isinstance(copied, list):
         cleaned = [str(item).strip() for item in copied if str(item).strip()]
         if cleaned:
             metadata["copied_snippets"] = cleaned[:4]
+    plot_payload = _sanitize_plot_payload(data.get("plot"))
+    if plot_payload:
+        metadata["plot"] = plot_payload
     return metadata
+
+
+def _sanitize_plot_point(point: Any) -> dict[str, Any] | None:
+    if not isinstance(point, dict):
+        return None
+    x_value = point.get("x")
+    if x_value is None:
+        return None
+    sanitized: dict[str, Any] = {"x": x_value if isinstance(x_value, (int, float)) else str(x_value)[:120]}
+    metric_count = 0
+    for raw_key, raw_value in list(point.items())[:12]:
+        key = str(raw_key or "").strip()[:80]
+        if not key or key == "x":
+            continue
+        if isinstance(raw_value, (int, float)):
+            sanitized[key] = raw_value
+            metric_count += 1
+            continue
+        value_text = str(raw_value or "").strip()
+        if value_text:
+            sanitized[key] = value_text[:120]
+            metric_count += 1
+    if metric_count <= 0:
+        return None
+    if "y" not in sanitized:
+        for key in sanitized:
+            if key != "x":
+                sanitized["y"] = sanitized[key]
+                break
+    return sanitized
+
+
+def _sanitize_plot_series(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in payload[:8]:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or item.get("data_key") or "").strip()[:80]
+        if not key:
+            continue
+        cleaned.append(
+            {
+                "key": key,
+                "label": str(item.get("label") or key).strip()[:120],
+                "type": str(item.get("type") or "").strip().lower()[:16],
+                "color": str(item.get("color") or "").strip()[:24],
+            }
+        )
+    return cleaned
+
+
+def _sanitize_plot_payload(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind != "chart":
+        return None
+    chart_type = str(payload.get("chart_type") or "").strip().lower()
+    if chart_type not in {"line", "bar", "scatter", "histogram"}:
+        return None
+    points = payload.get("points")
+    clean_points: list[dict[str, Any]] = []
+    if isinstance(points, list):
+        for point in points[:600]:
+            normalized = _sanitize_plot_point(point)
+            if normalized:
+                clean_points.append(normalized)
+    if not clean_points:
+        return None
+    series = _sanitize_plot_series(payload.get("series"))
+    if not series:
+        y_name = str(payload.get("y") or "y").strip()[:80] or "y"
+        series = [{"key": y_name, "label": y_name, "type": chart_type, "color": ""}]
+    row_count_value = payload.get("row_count")
+    try:
+        row_count = int(row_count_value)
+    except Exception:
+        row_count = len(clean_points)
+    interactive_payload = payload.get("interactive")
+    interactive: dict[str, Any] = {}
+    if isinstance(interactive_payload, dict):
+        if "brush" in interactive_payload:
+            interactive["brush"] = bool(interactive_payload.get("brush"))
+    return {
+        "kind": "chart",
+        "library": "recharts",
+        "chart_type": chart_type,
+        "title": str(payload.get("title") or "").strip()[:180],
+        "x": str(payload.get("x") or "").strip()[:120],
+        "y": str(payload.get("y") or "").strip()[:120],
+        "x_type": str(payload.get("x_type") or "").strip()[:24],
+        "row_count": row_count,
+        "series": series,
+        "interactive": interactive,
+        "points": clean_points,
+    }
 
 
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")

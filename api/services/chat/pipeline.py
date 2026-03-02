@@ -18,6 +18,7 @@ from ktem.utils.commands import WEB_SEARCH_COMMAND
 from api.context import ApiContext
 from api.schemas import ChatRequest
 
+from .citations import resolve_required_citation_mode
 from .constants import DEFAULT_SETTING, PLACEHOLDER_KEYS, logger
 
 
@@ -107,8 +108,13 @@ def create_pipeline(
     if request.use_mindmap is not None:
         effective_settings["reasoning.options.simple.create_mindmap"] = request.use_mindmap
 
-    if request.citation not in (None, DEFAULT_SETTING, ""):
-        effective_settings["reasoning.options.simple.highlight_citation"] = request.citation
+    configured_citation_mode = effective_settings.get("reasoning.options.simple.highlight_citation")
+    citation_mode_input = request.citation
+    if citation_mode_input in (None, DEFAULT_SETTING, ""):
+        citation_mode_input = str(configured_citation_mode or "")
+    effective_settings["reasoning.options.simple.highlight_citation"] = resolve_required_citation_mode(
+        str(citation_mode_input or "")
+    )
 
     if request.language not in (None, DEFAULT_SETTING, ""):
         effective_settings["reasoning.lang"] = request.language

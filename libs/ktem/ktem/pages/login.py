@@ -6,6 +6,7 @@ from ktem.app import BasePage
 from ktem.db.models import User, engine
 from ktem.pages.resources.user import create_user
 from sqlmodel import Session, select
+from theflow.settings import settings as flowsettings
 
 ASSETS_IMG_DIR = Path(__file__).resolve().parents[1] / "assets" / "img"
 MAIA_ICON_SVG_PATH = ASSETS_IMG_DIR / "favicon.svg"
@@ -25,17 +26,27 @@ HERO_ICON_SVG = MAIA_WHITE_ICON_SVG or MAIA_ICON_SVG
 
 fetch_creds = """
 function() {
-    const username = getStorage('username', '')
-    const password = getStorage('password', '')
-    return [username, password, null];
+    try {
+        const username = localStorage.getItem("username") || "";
+        const password = localStorage.getItem("password") || "";
+        return [username, password];
+    } catch (e) {
+        return ["", ""];
+    }
 }
 """
 
 signin_js = """
 function(usn, pwd) {
-    setStorage('username', usn);
-    setStorage('password', pwd);
-    return [usn, pwd];
+    const usnEl = document.querySelector("#maia-login-username textarea, #maia-login-username input");
+    const pwdEl = document.querySelector("#maia-login-password textarea, #maia-login-password input");
+    const resolvedUsn = ((usnEl && usnEl.value) ? usnEl.value : (usn || "")).trim();
+    const resolvedPwd = (pwdEl && typeof pwdEl.value === "string") ? pwdEl.value : (pwd || "");
+    try {
+        localStorage.setItem("username", resolvedUsn);
+        localStorage.setItem("password", resolvedPwd);
+    } catch (e) {}
+    return [resolvedUsn, resolvedPwd];
 }
 """
 
@@ -45,7 +56,45 @@ class LoginPage(BasePage):
 
     def __init__(self, app):
         self._app = app
+        self._ensure_bootstrap_admin()
         self.on_building_ui()
+
+    def _ensure_bootstrap_admin(self):
+        admin_username = str(
+            getattr(flowsettings, "KH_FEATURE_USER_MANAGEMENT_ADMIN", "")
+        ).strip()
+        admin_password = str(
+            getattr(flowsettings, "KH_FEATURE_USER_MANAGEMENT_PASSWORD", "")
+        )
+        if not admin_username or not admin_password:
+            return
+
+        normalized_username_lower = admin_username.lower()
+        hashed_password = hashlib.sha256(admin_password.encode()).hexdigest()
+
+        with Session(engine) as session:
+            existing_user = session.exec(
+                select(User).where(User.username_lower == normalized_username_lower)
+            ).first()
+
+            if existing_user is None:
+                create_user(admin_username, admin_password, is_admin=True)
+                return
+
+            needs_update = False
+            if existing_user.username != admin_username:
+                existing_user.username = admin_username
+                needs_update = True
+            if existing_user.password != hashed_password:
+                existing_user.password = hashed_password
+                needs_update = True
+            if not existing_user.admin:
+                existing_user.admin = True
+                needs_update = True
+
+            if needs_update:
+                session.add(existing_user)
+                session.commit()
 
     def on_building_ui(self):
         with gr.Row(elem_id="maia-login-shell"):
@@ -76,14 +125,14 @@ class LoginPage(BasePage):
                 self.usn = gr.Textbox(
                     label="Email or Phone Number",
                     placeholder="name@example.com",
-                    visible=False,
+                    visible=True,
                     elem_id="maia-login-username",
                 )
                 self.pwd = gr.Textbox(
                     label="Password",
                     type="password",
                     placeholder="Enter your password",
-                    visible=False,
+                    visible=True,
                     elem_id="maia-login-password",
                 )
                 gr.HTML(
@@ -99,14 +148,16 @@ class LoginPage(BasePage):
                 )
                 self.btn_login = gr.Button(
                     "Sign In",
-                    visible=False,
+                    visible=True,
                     elem_id="maia-login-submit",
                     variant="primary",
                 )
                 gr.HTML(
                     """
                     <div class="maia-login-divider"><span>OR</span></div>
-                    <p class="maia-login-footnote">Don't have a Maia account?</p>
+                    <p class="maia-login-footnote">
+                      Don't have a Maia account? Contact your workspace admin to get access.
+                    </p>
                     """
                 )
 
@@ -164,7 +215,7 @@ class LoginPage(BasePage):
             import gradiologin as grlogin
 
             user = grlogin.get_user(request)
-        except (ImportError, AssertionError):
+        except Exception:
             user = None
 
         if user:
@@ -188,13 +239,36 @@ class LoginPage(BasePage):
                 )
                 return user_id, "", ""
         else:
-            if not usn or not pwd:
+            username = (usn or "").strip()
+            if not username or not pwd:
+                gr.Warning("Please enter both username and password")
                 return None, usn, pwd
+
+            bootstrap_admin_username = str(
+                getattr(flowsettings, "KH_FEATURE_USER_MANAGEMENT_ADMIN", "")
+            ).strip()
+            bootstrap_admin_password = str(
+                getattr(flowsettings, "KH_FEATURE_USER_MANAGEMENT_PASSWORD", "")
+            )
+            if (
+                bootstrap_admin_username
+                and bootstrap_admin_password
+                and username.lower() == bootstrap_admin_username.lower()
+                and pwd == bootstrap_admin_password
+            ):
+                with Session(engine) as session:
+                    admin_user = session.exec(
+                        select(User).where(
+                            User.username_lower == bootstrap_admin_username.lower()
+                        )
+                    ).first()
+                if admin_user:
+                    return admin_user.id, "", ""
 
             hashed_password = hashlib.sha256(pwd.encode()).hexdigest()
             with Session(engine) as session:
                 stmt = select(User).where(
-                    User.username_lower == usn.lower().strip(),
+                    User.username_lower == username.lower(),
                     User.password == hashed_password,
                 )
                 result = session.exec(stmt).all()

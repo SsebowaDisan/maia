@@ -58,16 +58,15 @@ def _heuristic_search_terms(
 ) -> list[str]:
     host = (urlparse(url).hostname or "").strip().lower()
     terms: list[str] = []
+    compact_message = " ".join(f"{message} {goal}".split()).strip()
     if host:
-        combined = " ".join(f"{message} {goal}".split()).strip()[:120]
-        if combined:
-            terms.append(f"site:{host} {combined}")
+        if compact_message:
+            terms.append(f"site:{host} {compact_message[:120]}")
         terms.append(f"site:{host}")
     if keywords:
         terms.append(" ".join(keywords[:4]))
         if len(keywords) >= 8:
             terms.append(" ".join(keywords[4:8]))
-    compact_message = " ".join(f"{message} {goal}".split()).strip()
     if compact_message:
         terms.append(compact_message[:160])
     deduped = [item for item in dict.fromkeys(item.strip() for item in terms if item.strip())]

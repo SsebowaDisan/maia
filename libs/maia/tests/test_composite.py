@@ -13,29 +13,31 @@ from maia.llms import (
 )
 from maia.parsers import RegexExtractor
 
-_openai_chat_completion_response = ChatCompletion.parse_obj(
-    {
-        "id": "chatcmpl-7qyuw6Q1CFCpcKsMdFkmUPUa7JP2x",
-        "object": "chat.completion",
-        "created": 1692338378,
-        "model": "gpt-35-turbo",
-        "system_fingerprint": None,
-        "choices": [
-            {
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {
-                    "role": "assistant",
-                    "content": "This is a test 123",
-                    "finish_reason": "length",
+
+def make_chat_completion(content: str = "This is a test 123") -> ChatCompletion:
+    return ChatCompletion.parse_obj(
+        {
+            "id": "chatcmpl-7qyuw6Q1CFCpcKsMdFkmUPUa7JP2x",
+            "object": "chat.completion",
+            "created": 1692338378,
+            "model": "gpt-35-turbo",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "finish_reason": "length",
+                        "logprobs": None,
+                    },
                     "logprobs": None,
-                },
-                "logprobs": None,
-            }
-        ],
-        "usage": {"completion_tokens": 9, "prompt_tokens": 10, "total_tokens": 19},
-    }
-)
+                }
+            ],
+            "usage": {"completion_tokens": 9, "prompt_tokens": 10, "total_tokens": 19},
+        }
+    )
 
 
 @pytest.fixture
@@ -88,7 +90,7 @@ def mock_gated_linear_pipeline_negative(mock_prompt, mock_llm, mock_post_process
 def test_simple_linear_pipeline_run(mocker, mock_simple_linear_pipeline):
     openai_mocker = mocker.patch(
         "openai.resources.chat.completions.Completions.create",
-        return_value=_openai_chat_completion_response,
+        return_value=make_chat_completion(),
     )
 
     result = mock_simple_linear_pipeline(value="abc")
@@ -102,7 +104,7 @@ def test_gated_linear_pipeline_run_positive(
 ):
     openai_mocker = mocker.patch(
         "openai.resources.chat.completions.Completions.create",
-        return_value=_openai_chat_completion_response,
+        return_value=make_chat_completion(),
     )
 
     result = mock_gated_linear_pipeline_positive(
@@ -118,7 +120,7 @@ def test_gated_linear_pipeline_run_negative(
 ):
     openai_mocker = mocker.patch(
         "openai.resources.chat.completions.Completions.create",
-        return_value=_openai_chat_completion_response,
+        return_value=make_chat_completion(),
     )
 
     result = mock_gated_linear_pipeline_positive(
@@ -130,10 +132,10 @@ def test_gated_linear_pipeline_run_negative(
 
 
 def test_simple_branching_pipeline_run(mocker, mock_simple_linear_pipeline):
-    response0: ChatCompletion = _openai_chat_completion_response
-    response1: ChatCompletion = deepcopy(_openai_chat_completion_response)
+    response0: ChatCompletion = make_chat_completion()
+    response1: ChatCompletion = deepcopy(make_chat_completion())
     response1.choices[0].message.content = "a quick brown fox"
-    response2: ChatCompletion = deepcopy(_openai_chat_completion_response)
+    response2: ChatCompletion = deepcopy(make_chat_completion())
     response2.choices[0].message.content = "jumps over the lazy dog 456"
     openai_mocker = mocker.patch(
         "openai.resources.chat.completions.Completions.create",
@@ -154,7 +156,7 @@ def test_simple_branching_pipeline_run(mocker, mock_simple_linear_pipeline):
 def test_simple_gated_branching_pipeline_run(
     mocker, mock_gated_linear_pipeline_positive, mock_gated_linear_pipeline_negative
 ):
-    response0: ChatCompletion = deepcopy(_openai_chat_completion_response)
+    response0: ChatCompletion = deepcopy(make_chat_completion())
     response0.choices[0].message.content = "a quick brown fox"
     openai_mocker = mocker.patch(
         "openai.resources.chat.completions.Completions.create",

@@ -1,3 +1,11 @@
+# React frontend build stage
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend/user_interface
+COPY frontend/user_interface/package*.json ./
+RUN npm ci
+COPY frontend/user_interface/ ./
+RUN npm run build
+
 # Lite version
 FROM python:3.10-slim AS lite
 
@@ -35,6 +43,7 @@ RUN bash scripts/download_pdfjs.sh $PDFJS_PREBUILT_DIR
 
 # Copy contents
 COPY . /app
+COPY --from=frontend-builder /app/frontend/user_interface/dist /app/frontend/user_interface/dist
 COPY launch.sh /app/launch.sh
 COPY .env.example /app/.env
 

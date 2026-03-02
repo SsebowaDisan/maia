@@ -59,7 +59,7 @@ CALL :print_highlight "Downloading and extracting PDF.js"
 CALL :download_and_extract_pdf_js
 IF ERRORLEVEL 1 GOTO :end
 
-CALL :print_highlight "Launching Maia in your browser, please wait..."
+CALL :print_highlight "Launching Maia API (React UI runs separately on port 5173 in dev)..."
 CALL :launch_ui
 
 CALL :deactivate_environment
@@ -275,7 +275,7 @@ GOTO :eof
 SET THEFLOW_TEMP_PATH=flow_tmp
 SET PDFJS_PREBUILT_DIR=%target_pdf_js_dir%
 ECHO Starting Maia UI... (prebuilt PDF.js is at %PDFJS_PREBUILT_DIR%)
-CALL python -Xutf8 "%CD%\app.py" || ( ECHO. && ECHO Will exit now... && GOTO :exit_func_with_error )
+CALL python -Xutf8 "%CD%\run_api.py" || ( ECHO. && ECHO Will exit now... && GOTO :exit_func_with_error )
 GOTO :eof
 
 :print_highlight

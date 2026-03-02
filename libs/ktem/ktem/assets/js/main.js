@@ -1,35 +1,82 @@
 function run() {
-  let main_parent = document.getElementById("chat-tab").parentNode;
+  // store info in local storage
+  globalThis.setStorage = (key, value) => {
+    localStorage.setItem(key, value);
+  };
+  globalThis.getStorage = (key, value) => {
+    const item = localStorage.getItem(key);
+    return item ? item : value;
+  };
+  globalThis.removeFromStorage = (key) => {
+    localStorage.removeItem(key);
+  };
 
-  main_parent.childNodes[0].classList.add("header-bar");
+  // clpse
+  globalThis.clpseFn = (id) => {
+    const obj = document.getElementById("clpse-btn-" + id);
+    if (!obj) return;
+    obj.classList.toggle("clpse-active");
+    const content = obj.nextElementSibling;
+    if (!content) return;
+    if (content.style.display === "none") {
+      content.style.display = "block";
+    } else {
+      content.style.display = "none";
+    }
+  };
+
+  const chat_tab = document.getElementById("chat-tab");
+  if (!chat_tab || !chat_tab.parentNode) {
+    return;
+  }
+
+  let main_parent = chat_tab.parentNode;
+
+  if (main_parent.childNodes[0] && main_parent.childNodes[0].classList) {
+    main_parent.childNodes[0].classList.add("header-bar");
+  }
   main_parent.style = "padding: 0; margin: 0";
-  main_parent.parentNode.style = "gap: 0";
-  main_parent.parentNode.parentNode.style = "padding: 0";
+  if (main_parent.parentNode) {
+    main_parent.parentNode.style = "gap: 0";
+  }
+  if (main_parent.parentNode && main_parent.parentNode.parentNode) {
+    main_parent.parentNode.parentNode.style = "padding: 0";
+  }
 
-  const version_node = document.createElement("p");
-  version_node.innerHTML = "version: KH_APP_VERSION";
-  version_node.style = "position: fixed; top: 10px; right: 10px;";
-  main_parent.appendChild(version_node);
+  if (!document.getElementById("maia-version-badge")) {
+    const version_node = document.createElement("p");
+    version_node.id = "maia-version-badge";
+    version_node.innerHTML = "version: KH_APP_VERSION";
+    version_node.style = "position: fixed; top: 10px; right: 10px;";
+    main_parent.appendChild(version_node);
+  }
 
   // add favicon
-  const favicon = document.createElement("link");
-  // set favicon attributes
-  favicon.rel = "icon";
-  favicon.type = "image/svg+xml";
-  favicon.href = `/favicon.ico?v=${Date.now()}`;
-  document.head.appendChild(favicon);
+  if (!document.querySelector("link[data-maia-favicon='1']")) {
+    const favicon = document.createElement("link");
+    // set favicon attributes
+    favicon.rel = "icon";
+    favicon.type = "image/svg+xml";
+    favicon.href = `/favicon.ico?v=${Date.now()}`;
+    favicon.dataset.maiaFavicon = "1";
+    document.head.appendChild(favicon);
+  }
 
   // setup conversation dropdown placeholder
   let conv_dropdown = document.querySelector("#conversation-dropdown input");
-  conv_dropdown.placeholder = "Browse conversation";
+  if (conv_dropdown) {
+    conv_dropdown.placeholder = "Browse conversation";
+  }
 
   // move info-expand-button
   let info_expand_button = document.getElementById("info-expand-button");
   let chat_info_panel = document.getElementById("info-expand");
-  chat_info_panel.insertBefore(
-    info_expand_button,
-    chat_info_panel.childNodes[2]
-  );
+  if (info_expand_button && chat_info_panel) {
+    chat_info_panel.insertBefore(
+      info_expand_button,
+      chat_info_panel.childNodes[2]
+    );
+  }
 
   // move toggle-side-bar button
   let chat_expand_button = document.getElementById("chat-expand-button");
@@ -39,14 +86,19 @@ function run() {
   // move setting close button
   let setting_tab_nav_bar = document.querySelector("#settings-tab .tab-nav");
   let setting_close_button = document.getElementById("save-setting-btn");
-  if (setting_close_button) {
+  if (setting_tab_nav_bar && setting_close_button) {
     setting_tab_nav_bar.appendChild(setting_close_button);
   }
 
   let default_conv_column_min_width = "min(300px, 100%)";
-  conv_column.style.minWidth = default_conv_column_min_width;
+  if (conv_column) {
+    conv_column.style.minWidth = default_conv_column_min_width;
+  }
+
+  globalThis.toggleChatColumn = () => {};
 
   globalThis.toggleChatColumn = () => {
+    if (!conv_column) return;
     /* get flex-grow value of chat_column */
     let flex_grow = conv_column.style.flexGrow;
     if (flex_grow == "0") {
@@ -58,60 +110,49 @@ function run() {
     }
   };
 
-  chat_column.insertBefore(chat_expand_button, chat_column.firstChild);
+  if (chat_column && chat_expand_button) {
+    chat_column.insertBefore(chat_expand_button, chat_column.firstChild);
+  }
 
   // move use mind-map checkbox
   let mindmap_checkbox = document.getElementById("use-mindmap-checkbox");
   let citation_dropdown = document.getElementById("citation-dropdown");
   let chat_setting_panel = document.getElementById("chat-settings-expand");
-  chat_setting_panel.insertBefore(
-    mindmap_checkbox,
-    chat_setting_panel.childNodes[2]
-  );
-  chat_setting_panel.insertBefore(citation_dropdown, mindmap_checkbox);
+  if (chat_setting_panel && mindmap_checkbox) {
+    chat_setting_panel.insertBefore(
+      mindmap_checkbox,
+      chat_setting_panel.childNodes[2]
+    );
+  }
+  if (chat_setting_panel && citation_dropdown && mindmap_checkbox) {
+    chat_setting_panel.insertBefore(citation_dropdown, mindmap_checkbox);
+  }
 
   // move share conv checkbox
   let report_div = document.querySelector(
     "#report-accordion > div:nth-child(3) > div:nth-child(1)"
   );
   let share_conv_checkbox = document.getElementById("is-public-checkbox");
-  if (share_conv_checkbox) {
+  if (share_conv_checkbox && report_div) {
     report_div.insertBefore(share_conv_checkbox, report_div.querySelector("button"));
   }
 
   // create slider toggle
   const is_public_checkbox = document.getElementById("suggest-chat-checkbox");
-  const label_element = is_public_checkbox.getElementsByTagName("label")[0];
-  const checkbox_span = is_public_checkbox.getElementsByTagName("span")[0];
-  new_div = document.createElement("div");
-
-  label_element.classList.add("switch");
-  is_public_checkbox.appendChild(checkbox_span);
-  label_element.appendChild(new_div);
-
-  // clpse
-  globalThis.clpseFn = (id) => {
-    var obj = document.getElementById("clpse-btn-" + id);
-    obj.classList.toggle("clpse-active");
-    var content = obj.nextElementSibling;
-    if (content.style.display === "none") {
-      content.style.display = "block";
-    } else {
-      content.style.display = "none";
+  if (is_public_checkbox) {
+    const label_element = is_public_checkbox.getElementsByTagName("label")[0];
+    const checkbox_span = is_public_checkbox.getElementsByTagName("span")[0];
+    if (
+      label_element &&
+      checkbox_span &&
+      !label_element.classList.contains("switch")
+    ) {
+      const new_div = document.createElement("div");
+      label_element.classList.add("switch");
+      is_public_checkbox.appendChild(checkbox_span);
+      label_element.appendChild(new_div);
     }
-  };
-
-  // store info in local storage
-  globalThis.setStorage = (key, value) => {
-    localStorage.setItem(key, value);
-  };
-  globalThis.getStorage = (key, value) => {
-    item = localStorage.getItem(key);
-    return item ? item : value;
-  };
-  globalThis.removeFromStorage = (key) => {
-    localStorage.removeItem(key);
-  };
+  }
 
   // Function to scroll to given citation with ID
   // Sleep function using Promise and setTimeout
@@ -129,14 +170,16 @@ function run() {
     var modal = document.getElementById("pdf-modal");
     var citation = document.querySelector('mark[id="' + citationId + '"]');
 
-    if (modal.style.display == "block") {
+    if (modal && modal.style.display == "block" && citation) {
       // trigger on click event of PDF Preview link
       var detail_elem = citation;
       // traverse up the DOM tree to find the parent element with tag detail
-      while (detail_elem.tagName.toLowerCase() != "details") {
+      while (detail_elem && detail_elem.tagName.toLowerCase() != "details") {
         detail_elem = detail_elem.parentElement;
       }
-      detail_elem.getElementsByClassName("pdf-link").item(0).click();
+      if (detail_elem) {
+        detail_elem.getElementsByClassName("pdf-link").item(0)?.click();
+      }
     } else {
       if (citation) {
         citation.scrollIntoView({ behavior: "smooth" });
@@ -149,7 +192,13 @@ function run() {
     var bot_messages = document.querySelectorAll(
       "div#main-chat-bot div.message-row.bot-row"
     );
+    if (!bot_messages || bot_messages.length === 0) {
+      return;
+    }
     var last_bot_message = bot_messages[bot_messages.length - 1];
+    if (!last_bot_message) {
+      return;
+    }
 
     // check if the last bot message has class "text_selection"
     if (last_bot_message.classList.contains("text_selection")) {
@@ -179,9 +228,10 @@ function run() {
       }
 
       var evidence_content = evidence.textContent.replace(/[\r\n]+/g, " ");
-      sentence_it = segmenterEn.segment(evidence_content)[Symbol.iterator]();
+      let sentence_it = segmenterEn.segment(evidence_content)[Symbol.iterator]();
+      let sentence;
       while ((sentence = sentence_it.next().value)) {
-        segment = sentence.segment.trim();
+        const segment = sentence.segment.trim();
         if (segment) {
           all_segments.push({
             id: all_segments.length,
@@ -227,7 +277,7 @@ function run() {
         var evidence_content = evidence.textContent.replace(/[\r\n]+/g, " ");
         if (evidence_content.includes(matched_text)) {
           // select all p and li elements
-          paragraphs = evidence.querySelectorAll("p, li");
+          const paragraphs = evidence.querySelectorAll("p, li");
           for (var p of paragraphs) {
             var p_content = p.textContent.replace(/[\r\n]+/g, " ");
             if (p_content.includes(matched_text)) {
@@ -236,14 +286,16 @@ function run() {
                 "<mark>" + matched_text + "</mark>"
               );
               console.log("highlighted", matched_text, "in", p);
-              if (modal.style.display == "block") {
+              if (modal && modal.style.display == "block") {
                 // trigger on click event of PDF Preview link
                 var detail_elem = p;
                 // traverse up the DOM tree to find the parent element with tag detail
-                while (detail_elem.tagName.toLowerCase() != "details") {
+                while (detail_elem && detail_elem.tagName.toLowerCase() != "details") {
                   detail_elem = detail_elem.parentElement;
                 }
-                detail_elem.getElementsByClassName("pdf-link").item(0).click();
+                if (detail_elem) {
+                  detail_elem.getElementsByClassName("pdf-link").item(0)?.click();
+                }
               } else {
                 p.scrollIntoView({ behavior: "smooth", block: "center" });
               }
@@ -277,9 +329,9 @@ function run() {
 
   globalThis.fillChatInput = (event) => {
     let chatInput = document.querySelector("#chat-input textarea");
+    if (!chatInput) return;
     // fill the chat input with the clicked div text
     chatInput.value = "Explain " + event.target.textContent;
-    var evt = new Event("change");
     chatInput.dispatchEvent(new Event("input", { bubbles: true }));
     chatInput.focus();
   };

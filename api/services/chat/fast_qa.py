@@ -18,8 +18,10 @@ from api.schemas import ChatRequest
 from .citations import (
     assign_fast_source_refs,
     build_fast_info_html,
+    enforce_required_citations,
     normalize_fast_answer,
     render_fast_citation_links,
+    resolve_required_citation_mode,
 )
 from .constants import (
     API_FAST_QA_MAX_IMAGES,
@@ -32,6 +34,7 @@ from .constants import (
 from .conversation_store import (
     build_selected_payload,
     get_or_create_conversation,
+    maybe_autoname_conversation,
     persist_conversation,
 )
 from .fast_qa_retrieval import load_recent_chunks_for_fast_qa
@@ -96,10 +99,8 @@ def call_openai_fast_qa(
             question.lower(),
         )
     )
-    mode = (citation_mode or "").strip().lower()
-    if mode == "off":
-        citation_instruction = "Citations are disabled for this response."
-    elif mode == "footnote":
+    mode = resolve_required_citation_mode(citation_mode)
+    if mode == "footnote":
         citation_instruction = (
             "Keep the main paragraphs citation-free, then add a final 'Sources' section "
             "with refs in square brackets (for example [1], [2]) tied to the key claims."
@@ -210,6 +211,13 @@ def run_fast_chat_turn(
         user_id=user_id,
         conversation_id=request.conversation_id,
     )
+    conversation_name = maybe_autoname_conversation(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        current_name=conversation_name,
+        message=message,
+        agent_mode=request.agent_mode,
+    )
     chat_history = deepcopy(data_source.get("messages", []))
     chat_state = deepcopy(data_source.get("state", STATE))
 
@@ -242,12 +250,18 @@ def run_fast_chat_turn(
     if not answer:
         return None
     answer = normalize_fast_answer(answer)
+    resolved_citation_mode = resolve_required_citation_mode(request.citation)
     answer = render_fast_citation_links(
         answer=answer,
         refs=refs,
-        citation_mode=request.citation,
+        citation_mode=resolved_citation_mode,
     )
     info_text = build_fast_info_html(snippets_with_refs, max_blocks=6)
+    answer = enforce_required_citations(
+        answer=answer,
+        info_html=info_text,
+        citation_mode=resolved_citation_mode,
+    )
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))

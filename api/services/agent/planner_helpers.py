@@ -28,8 +28,8 @@ def sanitize_search_query(text: str, *, fallback_url: str = "") -> str:
     if fallback_url:
         host = (urlparse(fallback_url).hostname or "").strip()
         if host:
-            return f"site:{host} company overview services"
-    return "company overview services"
+            return f"site:{host}"
+    return "web research request"
 
 
 def preferred_highlight_color(_: str) -> str:
@@ -55,4 +55,3 @@ def intent_signals(request: ChatRequest) -> dict[str, object]:
         "wants_file_scope": False,
         "highlight_color": preferred_highlight_color(combined),
     }
-

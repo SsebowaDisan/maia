@@ -5,6 +5,7 @@ type BrowserSceneProps = {
   activeDetail: string;
   activeTitle: string;
   browserUrl: string;
+  blockedSignal: boolean;
   canRenderLiveUrl: boolean;
   copyPulseText: string;
   copyPulseVisible: boolean;
@@ -13,6 +14,9 @@ type BrowserSceneProps = {
   findQuery: string;
   highlightRegions: HighlightRegion[];
   onSnapshotError?: () => void;
+  providerLabel: string;
+  renderQualityLabel: string;
+  contentDensityLabel: string;
   sceneText: string;
   scrollPercent: number | null;
   showFindOverlay: boolean;
@@ -146,6 +150,7 @@ function BrowserScene({
   activeDetail,
   activeTitle,
   browserUrl,
+  blockedSignal,
   canRenderLiveUrl,
   copyPulseText,
   copyPulseVisible,
@@ -154,6 +159,9 @@ function BrowserScene({
   findQuery,
   highlightRegions,
   onSnapshotError,
+  providerLabel,
+  renderQualityLabel,
+  contentDensityLabel,
   sceneText,
   scrollPercent,
   showFindOverlay,
@@ -168,6 +176,28 @@ function BrowserScene({
         <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
         <div className="ml-2 flex-1 truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] text-white/85">
           {browserUrl || "Searching the web and opening result pages..."}
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px]">
+          {providerLabel ? (
+            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
+              {providerLabel}
+            </span>
+          ) : null}
+          {renderQualityLabel ? (
+            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
+              quality: {renderQualityLabel}
+            </span>
+          ) : null}
+          {contentDensityLabel ? (
+            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
+              density: {contentDensityLabel}
+            </span>
+          ) : null}
+          {blockedSignal ? (
+            <span className="rounded-full border border-[#ff9b6a]/60 bg-[#ff9b6a]/20 px-2 py-0.5 text-[#ffd7c2]">
+              blocked
+            </span>
+          ) : null}
         </div>
       </div>
 

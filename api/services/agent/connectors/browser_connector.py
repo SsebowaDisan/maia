@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import random
+import time
 from typing import Any, Generator
 
 from .browser_page_state import (
@@ -44,6 +45,8 @@ class BrowserConnector(BaseConnector):
         wait_ms: int = 1200,
         auto_accept_cookies: bool = True,
         highlight_color: str = "yellow",
+        follow_same_domain_links: bool = True,
+        interaction_actions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         stream = self.browse_live_stream(
             url=url,
@@ -53,6 +56,8 @@ class BrowserConnector(BaseConnector):
             max_scroll_steps=1,
             auto_accept_cookies=auto_accept_cookies,
             highlight_color=highlight_color,
+            follow_same_domain_links=follow_same_domain_links,
+            interaction_actions=interaction_actions,
         )
         while True:
             try:
@@ -70,6 +75,8 @@ class BrowserConnector(BaseConnector):
         max_scroll_steps: int = 3,
         auto_accept_cookies: bool = True,
         highlight_color: str = "yellow",
+        follow_same_domain_links: bool = True,
+        interaction_actions: list[dict[str, Any]] | None = None,
     ) -> Generator[dict[str, Any], None, dict[str, Any]]:
         if not playwright_available():
             raise ConnectorError(
@@ -82,13 +89,65 @@ class BrowserConnector(BaseConnector):
         output_dir.mkdir(parents=True, exist_ok=True)
         stamp_prefix = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         visited_pages: list[dict[str, Any]] = []
+        stream_started = time.perf_counter()
 
         effective_highlight_color = "green" if str(highlight_color).strip().lower() == "green" else "yellow"
         movement_rng = random.Random(datetime.now(timezone.utc).timestamp())
 
+        def _elapsed_ms() -> int:
+            return int((time.perf_counter() - stream_started) * 1000.0)
+
+        def _quality_profile(*, text_excerpt: str) -> dict[str, Any]:
+            compact = " ".join(str(text_excerpt or "").split())
+            characters = len(compact)
+            words = len(re.findall(r"[A-Za-z0-9]+", compact))
+            density = round(min(1.0, float(words) / 420.0), 4)
+            blocked_patterns = (
+                ("captcha", "captcha"),
+                ("access denied", "access_denied"),
+                ("verify you are human", "bot_challenge"),
+                ("unusual traffic", "bot_challenge"),
+                ("temporarily unavailable", "temporarily_unavailable"),
+                ("enable javascript", "javascript_required"),
+                ("request blocked", "request_blocked"),
+                ("forbidden", "forbidden"),
+            )
+            lowered = compact.lower()
+            blocked_reason = ""
+            for pattern, reason in blocked_patterns:
+                if pattern in lowered:
+                    blocked_reason = reason
+                    break
+            blocked_signal = bool(blocked_reason)
+            if blocked_signal:
+                render_quality = "blocked"
+            elif characters < 120:
+                render_quality = "low"
+            elif characters < 900:
+                render_quality = "medium"
+            else:
+                render_quality = "high"
+            return {
+                "render_quality": render_quality,
+                "content_density": density,
+                "blocked_signal": blocked_signal,
+                "blocked_reason": blocked_reason,
+                "characters": characters,
+            }
+
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             page = browser.new_page(viewport={"width": 1366, "height": 768})
+            actions = interaction_actions if isinstance(interaction_actions, list) else []
+
+            def _safe_selector(value: Any) -> str:
+                text = str(value or "").strip()
+                if not text or len(text) > 160:
+                    return ""
+                lowered = text.lower()
+                if "javascript:" in lowered:
+                    return ""
+                return text
 
             def _jitter_target(
                 base_x: float,
@@ -230,6 +289,7 @@ class BrowserConnector(BaseConnector):
                     "url": open_capture["url"],
                     "title": open_capture["title"],
                     "page_index": 1,
+                    "elapsed_ms": _elapsed_ms(),
                     **open_cursor,
                     **open_metrics,
                 },
@@ -285,8 +345,10 @@ class BrowserConnector(BaseConnector):
                     "title": quick_capture["title"],
                     "text_excerpt": quick_capture["text_excerpt"],
                     "screenshot_path": quick_capture["screenshot_path"],
+                    **_quality_profile(text_excerpt=str(quick_capture["text_excerpt"] or "")),
                 }
             )
+            quick_quality = _quality_profile(text_excerpt=str(quick_capture["text_excerpt"] or ""))
             yield {
                 "event_type": "browser_extract",
                 "title": "Fast landing-page analysis",
@@ -296,8 +358,14 @@ class BrowserConnector(BaseConnector):
                     "title": quick_capture["title"],
                     "page_index": 1,
                     "extract_pass": "initial",
+                    "extract_stage": "initial_render",
                     "characters": len(str(quick_capture["text_excerpt"] or "")),
                     "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
+                    "render_quality": quick_quality["render_quality"],
+                    "content_density": quick_quality["content_density"],
+                    "blocked_signal": quick_quality["blocked_signal"],
+                    "blocked_reason": quick_quality["blocked_reason"],
+                    "elapsed_ms": _elapsed_ms(),
                     **quick_cursor,
                     **page_metrics(page=page),
                 },
@@ -310,15 +378,89 @@ class BrowserConnector(BaseConnector):
             ):
                 yield side_event
 
+            for action_index, action in enumerate(actions[:8], start=1):
+                if not isinstance(action, dict):
+                    continue
+                action_type = str(action.get("type") or "").strip().lower()
+                selector = _safe_selector(action.get("selector"))
+                value = str(action.get("value") or "").strip()
+                if action_type not in {"click", "fill"} or not selector:
+                    yield {
+                        "event_type": "browser_interaction_failed",
+                        "title": f"Skip browser action {action_index}",
+                        "detail": "Invalid action payload",
+                        "data": {
+                            "action_index": action_index,
+                            "action_type": action_type,
+                            "selector": selector,
+                            "elapsed_ms": _elapsed_ms(),
+                        },
+                    }
+                    continue
+                yield {
+                    "event_type": "browser_interaction_started",
+                    "title": f"Run browser action {action_index}",
+                    "detail": f"{action_type} -> {selector}",
+                    "data": {
+                        "action_index": action_index,
+                        "action_type": action_type,
+                        "selector": selector,
+                        "elapsed_ms": _elapsed_ms(),
+                    },
+                }
+                try:
+                    locator = page.locator(selector).first
+                    locator.wait_for(timeout=min(timeout_ms, 7000), state="visible")
+                    if action_type == "click":
+                        locator.click(timeout=min(timeout_ms, 7000))
+                    else:
+                        locator.fill(value, timeout=min(timeout_ms, 7000))
+                    page.wait_for_timeout(max(180, wait_ms // 2))
+                    interaction_capture = capture_page_state(
+                        page=page,
+                        output_dir=output_dir,
+                        stamp_prefix=stamp_prefix,
+                        label=f"interaction-{action_index}",
+                    )
+                    yield {
+                        "event_type": "browser_interaction_completed",
+                        "title": f"Completed browser action {action_index}",
+                        "detail": f"{action_type} -> {selector}",
+                        "data": {
+                            "action_index": action_index,
+                            "action_type": action_type,
+                            "selector": selector,
+                            "value_preview": excerpt(value, limit=80) if action_type == "fill" else "",
+                            "url": interaction_capture["url"],
+                            "title": interaction_capture["title"],
+                            "elapsed_ms": _elapsed_ms(),
+                            **page_metrics(page=page),
+                        },
+                        "snapshot_ref": interaction_capture["screenshot_path"],
+                    }
+                except Exception as exc:
+                    yield {
+                        "event_type": "browser_interaction_failed",
+                        "title": f"Browser action {action_index} failed",
+                        "detail": str(exc)[:180],
+                        "data": {
+                            "action_index": action_index,
+                            "action_type": action_type,
+                            "selector": selector,
+                            "elapsed_ms": _elapsed_ms(),
+                        },
+                    }
+
             current_url = str(open_capture["url"] or url)
             targets = [current_url]
-            targets.extend(
-                extract_same_origin_links(
-                    page=page,
-                    origin_url=current_url,
-                    limit=max(0, int(max_pages) - 1),
+            if follow_same_domain_links:
+                targets.extend(
+                    extract_same_origin_links(
+                        page=page,
+                        origin_url=current_url,
+                        limit=max(0, int(max_pages) - 1),
+                    )
                 )
-            )
 
             for page_index, target_url in enumerate(targets, start=1):
                 last_cursor = dict(open_cursor)
@@ -345,6 +487,8 @@ class BrowserConnector(BaseConnector):
                             "url": nav_capture["url"],
                             "title": nav_capture["title"],
                             "page_index": page_index,
+                            "extract_stage": "same_domain_followup",
+                            "elapsed_ms": _elapsed_ms(),
                             **last_cursor,
                             **nav_metrics,
                         },
@@ -429,6 +573,8 @@ class BrowserConnector(BaseConnector):
                             "scroll_pass": scroll_index + 1,
                             "scroll_delta": round(float(scroll_delta), 2),
                             "scroll_direction": "down" if scroll_delta >= 0 else "up",
+                            "extract_stage": "lazy_load_scroll",
+                            "elapsed_ms": _elapsed_ms(),
                             **last_cursor,
                             **metrics_after,
                         },
@@ -447,8 +593,10 @@ class BrowserConnector(BaseConnector):
                         "title": extract_capture["title"],
                         "text_excerpt": extract_capture["text_excerpt"],
                         "screenshot_path": extract_capture["screenshot_path"],
+                        **_quality_profile(text_excerpt=str(extract_capture["text_excerpt"] or "")),
                     }
                 )
+                extract_quality = _quality_profile(text_excerpt=str(extract_capture["text_excerpt"] or ""))
                 yield {
                     "event_type": "browser_extract",
                     "title": f"Extract web evidence (page {page_index})",
@@ -459,6 +607,12 @@ class BrowserConnector(BaseConnector):
                         "page_index": page_index,
                         "characters": len(str(extract_capture["text_excerpt"] or "")),
                         "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
+                        "extract_stage": "post_scroll_capture",
+                        "render_quality": extract_quality["render_quality"],
+                        "content_density": extract_quality["content_density"],
+                        "blocked_signal": extract_quality["blocked_signal"],
+                        "blocked_reason": extract_quality["blocked_reason"],
+                        "elapsed_ms": _elapsed_ms(),
                         **last_cursor,
                         **page_metrics(page=page),
                     },
@@ -486,6 +640,25 @@ class BrowserConnector(BaseConnector):
             str(row.get("text_excerpt") or "").strip() for row in visited_pages if isinstance(row, dict)
         )
         combined_excerpt = combined_excerpt[:12000]
+        page_profiles = [dict(row) for row in visited_pages if isinstance(row, dict)]
+        blocked_profiles = [row for row in page_profiles if bool(row.get("blocked_signal"))]
+        average_density = 0.0
+        if page_profiles:
+            total_density = 0.0
+            for row in page_profiles:
+                try:
+                    total_density += float(row.get("content_density") or 0.0)
+                except Exception:
+                    total_density += 0.0
+            average_density = round(total_density / float(len(page_profiles)), 4)
+        if blocked_profiles:
+            final_quality = "blocked"
+        elif average_density < 0.15:
+            final_quality = "low"
+        elif average_density < 0.45:
+            final_quality = "medium"
+        else:
+            final_quality = "high"
         primary = visited_pages[0]
         final_page = visited_pages[-1]
         return {
@@ -494,6 +667,15 @@ class BrowserConnector(BaseConnector):
             "text_excerpt": combined_excerpt,
             "screenshot_path": str(final_page.get("screenshot_path") or ""),
             "pages": visited_pages,
+            "render_quality": final_quality,
+            "content_density": average_density,
+            "blocked_signal": bool(blocked_profiles),
+            "blocked_reason": str(blocked_profiles[0].get("blocked_reason") or "") if blocked_profiles else "",
+            "stages": {
+                "initial_render": True,
+                "lazy_load_scroll": max(1, int(max_scroll_steps)),
+                "same_domain_followup": max(0, len(targets) - 1),
+            },
         }
 
 

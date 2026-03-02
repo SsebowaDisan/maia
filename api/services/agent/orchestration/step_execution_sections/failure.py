@@ -8,6 +8,8 @@ from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 
 from ..models import ExecutionState
+from ..web_evidence import record_web_evidence
+from ..web_kpi import is_web_tool, record_web_kpi
 
 
 def handle_step_failure(
@@ -18,10 +20,26 @@ def handle_step_failure(
     step: PlannedStep,
     index: int,
     step_started: str,
+    duration_seconds: float,
     exc: Exception,
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, None]:
+    if is_web_tool(step.tool_id):
+        record_web_kpi(
+            settings=state.execution_context.settings,
+            tool_id=step.tool_id,
+            status="failed",
+            duration_seconds=duration_seconds,
+            data={},
+        )
+        record_web_evidence(
+            settings=state.execution_context.settings,
+            tool_id=step.tool_id,
+            status="failed",
+            data={},
+            sources=[],
+        )
     if (
         step.tool_id in ("workspace.docs.research_notes", "workspace.sheets.track_step")
         and any(

@@ -56,6 +56,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           architecture: x64
 
+      - name: Guard against legacy Gradio runtime reintroduction
+        run: |
+          test ! -f app.py
+          test ! -f sso_app.py
+          test ! -f sso_app_demo.py
+
       - name: Get cache key
         id: get-cache-key
         run: |

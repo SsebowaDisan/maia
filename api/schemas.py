@@ -223,4 +223,5 @@ class ChatResponse(BaseModel):
     next_recommended_steps: list[str] = Field(default_factory=list)
     needs_human_review: bool = False
     human_review_notes: str | None = None
+    web_summary: dict[str, Any] = Field(default_factory=dict)
     activity_run_id: str | None = None

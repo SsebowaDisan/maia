@@ -97,10 +97,11 @@ def execute_planned_steps(
                 prompt=execution_prompt,
                 params=guard_outcome.params,
             )
+            elapsed = time.perf_counter() - tool_started_clock
             get_agent_observability().observe_tool_execution(
                 tool_id=step.tool_id,
                 status="success",
-                duration_seconds=time.perf_counter() - tool_started_clock,
+                duration_seconds=elapsed,
             )
             yield from handle_step_success(
                 access_context=access_context,
@@ -113,16 +114,18 @@ def execute_planned_steps(
                 step=step,
                 index=index,
                 step_started=step_started,
+                duration_seconds=elapsed,
                 result=result,
                 run_tool_live=run_tool_live,
                 emit_event=emit_event,
                 activity_event_factory=activity_event_factory,
             )
         except Exception as exc:
+            elapsed = time.perf_counter() - tool_started_clock
             get_agent_observability().observe_tool_execution(
                 tool_id=step.tool_id,
                 status="failed",
-                duration_seconds=time.perf_counter() - tool_started_clock,
+                duration_seconds=elapsed,
             )
             yield from handle_step_failure(
                 execution_prompt=execution_prompt,
@@ -131,6 +134,7 @@ def execute_planned_steps(
                 step=step,
                 index=index,
                 step_started=step_started,
+                duration_seconds=elapsed,
                 exc=exc,
                 emit_event=emit_event,
                 activity_event_factory=activity_event_factory,

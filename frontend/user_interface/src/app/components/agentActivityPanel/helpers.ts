@@ -59,6 +59,22 @@ function readStringListField(value: unknown, limit = 16): string[] {
   return Array.from(new Set(cleaned)).slice(0, Math.max(1, limit));
 }
 
+function readBooleanField(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return null;
+}
+
 function readObjectListField(value: unknown, limit = 16): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) {
     return [];
@@ -93,6 +109,7 @@ function mergeLiveSceneData(
       normalizedType === "llm.task_contract_completed" ||
       normalizedType === "llm.plan_decompose_started" ||
       normalizedType === "llm.plan_decompose_completed" ||
+      normalizedType === "llm.web_routing_decision" ||
       normalizedType === "llm.plan_step" ||
       normalizedType === "llm.plan_fact_coverage";
     const isHighlightEvent = normalizedType.includes("highlight");
@@ -119,7 +136,22 @@ function mergeLiveSceneData(
       "path",
       "scene_surface",
       "pdf_path",
+      "provider",
+      "provider_requested",
+      "web_provider",
+      "render_quality",
+      "blocked_reason",
+      "routing_mode",
     ].forEach((key) => assignString(key, payload[key]));
+
+    const contentDensity = readNumberField(payload["content_density"]);
+    if (contentDensity !== null) {
+      merged["content_density"] = Math.max(0, Math.min(1, Number(contentDensity)));
+    }
+    const blockedSignal = readBooleanField(payload["blocked_signal"]);
+    if (blockedSignal !== null) {
+      merged["blocked_signal"] = blockedSignal;
+    }
 
     const searchTerms = readStringListField(payload["search_terms"] ?? payload["planned_search_terms"], 12);
     if (searchTerms.length) {
@@ -242,6 +274,7 @@ function phaseForEvent(event: AgentActivityEvent | null): ActivityPhaseKey | nul
     type.startsWith("plan_") ||
     type === "llm.plan_decompose_started" ||
     type === "llm.plan_decompose_completed" ||
+    type === "llm.web_routing_decision" ||
     type === "llm.plan_step" ||
     type === "llm.plan_fact_coverage"
   ) {

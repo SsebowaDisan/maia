@@ -4,43 +4,46 @@ from unittest.mock import patch
 from maia.base.schema import LLMInterface
 from maia.llms import AzureOpenAI, LlamaCpp, OpenAI
 
-try:
-    from langchain_openai import AzureOpenAI as AzureOpenAILC
-    from langchain_openai import OpenAI as OpenAILC
-except ImportError:
-    from langchain.llms import AzureOpenAI as AzureOpenAILC
-    from langchain.llms import OpenAI as OpenAILC
-
 from openai.types.completion import Completion
 
 from .conftest import skip_llama_cpp_not_installed, skip_openai_lc_wrapper_test
 
-_openai_completion_response = Completion.parse_obj(
-    {
-        "id": "cmpl-7qyNoIo6gRSCJR0hi8o3ZKBH4RkJ0",
-        "object": "text_completion",
-        "created": 1392751226,
-        "model": "gpt-35-turbo",
-        "system_fingerprint": None,
-        "choices": [
-            {
-                "text": "completion",
-                "index": 0,
-                "finish_reason": "length",
-                "logprobs": None,
-            }
-        ],
-        "usage": {"completion_tokens": 20, "prompt_tokens": 2, "total_tokens": 22},
-    }
-)
+
+def _langchain_completion_classes():
+    try:
+        from langchain_openai import AzureOpenAI as AzureOpenAILC
+        from langchain_openai import OpenAI as OpenAILC
+    except ImportError:
+        from langchain.llms import AzureOpenAI as AzureOpenAILC
+        from langchain.llms import OpenAI as OpenAILC
+
+    return AzureOpenAILC, OpenAILC
+
+
+def make_completion_response():
+    return Completion.parse_obj(
+        {
+            "id": "cmpl-7qyNoIo6gRSCJR0hi8o3ZKBH4RkJ0",
+            "object": "text_completion",
+            "created": 1392751226,
+            "model": "gpt-35-turbo",
+            "system_fingerprint": None,
+            "choices": [
+                {
+                    "text": "completion",
+                    "index": 0,
+                    "finish_reason": "length",
+                    "logprobs": None,
+                }
+            ],
+            "usage": {"completion_tokens": 20, "prompt_tokens": 2, "total_tokens": 22},
+        }
+    )
 
 
 @skip_openai_lc_wrapper_test
-@patch(
-    "openai.resources.completions.Completions.create",
-    side_effect=lambda *args, **kwargs: _openai_completion_response,
-)
-def test_azureopenai_model(openai_completion):
+def test_azureopenai_model():
+    AzureOpenAILC, _ = _langchain_completion_classes()
     model = AzureOpenAI(
         azure_endpoint="https://test.openai.azure.com/",
         openai_api_key="some-key",
@@ -53,17 +56,19 @@ def test_azureopenai_model(openai_completion):
         model.to_langchain_format(), AzureOpenAILC
     ), "Agent not wrapped in Langchain's AzureOpenAI"
 
-    output = model("hello world")
+    with patch(
+        "openai.resources.completions.Completions.create",
+        side_effect=lambda *args, **kwargs: make_completion_response(),
+    ) as openai_completion:
+        output = model("hello world")
     assert isinstance(
         output, LLMInterface
     ), "Output for single text is not LLMInterface"
+    openai_completion.assert_called()
 
 
-@patch(
-    "openai.resources.completions.Completions.create",
-    side_effect=lambda *args, **kwargs: _openai_completion_response,
-)
-def test_openai_model(openai_completion):
+def test_openai_model():
+    _, OpenAILC = _langchain_completion_classes()
     model = OpenAI(
         openai_api_base="https://test.openai.azure.com/",
         openai_api_key="some-key",
@@ -76,10 +81,15 @@ def test_openai_model(openai_completion):
         model.to_langchain_format(), OpenAILC
     ), "Agent is not wrapped in Langchain's OpenAI"
 
-    output = model("hello world")
+    with patch(
+        "openai.resources.completions.Completions.create",
+        side_effect=lambda *args, **kwargs: make_completion_response(),
+    ) as openai_completion:
+        output = model("hello world")
     assert isinstance(
         output, LLMInterface
     ), "Output for single text is not LLMInterface"
+    openai_completion.assert_called()
 
 
 @skip_llama_cpp_not_installed

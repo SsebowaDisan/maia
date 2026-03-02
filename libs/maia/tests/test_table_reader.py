@@ -5,7 +5,10 @@ import pytest
 
 from maia.loaders import MathpixPDFReader, OCRReader, PandasExcelReader
 
-from .conftest import skip_when_unstructured_pdf_not_installed
+from .conftest import (
+    ensure_unstructured_pdf_runtime,
+    skip_when_unstructured_pdf_not_installed,
+)
 
 input_file = Path(__file__).parent / "resources" / "table.pdf"
 input_file_excel = Path(__file__).parent / "resources" / "dummy.xlsx"
@@ -30,6 +33,7 @@ def mathpix_output():
 
 @skip_when_unstructured_pdf_not_installed
 def test_ocr_reader(fullocr_output):
+    ensure_unstructured_pdf_runtime()
     reader = OCRReader()
     documents = reader.load_data(input_file, response_content=fullocr_output)
     table_docs = [doc for doc in documents if doc.metadata.get("type", "") == "table"]

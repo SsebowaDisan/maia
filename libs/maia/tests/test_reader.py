@@ -1,7 +1,6 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from langchain.schema import Document as LangchainDocument
 from llama_index.core.node_parser import SimpleNodeParser
 
 from maia.base import Document
@@ -14,7 +13,10 @@ from maia.loaders import (
     UnstructuredReader,
 )
 
-from .conftest import skip_when_unstructured_pdf_not_installed
+from .conftest import (
+    ensure_unstructured_pdf_runtime,
+    skip_when_unstructured_pdf_not_installed,
+)
 
 
 def test_docx_reader():
@@ -45,6 +47,8 @@ def test_pdf_reader():
     assert isinstance(first_doc, Document)
     assert first_doc.text.lower().replace(" ", "") == "dummypdffile"
 
+    from langchain.schema import Document as LangchainDocument
+
     langchain_doc = first_doc.to_langchain_format()
     assert isinstance(langchain_doc, LangchainDocument)
 
@@ -56,6 +60,7 @@ def test_pdf_reader():
 
 @skip_when_unstructured_pdf_not_installed
 def test_unstructured_pdf_reader():
+    ensure_unstructured_pdf_runtime()
     reader = UnstructuredReader()
     dirpath = Path(__file__).parent
     input_path = dirpath / "resources/dummy.pdf"

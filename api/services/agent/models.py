@@ -114,6 +114,7 @@ class AgentRunResult:
     next_recommended_steps: list[str]
     needs_human_review: bool = False
     human_review_notes: str = ""
+    web_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,4 +126,5 @@ class AgentRunResult:
             "next_recommended_steps": self.next_recommended_steps,
             "needs_human_review": self.needs_human_review,
             "human_review_notes": self.human_review_notes,
+            "web_summary": self.web_summary,
         }

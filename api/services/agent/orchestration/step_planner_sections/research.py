@@ -99,7 +99,12 @@ def ensure_company_agent_highlight_step(
 
     insert_at = len(steps)
     for idx, step in enumerate(steps):
-        if step.tool_id in ("browser.playwright.inspect", "marketing.web_research"):
+        if step.tool_id in (
+            "browser.playwright.inspect",
+            "marketing.web_research",
+            "web.extract.structured",
+            "web.dataset.adapter",
+        ):
             insert_at = idx + 1
             break
     steps.insert(

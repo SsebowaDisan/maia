@@ -95,19 +95,25 @@ def validate_password(pwd, pwd_cnf):
 
 
 def create_user(usn, pwd, user_id=None, is_admin=True) -> bool:
+    normalized_usn = (usn or "").strip()
+    normalized_usn_lower = normalized_usn.lower()
+    if not normalized_usn:
+        print("Cannot create user with empty username")
+        return False
+
     with Session(engine) as session:
-        statement = select(User).where(User.username_lower == usn.lower())
+        statement = select(User).where(User.username_lower == normalized_usn_lower)
         result = session.exec(statement).all()
         if result:
-            print(f'User "{usn}" already exists')
+            print(f'User "{normalized_usn}" already exists')
             return False
 
         else:
             hashed_password = hashlib.sha256(pwd.encode()).hexdigest()
             user = User(
                 id=user_id,
-                username=usn,
-                username_lower=usn.lower(),
+                username=normalized_usn,
+                username_lower=normalized_usn_lower,
                 password=hashed_password,
                 admin=is_admin,
             )

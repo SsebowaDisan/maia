@@ -61,8 +61,8 @@ documents and developers who want to build their own RAG pipeline.
 ### For developers
 
 - **Framework for RAG Pipelines**: Tools to build your own RAG-based document QA pipeline.
-- **Customizable UI**: See your RAG pipeline in action with the provided UI, built with <a href='https://github.com/gradio-app/gradio'>Gradio <img src='https://img.shields.io/github/stars/gradio-app/gradio'></a>.
-- **Gradio Theme**: If you use Gradio for development, check out our theme here: [maia-gradio-theme](https://github.com/lone17/maia-gradio-theme).
+- **React + FastAPI stack**: Primary UI lives in `frontend/user_interface` and runs against API routes in `api/`.
+- **API-first architecture**: UI behavior flows through typed API clients under `frontend/user_interface/src/api`.
 
 ## Key Features
 
@@ -80,7 +80,7 @@ documents and developers who want to build their own RAG pipeline.
 
 - **Configurable settings UI**: You can adjust most important aspects of retrieval & generation process on the UI (incl. prompts).
 
-- **Extensible**: Being built on Gradio, you are free to customize or add any UI elements as you like. Also, we aim to support multiple strategies for document indexing & retrieval. `GraphRAG` indexing pipeline is provided as an example.
+- **Extensible**: You are free to customize or add UI elements in the React app and extend backend orchestration tools. `GraphRAG` indexing pipeline is provided as an example.
 
 ![Preview](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/preview.png)
 
@@ -102,10 +102,10 @@ documents and developers who want to build their own RAG pipeline.
 
      ```bash
      docker run \
-     -e GRADIO_SERVER_NAME=0.0.0.0 \
-     -e GRADIO_SERVER_PORT=7860 \
+     -e MAIA_SERVER_NAME=0.0.0.0 \
+     -e MAIA_SERVER_PORT=8000 \
      -v ./ktem_app_data:/app/ktem_app_data \
-     -p 7860:7860 -it --rm \
+     -p 8000:8000 -it --rm \
      ghcr.io/cinnamon/maia:main-full
      ```
 
@@ -128,15 +128,15 @@ documents and developers who want to build their own RAG pipeline.
    ```bash
    # To run docker with platform linux/arm64
    docker run \
-   -e GRADIO_SERVER_NAME=0.0.0.0 \
-   -e GRADIO_SERVER_PORT=7860 \
+   -e MAIA_SERVER_NAME=0.0.0.0 \
+   -e MAIA_SERVER_PORT=8000 \
    -v ./ktem_app_data:/app/ktem_app_data \
-   -p 7860:7860 -it --rm \
+   -p 8000:8000 -it --rm \
    --platform linux/arm64 \
    ghcr.io/cinnamon/maia:main-lite
    ```
 
-3. Once everything is set up correctly, you can go to `http://localhost:7860/` to access the WebUI.
+3. Once everything is set up correctly, you can go to `http://localhost:8000/` to access the WebUI.
 
 4. We use [GHCR](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) to store docker images, all images can be found [here.](https://github.com/Cinnamon/maia/pkgs/container/maia)
 
@@ -165,18 +165,29 @@ documents and developers who want to build their own RAG pipeline.
 
 <img src="https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/pdf-viewer-setup.png" alt="pdf-setup" width="300">
 
-4. Start the web server:
+4. Start the API server:
 
    ```shell
-   python app.py
+   python run_api.py
    ```
 
-   - The app will be automatically launched in your browser.
-   - Default username and password are both `admin`. You can set up additional users directly through the UI.
+5. Start the React UI in a second terminal:
 
-   ![Chat tab](https://raw.githubusercontent.com/Cinnamon/maia/main/docs/images/chat-tab.png)
+   ```shell
+   cd frontend/user_interface
+   npm install
+   npm run dev
+   ```
 
-5. Check the `Resources` tab and `LLMs and Embeddings` and ensure that your `api_key` value is set correctly from your `.env` file. If it is not set, you can set it there.
+   Or run both with one command from repo root:
+
+   ```shell
+   python scripts/dev_react_stack.py
+   ```
+
+6. Open `http://localhost:5173/` for local dev (or `http://localhost:8000/` when serving built frontend from API).
+
+7. Check the `Resources` tab and `LLMs and Embeddings` and ensure that your `api_key` value is set correctly from your `.env` file. If it is not set, you can set it there.
 
 ### Setup GraphRAG
 

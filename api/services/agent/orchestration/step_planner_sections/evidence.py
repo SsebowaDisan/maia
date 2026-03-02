@@ -10,6 +10,8 @@ from ..models import TaskPreparation
 
 EVIDENCE_TOOL_IDS = {
     "browser.playwright.inspect",
+    "web.dataset.adapter",
+    "web.extract.structured",
     "marketing.web_research",
     "workspace.drive.search",
     "documents.highlight.extract",

@@ -5,39 +5,41 @@ from openai.types.chat.chat_completion import ChatCompletion
 from maia.llms import AzureChatOpenAI
 from maia.llms.cot import ManualSequentialChainOfThought, Thought
 
-_openai_chat_completion_response = [
-    ChatCompletion.parse_obj(
-        {
-            "id": "chatcmpl-7qyuw6Q1CFCpcKsMdFkmUPUa7JP2x",
-            "object": "chat.completion",
-            "created": 1692338378,
-            "model": "gpt-35-turbo",
-            "system_fingerprint": None,
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "stop",
-                    "message": {
-                        "role": "assistant",
-                        "content": text,
-                        "function_call": None,
-                        "tool_calls": None,
-                    },
-                    "logprobs": None,
-                }
-            ],
-            "usage": {"completion_tokens": 9, "prompt_tokens": 10, "total_tokens": 19},
-        }
-    )
-    for text in ["Bonjour", "こんにちは (Konnichiwa)"]
-]
+
+def cot_responses():
+    return [
+        ChatCompletion.parse_obj(
+            {
+                "id": "chatcmpl-7qyuw6Q1CFCpcKsMdFkmUPUa7JP2x",
+                "object": "chat.completion",
+                "created": 1692338378,
+                "model": "gpt-35-turbo",
+                "system_fingerprint": None,
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": text,
+                            "function_call": None,
+                            "tool_calls": None,
+                        },
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "completion_tokens": 9,
+                    "prompt_tokens": 10,
+                    "total_tokens": 19,
+                },
+            }
+        )
+        for text in ["Bonjour", "こんにちは (Konnichiwa)"]
+    ]
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_response,
-)
-def test_cot_plus_operator(openai_completion):
+def test_cot_plus_operator():
     llm = AzureChatOpenAI(
         api_key="dummy",
         api_version="2024-05-01-preview",
@@ -55,7 +57,12 @@ def test_cot_plus_operator(openai_completion):
         post_process=lambda string: {"output": string},
     )
     thought = thought1 + thought2
-    output = thought(word="hello", language="French")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=cot_responses(),
+    ) as openai_completion:
+        output = thought(word="hello", language="French")
+    openai_completion.assert_called()
     assert output.content == {
         "word": "hello",
         "language": "French",
@@ -64,11 +71,7 @@ def test_cot_plus_operator(openai_completion):
     }
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_response,
-)
-def test_cot_manual(openai_completion):
+def test_cot_manual():
     llm = AzureChatOpenAI(
         api_key="dummy",
         api_version="2024-05-01-preview",
@@ -84,7 +87,12 @@ def test_cot_manual(openai_completion):
         post_process=lambda string: {"output": string},
     )
     thought = ManualSequentialChainOfThought(thoughts=[thought1, thought2], llm=llm)
-    output = thought(word="hello", language="French")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=cot_responses(),
+    ) as openai_completion:
+        output = thought(word="hello", language="French")
+    openai_completion.assert_called()
     assert output.content == {
         "word": "hello",
         "language": "French",
@@ -93,11 +101,7 @@ def test_cot_manual(openai_completion):
     }
 
 
-@patch(
-    "openai.resources.chat.completions.Completions.create",
-    side_effect=_openai_chat_completion_response,
-)
-def test_cot_with_termination_callback(openai_completion):
+def test_cot_with_termination_callback():
     llm = AzureChatOpenAI(
         api_key="dummy",
         api_version="2024-05-01-preview",
@@ -117,7 +121,12 @@ def test_cot_with_termination_callback(openai_completion):
         llm=llm,
         terminate=lambda d: True if d.get("translated", "") == "Bonjour" else False,
     )
-    output = thought(word="hallo", language="French")
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        side_effect=cot_responses(),
+    ) as openai_completion:
+        output = thought(word="hallo", language="French")
+    openai_completion.assert_called()
     assert output.content == {
         "word": "hallo",
         "language": "French",

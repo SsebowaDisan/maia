@@ -7,6 +7,7 @@ from api.services.agent.models import AgentAction, AgentSource
 from api.services.agent.planner import PlannedStep
 
 from .artifacts import append_files_and_documents
+from .citations import append_evidence_citations
 from .delivery import append_contract_gate, append_delivery_status
 from .models import AnswerBuildContext
 from .plan import append_execution_plan
@@ -49,5 +50,6 @@ def compose_professional_answer(
     append_files_and_documents(lines, ctx)
     append_verification(lines, ctx)
     append_evidence_backed_value_add(lines, ctx)
+    append_evidence_citations(lines, ctx)
     append_recommended_next_steps(lines, ctx)
     return "\n".join(lines)

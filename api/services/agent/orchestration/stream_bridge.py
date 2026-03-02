@@ -66,6 +66,12 @@ class LiveRunStream:
             trace_detail = str(payload.get("detail") or "").strip()
             trace_data = payload.get("data")
             trace_data_dict = dict(trace_data) if isinstance(trace_data, dict) else {}
+            if "scene_surface" not in trace_data_dict:
+                trace_data_dict["scene_surface"] = (
+                    "preview"
+                    if trace_event_type.startswith(("browser_", "web_"))
+                    else "system"
+                )
             trace_snapshot = payload.get("snapshot_ref")
             trace_event = activity_event_factory(
                 event_type=trace_event_type,

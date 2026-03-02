@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 from abc import abstractmethod
-from typing import Any, AsyncGenerator, Iterator, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Iterator, Optional
 
 from theflow import Function, Node, Param, lazy
 
-from maia.base.schema import Document
+if TYPE_CHECKING:
+    from maia.base.schema import Document
 
 
 class BaseComponent(Function):

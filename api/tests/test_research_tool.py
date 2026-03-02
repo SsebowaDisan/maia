@@ -91,6 +91,44 @@ class ResearchToolTests(unittest.TestCase):
             )
         self.assertIn("No web search data available", result.content)
         self.assertNotIn("duckduckgo.com/?q=", result.content.lower())
+        provider_failures = result.data.get("provider_failures") or []
+        self.assertTrue(provider_failures)
+        self.assertEqual(provider_failures[-1].get("reason"), "provider_unavailable")
+
+    def test_brave_failure_can_fallback_to_bing_when_enabled(self) -> None:
+        registry = _RegistryStub(brave=_FailingConnector(), bing=_BingConnectorStub())
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="research axon group",
+                params={
+                    "query": "axon group",
+                    "provider": "brave_search",
+                    "allow_provider_fallback": True,
+                },
+            )
+        self.assertEqual(result.data.get("provider"), "bing_search")
+        failures = result.data.get("provider_failures") or []
+        self.assertGreaterEqual(len(failures), 1)
+        self.assertEqual(failures[0].get("provider"), "brave_search")
+        self.assertEqual(failures[0].get("reason"), "provider_unavailable")
+
+    def test_brave_failure_hard_fails_when_fallback_disabled(self) -> None:
+        registry = _RegistryStub(brave=_FailingConnector(), bing=_BingConnectorStub())
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="research axon group",
+                params={
+                    "query": "axon group",
+                    "provider": "brave_search",
+                    "allow_provider_fallback": False,
+                },
+            )
+        self.assertIn("No web search data available", result.content)
+        self.assertEqual(result.data.get("provider"), "brave_search")
+        attempts = result.data.get("provider_attempted") or []
+        self.assertEqual(attempts, ["brave_search"])
 
 
 if __name__ == "__main__":

@@ -5,11 +5,10 @@ from typing import Any
 
 from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_IDS
 from api.schemas import ChatRequest
-from api.services.agent.llm_intent import enrich_task_intelligence
+from api.services.agent.llm_intent import detect_web_routing_mode, enrich_task_intelligence
 from api.services.agent.llm_planner import plan_with_llm
 from api.services.agent.llm_plan_optimizer import optimize_plan_rows, rewrite_search_query
 from api.services.agent.llm_runtime import env_bool
-from api.services.agent.planner_business_fallback import build_business_fallback_rows
 from api.services.agent.planner_helpers import intent_signals, sanitize_search_query
 LLM_ALLOWED_TOOL_IDS = {
     "ads.google.performance",
@@ -23,8 +22,14 @@ LLM_ALLOWED_TOOL_IDS = {
     "business.route_plan",
     "browser.contact_form.send",
     "browser.playwright.inspect",
+    "web.dataset.adapter",
+    "web.extract.structured",
     "calendar.create_event",
     "data.dataset.analyze",
+    "data.science.deep_learning.train",
+    "data.science.ml.train",
+    "data.science.profile",
+    "data.science.visualize",
     "documents.highlight.extract",
     "docs.create",
     "email.draft",
@@ -51,6 +56,8 @@ LLM_ALLOWED_TOOL_IDS = {
 
 _CORE_FLOW_TOOL_IDS = {
     "browser.playwright.inspect",
+    "web.dataset.adapter",
+    "web.extract.structured",
     "documents.highlight.extract",
     "docs.create",
     "marketing.web_research",
@@ -58,6 +65,9 @@ _CORE_FLOW_TOOL_IDS = {
     "workspace.docs.research_notes",
     "workspace.sheets.track_step",
 }
+
+DEFAULT_WEB_RESEARCH_PROVIDER = "brave_search"
+DEFAULT_WEB_PROVIDER = "playwright_browser"
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,16 @@ class PlannedStep:
     expected_evidence: tuple[str, ...] = ()
 
 
+def resolve_web_routing(request: ChatRequest) -> dict[str, Any]:
+    signals = intent_signals(request)
+    routing = detect_web_routing_mode(
+        message=request.message,
+        agent_goal=request.agent_goal,
+        heuristic=signals,
+    )
+    return routing if isinstance(routing, dict) else {}
+
+
 def is_deep_research_request(request: ChatRequest) -> bool:
     return request.agent_mode == "company_agent" and bool(str(request.agent_goal or "").strip())
 
@@ -76,6 +96,8 @@ def is_deep_research_request(request: ChatRequest) -> bool:
 def _sort_steps(steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
     priorities = {
         "browser.playwright.inspect": 5,
+        "web.dataset.adapter": 6,
+        "web.extract.structured": 7,
         "documents.highlight.extract": 8,
         "workspace.docs.research_notes": 10,
         "workspace.sheets.track_step": 15,
@@ -88,6 +110,10 @@ def _sort_steps(steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None
         "business.meeting_scheduler": 44,
         "business.proposal_workflow": 46,
         "data.dataset.analyze": 45,
+        "data.science.profile": 45,
+        "data.science.visualize": 46,
+        "data.science.ml.train": 47,
+        "data.science.deep_learning.train": 48,
         "report.generate": 70,
         "docs.create": 72,
         "workspace.docs.fill_template": 74,
@@ -107,11 +133,25 @@ def _sort_steps(steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None
     return [item[2] for item in decorated]
 
 
-def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
+def _normalize_steps(
+    request: ChatRequest,
+    steps: list[PlannedStep],
+    *,
+    preferred_tool_ids: set[str] | None = None,
+    web_routing: dict[str, Any] | None = None,
+) -> list[PlannedStep]:
     signals = intent_signals(request)
     url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
     highlight_color = str(signals.get("highlight_color") or "yellow")
+    routing = web_routing if isinstance(web_routing, dict) else detect_web_routing_mode(
+        message=request.message,
+        agent_goal=request.agent_goal,
+        heuristic=signals,
+    )
+    routing_mode = str(routing.get("routing_mode") or "").strip().lower()
+    scrape_url_requested = routing_mode == "url_scrape"
+    online_research_requested = routing_mode == "online_research"
     company_agent_mode = request.agent_mode == "company_agent"
     has_highlight_extract = any(step.tool_id == "documents.highlight.extract" for step in steps)
 
@@ -121,9 +161,18 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferre
         if step.tool_id == "browser.playwright.inspect":
             if url:
                 params.setdefault("url", url)
+            params.setdefault("web_provider", DEFAULT_WEB_PROVIDER)
             params.setdefault("highlight_color", highlight_color)
         if step.tool_id == "documents.highlight.extract":
             params.setdefault("highlight_color", highlight_color)
+        if step.tool_id == "web.extract.structured":
+            if url:
+                params.setdefault("url", url)
+            params.setdefault("extraction_goal", request.message)
+        if step.tool_id == "web.dataset.adapter":
+            if url:
+                params.setdefault("url", url)
+            params.setdefault("goal", request.message)
         if step.tool_id == "marketing.web_research":
             query = sanitize_search_query(
                 str(params.get("query") or request.message),
@@ -134,6 +183,8 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferre
                 request=request,
                 fallback_url=url,
             )
+            params.setdefault("provider", DEFAULT_WEB_RESEARCH_PROVIDER)
+            params.setdefault("allow_provider_fallback", False)
         if step.tool_id == "report.generate":
             params.setdefault("title", "Website Analysis Report")
             params.setdefault("summary", request.message)
@@ -169,6 +220,38 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferre
             )
         )
 
+    if scrape_url_requested and url:
+        normalized = [step for step in normalized if step.tool_id != "marketing.web_research"]
+        has_browser = any(step.tool_id == "browser.playwright.inspect" for step in normalized)
+        if not has_browser:
+            normalized.insert(
+                0,
+                PlannedStep(
+                    tool_id="browser.playwright.inspect",
+                    title="Inspect provided website in live browser",
+                    params={
+                        "url": url,
+                        "web_provider": DEFAULT_WEB_PROVIDER,
+                        "highlight_color": highlight_color,
+                    },
+                ),
+            )
+    elif online_research_requested and not url:
+        has_web_research = any(step.tool_id == "marketing.web_research" for step in normalized)
+        if not has_web_research:
+            normalized.insert(
+                0,
+                PlannedStep(
+                    tool_id="marketing.web_research",
+                    title="Search online sources",
+                    params={
+                        "query": sanitize_search_query(request.message, fallback_url=""),
+                        "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
+                        "allow_provider_fallback": False,
+                    },
+                ),
+            )
+
     if company_agent_mode:
         normalized = [
             step
@@ -191,9 +274,21 @@ def _normalize_steps(request: ChatRequest, steps: list[PlannedStep], *, preferre
     return _sort_steps(deduped, preferred_tool_ids=preferred_tool_ids)
 
 
-def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
+def _augment_for_deep_research(
+    request: ChatRequest,
+    steps: list[PlannedStep],
+    *,
+    preferred_tool_ids: set[str] | None = None,
+    web_routing: dict[str, Any] | None = None,
+) -> list[PlannedStep]:
+    routing = web_routing if isinstance(web_routing, dict) else resolve_web_routing(request)
     if not is_deep_research_request(request):
-        return _normalize_steps(request, steps, preferred_tool_ids=preferred_tool_ids)
+        return _normalize_steps(
+            request,
+            steps,
+            preferred_tool_ids=preferred_tool_ids,
+            web_routing=routing,
+        )
 
     enriched = list(steps)
     intent = intent_signals(request)
@@ -206,7 +301,11 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep], *
             PlannedStep(
                 tool_id="marketing.web_research",
                 title="Search online sources",
-                params={"query": request.message},
+                params={
+                    "query": request.message,
+                    "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
+                    "allow_provider_fallback": False,
+                },
             ),
         )
 
@@ -227,11 +326,16 @@ def _augment_for_deep_research(request: ChatRequest, steps: list[PlannedStep], *
             PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Inspect provided website in live browser",
-                params={"url": direct_url},
+                params={"url": direct_url, "web_provider": DEFAULT_WEB_PROVIDER},
             ),
         )
 
-    return _normalize_steps(request, enriched, preferred_tool_ids=preferred_tool_ids)
+    return _normalize_steps(
+        request,
+        enriched,
+        preferred_tool_ids=preferred_tool_ids,
+        web_routing=routing,
+    )
 
 
 def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
@@ -275,7 +379,7 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
             PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Inspect provided website in live browser",
-                params={"url": target_url},
+                params={"url": target_url, "web_provider": DEFAULT_WEB_PROVIDER},
             )
         )
     elif requires_web:
@@ -283,7 +387,11 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
             PlannedStep(
                 tool_id="marketing.web_research",
                 title="Search online sources",
-                params={"query": objective or request.message},
+                params={
+                    "query": objective or request.message,
+                    "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
+                    "allow_provider_fallback": False,
+                },
             )
         )
 
@@ -367,8 +475,10 @@ def build_plan(
     request: ChatRequest,
     *,
     preferred_tool_ids: set[str] | None = None,
+    web_routing: dict[str, Any] | None = None,
 ) -> list[PlannedStep]:
     steps: list[PlannedStep] = []
+    routing = web_routing if isinstance(web_routing, dict) else resolve_web_routing(request)
     company_agent_mode = request.agent_mode == "company_agent"
     planning_allowed_tool_ids = _planning_allowed_tool_ids(
         preferred_tool_ids=preferred_tool_ids,
@@ -424,25 +534,8 @@ def build_plan(
                 request,
                 llm_steps,
                 preferred_tool_ids=preferred_tool_ids,
+                web_routing=routing,
             )
-
-    business_fallback_rows = build_business_fallback_rows(request)
-    if business_fallback_rows:
-        business_fallback_steps = [
-            PlannedStep(
-                tool_id=str(row.get("tool_id") or "").strip(),
-                title=str(row.get("title") or row.get("tool_id") or "Business workflow").strip()
-                or "Business workflow",
-                params=dict(row.get("params")) if isinstance(row.get("params"), dict) else {},
-            )
-            for row in business_fallback_rows
-            if str(row.get("tool_id") or "").strip()
-        ]
-        return _normalize_steps(
-            request,
-            business_fallback_steps,
-            preferred_tool_ids=preferred_tool_ids,
-        )
 
     semantic_fallback_steps = _build_semantic_fallback_steps(request)
     if semantic_fallback_steps:
@@ -450,6 +543,7 @@ def build_plan(
             request,
             semantic_fallback_steps,
             preferred_tool_ids=preferred_tool_ids,
+            web_routing=routing,
         )
 
     signals = intent_signals(request)
@@ -460,7 +554,7 @@ def build_plan(
             PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Inspect provided website in live browser",
-                params={"url": target_url},
+                params={"url": target_url, "web_provider": DEFAULT_WEB_PROVIDER},
             )
         )
     else:
@@ -468,7 +562,11 @@ def build_plan(
             PlannedStep(
                 tool_id="marketing.web_research",
                 title="Search online sources",
-                params={"query": request.message},
+                params={
+                    "query": request.message,
+                    "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
+                    "allow_provider_fallback": False,
+                },
             )
         )
     steps.append(
@@ -535,6 +633,7 @@ def build_plan(
         request,
         steps,
         preferred_tool_ids=preferred_tool_ids,
+        web_routing=routing,
     )
 
 

@@ -67,6 +67,7 @@ type ChatResponse = {
   next_recommended_steps: string[];
   needs_human_review: boolean;
   human_review_notes: string | null;
+  web_summary: Record<string, unknown>;
   activity_run_id: string | null;
 };
 

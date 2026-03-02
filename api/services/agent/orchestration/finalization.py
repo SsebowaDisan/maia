@@ -17,6 +17,8 @@ from api.services.agent.observability import get_agent_observability
 from .answer_builder import compose_professional_answer
 from .contract_gate import action_rows_for_contract_check, run_contract_check_live
 from .models import ExecutionState, TaskPreparation
+from .web_evidence import summarize_web_evidence
+from .web_kpi import evaluate_web_kpi_gate, summarize_web_kpi
 
 
 def finalize_run(
@@ -74,6 +76,60 @@ def finalize_run(
         metadata=verification_report,
     )
     yield emit_event(verification_completed_event)
+    web_kpi_summary = summarize_web_kpi(state.execution_context.settings)
+    web_evidence_summary = summarize_web_evidence(state.execution_context.settings)
+    web_kpi_gate = evaluate_web_kpi_gate(
+        settings=state.execution_context.settings,
+        summary=web_kpi_summary,
+    )
+    if int(web_kpi_summary.get("web_steps_total") or 0) > 0:
+        web_kpi_event = activity_event_factory(
+            event_type="web_kpi_summary",
+            title="Web reliability summary",
+            detail=(
+                f"Web steps={web_kpi_summary.get('web_steps_total')} | "
+                f"avg quality={web_kpi_summary.get('avg_quality_score')} | "
+                f"blocked={web_kpi_summary.get('blocked_count')}"
+            ),
+            metadata=web_kpi_summary,
+        )
+        yield emit_event(web_kpi_event)
+    if int(web_evidence_summary.get("web_evidence_total") or 0) > 0:
+        web_evidence_event = activity_event_factory(
+            event_type="web_evidence_summary",
+            title="Web evidence summary",
+            detail=(
+                f"Evidence items={web_evidence_summary.get('web_evidence_total')} | "
+                f"citations_ready={web_evidence_summary.get('citations_ready')}"
+            ),
+            metadata=web_evidence_summary,
+        )
+        yield emit_event(web_evidence_event)
+    if int(web_kpi_summary.get("web_steps_total") or 0) > 0:
+        gate_failed_checks = [
+            str(item).strip()
+            for item in (web_kpi_gate.get("failed_checks") if isinstance(web_kpi_gate, dict) else [])
+            if str(item).strip()
+        ]
+        gate_ready = bool(web_kpi_gate.get("ready_for_scale"))
+        gate_event = activity_event_factory(
+            event_type="web_release_gate",
+            title="Web rollout gate evaluation",
+            detail=(
+                "Web stack passed release gate thresholds."
+                if gate_ready
+                else f"Web stack below thresholds: {', '.join(gate_failed_checks[:3])}"
+            ),
+            metadata=web_kpi_gate,
+        )
+        yield emit_event(gate_event)
+        if bool(web_kpi_gate.get("gate_enforced")) and not gate_ready:
+            gate_note = (
+                "Web KPI gate is enforced and currently below threshold. "
+                "Review gate checks before enabling full rollout."
+            )
+            if gate_note not in state.next_steps:
+                state.next_steps.insert(0, gate_note)
 
     if deep_research_mode:
         minimum_seconds_raw = settings.get("agent.deep_research_min_seconds", 30)
@@ -234,6 +290,11 @@ def finalize_run(
         next_recommended_steps=unique_next_steps[:8],
         needs_human_review=needs_human_review,
         human_review_notes=human_review_notes,
+        web_summary={
+            "kpi": web_kpi_summary,
+            "evidence": web_evidence_summary,
+            "release_gate": web_kpi_gate,
+        },
     )
     synthesis_completed_event = activity_event_factory(
         event_type="synthesis_completed",
@@ -272,6 +333,9 @@ def finalize_run(
             "actions": len(state.all_actions),
             "sources": len(state.all_sources),
             "event_coverage_percent": coverage.get("coverage_percent", 0),
+            "web_ready_for_scale": bool(web_kpi_gate.get("ready_for_scale")),
+            "web_steps_total": int(web_kpi_summary.get("web_steps_total") or 0),
+            "web_evidence_total": int(web_evidence_summary.get("web_evidence_total") or 0),
         },
     )
     memory.save_run(
@@ -288,6 +352,7 @@ def finalize_run(
             "next_recommended_steps": result.next_recommended_steps,
             "needs_human_review": result.needs_human_review,
             "human_review_notes": result.human_review_notes,
+            "web_summary": result.web_summary,
             "user_preferences": task_prep.user_preferences,
             "event_coverage": coverage,
         }

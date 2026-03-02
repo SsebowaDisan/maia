@@ -19,9 +19,11 @@ from api.services.agent.orchestrator import get_orchestrator
 from api.services.settings_service import load_user_settings
 
 from .constants import API_CHAT_FAST_PATH, logger
+from .citations import append_required_citation_suffix, enforce_required_citations
 from .conversation_store import (
     build_selected_payload,
     get_or_create_conversation,
+    maybe_autoname_conversation,
     persist_conversation,
 )
 from .fallbacks import build_extractive_timeout_answer, fallback_answer_from_exception
@@ -73,6 +75,20 @@ def _capture_workspace_ids_from_actions(actions: list[Any]) -> dict[str, str]:
     return captured
 
 
+def _extract_plot_from_actions(actions: list[Any]) -> dict[str, Any] | None:
+    for action in reversed(actions or []):
+        status = str(getattr(action, "status", "") or "").strip().lower()
+        if status and status != "success":
+            continue
+        metadata = getattr(action, "metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        plot = metadata.get("plot")
+        if isinstance(plot, dict) and str(plot.get("kind") or "").strip().lower() == "chart":
+            return dict(plot)
+    return None
+
+
 def stream_chat_turn(
     context: ApiContext,
     user_id: str,
@@ -86,6 +102,13 @@ def stream_chat_turn(
     conversation_id, conversation_name, data_source = get_or_create_conversation(
         user_id=user_id,
         conversation_id=request.conversation_id,
+    )
+    conversation_name = maybe_autoname_conversation(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        current_name=conversation_name,
+        message=message,
+        agent_mode=request.agent_mode,
     )
 
     chat_history = deepcopy(data_source.get("messages", []))
@@ -173,6 +196,7 @@ def stream_chat_turn(
                     "next_recommended_steps": [],
                     "needs_human_review": False,
                     "human_review_notes": "",
+                    "web_summary": {},
                 },
             )()
 
@@ -213,6 +237,9 @@ def stream_chat_turn(
             }
         if agent_result.info_html:
             yield {"type": "info_delta", "delta": agent_result.info_html}
+        plot_data = _extract_plot_from_actions(agent_result.actions_taken)
+        if plot_data:
+            yield {"type": "plot", "plot": plot_data}
 
         chat_state.setdefault("app", {})
         chat_state["app"]["last_agent_run_id"] = agent_result.run_id
@@ -230,7 +257,7 @@ def stream_chat_turn(
         retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
         retrieval_history.append(agent_result.info_html)
         plot_history = deepcopy(data_source.get("plot_history", []))
-        plot_history.append(None)
+        plot_history.append(plot_data)
         message_meta = deepcopy(data_source.get("message_meta", []))
         message_meta.append(
             {
@@ -241,6 +268,11 @@ def stream_chat_turn(
                 "next_recommended_steps": agent_result.next_recommended_steps,
                 "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
+                "web_summary": (
+                    dict(getattr(agent_result, "web_summary", {}))
+                    if isinstance(getattr(agent_result, "web_summary", {}), dict)
+                    else {}
+                ),
             }
         )
 
@@ -254,6 +286,11 @@ def stream_chat_turn(
                 "next_recommended_steps": agent_result.next_recommended_steps,
                 "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
+                "web_summary": (
+                    dict(getattr(agent_result, "web_summary", {}))
+                    if isinstance(getattr(agent_result, "web_summary", {}), dict)
+                    else {}
+                ),
                 "date_created": datetime.now(get_localzone()).isoformat(),
             }
         )
@@ -276,7 +313,7 @@ def stream_chat_turn(
             "message": message,
             "answer": answer_text,
             "info": agent_result.info_html,
-            "plot": None,
+            "plot": plot_data,
             "state": chat_state,
             "mode": "company_agent",
             "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
@@ -284,6 +321,11 @@ def stream_chat_turn(
             "next_recommended_steps": agent_result.next_recommended_steps,
             "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
             "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
+            "web_summary": (
+                dict(getattr(agent_result, "web_summary", {}))
+                if isinstance(getattr(agent_result, "web_summary", {}), dict)
+                else {}
+            ),
             "activity_run_id": agent_result.run_id,
         }
 
@@ -350,6 +392,17 @@ def stream_chat_turn(
         )
         yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
 
+    answer_with_citation_suffix = append_required_citation_suffix(answer=answer_text, info_html=info_text)
+    if answer_with_citation_suffix != answer_text:
+        if answer_with_citation_suffix.startswith(answer_text):
+            delta = answer_with_citation_suffix[len(answer_text) :]
+            answer_text = answer_with_citation_suffix
+            if delta:
+                yield {"type": "chat_delta", "delta": delta, "text": answer_text}
+        else:
+            answer_text = answer_with_citation_suffix
+            yield {"type": "chat_delta", "delta": f"\n\n{answer_text}", "text": answer_text}
+
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))
     chat_state[reasoning_id] = reasoning_state.get("pipeline", {})
@@ -369,6 +422,7 @@ def stream_chat_turn(
             "next_recommended_steps": [],
             "needs_human_review": False,
             "human_review_notes": None,
+            "web_summary": {},
         }
     )
 
@@ -397,6 +451,7 @@ def stream_chat_turn(
         "next_recommended_steps": [],
         "needs_human_review": False,
         "human_review_notes": None,
+        "web_summary": {},
         "activity_run_id": None,
     }
 
@@ -427,9 +482,21 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             user_id=user_id,
             conversation_id=request.conversation_id,
         )
+        conversation_name = maybe_autoname_conversation(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            current_name=conversation_name,
+            message=message,
+            agent_mode=request.agent_mode,
+        )
         timeout_answer, timeout_info = build_extractive_timeout_answer(
             context=context,
             user_id=user_id,
+        )
+        timeout_answer = enforce_required_citations(
+            answer=timeout_answer,
+            info_html=timeout_info,
+            citation_mode=request.citation,
         )
 
         messages = deepcopy(data_source.get("messages", []))
@@ -449,6 +516,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "next_recommended_steps": [],
                 "needs_human_review": False,
                 "human_review_notes": None,
+                "web_summary": {},
             }
         )
 
@@ -477,6 +545,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "next_recommended_steps": [],
             "needs_human_review": False,
             "human_review_notes": None,
+            "web_summary": {},
             "activity_run_id": None,
         }
     finally:

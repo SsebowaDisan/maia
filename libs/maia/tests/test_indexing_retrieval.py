@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
+import pytest
 from openai.types.create_embedding_response import CreateEmbeddingResponse
 
 from maia.base import Document
@@ -10,15 +11,14 @@ from maia.embeddings import AzureOpenAIEmbeddings
 from maia.indices import VectorIndexing, VectorRetrieval
 from maia.storages import ChromaVectorStore, InMemoryDocumentStore
 
-with open(Path(__file__).parent / "resources" / "embedding_openai.json") as f:
-    openai_embedding = CreateEmbeddingResponse.model_validate(json.load(f))
+
+@pytest.fixture(scope="session")
+def openai_embedding():
+    with open(Path(__file__).parent / "resources" / "embedding_openai.json") as f:
+        return CreateEmbeddingResponse.model_validate(json.load(f))
 
 
-@patch(
-    "openai.resources.embeddings.Embeddings.create",
-    side_effect=lambda *args, **kwargs: openai_embedding,
-)
-def test_indexing(tmp_path):
+def test_indexing(tmp_path, openai_embedding):
     db = ChromaVectorStore(path=str(tmp_path))
     doc_store = InMemoryDocumentStore()
     embedding = AzureOpenAIEmbeddings(
@@ -33,16 +33,16 @@ def test_indexing(tmp_path):
     pipeline.vector_store = cast(ChromaVectorStore, pipeline.vector_store)
     assert pipeline.vector_store._collection.count() == 0, "Expected empty collection"
     assert len(pipeline.doc_store._store) == 0, "Expected empty doc store"
-    pipeline(text=Document(text="Hello world"))
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=lambda *args, **kwargs: openai_embedding,
+    ):
+        pipeline(text=Document(text="Hello world"))
     assert pipeline.vector_store._collection.count() == 1, "Index 1 item"
     assert len(pipeline.doc_store._store) == 1, "Expected 1 document"
 
 
-@patch(
-    "openai.resources.embeddings.Embeddings.create",
-    side_effect=lambda *args, **kwargs: openai_embedding,
-)
-def test_retrieving(tmp_path):
+def test_retrieving(tmp_path, openai_embedding):
     db = ChromaVectorStore(path=str(tmp_path))
     doc_store = InMemoryDocumentStore()
     embedding = AzureOpenAIEmbeddings(
@@ -59,9 +59,13 @@ def test_retrieving(tmp_path):
         vector_store=db, doc_store=doc_store, embedding=embedding
     )
 
-    index_pipeline(text=Document(text="Hello world"))
-    output = retrieval_pipeline(text="Hello world")
-    output1 = retrieval_pipeline(text="Hello world")
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=lambda *args, **kwargs: openai_embedding,
+    ):
+        index_pipeline(text=Document(text="Hello world"))
+        output = retrieval_pipeline(text="Hello world")
+        output1 = retrieval_pipeline(text="Hello world")
 
     assert len(output) == 1, "Expect 1 results"
     assert output == output1, "Expect identical results"

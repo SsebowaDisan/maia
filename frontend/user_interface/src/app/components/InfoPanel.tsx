@@ -17,6 +17,7 @@ import { SourceGraphCard } from "./infoPanel/SourceGraphCard";
 import { claimStatusLabel, claimStatusStyle, contradictionLabel, contradictionStyle } from "./infoPanel/statusHelpers";
 
 type InfoTab = "evidence" | "claims" | "mindmap" | "graph" | "consistency" | "actions";
+const COMPACT_INFO_PANEL_BREAKPOINT = 340;
 
 interface InfoPanelProps {
   messageCount: number;
@@ -53,6 +54,7 @@ export function InfoPanel({
   );
   const support = useMemo(() => supportRate(claimInsights), [claimInsights]);
   const [tab, setTab] = useState<InfoTab>("evidence");
+  const isCompactPanel = width <= COMPACT_INFO_PANEL_BREAKPOINT;
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [graphEvidenceFocusId, setGraphEvidenceFocusId] = useState<string | null>(null);
   const selectedClaim = selectedClaimId ? claimInsights.find((c) => c.id === selectedClaimId) || null : null;
@@ -113,6 +115,22 @@ export function InfoPanel({
     const combined = questionText ? `Original question: ${questionText}\n\nInstruction: ${prompt}` : prompt;
     await navigator.clipboard.writeText(combined);
   };
+
+  const signalCards = [
+    { id: "evidence", label: "Evidence", icon: Search, value: evidenceCards.length },
+    { id: "claims", label: "Claims", icon: FileText, value: claimInsights.length },
+    { id: "graph-links", label: "Graph links", icon: Network, value: sourceGraph.edges.length },
+    { id: "contradictions", label: "Contradictions", icon: AlertTriangle, value: contradictionFindings.length },
+  ];
+
+  const tabItems: Array<{ id: InfoTab; label: string; icon: typeof Search }> = [
+    { id: "evidence", label: "Evidence", icon: Search },
+    { id: "claims", label: "Claims", icon: FileText },
+    { id: "mindmap", label: "Mindmap", icon: Sparkles },
+    { id: "graph", label: "Graph", icon: Network },
+    { id: "consistency", label: "Consistency", icon: ShieldAlert },
+    { id: "actions", label: "Actions", icon: CheckCircle2 },
+  ];
 
   return (
     <div
@@ -211,44 +229,46 @@ export function InfoPanel({
               </div>
             </div>
             <div className="grid grid-cols-4 gap-2">
-              <div className="rounded-lg bg-white p-2 border border-black/[0.05]">
-                <p className="text-[11px] text-[#86868b]">Evidence</p>
-                <p className="text-[14px] text-[#1d1d1f]">{evidenceCards.length}</p>
-              </div>
-              <div className="rounded-lg bg-white p-2 border border-black/[0.05]">
-                <p className="text-[11px] text-[#86868b]">Claims</p>
-                <p className="text-[14px] text-[#1d1d1f]">{claimInsights.length}</p>
-              </div>
-              <div className="rounded-lg bg-white p-2 border border-black/[0.05]">
-                <p className="text-[11px] text-[#86868b]">Graph links</p>
-                <p className="text-[14px] text-[#1d1d1f]">{sourceGraph.edges.length}</p>
-              </div>
-              <div className="rounded-lg bg-white p-2 border border-black/[0.05]">
-                <p className="text-[11px] text-[#86868b]">Contrad.</p>
-                <p className="text-[14px] text-[#1d1d1f]">{contradictionFindings.length}</p>
-              </div>
+              {signalCards.map((card) => {
+                const Icon = card.icon;
+                return (
+                  <div key={card.id} className="rounded-lg bg-white p-2 border border-black/[0.05]">
+                    {isCompactPanel ? (
+                      <div className="flex justify-center mb-1">
+                        <Icon className="w-3.5 h-3.5 text-[#86868b]" aria-hidden="true" />
+                        <span className="sr-only">{card.label}</span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-[#86868b]">{card.label}</p>
+                    )}
+                    <p className={`text-[#1d1d1f] ${isCompactPanel ? "text-[18px] text-center leading-tight" : "text-[14px]"}`}>
+                      {card.value}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
           <div className="bg-[#f5f5f7] rounded-xl p-1.5 grid grid-cols-6 gap-1">
-            {[
-              ["evidence", "Evidence"],
-              ["claims", "Claims"],
-              ["mindmap", "Mindmap"],
-              ["graph", "Graph"],
-              ["consistency", "Consistency"],
-              ["actions", "Actions"],
-            ].map(([id, label]) => (
+            {tabItems.map((item) => {
+              const Icon = item.icon;
+              return (
               <button
-                key={id}
-                onClick={() => setTab(id as InfoTab)}
-                className={`px-2 py-2 rounded-lg text-[11px] transition-colors ${
-                  tab === id ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#6e6e73]"
+                key={item.id}
+                onClick={() => setTab(item.id)}
+                aria-label={item.label}
+                title={item.label}
+                className={`rounded-lg transition-colors inline-flex items-center justify-center ${
+                  isCompactPanel ? "h-9" : "px-2 py-2 text-[11px]"
+                } ${
+                  tab === item.id ? "bg-white text-[#1d1d1f] shadow-sm" : "text-[#6e6e73]"
                 }`}
               >
-                {label}
+                {isCompactPanel ? <Icon className="w-4 h-4" aria-hidden="true" /> : item.label}
               </button>
-            ))}
+            );
+            })}
           </div>
 
           {tab === "evidence" ? (

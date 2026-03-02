@@ -14,6 +14,8 @@ from api.services.agent.tools.base import (
     ToolMetadata,
 )
 
+SCENE_SURFACE_SYSTEM = "system"
+
 
 def _as_float(value: Any) -> float | None:
     try:
@@ -79,6 +81,28 @@ def _extract_location_signal(text: str) -> str:
     return ""
 
 
+def _event(
+    *,
+    tool_id: str,
+    event_type: str,
+    title: str,
+    detail: str = "",
+    data: dict[str, Any] | None = None,
+) -> ToolTraceEvent:
+    payload = {
+        "tool_id": tool_id,
+        "scene_surface": SCENE_SURFACE_SYSTEM,
+    }
+    if isinstance(data, dict):
+        payload.update(data)
+    return ToolTraceEvent(
+        event_type=event_type,
+        title=title,
+        detail=detail,
+        data=payload,
+    )
+
+
 class DataAnalysisTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="data.dataset.analyze",
@@ -96,6 +120,8 @@ class DataAnalysisTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> ToolExecutionResult:
+        del context, prompt
+        events: list[ToolTraceEvent] = []
         csv_text = str(params.get("csv_text") or "").strip()
         rows_payload = params.get("rows")
         headers: list[str] = []
@@ -117,13 +143,34 @@ class DataAnalysisTool(AgentTool):
                 sources=[],
                 next_steps=["Attach a CSV payload or selected file rows."],
                 events=[
-                    ToolTraceEvent(
-                        event_type="tool_progress",
+                    _event(
+                        tool_id=self.metadata.tool_id,
+                        event_type="tool_failed",
                         title="Dataset missing",
                         detail="No rows or CSV text available for analysis",
+                        data={"remediation": "Provide rows or csv_text and retry."},
                     )
                 ],
             )
+        row_count = len(rows)
+        col_count = len(headers)
+        events.append(
+            _event(
+                tool_id=self.metadata.tool_id,
+                event_type="prepare_request",
+                title="Prepare dataset",
+                detail=f"Loaded {row_count} rows and {col_count} columns",
+                data={"row_count": row_count, "column_count": col_count},
+            )
+        )
+        events.append(
+            _event(
+                tool_id=self.metadata.tool_id,
+                event_type="api_call_started",
+                title="Compute numeric summaries",
+                detail="Analyzing numeric ranges and averages",
+            )
+        )
 
         numeric_stats: dict[str, dict[str, float]] = {}
         for header in headers:
@@ -136,6 +183,24 @@ class DataAnalysisTool(AgentTool):
                 "max": max(nums),
                 "avg": mean(nums),
             }
+        events.append(
+            _event(
+                tool_id=self.metadata.tool_id,
+                event_type="api_call_completed",
+                title="Compute numeric summaries completed",
+                detail=f"Analyzed {len(numeric_stats)} numeric column(s)",
+                data={"numeric_columns": len(numeric_stats)},
+            )
+        )
+        events.append(
+            _event(
+                tool_id=self.metadata.tool_id,
+                event_type="normalize_response",
+                title="Normalize analysis output",
+                detail=f"rows={row_count}, columns={col_count}",
+                data={"row_count": row_count, "column_count": col_count},
+            )
+        )
 
         stats_lines = []
         for column, stats in numeric_stats.items():
@@ -152,27 +217,23 @@ class DataAnalysisTool(AgentTool):
             + ("\n".join(stats_lines) if stats_lines else "- No numeric columns detected.")
         )
         return ToolExecutionResult(
-            summary=f"Analyzed dataset with {len(rows)} rows.",
+            summary=f"Analyzed dataset with {row_count} rows.",
             content=content,
-            data={"row_count": len(rows), "headers": headers, "stats": numeric_stats},
+            data={"row_count": row_count, "headers": headers, "stats": numeric_stats},
             sources=[],
             next_steps=[
                 "Filter by key segment and rerun summary.",
                 "Add trend windows if a date column exists.",
             ],
-            events=[
-                ToolTraceEvent(
-                    event_type="doc_open",
-                    title="Open dataset",
-                    detail=f"Loaded {len(rows)} rows and {len(headers)} columns",
-                    data={"row_count": len(rows), "column_count": len(headers)},
-                ),
-                ToolTraceEvent(
+            events=events
+            + [
+                _event(
+                    tool_id=self.metadata.tool_id,
                     event_type="tool_progress",
-                    title="Compute numeric summaries",
+                    title="Dataset analysis ready",
                     detail=f"Analyzed {len(numeric_stats)} numeric column(s)",
                     data={"numeric_columns": len(numeric_stats)},
-                ),
+                )
             ],
         )
 

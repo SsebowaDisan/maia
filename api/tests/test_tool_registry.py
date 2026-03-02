@@ -29,6 +29,10 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertIn("business.invoice_workflow", ids)
         self.assertIn("business.meeting_scheduler", ids)
         self.assertIn("business.proposal_workflow", ids)
+        self.assertIn("web.extract.structured", ids)
+        self.assertIn("web.dataset.adapter", ids)
+        self.assertIn("data.science.profile", ids)
+        self.assertIn("data.science.ml.train", ids)
 
     def test_execute_draft_tool(self) -> None:
         access = build_access_context(

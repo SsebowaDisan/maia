@@ -87,10 +87,17 @@ class AgentOrchestrator:
         has_docs = any(
             token in request.message.lower() for token in ("pdf", "document", "file", "page")
         )
+        has_web_steps = False
         for step in steps:
             expected.append("tool_started")
             expected.append("tool_completed")
-            if step.tool_id in ("marketing.web_research", "browser.playwright.inspect"):
+            if step.tool_id in (
+                "marketing.web_research",
+                "browser.playwright.inspect",
+                "web.extract.structured",
+                "web.dataset.adapter",
+            ):
+                has_web_steps = True
                 expected.extend(
                     [
                         "web_search_started",
@@ -118,6 +125,10 @@ class AgentOrchestrator:
             if has_docs and step.tool_id in (
                 "report.generate",
                 "data.dataset.analyze",
+                "data.science.profile",
+                "data.science.visualize",
+                "data.science.ml.train",
+                "data.science.deep_learning.train",
                 "invoice.create",
                 "docs.create",
                 "documents.highlight.extract",
@@ -172,6 +183,8 @@ class AgentOrchestrator:
                         "drive.go_to_sheet",
                     ]
                 )
+        if has_web_steps:
+            expected.extend(["web_kpi_summary", "web_evidence_summary", "web_release_gate"])
         return list(dict.fromkeys(expected))
 
     def _build_execution_prompt(

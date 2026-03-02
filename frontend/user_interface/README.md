@@ -1,11 +1,28 @@
+# Maia React UI
 
-  # Enhance UI/UX Design
+Primary UI for Maia. This app is served by Vite in local development and by FastAPI static hosting in packaged deployments.
 
-  This is a code bundle for Enhance UI/UX Design. The original project is available at https://www.figma.com/design/wH5OKC2tuDUfnUD711pVfK/Enhance-UI-UX-Design.
+## Local development
 
-  ## Running the code
+1. Install frontend dependencies:
+   ```bash
+   npm install
+   ```
+2. Ensure backend API is running from repo root:
+   ```bash
+   python run_api.py
+   ```
+3. Run the frontend:
+   ```bash
+   npm run dev
+   ```
 
-  Run `npm i` to install the dependencies.
+Default dev URLs:
+- UI: `http://127.0.0.1:5173`
+- API: `http://127.0.0.1:8000`
 
-  Run `npm run dev` to start the development server.
-  
+## Environment variables
+
+Use `.env.example` as the baseline:
+- `VITE_API_BASE_URL`: backend origin (defaults to `http://127.0.0.1:8000` in dev inference)
+- `VITE_USER_ID`: default user identity header for API calls

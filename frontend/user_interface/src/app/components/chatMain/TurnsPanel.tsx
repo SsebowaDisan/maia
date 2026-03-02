@@ -3,6 +3,7 @@ import { type MouseEvent as ReactMouseEvent } from "react";
 import type { AgentActivityEvent, ChatTurn } from "../../types";
 import { renderRichText } from "../../utils/richText";
 import { AgentActivityPanel } from "../AgentActivityPanel";
+import { ChatTurnPlot } from "./ChatTurnPlot";
 
 type TurnsPanelProps = {
   activityEvents: AgentActivityEvent[];
@@ -57,7 +58,8 @@ function TurnsPanel({
         const stageAttachment =
           (turn.attachments || []).find((attachment) => Boolean(attachment.fileId)) ||
           (turn.attachments || [])[0];
-        const hasAssistantOutput = Boolean(String(turn.assistant || "").trim());
+        const hasAssistantText = Boolean(String(turn.assistant || "").trim());
+        const hasAssistantOutput = hasAssistantText || Boolean(turn.plot);
 
         return (
           <div
@@ -190,25 +192,30 @@ function TurnsPanel({
             {hasAssistantOutput ? (
               <div className="flex justify-start">
                 <div className="max-w-[90%] space-y-1.5 group">
-                  <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[14px] leading-relaxed text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
-                    <div
-                      className="chat-answer-html [&_p]:mb-3 [&_p]:leading-[1.7] [&_p:last-child]:mb-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:text-[17px] [&_h3]:font-semibold [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#0a66d9] hover:[&_a]:underline [&_a.citation]:ml-1 [&_a.citation]:inline-flex [&_a.citation]:items-center [&_a.citation]:justify-center [&_a.citation]:rounded-md [&_a.citation]:bg-[#ececf0] [&_a.citation]:px-1.5 [&_a.citation]:py-0.5 [&_a.citation]:text-[11px] [&_a.citation]:font-medium [&_a.citation]:text-[#2f2f34] hover:[&_a.citation]:bg-[#e4e4e8] [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg [&_mark]:bg-[#fff5b5]"
-                      dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
-                    />
-                  </div>
+                  {hasAssistantText ? (
+                    <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[14px] leading-relaxed text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
+                      <div
+                        className="chat-answer-html [&_p]:mb-3 [&_p]:leading-[1.7] [&_p:last-child]:mb-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:text-[17px] [&_h3]:font-semibold [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#0a66d9] hover:[&_a]:underline [&_a.citation]:ml-1 [&_a.citation]:inline-flex [&_a.citation]:items-center [&_a.citation]:justify-center [&_a.citation]:rounded-md [&_a.citation]:bg-[#ececf0] [&_a.citation]:px-1.5 [&_a.citation]:py-0.5 [&_a.citation]:text-[11px] [&_a.citation]:font-medium [&_a.citation]:text-[#2f2f34] hover:[&_a.citation]:bg-[#e4e4e8] [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg [&_mark]:bg-[#fff5b5]"
+                        dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
+                      />
+                    </div>
+                  ) : null}
+                  <ChatTurnPlot plot={turn.plot} />
                   <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        stopBubbleAction(event);
-                        void copyPlainText(turn.assistant, "Assistant answer");
-                      }}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
-                      title="Copy answer"
-                    >
-                      <Copy className="w-3 h-3" />
-                      <span>Copy</span>
-                    </button>
+                    {hasAssistantText ? (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          stopBubbleAction(event);
+                          void copyPlainText(turn.assistant, "Assistant answer");
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                        title="Copy answer"
+                      >
+                        <Copy className="w-3 h-3" />
+                        <span>Copy</span>
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={(event) => {
@@ -222,17 +229,19 @@ function TurnsPanel({
                       <RotateCcw className="w-3 h-3" />
                       <span>Retry</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        stopBubbleAction(event);
-                        quoteAssistant(turn);
-                      }}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
-                      title="Quote in composer"
-                    >
-                      <span>Quote</span>
-                    </button>
+                    {hasAssistantText ? (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          stopBubbleAction(event);
+                          quoteAssistant(turn);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                        title="Quote in composer"
+                      >
+                        <span>Quote</span>
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </div>

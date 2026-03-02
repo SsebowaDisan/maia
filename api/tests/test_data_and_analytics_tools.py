@@ -5,6 +5,12 @@ from unittest.mock import patch
 from api.services.agent.tools.analytics_tools import GA4ReportTool
 from api.services.agent.tools.base import ToolExecutionContext
 from api.services.agent.tools.charts_tools import ChartGenerateTool
+from api.services.agent.tools.data_science_tools import (
+    DataScienceDeepLearningTrainTool,
+    DataScienceModelTrainTool,
+    DataScienceProfileTool,
+    DataScienceVisualizationTool,
+)
 from api.services.agent.tools.data_tools import DataAnalysisTool, ReportGenerationTool
 
 
@@ -28,6 +34,12 @@ def test_data_analysis_tool_produces_numeric_summary() -> None:
     assert "Dataset Analysis" in result.content
     assert result.data["row_count"] == 2
     assert "revenue" in result.data["stats"]
+    event_types = [event.event_type for event in result.events]
+    assert "prepare_request" in event_types
+    assert "api_call_started" in event_types
+    assert "api_call_completed" in event_types
+    assert "normalize_response" in event_types
+    _assert_phase1_event_payloads(result, "data.dataset.analyze")
 
 
 def test_report_generation_tool_persists_latest_report_context() -> None:
@@ -51,6 +63,239 @@ def test_chart_generate_tool_returns_artifact_path() -> None:
     assert "Generated" in result.summary
     assert result.data["path"]
     assert result.data["points"] == 2
+
+
+def test_data_science_profile_tool_profiles_inline_rows() -> None:
+    result = DataScienceProfileTool().execute(
+        context=_context(),
+        prompt="profile",
+        params={
+            "rows": [
+                {"revenue": 100, "cost": 40, "segment": "A"},
+                {"revenue": 220, "cost": 80, "segment": "B"},
+                {"revenue": 140, "cost": 55, "segment": "A"},
+            ]
+        },
+    )
+    assert result.data["row_count"] == 3
+    assert "revenue" in result.data["numeric_summary"]
+    assert "Data Science Profile" in result.content
+
+
+def test_data_science_visualization_tool_generates_artifact() -> None:
+    result = DataScienceVisualizationTool().execute(
+        context=_context(),
+        prompt="plot",
+        params={
+            "rows": [
+                {"revenue": 100, "cost": 40},
+                {"revenue": 220, "cost": 80},
+                {"revenue": 140, "cost": 55},
+            ],
+            "chart_type": "scatter",
+            "x": "revenue",
+            "y": "cost",
+        },
+    )
+    assert result.data["path"]
+    assert result.data["chart_type"] in {"scatter", "histogram", "line", "bar"}
+    event_types = [event.event_type for event in result.events]
+    assert "prepare_request" in event_types
+    assert "normalize_response" in event_types
+    _assert_phase1_event_payloads(result, "data.science.visualize")
+
+
+def test_data_science_visualization_validates_unknown_columns_gracefully() -> None:
+    result = DataScienceVisualizationTool().execute(
+        context=_context(),
+        prompt="plot",
+        params={
+            "rows": [
+                {"revenue": 100, "cost": 40},
+                {"revenue": 220, "cost": 80},
+            ],
+            "chart_type": "scatter",
+            "x": "missing_x",
+            "y": "cost",
+        },
+    )
+    assert result.summary == "Visualization validation failed."
+    assert result.data.get("available") is False
+    assert result.data.get("error_type") == "validation"
+    assert any("missing_x" in str(item) for item in result.data.get("validation_errors", []))
+
+
+def test_data_science_visualization_uses_llm_cleaning_plan(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.tools.data_science.quality.call_json_response",
+        lambda **kwargs: {
+            "issues": ["Numeric fields are mixed with text values."],
+            "cleaning_steps": [
+                {
+                    "operation": "coerce_numeric",
+                    "columns": ["revenue", "cost"],
+                    "reason": "Required numeric columns for plotting.",
+                },
+                {
+                    "operation": "drop_rows_with_missing",
+                    "columns": ["revenue", "cost"],
+                    "reason": "Remove rows that cannot be plotted.",
+                },
+            ],
+        },
+    )
+    result = DataScienceVisualizationTool().execute(
+        context=_context(),
+        prompt="plot",
+        params={
+            "rows": [
+                {"revenue": "100", "cost": "40"},
+                {"revenue": "N/A", "cost": "80"},
+                {"revenue": "220", "cost": "120"},
+            ],
+            "chart_type": "scatter",
+            "x": "revenue",
+            "y": "cost",
+        },
+    )
+    assert result.data.get("llm_cleaning_used") is True
+    assert isinstance(result.data.get("cleaning_applied"), list)
+    assert len(result.data.get("cleaning_applied") or []) >= 1
+    assert int(result.data.get("rows_after_cleaning") or 0) <= int(
+        result.data.get("rows_before_cleaning") or 0
+    )
+
+
+def test_data_science_visualization_autoselects_multi_series_chart(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.tools.data_science.visualization_planner.call_json_response",
+        lambda **kwargs: {
+            "chart_type": "line",
+            "x": "month",
+            "y": "revenue",
+            "y_series": ["revenue", "cost"],
+            "title": "Revenue vs Cost Trend",
+            "reasoning": "Compare monthly movement across two numeric metrics.",
+        },
+    )
+    result = DataScienceVisualizationTool().execute(
+        context=_context(),
+        prompt="analyze monthly performance with trends",
+        params={
+            "rows": [
+                {"month": "Jan", "revenue": 100, "cost": 40},
+                {"month": "Feb", "revenue": 120, "cost": 45},
+                {"month": "Mar", "revenue": 160, "cost": 60},
+            ],
+            "chart_type": "auto",
+        },
+    )
+    plot = result.data.get("plot") or {}
+    assert result.data.get("llm_visualization_plan_used") is True
+    assert plot.get("chart_type") == "line"
+    series = plot.get("series") if isinstance(plot.get("series"), list) else []
+    keys = [str(item.get("key")) for item in series if isinstance(item, dict)]
+    assert "revenue" in keys
+    assert "cost" in keys
+    points = plot.get("points") if isinstance(plot.get("points"), list) else []
+    assert points and isinstance(points[0], dict)
+    assert "revenue" in points[0]
+    assert "cost" in points[0]
+
+
+def _assert_phase1_event_payloads(result, tool_id: str) -> None:
+    for event in result.events:
+        assert event.data.get("tool_id") == tool_id
+        assert event.data.get("scene_surface") == "system"
+
+
+def test_data_science_profile_emits_phase1_event_contract() -> None:
+    result = DataScienceProfileTool().execute(
+        context=_context(),
+        prompt="profile",
+        params={
+            "rows": [
+                {"revenue": 100, "cost": 40, "segment": "A"},
+                {"revenue": 220, "cost": 80, "segment": "B"},
+                {"revenue": 140, "cost": 55, "segment": "A"},
+            ]
+        },
+    )
+    event_types = [event.event_type for event in result.events]
+    assert "prepare_request" in event_types
+    assert "api_call_started" in event_types
+    assert "api_call_completed" in event_types
+    assert "normalize_response" in event_types
+    _assert_phase1_event_payloads(result, "data.science.profile")
+
+
+def test_data_science_ml_train_tool_handles_optional_dependency() -> None:
+    result = DataScienceModelTrainTool().execute(
+        context=_context(),
+        prompt="train model",
+        params={
+            "rows": [
+                {"x1": 1.0, "x2": 3.0, "label": 0},
+                {"x1": 2.0, "x2": 5.0, "label": 0},
+                {"x1": 3.0, "x2": 7.0, "label": 1},
+                {"x1": 4.0, "x2": 8.0, "label": 1},
+                {"x1": 5.0, "x2": 9.0, "label": 1},
+                {"x1": 6.0, "x2": 10.0, "label": 1},
+                {"x1": 7.0, "x2": 11.0, "label": 1},
+                {"x1": 8.0, "x2": 12.0, "label": 1},
+                {"x1": 9.0, "x2": 13.0, "label": 1},
+                {"x1": 10.0, "x2": 14.0, "label": 1},
+                {"x1": 11.0, "x2": 15.0, "label": 1},
+                {"x1": 12.0, "x2": 16.0, "label": 1},
+                {"x1": 13.0, "x2": 17.0, "label": 1},
+                {"x1": 14.0, "x2": 18.0, "label": 1},
+                {"x1": 15.0, "x2": 19.0, "label": 1},
+                {"x1": 16.0, "x2": 20.0, "label": 1},
+                {"x1": 17.0, "x2": 21.0, "label": 1},
+                {"x1": 18.0, "x2": 22.0, "label": 1},
+                {"x1": 19.0, "x2": 23.0, "label": 1},
+                {"x1": 20.0, "x2": 24.0, "label": 1},
+            ],
+            "target": "label",
+        },
+    )
+    if result.data.get("available") is False:
+        assert "scikit-learn" in result.content
+    else:
+        assert "metrics" in result.data
+        assert result.data["target"] == "label"
+    event_types = [event.event_type for event in result.events]
+    assert "prepare_request" in event_types
+    assert "normalize_response" in event_types
+    if result.data.get("available") is False:
+        assert "tool_failed" in event_types
+    else:
+        assert "api_call_started" in event_types
+        assert "api_call_completed" in event_types
+    _assert_phase1_event_payloads(result, "data.science.ml.train")
+
+
+def test_data_science_deep_learning_tool_handles_optional_dependency() -> None:
+    rows = [{"x1": float(i), "x2": float(i * 2), "label": int(i >= 20)} for i in range(1, 60)]
+    result = DataScienceDeepLearningTrainTool().execute(
+        context=_context(),
+        prompt="train deep model",
+        params={"rows": rows, "target": "label", "epochs": 4},
+    )
+    if result.data.get("available") is False:
+        assert "torch" in result.content
+    else:
+        assert "metrics" in result.data
+        assert result.data["target"] == "label"
+    event_types = [event.event_type for event in result.events]
+    assert "prepare_request" in event_types
+    assert "normalize_response" in event_types
+    if result.data.get("available") is False:
+        assert "tool_failed" in event_types
+    else:
+        assert "api_call_started" in event_types
+        assert "api_call_completed" in event_types
+    _assert_phase1_event_payloads(result, "data.science.deep_learning.train")
 
 
 class _StubGa4Connector:
@@ -84,4 +329,3 @@ def test_ga4_report_tool_summarizes_rows() -> None:
         )
     assert result.data["row_count"] == 1
     assert "GA4 report summary" in result.content
-
