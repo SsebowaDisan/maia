@@ -7,6 +7,7 @@ import { InfoPanel } from "../components/InfoPanel";
 import { ResourcesView } from "../components/ResourcesView";
 import { SettingsView } from "../components/SettingsView";
 import { TopNav } from "../components/TopNav";
+import { getSharedMindmap } from "../../api/client";
 import {
   clearCitationDeepLinkInUrl,
   readCitationDeepLinkFromUrl,
@@ -102,14 +103,31 @@ export default function App() {
     }
     mindmapLinkHandledRef.current = true;
     const applyShare = async () => {
-      if (shared.conversationId) {
+      let sharedConversationId = shared.conversationId;
+      let sharedMap = shared.map || null;
+      if (!sharedMap && shared.shareId) {
         try {
-          await chatState.handleSelectConversation(shared.conversationId);
+          const resolved = await getSharedMindmap(shared.shareId);
+          sharedMap =
+            resolved.map && typeof resolved.map === "object"
+              ? (resolved.map as Record<string, unknown>)
+              : null;
+          sharedConversationId = resolved.conversation_id || sharedConversationId;
+        } catch {
+          sharedMap = null;
+        }
+      }
+
+      if (sharedConversationId) {
+        try {
+          await chatState.handleSelectConversation(sharedConversationId);
         } catch {
           // Continue rendering shared map even if conversation is unavailable.
         }
       }
-      setSharedMindmap(shared.map);
+      if (sharedMap) {
+        setSharedMindmap(sharedMap);
+      }
       layout.setActiveTab("Chat");
       layout.setIsInfoPanelOpen(true);
       clearMindmapShareInUrl();
@@ -192,6 +210,8 @@ export default function App() {
               onMindmapMaxDepthChange={chatState.setMindmapMaxDepth}
               mindmapIncludeReasoning={chatState.mindmapIncludeReasoning}
               onMindmapIncludeReasoningChange={chatState.setMindmapIncludeReasoning}
+              mindmapMapType={chatState.mindmapMapType}
+              onMindmapMapTypeChange={chatState.setMindmapMapType}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -224,6 +244,8 @@ export default function App() {
               onMindmapMaxDepthChange={chatState.setMindmapMaxDepth}
               mindmapIncludeReasoning={chatState.mindmapIncludeReasoning}
               onMindmapIncludeReasoningChange={chatState.setMindmapIncludeReasoning}
+              mindmapMapType={chatState.mindmapMapType}
+              onMindmapMapTypeChange={chatState.setMindmapMapType}
               agentMode={chatState.composerMode}
               onAgentModeChange={chatState.handleAgentModeChange}
               accessMode={chatState.accessMode}
@@ -268,15 +290,24 @@ export default function App() {
                 onAskMindmapNode={(node) => {
                   const focusText = String(node.text || "").trim();
                   const focusTitle = String(node.title || "").trim();
-                  const nextPrompt = focusTitle
-                    ? `Focus on "${focusTitle}" and answer the follow-up in detail.`
-                    : "Focus on the selected mind-map node and answer in detail.";
+                  const defaultPrompt = focusTitle
+                    ? `What are the most important details about "${focusTitle}"?`
+                    : "What are the most important details about this selected topic?";
+                  const typedPrompt = window.prompt(
+                    "Ask a focused follow-up for this node:",
+                    defaultPrompt,
+                  );
+                  if (typedPrompt === null) {
+                    return;
+                  }
+                  const nextPrompt = typedPrompt.trim() || defaultPrompt;
                   void chatState.handleSendMessage(nextPrompt, undefined, {
                     citationMode: chatState.citationMode,
                     useMindmap: chatState.mindmapEnabled,
                     mindmapSettings: {
                       max_depth: chatState.mindmapMaxDepth,
                       include_reasoning_map: chatState.mindmapIncludeReasoning,
+                      map_type: chatState.mindmapMapType,
                     },
                     mindmapFocus: {
                       node_id: node.nodeId,

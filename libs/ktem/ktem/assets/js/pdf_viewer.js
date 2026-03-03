@@ -25,6 +25,8 @@ function onBlockLoad() {
 
     modal.querySelector("#modal-close").onclick = function () {
       modal.style.display = "none";
+      clearBboxHighlights();
+      clearSearchHighlights();
       var info_panel = document.getElementById("html-info-panel");
       if (info_panel) {
         info_panel.style.display = "block";
@@ -53,70 +55,308 @@ function onBlockLoad() {
     };
   };
 
-  function matchRatio(str1, str2) {
-    let n = str1.length;
-    let m = str2.length;
-
-    let lcs = [];
-    for (let i = 0; i <= n; i++) {
-      lcs[i] = [];
-      for (let j = 0; j <= m; j++) {
-        lcs[i][j] = 0;
-      }
+  function clamp01(value) {
+    var numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return 0;
     }
-
-    let result = "";
-    let max = 0;
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < m; j++) {
-        if (str1[i] === str2[j]) {
-          lcs[i + 1][j + 1] = lcs[i][j] + 1;
-          if (lcs[i + 1][j + 1] > max) {
-            max = lcs[i + 1][j + 1];
-            result = str1.substring(i - max + 1, i + 1);
-          }
-        }
-      }
-    }
-
-    return result.length / Math.min(n, m);
+    return Math.max(0, Math.min(1, numeric));
   }
 
-  globalThis.compareText = (search_phrases, page_label) => {
-    var iframe = document.querySelector("#pdf-viewer").iframe;
-    var innerDoc = iframe.contentDocument
-      ? iframe.contentDocument
-      : iframe.contentWindow.document;
+  function getInnerDoc() {
+    var viewer = document.querySelector("#pdf-viewer");
+    var iframe = viewer ? viewer.iframe : null;
+    if (!iframe) {
+      return null;
+    }
+    return iframe.contentDocument ? iframe.contentDocument : iframe.contentWindow.document;
+  }
 
-    var renderedPages = innerDoc.querySelectorAll("div#viewer div.page");
-    if (renderedPages.length == 0) {
-      // if pages are not rendered yet, wait and try again
-      setTimeout(() => compareText(search_phrases, page_label), 2000);
+  function getPdfViewerApp() {
+    var innerDoc = getInnerDoc();
+    if (!innerDoc || !innerDoc.defaultView) {
+      return null;
+    }
+    var win = innerDoc.defaultView;
+    return win.PDFViewerApplication || null;
+  }
+
+  function normalizeSearchPhrase(raw) {
+    var text = String(raw || "")
+      .replace(/[\u3010\[]\d+[\u3011\]]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) {
+      return "";
+    }
+    if (text.toLowerCase() === "true" || text.toLowerCase() === "false") {
+      return "";
+    }
+    if (text.length > 360) {
+      return text.slice(0, 360);
+    }
+    return text;
+  }
+
+  function dedupePhrases(rawPhrases) {
+    var seen = new Set();
+    var out = [];
+    for (var i = 0; i < rawPhrases.length; i++) {
+      var normalized = normalizeSearchPhrase(rawPhrases[i]);
+      if (!normalized) {
+        continue;
+      }
+      var key = normalized.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      out.push(normalized);
+      if (out.length >= 12) {
+        break;
+      }
+    }
+    return out;
+  }
+
+  function parseSearchPayload(raw) {
+    var value = String(raw || "").trim();
+    if (!value) {
+      return [];
+    }
+    try {
+      var parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item || ""));
+      }
+      if (typeof parsed === "string") {
+        return [parsed];
+      }
+    } catch (_error) {
+      // Treat as plain text if payload is not JSON.
+    }
+    return value.split(/\s*\|\|\s*|\r?\n|;\s*/g).filter(Boolean);
+  }
+
+  function extractMarkedSearchPhrases(target) {
+    var terms = [];
+    var detailsNode = target.closest("details");
+    var scope = detailsNode || target.closest(".evidence") || document;
+    var marks = scope.querySelectorAll("mark");
+    for (var i = 0; i < marks.length; i++) {
+      terms.push(marks[i].textContent || "");
+      if (terms.length >= 12) {
+        break;
+      }
+    }
+    return terms;
+  }
+
+  function resolveSearchPhrases(target) {
+    var terms = [];
+    var searchAttr = target.getAttribute("data-search");
+    var phraseAttr = target.getAttribute("data-phrase");
+    terms = terms.concat(parseSearchPayload(searchAttr));
+    terms = terms.concat(parseSearchPayload(phraseAttr));
+    terms = terms.concat(extractMarkedSearchPhrases(target));
+    return dedupePhrases(terms);
+  }
+
+  function parseBboxes(raw) {
+    var payload = String(raw || "").trim();
+    if (!payload) {
+      return [];
+    }
+    payload = payload.replace(/&quot;/g, '"').replace(/&#34;/g, '"');
+    var parsed = null;
+    try {
+      parsed = JSON.parse(payload);
+    } catch (_error) {
+      return [];
+    }
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    var boxes = [];
+    for (var i = 0; i < parsed.length; i++) {
+      var row = parsed[i];
+      if (!row || typeof row !== "object") {
+        continue;
+      }
+      var x = clamp01(row.x);
+      var y = clamp01(row.y);
+      var width = Math.max(0, Math.min(1 - x, Number(row.width || 0)));
+      var height = Math.max(0, Math.min(1 - y, Number(row.height || 0)));
+      if (width < 0.002 || height < 0.002) {
+        continue;
+      }
+      boxes.push({
+        x: Number(x.toFixed(6)),
+        y: Number(y.toFixed(6)),
+        width: Number(width.toFixed(6)),
+        height: Number(height.toFixed(6)),
+      });
+      if (boxes.length >= 24) {
+        break;
+      }
+    }
+    return boxes;
+  }
+
+  function clearBboxHighlights() {
+    var innerDoc = getInnerDoc();
+    if (!innerDoc) {
+      return;
+    }
+    var layers = innerDoc.querySelectorAll(".maia-bbox-layer");
+    for (var i = 0; i < layers.length; i++) {
+      layers[i].remove();
+    }
+  }
+
+  function clearTextLayerHighlights() {
+    var innerDoc = getInnerDoc();
+    if (!innerDoc) {
+      return;
+    }
+    var highlightedNodes = innerDoc.querySelectorAll(".textLayer .highlight");
+    for (var i = 0; i < highlightedNodes.length; i++) {
+      highlightedNodes[i].classList.remove(
+        "highlight",
+        "selected",
+        "begin",
+        "middle",
+        "end",
+        "appended"
+      );
+    }
+  }
+
+  function clearSearchHighlights() {
+    clearTextLayerHighlights();
+    var app = getPdfViewerApp();
+    var eventBus = app ? app.eventBus : null;
+    if (!eventBus) {
+      return;
+    }
+    eventBus.dispatch("find", {
+      source: window,
+      type: "",
+      query: "",
+      caseSensitive: false,
+      entireWord: false,
+      highlightAll: false,
+      findPrevious: false,
+      matchDiacritics: false,
+    });
+  }
+
+  function buildFindQuery(search_phrases, phrase_search) {
+    if (!Array.isArray(search_phrases) || search_phrases.length === 0) {
+      return "";
+    }
+    var tokens = [];
+    for (var i = 0; i < search_phrases.length; i++) {
+      var phrase = normalizeSearchPhrase(search_phrases[i]);
+      if (!phrase) {
+        continue;
+      }
+      if (phrase_search) {
+        tokens.push(phrase);
+      } else {
+        tokens = tokens.concat(phrase.match(/\S+/g) || []);
+      }
+      if (tokens.length >= 16) {
+        break;
+      }
+    }
+    tokens = dedupePhrases(tokens);
+    if (tokens.length === 0) {
+      return "";
+    }
+    if (tokens.length === 1) {
+      return tokens[0];
+    }
+    return tokens;
+  }
+
+  globalThis.searchPdfText = (search_phrases, page_label, phrase_search, attempt = 0) => {
+    var app = getPdfViewerApp();
+    var eventBus = app ? app.eventBus : null;
+    if (!app || !eventBus) {
+      if (attempt < 30) {
+        setTimeout(
+          () => searchPdfText(search_phrases, page_label, phrase_search, attempt + 1),
+          180
+        );
+      }
       return;
     }
 
-    var query_selector =
-      "#viewer > div[data-page-number='" +
-      page_label +
-      "'] > div.textLayer > span";
-    var page_spans = innerDoc.querySelectorAll(query_selector);
-    for (var i = 0; i < page_spans.length; i++) {
-      var span = page_spans[i];
-      if (
-        span.textContent.length > 4 &&
-        search_phrases.some(
-          (phrase) => matchRatio(phrase, span.textContent) > 0.5
-        )
-      ) {
-        span.innerHTML =
-          "<span class='highlight selected'>" + span.textContent + "</span>";
-      } else {
-        // if span is already highlighted, remove it
-        if (span.querySelector(".highlight")) {
-          span.innerHTML = span.textContent;
-        }
+    var pageNumber = Number(page_label);
+    if (Number.isFinite(pageNumber) && pageNumber > 0) {
+      if (app.pdfLinkService && typeof app.pdfLinkService.goToPage === "function") {
+        app.pdfLinkService.goToPage(pageNumber);
+      } else if (app.pdfViewer) {
+        app.pdfViewer.currentPageNumber = pageNumber;
       }
     }
+
+    var query = buildFindQuery(search_phrases, phrase_search);
+    clearSearchHighlights();
+    if (!query || (Array.isArray(query) && query.length === 0)) {
+      return;
+    }
+
+    eventBus.dispatch("find", {
+      source: window,
+      type: "",
+      query: query,
+      caseSensitive: false,
+      entireWord: false,
+      highlightAll: true,
+      findPrevious: false,
+      matchDiacritics: false,
+    });
+  };
+
+  globalThis.renderBboxHighlights = (boxes, page_label, attempt = 0) => {
+    var innerDoc = getInnerDoc();
+    if (!innerDoc) {
+      if (attempt < 30) {
+        setTimeout(() => renderBboxHighlights(boxes, page_label, attempt + 1), 180);
+      }
+      return;
+    }
+
+    var page_selector = "#viewer > div[data-page-number='" + page_label + "']";
+    var pageNode = innerDoc.querySelector(page_selector);
+    if (!pageNode) {
+      if (attempt < 30) {
+        setTimeout(() => renderBboxHighlights(boxes, page_label, attempt + 1), 180);
+      }
+      return;
+    }
+
+    var oldLayer = pageNode.querySelector(".maia-bbox-layer");
+    if (oldLayer) {
+      oldLayer.remove();
+    }
+    pageNode.style.position = "relative";
+
+    var layer = innerDoc.createElement("div");
+    layer.className = "maia-bbox-layer";
+    for (var i = 0; i < boxes.length; i++) {
+      var box = boxes[i];
+      var rect = innerDoc.createElement("div");
+      rect.className = "maia-bbox-rect";
+      rect.style.left = box.x * 100 + "%";
+      rect.style.top = box.y * 100 + "%";
+      rect.style.width = box.width * 100 + "%";
+      rect.style.height = box.height * 100 + "%";
+      layer.appendChild(rect);
+    }
+    pageNode.appendChild(layer);
   };
 
   // Sleep function using Promise and setTimeout
@@ -130,29 +370,17 @@ function onBlockLoad() {
     var target = event.currentTarget;
     var src = target.getAttribute("data-src");
     var page = target.getAttribute("data-page");
-    var search = target.getAttribute("data-search");
-    var highlighted_spans =
-      target.parentElement.parentElement.querySelectorAll("mark");
-
-    // Get text from highlighted spans
-    var search_phrases = Array.from(highlighted_spans).map(
-      (span) => span.textContent
-    );
-    // Use regex to strip 【id】from search phrases
-    search_phrases = search_phrases.map((phrase) =>
-      phrase.replace(/【\d+】/g, "")
-    );
-
-    // var phrase = target.getAttribute("data-phrase");
+    var phrase_mode = String(target.getAttribute("data-phrase") || "").toLowerCase() !== "false";
+    var bboxes_raw = target.getAttribute("data-bboxes") || target.getAttribute("data-boxes");
+    var bboxes = parseBboxes(bboxes_raw);
+    var search_phrases = resolveSearchPhrases(target);
 
     var pdfViewer = document.getElementById("pdf-viewer");
 
-    current_src = pdfViewer.getAttribute("src");
+    var current_src = pdfViewer.getAttribute("src");
     if (current_src != src) {
       pdfViewer.setAttribute("src", src);
     }
-    // pdfViewer.setAttribute("phrase", phrase);
-    // pdfViewer.setAttribute("search", search);
     pdfViewer.setAttribute("page", page);
 
     var scrollableDiv = document.getElementById("chat-info-panel");
@@ -166,9 +394,15 @@ function onBlockLoad() {
     }
     scrollableDiv.scrollTop = 0;
 
-    /* search for text inside PDF page */
     await sleep(500);
-    compareText(search_phrases, page);
+    clearSearchHighlights();
+    if (bboxes.length > 0) {
+      clearBboxHighlights();
+      renderBboxHighlights(bboxes, page);
+    } else {
+      clearBboxHighlights();
+      searchPdfText(search_phrases, page, phrase_mode);
+    }
   };
 
   globalThis.assignPdfOnclickEvent = () => {

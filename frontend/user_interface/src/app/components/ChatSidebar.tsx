@@ -81,6 +81,8 @@ interface ChatSidebarProps {
   onMindmapMaxDepthChange: (depth: number) => void;
   mindmapIncludeReasoning: boolean;
   onMindmapIncludeReasoningChange: (enabled: boolean) => void;
+  mindmapMapType: "structure" | "evidence";
+  onMindmapMapTypeChange: (mapType: "structure" | "evidence") => void;
   width?: number;
 }
 
@@ -110,6 +112,8 @@ export function ChatSidebar({
   onMindmapMaxDepthChange,
   mindmapIncludeReasoning,
   onMindmapIncludeReasoningChange,
+  mindmapMapType,
+  onMindmapMapTypeChange,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -534,6 +538,19 @@ export function ChatSidebar({
                   {depth}
                 </option>
               ))}
+            </select>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[12px] text-[#1d1d1f]">Map type</span>
+            <select
+              value={mindmapMapType}
+              onChange={(event) =>
+                onMindmapMapTypeChange(event.target.value === "evidence" ? "evidence" : "structure")
+              }
+              className="h-7 rounded-md border border-black/[0.1] bg-white px-2 text-[11px] text-[#1d1d1f]"
+            >
+              <option value="structure">Structure</option>
+              <option value="evidence">Evidence</option>
             </select>
           </div>
         </div>

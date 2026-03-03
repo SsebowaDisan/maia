@@ -366,6 +366,9 @@ def stream_chat_turn(
         requested_mindmap_depth = int(mindmap_settings.get("max_depth", 4))
     except Exception:
         requested_mindmap_depth = 4
+    requested_map_type = str(mindmap_settings.get("map_type", "structure") or "structure").strip().lower()
+    if requested_map_type not in {"structure", "evidence"}:
+        requested_map_type = "structure"
     try:
         for response in pipeline.stream(
             message,
@@ -374,6 +377,7 @@ def stream_chat_turn(
             mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
             mindmap_max_depth=max(2, min(8, requested_mindmap_depth)),
             include_reasoning_map=bool(mindmap_settings.get("include_reasoning_map", True)),
+            mindmap_map_type=requested_map_type,
         ):
             if not isinstance(response, Document) or response.channel is None:
                 continue

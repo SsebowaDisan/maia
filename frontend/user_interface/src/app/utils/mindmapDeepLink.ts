@@ -1,3 +1,5 @@
+import { createMindmapShare } from "../../api/client";
+
 type MindmapSharePayload = {
   version: 1;
   conversationId?: string;
@@ -5,6 +7,7 @@ type MindmapSharePayload = {
 };
 
 const PARAM_KEY = "mindmap_share";
+const PARAM_SHARE_ID = "mindmap_share_id";
 
 function toBase64Url(raw: string): string {
   const bytes = new TextEncoder().encode(raw);
@@ -23,25 +26,49 @@ function fromBase64Url(raw: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-function buildMindmapShareLink(params: {
+async function buildMindmapShareLink(params: {
   map: Record<string, unknown>;
   conversationId?: string | null;
-}): string {
+  title?: string;
+}): Promise<string> {
+  const url = new URL(window.location.href);
+  const conversationId = String(params.conversationId || "").trim();
+  if (conversationId) {
+    try {
+      const shared = await createMindmapShare(conversationId, {
+        map: params.map,
+        title: params.title,
+      });
+      url.searchParams.delete(PARAM_KEY);
+      url.searchParams.set(PARAM_SHARE_ID, shared.share_id);
+      return url.toString();
+    } catch {
+      // Fallback to inline payload when share API is unavailable.
+    }
+  }
+
   const payload: MindmapSharePayload = {
     version: 1,
-    conversationId: params.conversationId || undefined,
+    conversationId: conversationId || undefined,
     map: params.map,
   };
-  const url = new URL(window.location.href);
+  url.searchParams.delete(PARAM_SHARE_ID);
   url.searchParams.set(PARAM_KEY, toBase64Url(JSON.stringify(payload)));
   return url.toString();
 }
 
 function readMindmapShareFromUrl(search: string = window.location.search): {
-  map: Record<string, unknown>;
+  map?: Record<string, unknown>;
   conversationId?: string;
+  shareId?: string;
 } | null {
   const params = new URLSearchParams(search);
+  const shareId = String(params.get(PARAM_SHARE_ID) || "").trim();
+  if (shareId) {
+    return {
+      shareId,
+    };
+  }
   const encoded = params.get(PARAM_KEY);
   if (!encoded) {
     return null;
@@ -62,10 +89,13 @@ function readMindmapShareFromUrl(search: string = window.location.search): {
 
 function clearMindmapShareInUrl(): void {
   const url = new URL(window.location.href);
-  if (!url.searchParams.has(PARAM_KEY)) {
+  const hasInline = url.searchParams.has(PARAM_KEY);
+  const hasSharedId = url.searchParams.has(PARAM_SHARE_ID);
+  if (!hasInline && !hasSharedId) {
     return;
   }
   url.searchParams.delete(PARAM_KEY);
+  url.searchParams.delete(PARAM_SHARE_ID);
   window.history.replaceState({}, "", url.toString());
 }
 
@@ -74,4 +104,3 @@ export {
   clearMindmapShareInUrl,
   readMindmapShareFromUrl,
 };
-

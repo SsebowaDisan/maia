@@ -1,26 +1,20 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from typing import Any
 
+from .evidence_map import build_evidence_map
 from .extractors import (
     MAX_DEFAULT_NODES,
-    clean_text,
-    coerce_page_label,
     crawl_website_to_graph,
-    extract_multimodal_nodes,
-    extract_page_outline,
-    first_sentences,
-    group_records_by_source,
     jaccard,
-    normalize_records,
     parse_pdf_to_tree,
-    sort_page_key,
     stable_id,
     tokenize,
     truncate,
-    utc_now_iso,
 )
+from .structure_map import build_structure_map
 
 
 def _build_reasoning_context_nodes(
@@ -79,11 +73,216 @@ def build_reasoning_map(
         )
         edges.append({"id": f"context_edge_{idx}", "source": q_node_id, "target": c_id})
         edges.append({"id": f"context_to_step_{idx}", "source": c_id, "target": "reasoning_step_1"})
-    nodes.append(
-        {"id": a_node_id, "label": truncate(answer_text or "Answer", 220), "kind": "answer"}
-    )
+    nodes.append({"id": a_node_id, "label": truncate(answer_text or "Answer", 220), "kind": "answer"})
     edges.append({"id": "reasoning_edge_answer", "source": previous, "target": a_node_id})
     return {"layout": "horizontal", "nodes": nodes, "edges": edges}
+
+
+def _build_tree_view(payload: dict[str, Any]) -> dict[str, Any]:
+    nodes = payload.get("nodes", [])
+    edges = payload.get("edges", [])
+    root_id = str(payload.get("root_id", "") or "")
+    if not isinstance(nodes, list) or not isinstance(edges, list) or not root_id:
+        return {}
+
+    node_by_id = {str(node.get("id", "")): node for node in nodes if isinstance(node, dict)}
+    children_by_parent: dict[str, list[str]] = defaultdict(list)
+    cross_links_by_node: dict[str, list[str]] = defaultdict(list)
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if not source or not target:
+            continue
+        edge_type = str(edge.get("type", "") or "")
+        if edge_type == "hierarchy":
+            children_by_parent[source].append(target)
+        else:
+            cross_links_by_node[source].append(target)
+
+    visited: set[str] = set()
+
+    def build_node(node_id: str) -> dict[str, Any]:
+        node = node_by_id.get(node_id, {})
+        if node_id in visited:
+            return {
+                "id": node_id,
+                "title": str(node.get("title", node_id)),
+                "type": str(node.get("type") or node.get("node_type") or "structure"),
+                "children": [],
+                "crossLinks": [],
+            }
+        visited.add(node_id)
+        children = [build_node(child_id) for child_id in children_by_parent.get(node_id, [])]
+        return {
+            "id": node_id,
+            "title": str(node.get("title", node_id)),
+            "text": str(node.get("text", "")),
+            "page": str(node.get("page") or node.get("page_ref") or ""),
+            "type": str(node.get("type") or node.get("node_type") or "structure"),
+            "children": children,
+            "crossLinks": cross_links_by_node.get(node_id, []),
+        }
+
+    return build_node(root_id)
+
+
+def compute_balanced_tree_layout(
+    *,
+    root_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    max_depth: int = 4,
+    depth_gap: int = 240,
+    leaf_gap: int = 120,
+) -> dict[str, dict[str, float]]:
+    node_ids = {str(node.get("id", "")) for node in nodes if isinstance(node, dict)}
+    if root_id not in node_ids:
+        return {}
+
+    children_by_parent: dict[str, list[str]] = defaultdict(list)
+    depth_map: dict[str, int] = {root_id: 0}
+    for edge in edges:
+        if str(edge.get("type", "")) not in {"", "hierarchy"}:
+            continue
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if not source or not target or source not in node_ids or target not in node_ids:
+            continue
+        children_by_parent[source].append(target)
+    queue = [root_id]
+    while queue:
+        current = queue.pop(0)
+        for child in children_by_parent.get(current, []):
+            if child in depth_map:
+                continue
+            depth_map[child] = depth_map[current] + 1
+            queue.append(child)
+
+    side_by_node: dict[str, str] = {root_id: "center"}
+    top_children = children_by_parent.get(root_id, [])
+    for idx, child in enumerate(top_children):
+        side_by_node[child] = "left" if idx % 2 == 0 else "right"
+    walk_queue = list(top_children)
+    while walk_queue:
+        current = walk_queue.pop(0)
+        current_side = side_by_node.get(current, "right")
+        for child in children_by_parent.get(current, []):
+            side_by_node[child] = current_side
+            walk_queue.append(child)
+
+    def count_leaves(node_id: str) -> int:
+        if depth_map.get(node_id, max_depth + 1) >= max_depth:
+            return 1
+        children = [child for child in children_by_parent.get(node_id, []) if depth_map.get(child, max_depth + 1) <= max_depth]
+        if not children:
+            return 1
+        return sum(count_leaves(child) for child in children)
+
+    left_leaf_count = sum(count_leaves(child) for child in top_children if side_by_node.get(child) == "left")
+    right_leaf_count = sum(count_leaves(child) for child in top_children if side_by_node.get(child) == "right")
+    leaf_cursor = {
+        "left": -((max(0, left_leaf_count - 1) * leaf_gap) / 2.0),
+        "right": -((max(0, right_leaf_count - 1) * leaf_gap) / 2.0),
+    }
+    positions: dict[str, dict[str, float]] = {root_id: {"x": 0.0, "y": 0.0}}
+
+    def place(node_id: str) -> float:
+        side = side_by_node.get(node_id, "right")
+        depth = depth_map.get(node_id, 1)
+        x = float((-1 if side == "left" else 1) * depth * depth_gap)
+        children = [child for child in children_by_parent.get(node_id, []) if depth_map.get(child, max_depth + 1) <= max_depth]
+        if not children or depth >= max_depth:
+            y = float(leaf_cursor[side])
+            leaf_cursor[side] += float(leaf_gap)
+            positions[node_id] = {"x": x, "y": y}
+            return y
+        child_y = [place(child) for child in children]
+        y = float(sum(child_y) / max(1, len(child_y)))
+        positions[node_id] = {"x": x, "y": y}
+        return y
+
+    for child in top_children:
+        if depth_map.get(child, max_depth + 1) > max_depth:
+            continue
+        place(child)
+    return positions
+
+
+def parse_pdf_structure(
+    pdf_file: str,
+    *,
+    max_depth: int = 4,
+    node_limit: int = MAX_DEFAULT_NODES,
+) -> dict[str, Any]:
+    payload = parse_pdf_to_tree(pdf_file, max_depth=max_depth, node_limit=node_limit)
+    payload["map_type"] = "structure"
+    payload["tree"] = _build_tree_view(payload)
+    return payload
+
+
+def crawl_web(
+    urls: list[str] | str,
+    *,
+    max_pages: int = 8,
+    same_domain_only: bool = True,
+    timeout_seconds: int = 8,
+) -> dict[str, Any]:
+    targets = [urls] if isinstance(urls, str) else [str(item) for item in (urls or []) if str(item).strip()]
+    merged_nodes: list[dict[str, Any]] = []
+    merged_edges: list[dict[str, Any]] = []
+    root_id = ""
+    seen_nodes: set[str] = set()
+    seen_edges: set[str] = set()
+
+    for idx, url in enumerate(targets):
+        graph = crawl_website_to_graph(
+            url,
+            max_pages=max_pages,
+            same_domain_only=same_domain_only,
+            timeout_seconds=timeout_seconds,
+        )
+        nodes = graph.get("nodes", [])
+        edges = graph.get("edges", [])
+        if idx == 0:
+            root_id = str(graph.get("root_id", "") or "")
+        for node in nodes if isinstance(nodes, list) else []:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id", ""))
+            if not node_id or node_id in seen_nodes:
+                continue
+            seen_nodes.add(node_id)
+            node["type"] = "structure"
+            merged_nodes.append(node)
+        for edge in edges if isinstance(edges, list) else []:
+            if not isinstance(edge, dict):
+                continue
+            edge_id = str(edge.get("id", "") or f"{edge.get('source')}->{edge.get('target')}")
+            if edge_id in seen_edges:
+                continue
+            seen_edges.add(edge_id)
+            merged_edges.append(edge)
+
+    payload = {
+        "version": 2,
+        "map_type": "structure",
+        "kind": "graph",
+        "title": "Website structure map",
+        "root_id": root_id or (merged_nodes[0]["id"] if merged_nodes else ""),
+        "nodes": merged_nodes,
+        "edges": merged_edges,
+    }
+    payload["tree"] = _build_tree_view(payload)
+    return payload
+
+
+def _sanitize_map_type(map_type: str) -> str:
+    value = " ".join(str(map_type or "").split()).strip().lower()
+    if value in {"evidence", "citation", "claims"}:
+        return "evidence"
+    return "structure"
 
 
 def build_knowledge_map(
@@ -97,252 +296,67 @@ def build_knowledge_map(
     source_type_hint: str = "",
     focus: dict[str, Any] | None = None,
     node_limit: int = MAX_DEFAULT_NODES,
+    map_type: str = "structure",
 ) -> dict[str, Any]:
-    max_depth = max(1, min(8, int(max_depth)))
-    node_limit = max(32, min(800, int(node_limit)))
-    records = normalize_records(documents)
-    focus_payload = dict(focus or {})
-    map_title = truncate(question or "Knowledge map", 120) or "Knowledge map"
-
-    root_id = stable_id(map_title, prefix="root")
-    root_node = {
-        "id": root_id,
-        "title": map_title,
-        "text": truncate(context, 260),
-        "node_type": "root",
-        "children": [],
-        "related": [],
-        "focus": bool(focus_payload),
-    }
-    nodes: list[dict[str, Any]] = [root_node]
-    edges: list[dict[str, Any]] = []
-
-    source_groups = group_records_by_source(records)
-    if not source_groups and context.strip():
-        source_groups = {
-            "context": [
-                {
-                    "doc_id": "context",
-                    "source_id": "context",
-                    "source_name": "Context",
-                    "page_label": "",
-                    "text": context,
-                    "unit_id": "",
-                    "url": "",
-                    "media_type": "text",
-                    "image_origin": None,
-                    "links": [],
-                    "metadata": {},
-                }
-            ]
-        }
-
-    website_source_count = 0
-    pdf_source_count = 0
-
-    for source_id, rows in source_groups.items():
-        source_name = rows[0].get("source_name", "Indexed source")
-        source_url = clean_text(rows[0].get("url", ""))
-        is_web = bool(source_url or str(source_name).startswith(("http://", "https://")))
-        is_pdf = str(source_name).lower().endswith(".pdf")
-        website_source_count += 1 if is_web else 0
-        pdf_source_count += 1 if is_pdf else 0
-
-        source_node_id = stable_id(f"{source_id}|{source_name}", prefix="src")
-        source_node = {
-            "id": source_node_id,
-            "title": truncate(source_name, 120),
-            "text": truncate(" ".join(row["text"] for row in rows[:3]), 240),
-            "source_id": source_id,
-            "source_name": source_name,
-            "node_type": "web_source" if is_web else "source",
-            "children": [],
-            "related": [],
-        }
-        nodes.append(source_node)
-        root_node["children"].append(source_node_id)
-        edges.append(
-            {
-                "id": stable_id(f"{root_id}->{source_node_id}", prefix="edge"),
-                "source": root_id,
-                "target": source_node_id,
-                "type": "hierarchy",
-            }
+    selected_map_type = _sanitize_map_type(map_type)
+    focus_payload = focus if isinstance(focus, dict) else {}
+    if selected_map_type == "evidence":
+        payload = build_evidence_map(
+            question=question,
+            context=context,
+            documents=documents,
+            answer_text=answer_text,
+            max_depth=max_depth,
+            focus=focus_payload,
+            node_limit=node_limit,
+        )
+        alternate = build_structure_map(
+            question=question,
+            context=context,
+            documents=documents,
+            max_depth=max_depth,
+            source_type_hint=source_type_hint,
+            focus=focus_payload,
+            node_limit=node_limit,
+        )
+    else:
+        payload = build_structure_map(
+            question=question,
+            context=context,
+            documents=documents,
+            max_depth=max_depth,
+            source_type_hint=source_type_hint,
+            focus=focus_payload,
+            node_limit=node_limit,
+        )
+        alternate = build_evidence_map(
+            question=question,
+            context=context,
+            documents=documents,
+            answer_text=answer_text,
+            max_depth=max_depth,
+            focus=focus_payload,
+            node_limit=node_limit,
         )
 
-        page_groups: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            page_groups.setdefault(row.get("page_label", ""), []).append(row)
-        sorted_pages = sorted(page_groups.keys(), key=sort_page_key) or [""]
-        if not sorted_pages:
-            sorted_pages = [""]
-        for page_label in sorted_pages:
-            page_rows = page_groups.get(page_label, rows)
-            page_node_id = stable_id(
-                f"{source_node_id}|page|{page_label or 'na'}",
-                prefix="page",
-            )
-            page_title = f"Page {page_label}" if page_label else "Section"
-            page_text = " ".join(row.get("text", "") for row in page_rows[:4])
-            page_node = {
-                "id": page_node_id,
-                "title": truncate(page_title, 80),
-                "text": truncate(page_text, 240),
-                "source_id": source_id,
-                "source_name": source_name,
-                "page_ref": page_label or None,
-                "node_type": "page",
-                "children": [],
-                "related": [],
-            }
-            nodes.append(page_node)
-            source_node["children"].append(page_node_id)
-            edges.append(
-                {
-                    "id": stable_id(f"{source_node_id}->{page_node_id}", prefix="edge"),
-                    "source": source_node_id,
-                    "target": page_node_id,
-                    "type": "hierarchy",
-                }
-            )
-
-            outline = extract_page_outline(page_text, max_depth=max_depth)
-            if not outline:
-                for idx, sentence in enumerate(first_sentences(page_text, limit=3), start=1):
-                    leaf_id = stable_id(f"{page_node_id}|s|{idx}|{sentence}", prefix="leaf")
-                    nodes.append(
-                        {
-                            "id": leaf_id,
-                            "title": truncate(sentence, 120),
-                            "text": truncate(sentence, 220),
-                            "source_id": source_id,
-                            "source_name": source_name,
-                            "page_ref": page_label or None,
-                            "node_type": "excerpt",
-                            "children": [],
-                            "related": [],
-                        }
-                    )
-                    page_node["children"].append(leaf_id)
-                    edges.append(
-                        {
-                            "id": stable_id(f"{page_node_id}->{leaf_id}", prefix="edge"),
-                            "source": page_node_id,
-                            "target": leaf_id,
-                            "type": "hierarchy",
-                        }
-                    )
-                continue
-
-            level_parent: dict[int, str] = {1: page_node_id}
-            for idx, outline_row in enumerate(outline, start=1):
-                level = max(1, min(max_depth, int(outline_row.get("level", 1) or 1)))
-                parent_id = level_parent.get(max(1, level - 1), page_node_id)
-                node_type = "bullet" if outline_row.get("kind") == "bullet" else "section"
-                child_id = stable_id(
-                    f"{page_node_id}|{idx}|{outline_row.get('title','')}",
-                    prefix="sec",
-                )
-                nodes.append(
-                    {
-                        "id": child_id,
-                        "title": truncate(outline_row.get("title", ""), 120),
-                        "text": truncate(outline_row.get("title", ""), 220),
-                        "source_id": source_id,
-                        "source_name": source_name,
-                        "page_ref": page_label or None,
-                        "node_type": node_type,
-                        "children": [],
-                        "related": [],
-                    }
-                )
-                edges.append(
-                    {
-                        "id": stable_id(f"{parent_id}->{child_id}", prefix="edge"),
-                        "source": parent_id,
-                        "target": child_id,
-                        "type": "hierarchy",
-                    }
-                )
-                for node in nodes:
-                    if node["id"] == parent_id:
-                        node.setdefault("children", []).append(child_id)
-                        break
-                level_parent[level] = child_id
-
-    multimodal_nodes = extract_multimodal_nodes(records, max_nodes=24)
-    id_to_node = {node["id"]: node for node in nodes}
-    for asset in multimodal_nodes:
-        if len(nodes) >= node_limit:
-            break
-        nodes.append(asset)
-        source_id = asset.get("source_id", "")
-        page_ref = coerce_page_label(asset.get("page_ref", ""))
-        attach_target = ""
-        for node in nodes:
-            if node.get("node_type") == "page" and node.get("source_id") == source_id:
-                if not page_ref or coerce_page_label(node.get("page_ref")) == page_ref:
-                    attach_target = str(node.get("id", ""))
-                    break
-        if not attach_target:
-            for node in nodes:
-                if node.get("node_type") in {"source", "web_source"} and node.get("source_id") == source_id:
-                    attach_target = str(node.get("id", ""))
-                    break
-        if attach_target:
-            edges.append(
-                {
-                    "id": stable_id(f"{attach_target}->{asset['id']}", prefix="edge"),
-                    "source": attach_target,
-                    "target": asset["id"],
-                    "type": "hierarchy",
-                }
-            )
-            id_to_node.get(attach_target, {}).setdefault("children", []).append(asset["id"])
-
-    if len(nodes) > node_limit:
-        allowed_ids = {node["id"] for node in nodes[:node_limit]}
-        nodes = [node for node in nodes if node["id"] in allowed_ids]
-        edges = [
-            edge
-            for edge in edges
-            if edge.get("source") in allowed_ids and edge.get("target") in allowed_ids
-        ]
-
-    context_nodes = _build_reasoning_context_nodes(nodes, question=question, answer_text=answer_text)
-
-    map_kind = "tree"
-    if website_source_count > 0 and pdf_source_count > 0:
-        map_kind = "hybrid"
-    elif website_source_count > 0 and pdf_source_count == 0:
-        map_kind = "graph"
-    if source_type_hint.lower() in {"web", "website", "graph"}:
-        map_kind = "graph"
-    if source_type_hint.lower() in {"pdf", "tree"}:
-        map_kind = "tree"
-
-    payload: dict[str, Any] = {
-        "version": 1,
-        "kind": map_kind,
-        "title": map_title,
-        "root_id": root_id,
-        "nodes": nodes,
-        "edges": edges,
-        "settings": {
-            "max_depth": max_depth,
-            "include_reasoning_map": bool(include_reasoning_map),
-            "focus": focus_payload,
+    payload["map_type"] = selected_map_type
+    payload.setdefault("settings", {})
+    payload["settings"]["map_type"] = selected_map_type
+    payload["tree"] = _build_tree_view(payload)
+    alt_key = "evidence" if selected_map_type == "structure" else "structure"
+    payload["variants"] = {
+        alt_key: {
+            **alternate,
+            "tree": _build_tree_view(alternate),
         },
-        "source_summary": {
-            "source_count": len(source_groups),
-            "pdf_sources": pdf_source_count,
-            "website_sources": website_source_count,
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-        },
-        "created_at": utc_now_iso(),
     }
+
     if include_reasoning_map:
+        context_nodes = _build_reasoning_context_nodes(
+            list(payload.get("nodes", [])),
+            question=question,
+            answer_text=answer_text,
+        )
         payload["reasoning_map"] = build_reasoning_map(
             question=question,
             answer_text=answer_text,
@@ -353,4 +367,3 @@ def build_knowledge_map(
 
 def serialize_map_payload(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
-

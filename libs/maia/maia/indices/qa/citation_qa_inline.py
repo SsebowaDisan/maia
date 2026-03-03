@@ -14,6 +14,10 @@ from .citation_qa import (
     AnswerWithContextPipeline,
     _compute_span_strength,
 )
+from .highlight_boxes import (
+    extract_highlight_boxes_from_metadata,
+    merge_adjacent_highlight_boxes,
+)
 from .format_context import EVIDENCE_MODE_FIGURE
 from .utils import find_start_end_phrase, find_start_end_phrase_fuzzy
 
@@ -299,6 +303,7 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
                     include_reasoning_map=kwargs.get("include_reasoning_map", True),
                     source_type_hint=kwargs.get("mindmap_source_type_hint", ""),
                     focus=kwargs.get("mindmap_focus", {}),
+                    map_type=kwargs.get("mindmap_map_type", "structure"),
                 )
             except Exception as exc:
                 print("Mindmap generation failed:", exc)
@@ -382,6 +387,13 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
                         span_text=span_text,
                         is_exact_match=(best_match_quality == "exact"),
                     )
+                highlight_boxes = (
+                    merge_adjacent_highlight_boxes(
+                        extract_highlight_boxes_from_metadata((matched_doc.metadata or {}) if matched_doc else {})
+                    )
+                    if matched_doc is not None
+                    else []
+                )
                 spans[best_match_doc_idx].append(
                     {
                         "start": best_match[0],
@@ -391,6 +403,7 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
                         "unit_id": str((matched_doc.metadata or {}).get("unit_id", "") or "")
                         if matched_doc is not None
                         else "",
+                        "highlight_boxes": highlight_boxes,
                         "match_quality": best_match_quality,
                         "idx": evidence_idx,
                         "is_exact_match": bool(best_match_quality == "exact"),

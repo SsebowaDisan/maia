@@ -16,6 +16,16 @@ type ConversationDetail = ConversationSummary & {
   };
 };
 
+type MindmapShareResponse = {
+  share_id: string;
+  conversation_id: string;
+  title: string;
+  date_created: string;
+  map: Record<string, unknown>;
+};
+
+type MindmapPayloadResponse = Record<string, unknown>;
+
 type AgentActionRecord = {
   tool_id: string;
   action_class: "read" | "draft" | "execute";
@@ -233,6 +243,8 @@ export type {
   IndexSelection,
   IngestionJob,
   MoveFilesToGroupResponse,
+  MindmapPayloadResponse,
+  MindmapShareResponse,
   SourceUsageRecord,
   UploadItem,
   UploadResponse,

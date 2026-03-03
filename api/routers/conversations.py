@@ -7,6 +7,8 @@ from api.schemas import (
     ConversationDetail,
     ConversationSummary,
     ConversationUpdateRequest,
+    MindmapShareCreateRequest,
+    MindmapShareResponse,
 )
 from api.services import conversation_service
 
@@ -29,6 +31,11 @@ def create_conversation(
         name=payload.name,
         is_public=payload.is_public,
     )
+
+
+@router.get("/mindmaps/shared/{share_id}", response_model=MindmapShareResponse)
+def get_shared_mindmap(share_id: str):
+    return conversation_service.get_mindmap_share(share_id=share_id)
 
 
 @router.get("/{conversation_id}", response_model=ConversationDetail)
@@ -56,6 +63,23 @@ def update_conversation(
     )
 
 
+@router.post(
+    "/{conversation_id}/mindmaps/share",
+    response_model=MindmapShareResponse,
+)
+def create_mindmap_share(
+    conversation_id: str,
+    payload: MindmapShareCreateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    return conversation_service.create_mindmap_share(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        mindmap=payload.map,
+        title=payload.title,
+    )
+
+
 @router.delete("/{conversation_id}")
 def delete_conversation(
     conversation_id: str,
@@ -66,4 +90,3 @@ def delete_conversation(
         conversation_id=conversation_id,
     )
     return {"status": "deleted"}
-

@@ -5,6 +5,8 @@ import type {
   ConversationDetail,
   ConversationSummary,
   IndexSelection,
+  MindmapPayloadResponse,
+  MindmapShareResponse,
 } from "./types";
 
 function listConversations() {
@@ -40,6 +42,69 @@ function updateConversation(
 function deleteConversation(conversationId: string) {
   return request<{ status: string }>(`/api/conversations/${conversationId}`, {
     method: "DELETE",
+  });
+}
+
+function createMindmapShare(
+  conversationId: string,
+  payload: {
+    map: Record<string, unknown>;
+    title?: string;
+  },
+) {
+  return request<MindmapShareResponse>(
+    `/api/conversations/${encodeURIComponent(conversationId)}/mindmaps/share`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        map: payload.map,
+        title: payload.title || undefined,
+      }),
+    },
+  );
+}
+
+function getSharedMindmap(shareId: string) {
+  return request<MindmapShareResponse>(
+    `/api/conversations/mindmaps/shared/${encodeURIComponent(shareId)}`,
+  );
+}
+
+function getMindmapBySource(options: {
+  sourceId: string;
+  mapType?: "structure" | "evidence";
+  maxDepth?: number;
+  includeReasoningMap?: boolean;
+}) {
+  const query = new URLSearchParams({
+    sourceId: options.sourceId,
+    mapType: options.mapType || "structure",
+    maxDepth: String(options.maxDepth ?? 4),
+    includeReasoningMap: String(options.includeReasoningMap ?? true),
+  });
+  return request<MindmapPayloadResponse>(`/api/mindmap?${query.toString()}`);
+}
+
+function exportMindmapMarkdown(options: {
+  sourceId: string;
+  mapType?: "structure" | "evidence";
+  maxDepth?: number;
+  includeReasoningMap?: boolean;
+}) {
+  const query = new URLSearchParams({
+    sourceId: options.sourceId,
+    mapType: options.mapType || "structure",
+    maxDepth: String(options.maxDepth ?? 4),
+    includeReasoningMap: String(options.includeReasoningMap ?? true),
+  });
+  return fetchApi(`/api/mindmap/export/markdown?${query.toString()}`).then((response) => {
+    if (!response.ok) {
+      return response.text().then((text) => {
+        throw new Error(text || `Request failed: ${response.status}`);
+      });
+    }
+    return response.text();
   });
 }
 
@@ -226,8 +291,12 @@ async function sendChatStream(
 }
 
 export {
+  createMindmapShare,
   createConversation,
   deleteConversation,
+  exportMindmapMarkdown,
+  getMindmapBySource,
+  getSharedMindmap,
   getConversation,
   listConversations,
   sendChat,

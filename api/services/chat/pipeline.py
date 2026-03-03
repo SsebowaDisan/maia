@@ -126,6 +126,11 @@ def create_pipeline(
             effective_settings["reasoning.options.simple.include_reasoning_map"] = bool(
                 request.mindmap_settings.get("include_reasoning_map")
             )
+        if "map_type" in request.mindmap_settings:
+            parsed_map_type = str(request.mindmap_settings.get("map_type", "structure") or "structure").strip().lower()
+            if parsed_map_type not in {"structure", "evidence"}:
+                parsed_map_type = "structure"
+            effective_settings["reasoning.options.simple.mindmap_map_type"] = parsed_map_type
 
     configured_citation_mode = effective_settings.get("reasoning.options.simple.highlight_citation")
     citation_mode_input = request.citation

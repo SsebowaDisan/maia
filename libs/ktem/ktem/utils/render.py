@@ -1,9 +1,16 @@
 import os
+import json
+from html import escape
 
 import markdown
 from fast_langdetect import detect
 
 from maia.base import RetrievedDocument
+from maia.indices.qa.highlight_boxes import (
+    extract_highlight_boxes_from_metadata,
+    merge_adjacent_highlight_boxes,
+    normalize_highlight_boxes,
+)
 
 BASE_PATH = os.environ.get("GR_FILE_ROOT_PATH", "")
 
@@ -76,6 +83,7 @@ class Render:
         html_content: str,
         doc: RetrievedDocument,
         highlight_text: str | None = None,
+        highlight_boxes: list[dict[str, float]] | None = None,
     ) -> str:
         text = doc.content
         pdf_path = doc.metadata.get("file_path", "")
@@ -95,31 +103,47 @@ class Render:
             print("Fail to extract page number")
             return html_content
 
+        resolved_boxes = normalize_highlight_boxes(highlight_boxes or [])
+        if not resolved_boxes:
+            resolved_boxes = merge_adjacent_highlight_boxes(
+                extract_highlight_boxes_from_metadata(doc.metadata or {})
+            )
+
+        phrase = "true"
         if not highlight_text:
             try:
-                lang = detect(text.replace("\n", " "))["lang"]
-                if lang not in ["ja", "cn"]:
-                    highlight_words = [
-                        t[:-1] if t.endswith("-") else t for t in text.split("\n")
-                    ]
-                    highlight_text = highlight_words[0]
-                    phrase = "true"
-                else:
-                    phrase = "false"
+                lang = str(detect(text.replace("\n", " "))["lang"]).strip().lower()
+                phrase = "false" if lang in {"ja", "cn", "zh"} else "true"
+            except Exception as exc:
+                print(exc)
+                phrase = "true"
 
-                highlight_text = (
-                    text.replace("\n", "").replace('"', "").replace("'", "")
-                )
-            except Exception as e:
-                print(e)
-                highlight_text = text
-        else:
-            phrase = "true"
+            text_lines = [line.strip() for line in str(text).splitlines() if line.strip()]
+            if phrase == "true":
+                highlight_text = text_lines[0] if text_lines else str(text).strip()
+            else:
+                joined = " ".join(text_lines) if text_lines else str(text).strip()
+                highlight_text = joined[:120]
+
+        safe_pdf_src = escape(f"{BASE_PATH}/file={pdf_path}", quote=True)
+        safe_search = escape(str(highlight_text or "").replace("\n", " "), quote=True)
+        if len(safe_search) > 360:
+            safe_search = safe_search[:360]
+
+        if resolved_boxes:
+            payload = json.dumps(resolved_boxes, ensure_ascii=True, separators=(",", ":"))
+            safe_boxes = escape(payload, quote=True)
+            return f"""
+            {html_content}
+            <a href="#" class="pdf-link" data-src="{safe_pdf_src}" data-page="{page_idx}" data-search="{safe_search}" data-boxes="{safe_boxes}" data-bboxes="{safe_boxes}" data-phrase="{phrase}">
+                See in PDF
+            </a>
+            """  # noqa
 
         return f"""
         {html_content}
-        <a href="#" class="pdf-link" data-src="{BASE_PATH}/file={pdf_path}" data-page="{page_idx}" data-search="{highlight_text}" data-phrase="{phrase}">
-            [Preview]
+        <a href="#" class="pdf-link" data-src="{safe_pdf_src}" data-page="{page_idx}" data-search="{safe_search}" data-phrase="{phrase}">
+            See in PDF
         </a>
         """  # noqa
 
@@ -162,6 +186,7 @@ class Render:
         doc: RetrievedDocument,
         override_text: str | None = None,
         highlight_text: str | None = None,
+        highlight_boxes: list[dict[str, float]] | None = None,
         open_collapsible: bool = False,
     ) -> str:
         """Format the retrieval score and the document"""
@@ -225,6 +250,7 @@ class Render:
             f" [score: {llm_reranking_score}]",
             doc,
             highlight_text=highlight_text,
+            highlight_boxes=highlight_boxes,
         )
         rendered_doc_content = (
             f"<div class='evidence-content'>{rendered_doc_content}</div>"

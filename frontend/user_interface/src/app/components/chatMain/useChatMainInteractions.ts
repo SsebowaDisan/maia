@@ -16,6 +16,7 @@ type UseChatMainInteractionsParams = Pick<
   | "mindmapEnabled"
   | "mindmapMaxDepth"
   | "mindmapIncludeReasoning"
+  | "mindmapMapType"
   | "isSending"
   | "onAccessModeChange"
   | "onAgentModeChange"
@@ -34,6 +35,7 @@ function useChatMainInteractions({
   mindmapEnabled,
   mindmapMaxDepth,
   mindmapIncludeReasoning,
+  mindmapMapType,
   isSending,
   onAccessModeChange,
   onAgentModeChange,
@@ -155,6 +157,7 @@ function useChatMainInteractions({
       mindmapSettings: {
         max_depth: mindmapMaxDepth,
         include_reasoning_map: mindmapIncludeReasoning,
+        map_type: mindmapMapType,
       },
       agentMode,
       accessMode,
@@ -222,6 +225,7 @@ function useChatMainInteractions({
       mindmapSettings: {
         max_depth: mindmapMaxDepth,
         include_reasoning_map: mindmapIncludeReasoning,
+        map_type: mindmapMapType,
       },
       agentMode,
       accessMode,

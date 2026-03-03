@@ -1,8 +1,13 @@
+import datetime
+import uuid
+
 import ktem.db.base_models as base_models
 from ktem.db.engine import engine
-from sqlmodel import SQLModel
+from sqlalchemy import JSON, Column
+from sqlmodel import Field, SQLModel
 from theflow.settings import settings
 from theflow.utils.modules import import_dotted_string
+from tzlocal import get_localzone
 
 _base_conv = (
     import_dotted_string(settings.KH_TABLE_CONV, safe=False)
@@ -43,6 +48,29 @@ class Settings(_base_settings, table=True):  # type: ignore
 
 class IssueReport(_base_issue_report, table=True):  # type: ignore
     """Record of issues"""
+
+
+class MindmapShare(SQLModel, table=True):
+    """Shared mind-map payload for cross-user links."""
+
+    __table_args__ = {"extend_existing": True}
+
+    id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex, primary_key=True, index=True
+    )
+    share_id: str = Field(
+        default_factory=lambda: uuid.uuid4().hex[:16], index=True, unique=True
+    )
+    conversation_id: str = Field(default="", index=True)
+    user: str = Field(default="", index=True)
+    title: str = Field(default="Mind-map")
+    payload: dict = Field(default={}, sa_column=Column(JSON))
+    date_created: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(get_localzone())
+    )
+    date_updated: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(get_localzone())
+    )
 
 
 if not getattr(settings, "KH_ENABLE_ALEMBIC", False):

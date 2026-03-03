@@ -22,6 +22,10 @@ from .format_context import (
     EVIDENCE_MODE_TABLE,
     EVIDENCE_MODE_TEXT,
 )
+from .highlight_boxes import (
+    extract_highlight_boxes_from_metadata,
+    merge_adjacent_highlight_boxes,
+)
 from .utils import find_start_end_phrase_fuzzy, find_text, find_text_fuzzy
 
 try:
@@ -334,6 +338,7 @@ class AnswerWithContextPipeline(BaseComponent):
                     include_reasoning_map=kwargs.get("include_reasoning_map", True),
                     source_type_hint=kwargs.get("mindmap_source_type_hint", ""),
                     focus=kwargs.get("mindmap_focus", {}),
+                    map_type=kwargs.get("mindmap_map_type", "structure"),
                 )
             except Exception as exc:
                 print("Mindmap generation failed:", exc)
@@ -354,6 +359,7 @@ class AnswerWithContextPipeline(BaseComponent):
     def match_evidence_with_context(self, answer, docs) -> dict[str, list[dict]]:
         """Match the evidence with the context"""
         spans: dict[str, list[dict]] = defaultdict(list)
+        doc_boxes_by_id: dict[str, list[dict[str, float]]] = {}
 
         if not answer.metadata["citation"]:
             return spans
@@ -372,6 +378,11 @@ class AnswerWithContextPipeline(BaseComponent):
 
             for doc in docs:
                 doc_text = str(doc.text or "")
+                doc_id = str(doc.doc_id)
+                if doc_id not in doc_boxes_by_id:
+                    doc_boxes_by_id[doc_id] = merge_adjacent_highlight_boxes(
+                        extract_highlight_boxes_from_metadata(getattr(doc, "metadata", {}) or {})
+                    )
                 matches = find_text(quote, doc_text) if quote else []
                 match_quality = "exact"
                 if not matches and start_phrase and end_phrase:
@@ -403,6 +414,7 @@ class AnswerWithContextPipeline(BaseComponent):
                                 "char_start": start,
                                 "char_end": end,
                                 "unit_id": str((doc.metadata or {}).get("unit_id", "") or ""),
+                                "highlight_boxes": doc_boxes_by_id.get(doc_id, []),
                                 "match_quality": "exact" if is_exact_match else "fuzzy",
                                 "is_exact_match": is_exact_match,
                                 "strength_score": _compute_span_strength(
@@ -435,6 +447,16 @@ class AnswerWithContextPipeline(BaseComponent):
             doc_strength = max(
                 [_safe_float(span.get("strength_score", 0.0)) for span in ss] or [0.0]
             )
+            span_boxes: list[dict[str, float]] = []
+            for span in ss:
+                boxes = span.get("highlight_boxes")
+                if isinstance(boxes, list):
+                    span_boxes.extend(boxes)
+            merged_highlight_boxes = merge_adjacent_highlight_boxes(span_boxes)
+            if not merged_highlight_boxes:
+                merged_highlight_boxes = merge_adjacent_highlight_boxes(
+                    extract_highlight_boxes_from_metadata(getattr(cur_doc, "metadata", {}) or {})
+                )
             if MAIA_CITATION_STRENGTH_ORDERING_ENABLED:
                 ss = sorted(
                     ss,
@@ -479,6 +501,7 @@ class AnswerWithContextPipeline(BaseComponent):
                         cur_doc,
                         override_text=text,
                         highlight_text=highlight_text,
+                        highlight_boxes=merged_highlight_boxes,
                         open_collapsible=True,
                     ),
                     metadata={

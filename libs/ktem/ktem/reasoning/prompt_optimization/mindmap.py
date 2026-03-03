@@ -47,6 +47,7 @@ class CreateMindmapPipeline(BaseComponent):
         documents = kwargs.get("documents") or kwargs.get("docs") or kwargs.get("retrieved_docs") or []
         answer_text = str(kwargs.get("answer_text", "") or "")
         source_type_hint = str(kwargs.get("source_type_hint", "") or "")
+        map_type = str(kwargs.get("map_type", "structure") or "structure")
         focus = kwargs.get("focus")
         try:
             max_depth = int(kwargs.get("max_depth", self.default_max_depth))
@@ -65,6 +66,7 @@ class CreateMindmapPipeline(BaseComponent):
             include_reasoning_map=include_reasoning_map,
             source_type_hint=source_type_hint,
             focus=focus if isinstance(focus, dict) else None,
+            map_type=map_type,
         )
         return Document(
             text=serialize_map_payload(payload),

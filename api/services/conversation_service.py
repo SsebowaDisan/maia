@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import uuid
 
 from fastapi import HTTPException
 from sqlmodel import Session, select
 from tzlocal import get_localzone
 
-from ktem.db.models import Conversation, engine
+from ktem.db.models import Conversation, MindmapShare, engine
 from api.services.chat.conversation_naming import (
     extract_conversation_icon,
     generate_conversation_name,
@@ -19,6 +20,24 @@ from api.services.chat.conversation_naming import (
 
 AUTONAME_BACKFILL_LIMIT = 8
 ICON_REFRESH_BACKFILL_LIMIT = 8
+
+
+def _normalize_mindmap_payload(raw_payload: dict | None) -> dict:
+    if not isinstance(raw_payload, dict):
+        return {}
+    payload = deepcopy(raw_payload)
+    if not isinstance(payload.get("nodes"), list):
+        payload["nodes"] = []
+    if not isinstance(payload.get("edges"), list):
+        payload["edges"] = []
+    if not isinstance(payload.get("title"), str):
+        payload["title"] = "Mind-map"
+    return payload
+
+
+def _ensure_owner(user_id: str, conv: Conversation) -> None:
+    if conv.user != user_id:
+        raise HTTPException(status_code=403, detail="Only owner can update.")
 
 
 def _first_user_message(data_source: dict) -> str:
@@ -203,3 +222,68 @@ def delete_conversation(user_id: str, conversation_id: str) -> None:
             raise HTTPException(status_code=403, detail="Only owner can delete.")
         session.delete(conv)
         session.commit()
+
+
+def create_mindmap_share(
+    user_id: str,
+    conversation_id: str,
+    mindmap: dict | None,
+    title: str | None = None,
+) -> dict:
+    with Session(engine) as session:
+        conv = session.exec(
+            select(Conversation).where(Conversation.id == conversation_id)
+        ).first()
+        if conv is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        _ensure_owner(user_id, conv)
+
+        payload = _normalize_mindmap_payload(mindmap)
+        if not payload:
+            raise HTTPException(status_code=400, detail="Mind-map payload is empty.")
+
+        map_title = " ".join(str(title or payload.get("title", "")).split()).strip()
+        if not map_title:
+            map_title = "Mind-map"
+
+        now = datetime.now(get_localzone())
+        share = MindmapShare(
+            share_id=uuid.uuid4().hex[:16],
+            conversation_id=conversation_id,
+            user=user_id,
+            title=map_title[:160],
+            payload=payload,
+            date_created=now,
+            date_updated=now,
+        )
+        session.add(share)
+        session.commit()
+        session.refresh(share)
+
+    return {
+        "share_id": share.share_id,
+        "conversation_id": share.conversation_id,
+        "title": share.title,
+        "date_created": share.date_created,
+        "map": deepcopy(share.payload or {}),
+    }
+
+
+def get_mindmap_share(share_id: str) -> dict:
+    share_id_norm = " ".join(str(share_id or "").split()).strip()
+    if not share_id_norm:
+        raise HTTPException(status_code=404, detail="Mind-map share not found.")
+
+    with Session(engine) as session:
+        share = session.exec(
+            select(MindmapShare).where(MindmapShare.share_id == share_id_norm)
+        ).first()
+        if share is None:
+            raise HTTPException(status_code=404, detail="Mind-map share not found.")
+        return {
+            "share_id": share.share_id,
+            "conversation_id": share.conversation_id,
+            "title": share.title,
+            "date_created": share.date_created,
+            "map": deepcopy(share.payload or {}),
+        }

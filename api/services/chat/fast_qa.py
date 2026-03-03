@@ -531,6 +531,9 @@ def run_fast_chat_turn(
             map_depth = int(map_settings.get("max_depth", 4))
         except Exception:
             map_depth = 4
+        map_type = str(map_settings.get("map_type", "structure") or "structure").strip().lower()
+        if map_type not in {"structure", "evidence"}:
+            map_type = "structure"
         mindmap_payload = build_knowledge_map(
             question=message,
             context="\n\n".join(str(row.get("text", "") or "") for row in snippets[:8]),
@@ -540,6 +543,7 @@ def run_fast_chat_turn(
             include_reasoning_map=bool(map_settings.get("include_reasoning_map", True)),
             source_type_hint=str(map_settings.get("source_type_hint", "") or ""),
             focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            map_type=map_type,
         )
         info_panel["mindmap"] = mindmap_payload
     if source_usage:

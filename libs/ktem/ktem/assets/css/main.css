@@ -324,6 +324,33 @@ pdfjs-viewer-element {
   overflow: hidden;
 }
 
+.maia-bbox-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 12;
+}
+
+.maia-bbox-rect {
+  position: absolute;
+  border-radius: 4px;
+  border: 1px solid rgba(150, 107, 16, 0.6);
+  background: rgba(250, 214, 98, 0.32);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
+  animation: maia-bbox-fade-in 0.24s ease-out;
+}
+
+@keyframes maia-bbox-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.996);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* Switch checkbox styles */
 
 /* #is-public-checkbox {

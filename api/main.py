@@ -13,6 +13,7 @@ from api.routers.agent import router as agent_router
 from api.routers.chat import router as chat_router
 from api.routers.conversations import router as conversations_router
 from api.routers.integrations import router as integrations_router
+from api.routers.mindmap import router as mindmap_router
 from api.routers.settings import router as settings_router
 from api.routers.uploads import router as uploads_router
 from api.schemas import HealthResponse
@@ -37,6 +38,7 @@ app.include_router(conversations_router)
 app.include_router(settings_router)
 app.include_router(uploads_router)
 app.include_router(chat_router)
+app.include_router(mindmap_router)
 app.include_router(agent_router)
 app.include_router(integrations_router)
 app.include_router(metrics_router)

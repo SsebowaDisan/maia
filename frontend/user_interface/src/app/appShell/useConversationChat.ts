@@ -22,6 +22,7 @@ type ConversationMindmapSettings = {
   enabled: boolean;
   maxDepth: number;
   includeReasoningMap: boolean;
+  mapType: "structure" | "evidence";
 };
 
 type SendMessageOptions = {
@@ -63,6 +64,7 @@ export function useConversationChat({
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
   const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
   const [mindmapIncludeReasoning, setMindmapIncludeReasoning] = useState(true);
+  const [mindmapMapType, setMindmapMapType] = useState<"structure" | "evidence">("structure");
   const [conversationMindmapSettings, setConversationMindmapSettings] = useState<
     Record<string, ConversationMindmapSettings>
   >(() => {
@@ -172,6 +174,12 @@ export function useConversationChat({
         setMindmapEnabled(Boolean(mapSettings.enabled));
         setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
         setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
+        setMindmapMapType(mapSettings.mapType === "evidence" ? "evidence" : "structure");
+      } else {
+        setMindmapEnabled(true);
+        setMindmapMaxDepth(4);
+        setMindmapIncludeReasoning(true);
+        setMindmapMapType("structure");
       }
 
       if (hydratedTurns.length > 0) {
@@ -354,6 +362,7 @@ export function useConversationChat({
           mindmapSettings: options?.mindmapSettings ?? {
             max_depth: mindmapMaxDepth,
             include_reasoning_map: mindmapIncludeReasoning,
+            map_type: mindmapMapType,
           },
           mindmapFocus: options?.mindmapFocus ?? {},
           agentMode: effectiveMode,
@@ -473,6 +482,10 @@ export function useConversationChat({
               (options?.mindmapSettings?.["include_reasoning_map"] as boolean) ??
                 mindmapIncludeReasoning,
             ),
+            mapType:
+              (String(options?.mindmapSettings?.["map_type"] || mindmapMapType).toLowerCase() === "evidence"
+                ? "evidence"
+                : "structure"),
           },
         }));
         setInfoText(response.info || "");
@@ -557,6 +570,7 @@ export function useConversationChat({
       mindmapEnabled,
       mindmapIncludeReasoning,
       mindmapMaxDepth,
+      mindmapMapType,
       refreshConversations,
       selectedConversationId,
       selectedProjectId,
@@ -618,11 +632,13 @@ export function useConversationChat({
         enabled: mindmapEnabled,
         maxDepth: mindmapMaxDepth,
         includeReasoningMap: mindmapIncludeReasoning,
+        mapType: mindmapMapType,
       },
     }));
   }, [
     mindmapEnabled,
     mindmapIncludeReasoning,
+    mindmapMapType,
     mindmapMaxDepth,
     selectedConversationId,
   ]);
@@ -648,6 +664,7 @@ export function useConversationChat({
     isSending,
     mindmapEnabled,
     mindmapIncludeReasoning,
+    mindmapMapType,
     mindmapMaxDepth,
     refreshConversations,
     selectedConversationId,
@@ -659,6 +676,7 @@ export function useConversationChat({
     setInfoText,
     setMindmapEnabled,
     setMindmapIncludeReasoning,
+    setMindmapMapType,
     setMindmapMaxDepth,
     visibleConversations,
   };

@@ -113,6 +113,7 @@ function ChatMain({
   mindmapEnabled,
   mindmapMaxDepth,
   mindmapIncludeReasoning,
+  mindmapMapType,
   onCitationClick,
   agentMode,
   onAgentModeChange,
@@ -130,6 +131,7 @@ function ChatMain({
     mindmapEnabled,
     mindmapMaxDepth,
     mindmapIncludeReasoning,
+    mindmapMapType,
     isSending,
     onAccessModeChange,
     onAgentModeChange,
@@ -163,7 +165,10 @@ function ChatMain({
         citationAnchor.getAttribute("data-phrase") ||
         citationAnchor.getAttribute("data-search") ||
         "";
-      const boxesAttr = citationAnchor.getAttribute("data-boxes") || "";
+      const boxesAttr =
+        citationAnchor.getAttribute("data-boxes") ||
+        citationAnchor.getAttribute("data-bboxes") ||
+        "";
       const strengthAttr = Number(citationAnchor.getAttribute("data-strength") || "");
       const strengthTierAttr = Number(citationAnchor.getAttribute("data-strength-tier") || "");
       const matchQualityAttr = (citationAnchor.getAttribute("data-match-quality") || "").trim();

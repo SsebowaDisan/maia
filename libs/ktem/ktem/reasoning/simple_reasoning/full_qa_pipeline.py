@@ -40,6 +40,7 @@ class FullQAPipeline(BaseReasoning):
     use_rewrite: bool = False
     mindmap_max_depth: int = 4
     include_reasoning_map: bool = True
+    mindmap_map_type: str = "structure"
 
     retrievers: list[BaseComponent]
 
@@ -304,6 +305,7 @@ class FullQAPipeline(BaseReasoning):
             retrieved_docs=docs,
             mindmap_max_depth=self.mindmap_max_depth,
             include_reasoning_map=self.include_reasoning_map,
+            mindmap_map_type=self.mindmap_map_type,
             **kwargs,
         )
 
@@ -371,6 +373,9 @@ class FullQAPipeline(BaseReasoning):
         pipeline.include_reasoning_map = bool(
             settings.get(f"{prefix}.include_reasoning_map", True)
         )
+        pipeline.mindmap_map_type = str(
+            settings.get(f"{prefix}.mindmap_map_type", "structure") or "structure"
+        )
         pipeline.use_rewrite = states.get("app", {}).get("regen", False)
         if pipeline.rewrite_pipeline:
             pipeline.rewrite_pipeline.llm = llm
@@ -429,6 +434,15 @@ class FullQAPipeline(BaseReasoning):
                 "name": "Include reasoning map",
                 "value": True,
                 "component": "checkbox",
+            },
+            "mindmap_map_type": {
+                "name": "Mindmap type",
+                "value": "structure",
+                "component": "dropdown",
+                "choices": [
+                    ("structure", "structure"),
+                    ("evidence", "evidence"),
+                ],
             },
             "create_citation_viz": {
                 "name": "Create Embeddings Visualization",

@@ -34,6 +34,19 @@ class ConversationDetail(ConversationSummary):
     data_source: dict[str, Any] = Field(default_factory=dict)
 
 
+class MindmapShareCreateRequest(BaseModel):
+    map: dict[str, Any] = Field(default_factory=dict)
+    title: str | None = None
+
+
+class MindmapShareResponse(BaseModel):
+    share_id: str
+    conversation_id: str
+    title: str
+    date_created: datetime
+    map: dict[str, Any] = Field(default_factory=dict)
+
+
 class SettingsResponse(BaseModel):
     values: dict[str, Any]
 
