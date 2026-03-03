@@ -1,4 +1,4 @@
-@custom-variant dark (&:is(.dark *));
+﻿@custom-variant dark (&:is(.dark *));
 
 :root {
   --font-size: 16px;
@@ -229,6 +229,25 @@
   mix-blend-mode: multiply;
 }
 
+.chat-answer-html a.citation[data-strength-tier]::after {
+  margin-left: 4px;
+  font-size: 9px;
+  letter-spacing: -0.4px;
+  opacity: 0.86;
+}
+
+.chat-answer-html a.citation[data-strength-tier="1"]::after {
+  content: "\25CF\25CB\25CB";
+}
+
+.chat-answer-html a.citation[data-strength-tier="2"]::after {
+  content: "\25CF\25CF\25CB";
+}
+
+.chat-answer-html a.citation[data-strength-tier="3"]::after {
+  content: "\25CF\25CF\25CF";
+}
+
 @keyframes command-dock-reveal {
   0% {
     opacity: 0;
@@ -342,3 +361,4 @@
     transition: none;
   }
 }
+

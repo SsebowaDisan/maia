@@ -12,6 +12,7 @@ type ConversationMessageMeta = {
   activity_run_id?: string | null;
   web_summary?: Record<string, unknown>;
   info_panel?: Record<string, unknown>;
+  mindmap?: Record<string, unknown>;
 };
 
 export function isAgentActivityEvent(payload: unknown): payload is AgentActivityEvent {
@@ -51,6 +52,10 @@ export function buildConversationTurns(
     humanReviewNotes: messageMeta[index]?.human_review_notes || null,
     webSummary: messageMeta[index]?.web_summary || {},
     infoPanel: messageMeta[index]?.info_panel || {},
+    mindmap:
+      messageMeta[index]?.mindmap ||
+      ((messageMeta[index]?.info_panel as { mindmap?: Record<string, unknown> } | undefined)
+        ?.mindmap || {}),
     activityRunId: messageMeta[index]?.activity_run_id || null,
   }));
   const runIds = Array.from(

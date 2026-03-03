@@ -3,7 +3,8 @@ from __future__ import annotations
 import shutil
 import threading
 import time
-from hashlib import sha256
+import re
+from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -45,6 +46,95 @@ class IndexPipeline(BaseComponent):
             vector_store=self.VS, doc_store=self.DS, embedding=self.embedding
         )
 
+    @staticmethod
+    def _normalize_anchor_text(raw: str) -> str:
+        return re.sub(r"\s+", " ", str(raw or "")).strip()
+
+    def _assign_evidence_unit_anchors(
+        self,
+        *,
+        text_docs: list[Document],
+        all_chunks: list[Document],
+        non_text_docs: list[Document],
+        thumbnail_docs: list[Document],
+        file_id: str,
+    ) -> None:
+        page_text_by_label: dict[str, str] = {}
+        page_cursor_by_label: dict[str, int] = {}
+
+        for row in text_docs:
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            page_label = str(metadata.get("page_label", "") or "").strip()
+            if not page_label:
+                continue
+            existing = page_text_by_label.get(page_label, "")
+            joined = f"{existing}\n{row.text or ''}".strip()
+            page_text_by_label[page_label] = joined
+            if page_label not in page_cursor_by_label:
+                page_cursor_by_label[page_label] = 0
+
+        for chunk in all_chunks:
+            metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+            metadata.setdefault("source_id", file_id)
+            page_label = str(metadata.get("page_label", "") or "").strip()
+            normalized_chunk = self._normalize_anchor_text(chunk.text or "")
+            match_quality = "estimated"
+
+            if page_label and normalized_chunk and page_label in page_text_by_label:
+                page_text = page_text_by_label.get(page_label, "")
+                search_from = max(0, int(page_cursor_by_label.get(page_label, 0) or 0))
+                start = page_text.find(normalized_chunk, search_from)
+                if start < 0:
+                    start = page_text.lower().find(normalized_chunk.lower(), search_from)
+                if start < 0 and len(normalized_chunk) >= 14:
+                    probe = normalized_chunk[: min(42, len(normalized_chunk))]
+                    start = page_text.lower().find(probe.lower(), search_from)
+                if start >= 0:
+                    end = min(len(page_text), start + len(normalized_chunk))
+                    metadata["char_start"] = start
+                    metadata["char_end"] = end
+                    page_cursor_by_label[page_label] = max(
+                        page_cursor_by_label.get(page_label, 0),
+                        end,
+                    )
+                    match_quality = "exact"
+
+            if "char_start" in metadata and "char_end" in metadata:
+                try:
+                    if int(metadata.get("char_end", 0) or 0) <= int(metadata.get("char_start", 0) or 0):
+                        metadata.pop("char_start", None)
+                        metadata.pop("char_end", None)
+                except Exception:
+                    metadata.pop("char_start", None)
+                    metadata.pop("char_end", None)
+
+            span_key = (
+                f"{file_id}|{page_label}|{metadata.get('char_start', 0)}|"
+                f"{metadata.get('char_end', 0)}|"
+                f"{sha1(normalized_chunk.encode('utf-8')).hexdigest()[:16]}"
+            )
+            metadata.setdefault(
+                "unit_id",
+                f"eu-{sha1(span_key.encode('utf-8')).hexdigest()[:20]}",
+            )
+            metadata.setdefault("match_quality", match_quality)
+            chunk.metadata = metadata
+
+        for row in [*non_text_docs, *thumbnail_docs]:
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            metadata.setdefault("source_id", file_id)
+            page_label = str(metadata.get("page_label", "") or "").strip()
+            normalized_text = self._normalize_anchor_text(row.text or "")
+            span_key = (
+                f"{file_id}|{page_label}|{sha1(normalized_text.encode('utf-8')).hexdigest()[:16]}"
+            )
+            metadata.setdefault(
+                "unit_id",
+                f"eu-{sha1(span_key.encode('utf-8')).hexdigest()[:20]}",
+            )
+            metadata.setdefault("match_quality", "estimated")
+            row.metadata = metadata
+
     def handle_docs(self, docs, file_id, file_name) -> Generator[Document, None, int]:
         s_time = time.time()
         text_docs = []
@@ -74,6 +164,14 @@ class IndexPipeline(BaseComponent):
             page_label = chunk.metadata.get("page_label", None)
             if page_label and page_label in page_label_to_thumbnail:
                 chunk.metadata["thumbnail_doc_id"] = page_label_to_thumbnail[page_label]
+
+        self._assign_evidence_unit_anchors(
+            text_docs=text_docs,
+            all_chunks=all_chunks,
+            non_text_docs=non_text_docs,
+            thumbnail_docs=thumbnail_docs,
+            file_id=file_id,
+        )
 
         to_index_chunks = all_chunks + non_text_docs + thumbnail_docs
 

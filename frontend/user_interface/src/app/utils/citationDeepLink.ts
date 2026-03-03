@@ -9,6 +9,12 @@ type CitationDeepLinkPayload = {
   extract: string;
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
+  unitId?: string;
+  charStart?: number;
+  charEnd?: number;
+  matchQuality?: string;
+  strengthScore?: number;
+  strengthTier?: number;
 };
 
 const PARAM_KEY = "citation";
@@ -92,6 +98,10 @@ function toPayload(params: {
   conversationId?: string | null;
 }): CitationDeepLinkPayload {
   const { citationFocus, conversationId } = params;
+  const strengthScore = Number(citationFocus.strengthScore);
+  const strengthTier = Number(citationFocus.strengthTier);
+  const charStart = Number(citationFocus.charStart);
+  const charEnd = Number(citationFocus.charEnd);
   return {
     version: 1,
     conversationId: normalizeText(conversationId, 120) || undefined,
@@ -101,6 +111,12 @@ function toPayload(params: {
     extract: normalizeText(citationFocus.extract, MAX_EXTRACT_CHARS),
     evidenceId: normalizeText(citationFocus.evidenceId, 80) || undefined,
     highlightBoxes: normalizeHighlightBoxes(citationFocus.highlightBoxes),
+    unitId: normalizeText(citationFocus.unitId, 180) || undefined,
+    matchQuality: normalizeText(citationFocus.matchQuality, 24) || undefined,
+    charStart: Number.isFinite(charStart) && charStart > 0 ? charStart : undefined,
+    charEnd: Number.isFinite(charEnd) && charEnd > 0 ? charEnd : undefined,
+    strengthScore: Number.isFinite(strengthScore) ? Number(strengthScore.toFixed(6)) : undefined,
+    strengthTier: Number.isFinite(strengthTier) ? Math.max(1, Math.min(3, Math.round(strengthTier))) : undefined,
   };
 }
 
@@ -114,6 +130,16 @@ function payloadToFocus(payload: CitationDeepLinkPayload): CitationFocus {
       "No extract available for this citation.",
     evidenceId: normalizeText(payload.evidenceId, 80) || undefined,
     highlightBoxes: normalizeHighlightBoxes(payload.highlightBoxes),
+    unitId: normalizeText(payload.unitId, 180) || undefined,
+    matchQuality: normalizeText(payload.matchQuality, 24) || undefined,
+    charStart: Number.isFinite(Number(payload.charStart)) ? Number(payload.charStart) : undefined,
+    charEnd: Number.isFinite(Number(payload.charEnd)) ? Number(payload.charEnd) : undefined,
+    strengthScore: Number.isFinite(Number(payload.strengthScore))
+      ? Number(Number(payload.strengthScore).toFixed(6))
+      : undefined,
+    strengthTier: Number.isFinite(Number(payload.strengthTier))
+      ? Math.max(1, Math.min(3, Math.round(Number(payload.strengthTier))))
+      : undefined,
   };
 }
 
@@ -146,6 +172,16 @@ function decodeCitationPayload(encoded: string): {
       extract: normalizeText(parsed.extract, MAX_EXTRACT_CHARS),
       evidenceId: normalizeText(parsed.evidenceId, 80) || undefined,
       highlightBoxes: normalizeHighlightBoxes(parsed.highlightBoxes),
+      unitId: normalizeText(parsed.unitId, 180) || undefined,
+      matchQuality: normalizeText(parsed.matchQuality, 24) || undefined,
+      charStart: Number.isFinite(Number(parsed.charStart)) ? Number(parsed.charStart) : undefined,
+      charEnd: Number.isFinite(Number(parsed.charEnd)) ? Number(parsed.charEnd) : undefined,
+      strengthScore: Number.isFinite(Number(parsed.strengthScore))
+        ? Number(Number(parsed.strengthScore).toFixed(6))
+        : undefined,
+      strengthTier: Number.isFinite(Number(parsed.strengthTier))
+        ? Math.max(1, Math.min(3, Math.round(Number(parsed.strengthTier))))
+        : undefined,
     };
     return {
       citationFocus: payloadToFocus(payload),

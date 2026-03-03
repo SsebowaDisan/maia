@@ -30,6 +30,46 @@ MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
     default=False,
     cast=bool,
 )
+MAIA_CITATION_ANCHOR_INDEX_ENABLED = config(
+    "MAIA_CITATION_ANCHOR_INDEX_ENABLED",
+    default=True,
+    cast=bool,
+)
+MAIA_CITATION_FUZZY_MATCH_ENABLED = config(
+    "MAIA_CITATION_FUZZY_MATCH_ENABLED",
+    default=True,
+    cast=bool,
+)
+MAIA_CITATION_UNIFIED_REFS_ENABLED = config(
+    "MAIA_CITATION_UNIFIED_REFS_ENABLED",
+    default=True,
+    cast=bool,
+)
+MAIA_CITATION_STRENGTH_BADGES_ENABLED = config(
+    "MAIA_CITATION_STRENGTH_BADGES_ENABLED",
+    default=True,
+    cast=bool,
+)
+MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED = config(
+    "MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED",
+    default=True,
+    cast=bool,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL",
+    default=0.5,
+    cast=float,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_LLM = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_LLM",
+    default=0.4,
+    cast=float,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_SPAN = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_SPAN",
+    default=0.1,
+    cast=float,
+)
 MAIA_SOURCE_USAGE_HEATMAP_ENABLED = config(
     "MAIA_SOURCE_USAGE_HEATMAP_ENABLED",
     default=False,

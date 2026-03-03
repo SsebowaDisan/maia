@@ -82,6 +82,7 @@ type ChatResponse = {
   web_summary: Record<string, unknown>;
   info_panel: Record<string, unknown>;
   activity_run_id: string | null;
+  mindmap: Record<string, unknown>;
 };
 
 type ChatStreamEvent =

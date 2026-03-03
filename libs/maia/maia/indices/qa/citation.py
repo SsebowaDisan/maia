@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Union
 
 from pydantic import BaseModel, Field
 
@@ -7,14 +7,31 @@ from maia.base.schema import HumanMessage, SystemMessage
 from maia.llms import BaseLLM
 
 
+class CitationSpan(BaseModel):
+    """A cited span anchor represented by start/end phrases."""
+
+    start_phrase: str = Field(
+        ...,
+        description=(
+            "First 5-8 words from the relevant span, copied exactly from context."
+        ),
+    )
+    end_phrase: str = Field(
+        ...,
+        description=(
+            "Last 5-8 words from the relevant span, copied exactly from context."
+        ),
+    )
+
+
 class CiteEvidence(BaseModel):
     """List of evidences (maximum 5) to support the answer."""
 
-    evidences: List[str] = Field(
+    evidences: List[Union[CitationSpan, str]] = Field(
         ...,
         description=(
-            "Each source should be a direct quote from the context, "
-            "as a substring of the original content (max 15 words)."
+            "Each evidence item should identify span boundaries using start_phrase "
+            "and end_phrase copied exactly from context."
         ),
     )
 
@@ -58,7 +75,7 @@ class CitationPipeline(BaseComponent):
             HumanMessage(
                 content=(
                     "Tips: Make sure to cite your sources, "
-                    "and use the exact words from the context."
+                    "and use exact copied start/end phrases from the context."
                 )
             ),
         ]

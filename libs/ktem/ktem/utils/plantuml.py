@@ -60,7 +60,7 @@ def deflate_and_encode(plantuml_text):
 
 
 class PlantUML(object):
-    """Connection to a PlantUML server with optional authentication.
+    """Deprecated PlantUML connector.
 
     All parameters are optional.
 
@@ -87,10 +87,10 @@ class PlantUML(object):
         return self.url + deflate_and_encode(plantuml_text)
 
     def process(self, plantuml_text):
-        """Processes the plantuml text into the raw PNG image data.
+        """Processes PlantUML text into raw SVG content.
 
         :param str plantuml_text: The plantuml markup to render
-        :returns: the raw image data
+        :returns: SVG XML content
         """
         url = self.get_url(plantuml_text)
         try:
@@ -102,12 +102,4 @@ class PlantUML(object):
 
         svg_content = content.decode("utf-8")
         svg_content = svg_content.replace("<svg ", "<svg id='mindmap' ")
-
-        # wrap in fixed height div
-        svg_content = (
-            "<div id='mindmap-wrapper' "
-            "style='height: 400px; overflow: hidden;'>"
-            f"{svg_content}</div>"
-        )
-
         return svg_content

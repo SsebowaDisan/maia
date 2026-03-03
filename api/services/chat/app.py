@@ -251,6 +251,7 @@ def stream_chat_turn(
             if isinstance(getattr(agent_result, "web_summary", {}), dict)
             else {}
         )
+        mindmap_payload: dict[str, Any] = {}
         info_panel = build_info_panel_copy(
             request_message=message,
             answer_text=answer_text,
@@ -259,6 +260,8 @@ def stream_chat_turn(
             next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
             web_summary=agent_web_summary,
         )
+        if mindmap_payload:
+            info_panel["mindmap"] = mindmap_payload
 
         chat_state.setdefault("app", {})
         chat_state["app"]["last_agent_run_id"] = agent_result.run_id
@@ -290,6 +293,7 @@ def stream_chat_turn(
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
                 "web_summary": agent_web_summary,
                 "info_panel": info_panel,
+                "mindmap": mindmap_payload,
             }
         )
 
@@ -339,6 +343,7 @@ def stream_chat_turn(
             "web_summary": agent_web_summary,
             "activity_run_id": agent_result.run_id,
             "info_panel": info_panel,
+            "mindmap": mindmap_payload,
         }
 
     pipeline, reasoning_state, reasoning_id = create_pipeline(
@@ -353,10 +358,23 @@ def stream_chat_turn(
     answer_text = ""
     info_text = ""
     plot_data: dict[str, Any] | None = None
+    mindmap_payload: dict[str, Any] = {}
 
     pipeline_error: Exception | None = None
+    mindmap_settings = dict(request.mindmap_settings or {})
     try:
-        for response in pipeline.stream(message, conversation_id, chat_history):
+        requested_mindmap_depth = int(mindmap_settings.get("max_depth", 4))
+    except Exception:
+        requested_mindmap_depth = 4
+    try:
+        for response in pipeline.stream(
+            message,
+            conversation_id,
+            chat_history,
+            mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            mindmap_max_depth=max(2, min(8, requested_mindmap_depth)),
+            include_reasoning_map=bool(mindmap_settings.get("include_reasoning_map", True)),
+        ):
             if not isinstance(response, Document) or response.channel is None:
                 continue
 
@@ -371,6 +389,11 @@ def stream_chat_turn(
                     }
 
             elif response.channel == "info":
+                if isinstance(getattr(response, "metadata", None), dict):
+                    parsed_mindmap = response.metadata.get("mindmap")
+                    if isinstance(parsed_mindmap, dict) and not mindmap_payload:
+                        mindmap_payload = parsed_mindmap
+                        yield {"type": "mindmap", "mindmap": mindmap_payload}
                 delta = response.content if response.content else ""
                 if delta:
                     info_text += delta
@@ -422,6 +445,8 @@ def stream_chat_turn(
         next_steps=[],
         web_summary={},
     )
+    if mindmap_payload:
+        info_panel["mindmap"] = mindmap_payload
 
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))
@@ -445,6 +470,7 @@ def stream_chat_turn(
             "human_review_notes": None,
             "web_summary": {},
             "info_panel": info_panel,
+            "mindmap": mindmap_payload,
         }
     )
 
@@ -477,6 +503,7 @@ def stream_chat_turn(
         "web_summary": {},
         "activity_run_id": None,
         "info_panel": info_panel,
+        "mindmap": mindmap_payload,
     }
 
 
@@ -554,6 +581,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "human_review_notes": None,
                 "web_summary": {},
                 "info_panel": timeout_info_panel,
+                "mindmap": {},
             }
         )
 
@@ -586,6 +614,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "web_summary": {},
             "activity_run_id": None,
             "info_panel": timeout_info_panel,
+            "mindmap": {},
         }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)

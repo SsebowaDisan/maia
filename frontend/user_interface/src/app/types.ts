@@ -20,6 +20,7 @@ export type ChatTurn = {
   humanReviewNotes?: string | null;
   webSummary?: Record<string, unknown>;
   infoPanel?: Record<string, unknown>;
+  mindmap?: Record<string, unknown>;
 };
 
 export type AgentActionRecord = {
@@ -84,4 +85,10 @@ export type CitationFocus = {
   extract: string;
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
+  unitId?: string;
+  charStart?: number;
+  charEnd?: number;
+  matchQuality?: string;
+  strengthScore?: number;
+  strengthTier?: number;
 };

@@ -75,6 +75,12 @@ interface ChatSidebarProps {
   onRenameConversation: (conversationId: string, name: string) => Promise<void>;
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onOpenWorkspaceTab: (tab: "Files" | "Resources" | "Settings" | "Help") => void;
+  mindmapEnabled: boolean;
+  onMindmapEnabledChange: (enabled: boolean) => void;
+  mindmapMaxDepth: number;
+  onMindmapMaxDepthChange: (depth: number) => void;
+  mindmapIncludeReasoning: boolean;
+  onMindmapIncludeReasoningChange: (enabled: boolean) => void;
   width?: number;
 }
 
@@ -98,6 +104,12 @@ export function ChatSidebar({
   onRenameConversation,
   onDeleteConversation,
   onOpenWorkspaceTab,
+  mindmapEnabled,
+  onMindmapEnabledChange,
+  mindmapMaxDepth,
+  onMindmapMaxDepthChange,
+  mindmapIncludeReasoning,
+  onMindmapIncludeReasoningChange,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -489,7 +501,43 @@ export function ChatSidebar({
         </div>
       </div>
 
-      <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7]">
+      <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7] space-y-2.5">
+        <div className="rounded-xl border border-black/[0.08] bg-white p-2.5 space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">Mind-map</p>
+          <label className="flex items-center justify-between gap-2 text-[12px] text-[#1d1d1f]">
+            <span>Generate automatically</span>
+            <input
+              type="checkbox"
+              checked={mindmapEnabled}
+              onChange={(event) => onMindmapEnabledChange(event.target.checked)}
+              className="h-4 w-4 rounded border-black/[0.15]"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-2 text-[12px] text-[#1d1d1f]">
+            <span>Include reasoning map</span>
+            <input
+              type="checkbox"
+              checked={mindmapIncludeReasoning}
+              onChange={(event) => onMindmapIncludeReasoningChange(event.target.checked)}
+              className="h-4 w-4 rounded border-black/[0.15]"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[12px] text-[#1d1d1f]">Max depth</span>
+            <select
+              value={String(mindmapMaxDepth)}
+              onChange={(event) => onMindmapMaxDepthChange(Number(event.target.value))}
+              className="h-7 rounded-md border border-black/[0.1] bg-white px-2 text-[11px] text-[#1d1d1f]"
+            >
+              {[2, 3, 4, 5, 6, 7, 8].map((depth) => (
+                <option key={depth} value={depth}>
+                  {depth}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="relative">
           <button
             onClick={() => setWorkspaceMenuOpen((open) => !open)}

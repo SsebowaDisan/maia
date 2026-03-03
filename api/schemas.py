@@ -188,6 +188,8 @@ class ChatRequest(BaseModel):
     language: str | None = None
     command: str | None = None
     setting_overrides: dict[str, Any] = Field(default_factory=dict)
+    mindmap_focus: dict[str, Any] = Field(default_factory=dict)
+    mindmap_settings: dict[str, Any] = Field(default_factory=dict)
     agent_mode: Literal["ask", "company_agent"] = "ask"
     agent_goal: str | None = None
     access_mode: Literal["restricted", "full_access"] | None = None
@@ -241,3 +243,4 @@ class ChatResponse(BaseModel):
     web_summary: dict[str, Any] = Field(default_factory=dict)
     info_panel: dict[str, Any] = Field(default_factory=dict)
     activity_run_id: str | None = None
+    mindmap: dict[str, Any] = Field(default_factory=dict)

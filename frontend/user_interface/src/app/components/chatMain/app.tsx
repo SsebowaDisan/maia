@@ -110,6 +110,9 @@ function ChatMain({
   onCreateFileIngestionJob,
   isSending,
   citationMode,
+  mindmapEnabled,
+  mindmapMaxDepth,
+  mindmapIncludeReasoning,
   onCitationClick,
   agentMode,
   onAgentModeChange,
@@ -124,6 +127,9 @@ function ChatMain({
     agentMode,
     chatTurns,
     citationMode,
+    mindmapEnabled,
+    mindmapMaxDepth,
+    mindmapIncludeReasoning,
     isSending,
     onAccessModeChange,
     onAgentModeChange,
@@ -158,6 +164,12 @@ function ChatMain({
         citationAnchor.getAttribute("data-search") ||
         "";
       const boxesAttr = citationAnchor.getAttribute("data-boxes") || "";
+      const strengthAttr = Number(citationAnchor.getAttribute("data-strength") || "");
+      const strengthTierAttr = Number(citationAnchor.getAttribute("data-strength-tier") || "");
+      const matchQualityAttr = (citationAnchor.getAttribute("data-match-quality") || "").trim();
+      const unitIdAttr = (citationAnchor.getAttribute("data-unit-id") || "").trim();
+      const charStartAttr = Number(citationAnchor.getAttribute("data-char-start") || "");
+      const charEndAttr = Number(citationAnchor.getAttribute("data-char-end") || "");
       const attachmentFileId =
         (turn.attachments || []).find((attachment) => Boolean(attachment.fileId))?.fileId || "";
       const sourceName = (matchedEvidence?.source || "Indexed source").replace(
@@ -180,6 +192,16 @@ function ChatMain({
         ),
         evidenceId: evidenceId || undefined,
         highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+        strengthScore: Number.isFinite(strengthAttr)
+          ? strengthAttr
+          : matchedEvidence?.strengthScore,
+        strengthTier: Number.isFinite(strengthTierAttr)
+          ? strengthTierAttr
+          : matchedEvidence?.strengthTier,
+        matchQuality: matchQualityAttr || matchedEvidence?.matchQuality,
+        unitId: unitIdAttr || matchedEvidence?.unitId,
+        charStart: Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
+        charEnd: Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
       });
       return;
     }

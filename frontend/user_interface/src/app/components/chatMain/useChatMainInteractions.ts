@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { getIngestionJob } from "../../../api/client";
 import type { ChatAttachment, ChatTurn } from "../../types";
+import { formatIngestionJobProgress, formatUploadProgress } from "./ingestionProgress";
 import type { ChatMainProps, ComposerAttachment } from "./types";
 
 const CHAT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
 const CHAT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
-
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
   | "accessMode"
@@ -13,6 +13,9 @@ type UseChatMainInteractionsParams = Pick<
   | "agentMode"
   | "chatTurns"
   | "citationMode"
+  | "mindmapEnabled"
+  | "mindmapMaxDepth"
+  | "mindmapIncludeReasoning"
   | "isSending"
   | "onAccessModeChange"
   | "onAgentModeChange"
@@ -28,6 +31,9 @@ function useChatMainInteractions({
   agentMode,
   chatTurns,
   citationMode,
+  mindmapEnabled,
+  mindmapMaxDepth,
+  mindmapIncludeReasoning,
   isSending,
   onAccessModeChange,
   onAgentModeChange,
@@ -112,14 +118,13 @@ function useChatMainInteractions({
     return snippets;
   }, [activityEvents]);
 
-  const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) => {
-    return (turnAttachments || []).map((attachment, idx) => ({
+  const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) =>
+    (turnAttachments || []).map((attachment, idx) => ({
       id: `compose-${Date.now()}-${idx}-${attachment.name}`,
       name: attachment.name,
       status: "indexed" as const,
       fileId: attachment.fileId,
     }));
-  };
 
   const removeAttachment = (attachmentId: string) => {
     setAttachments((previous) => {
@@ -146,7 +151,11 @@ function useChatMainInteractions({
     setMessage("");
     await onSendMessage(payload, turnAttachments, {
       citationMode,
-      useMindmap: false,
+      useMindmap: mindmapEnabled,
+      mindmapSettings: {
+        max_depth: mindmapMaxDepth,
+        include_reasoning_map: mindmapIncludeReasoning,
+      },
       agentMode,
       accessMode,
     });
@@ -209,7 +218,11 @@ function useChatMainInteractions({
     showActionStatus("Message updated. Generating response...");
     await onSendMessage(value, editedTurn?.attachments, {
       citationMode,
-      useMindmap: false,
+      useMindmap: mindmapEnabled,
+      mindmapSettings: {
+        max_depth: mindmapMaxDepth,
+        include_reasoning_map: mindmapIncludeReasoning,
+      },
       agentMode,
       accessMode,
     });
@@ -271,7 +284,6 @@ function useChatMainInteractions({
     if (!selectedFiles || !selectedFiles.length) {
       return;
     }
-
     const selectedRows = Array.from(selectedFiles);
     const overSizeFile = selectedRows.find((file) => file.size > CHAT_MAX_FILE_SIZE_BYTES);
     if (overSizeFile) {
@@ -287,7 +299,6 @@ function useChatMainInteractions({
       event.target.value = "";
       return;
     }
-
     const pending = selectedRows.map((file, idx) => ({
       id: `${Date.now()}-${idx}-${file.name}`,
       name: file.name,
@@ -297,7 +308,6 @@ function useChatMainInteractions({
       mimeType: String(file.type || ""),
     }));
     setAttachments((prev) => [...prev, ...pending]);
-
     const updatePendingMessage = (text: string) => {
       setAttachments((prev) =>
         prev.map((attachment) =>
@@ -357,23 +367,7 @@ function useChatMainInteractions({
           const reason = job.errors[0] || job.message || `Ingestion job ${job.status}`;
           throw new Error(reason);
         }
-
-        const bytesTotal = Number(job.bytes_total || 0);
-        const bytesIndexed = Number(job.bytes_indexed || 0);
-        const percent =
-          bytesTotal > 0
-            ? Math.max(0, Math.min(100, Math.round((bytesIndexed / bytesTotal) * 100)))
-            : Math.max(
-                0,
-                Math.min(
-                  100,
-                  Math.round(
-                    ((Number(job.processed_items || 0) / Math.max(1, Number(job.total_items || 0))) *
-                      100),
-                  ),
-                ),
-              );
-        updatePendingMessage(`Indexing ${percent}%`);
+        updatePendingMessage(formatIngestionJobProgress(job));
 
         if (Date.now() - startedAt > timeoutMs) {
           throw new Error("Ingestion timed out while indexing attachments.");
@@ -381,20 +375,22 @@ function useChatMainInteractions({
         await new Promise((resolve) => window.setTimeout(resolve, 1500));
       }
     };
-
     setIsUploading(true);
     try {
-      const hasVeryLargeFile = selectedRows.some((file) => file.size >= 100 * 1024 * 1024);
-      const shouldQueueAsyncJob =
-        Boolean(onCreateFileIngestionJob) &&
-        (hasVeryLargeFile || totalBytes >= 250 * 1024 * 1024 || selectedRows.length >= 8);
+      const shouldQueueAsyncJob = Boolean(onCreateFileIngestionJob);
 
       if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
-        updatePendingMessage("Indexing queued");
+        updatePendingMessage("Uploading to server 0%");
         const queued = await onCreateFileIngestionJob(selectedFiles, {
           reindex: true,
           scope: "chat_temp",
+          onUploadProgress: (loadedBytes, totalBytesBytes) => {
+            updatePendingMessage(
+              formatUploadProgress(loadedBytes, totalBytesBytes, "creating indexing job"),
+            );
+          },
         });
+        updatePendingMessage(formatIngestionJobProgress(queued));
         showActionStatus(
           `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
         );
@@ -407,19 +403,13 @@ function useChatMainInteractions({
       } else {
         const response = await onUploadFiles(selectedFiles, {
           onUploadProgress: (loadedBytes, totalBytesBytes) => {
-            if (!totalBytesBytes || totalBytesBytes <= 0) {
-              updatePendingMessage("Uploading");
-              return;
-            }
-            const percent = Math.max(
-              0,
-              Math.min(100, Math.round((loadedBytes / totalBytesBytes) * 100)),
+            updatePendingMessage(
+              formatUploadProgress(
+                loadedBytes,
+                totalBytesBytes,
+                "server indexing in progress (no live server metrics)",
+              ),
             );
-            if (percent >= 100) {
-              updatePendingMessage("Upload complete. Processing...");
-              return;
-            }
-            updatePendingMessage(`Uploading ${percent}%`);
           },
         });
         applyUploadResult({

@@ -3,10 +3,18 @@ from __future__ import annotations
 import html
 import json
 import re
+from itertools import combinations
 from typing import Any
 
 from .constants import (
+    MAIA_CITATION_ANCHOR_INDEX_ENABLED,
+    MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED,
+    MAIA_CITATION_STRENGTH_BADGES_ENABLED,
     MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
+    MAIA_CITATION_STRENGTH_WEIGHT_LLM,
+    MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL,
+    MAIA_CITATION_STRENGTH_WEIGHT_SPAN,
+    MAIA_CITATION_UNIFIED_REFS_ENABLED,
     MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
 )
 
@@ -33,6 +41,10 @@ _CITATION_ANCHOR_OPEN_RE = re.compile(
 )
 _DETAILS_BOXES_RE = re.compile(r"data-boxes=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _DETAILS_STRENGTH_RE = re.compile(r"data-strength=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_UNIT_ID_RE = re.compile(r"data-unit-id=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_MATCH_QUALITY_RE = re.compile(r"data-match-quality=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_CHAR_START_RE = re.compile(r"data-char-start=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
+_DETAILS_CHAR_END_RE = re.compile(r"data-char-end=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 
@@ -43,6 +55,14 @@ def _to_float(value: Any) -> float | None:
     except Exception:
         return None
     if parsed != parsed:  # NaN
+        return None
+    return parsed
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
         return None
     return parsed
 
@@ -139,18 +159,41 @@ def _score_value(raw: Any) -> float:
     return parsed if parsed is not None else 0.0
 
 
-def _snippet_strength_score(snippet: dict[str, Any]) -> float:
-    base = (
-        _score_value(snippet.get("llm_trulens_score"))
-        + _score_value(snippet.get("rerank_score"))
-        + _score_value(snippet.get("vector_score"))
-    )
-    exact_match_bonus = 0.05 if bool(snippet.get("is_exact_match", False)) else 0.0
+def _normalized_retrieval_signal(snippet: dict[str, Any]) -> float:
+    # Fast QA retrieval `score` is an unbounded rank-like score; normalize into [0, 1].
+    lexical = min(1.0, max(0.0, _score_value(snippet.get("score"))) / 25.0)
+    rerank = max(0.0, _score_value(snippet.get("rerank_score")))
+    vector = max(0.0, _score_value(snippet.get("vector_score")))
+    return min(1.0, max(lexical, rerank, vector))
+
+
+def _span_bonus(snippet: dict[str, Any]) -> float:
+    exact_bonus = 0.60 if bool(snippet.get("is_exact_match", False)) else 0.0
     span_text = str(snippet.get("text", "") or "")
-    span_length_bonus = min(0.10, len(span_text) / 4000.0)
-    # Keep retrieval score as a weak fallback signal when explicit model scores are absent.
-    retrieval_bonus = min(0.05, max(0.0, _score_value(snippet.get("score"))) / 1000.0)
-    return base + exact_match_bonus + span_length_bonus + retrieval_bonus
+    length_bonus = min(0.40, len(span_text) / 900.0)
+    return min(1.0, exact_bonus + length_bonus)
+
+
+def _strength_tier(value: Any) -> int:
+    score = _score_value(value)
+    if score >= 0.70:
+        return 3
+    if score >= 0.42:
+        return 2
+    return 1
+
+
+def _snippet_strength_score(snippet: dict[str, Any]) -> float:
+    retrieval = _normalized_retrieval_signal(snippet)
+    llm_score = min(1.0, max(0.0, _score_value(snippet.get("llm_trulens_score"))))
+    span_quality = _span_bonus(snippet)
+    weighted = (
+        (retrieval * float(MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL))
+        + (llm_score * float(MAIA_CITATION_STRENGTH_WEIGHT_LLM))
+        + (span_quality * float(MAIA_CITATION_STRENGTH_WEIGHT_SPAN))
+    )
+    # Keep bounded for stable UI ordering and badge tiers.
+    return round(max(0.0, min(1.0, weighted)), 6)
 
 
 def _source_type_from_name(source_name: str) -> str:
@@ -378,18 +421,39 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
         return ""
     file_id = str(ref.get("source_id", "") or "").strip()
     page_label = str(ref.get("page_label", "") or "").strip()
+    unit_id = str(ref.get("unit_id", "") or "").strip()
     phrase = str(ref.get("phrase", "") or "").strip()
+    match_quality = str(ref.get("match_quality", "") or "").strip()
+    try:
+        char_start = int(ref.get("char_start", 0) or 0) if str(ref.get("char_start", "")).strip() else 0
+    except Exception:
+        char_start = 0
+    try:
+        char_end = int(ref.get("char_end", 0) or 0) if str(ref.get("char_end", "")).strip() else 0
+    except Exception:
+        char_end = 0
     strength_score = _score_value(ref.get("strength_score"))
+    strength_tier = _strength_tier(strength_score)
     boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
     attrs = [f"href='#evidence-{ref_id}'", f"id='citation-{ref_id}'", "class='citation'"]
     if file_id:
         attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
     if page_label:
         attrs.append(f"data-page='{html.escape(page_label, quote=True)}'")
+    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id:
+        attrs.append(f"data-unit-id='{html.escape(unit_id[:160], quote=True)}'")
     if phrase:
         attrs.append(f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'")
+    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality:
+        attrs.append(f"data-match-quality='{html.escape(match_quality[:32], quote=True)}'")
+    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0:
+        attrs.append(f"data-char-start='{char_start}'")
+    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start:
+        attrs.append(f"data-char-end='{char_end}'")
     if strength_score > 0:
         attrs.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
+        if MAIA_CITATION_STRENGTH_BADGES_ENABLED:
+            attrs.append(f"data-strength-tier='{strength_tier}'")
     if boxes_payload:
         attrs.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
     return f"<a {' '.join(attrs)}>[{ref_id}]</a>"
@@ -535,20 +599,51 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         additions: list[str] = []
         file_id = str(ref.get("source_id", "") or "").strip()
         page_label = str(ref.get("page_label", "") or "").strip()
+        unit_id = str(ref.get("unit_id", "") or "").strip()
         phrase = str(ref.get("phrase", "") or "").strip()
+        match_quality = str(ref.get("match_quality", "") or "").strip()
+        try:
+            char_start = int(ref.get("char_start", 0) or 0) if str(ref.get("char_start", "")).strip() else 0
+        except Exception:
+            char_start = 0
+        try:
+            char_end = int(ref.get("char_end", 0) or 0) if str(ref.get("char_end", "")).strip() else 0
+        except Exception:
+            char_end = 0
         strength_score = _score_value(ref.get("strength_score"))
+        strength_tier = _strength_tier(strength_score)
         boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
 
         if file_id and not re.search(r"\bdata-file-id=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
         if page_label and not re.search(r"\bdata-page=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(f"data-page='{html.escape(page_label, quote=True)}'")
+        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id and not re.search(
+            r"\bdata-unit-id=['\"]", anchor_open, flags=re.IGNORECASE
+        ):
+            additions.append(f"data-unit-id='{html.escape(unit_id[:160], quote=True)}'")
         if phrase and not re.search(r"\bdata-phrase=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(
                 f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'"
             )
+        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality and not re.search(
+            r"\bdata-match-quality=['\"]", anchor_open, flags=re.IGNORECASE
+        ):
+            additions.append(f"data-match-quality='{html.escape(match_quality[:32], quote=True)}'")
+        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0 and not re.search(
+            r"\bdata-char-start=['\"]", anchor_open, flags=re.IGNORECASE
+        ):
+            additions.append(f"data-char-start='{char_start}'")
+        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start and not re.search(
+            r"\bdata-char-end=['\"]", anchor_open, flags=re.IGNORECASE
+        ):
+            additions.append(f"data-char-end='{char_end}'")
         if strength_score > 0 and not re.search(r"\bdata-strength=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
+            if MAIA_CITATION_STRENGTH_BADGES_ENABLED and not re.search(
+                r"\bdata-strength-tier=['\"]", anchor_open, flags=re.IGNORECASE
+            ):
+                additions.append(f"data-strength-tier='{strength_tier}'")
         if boxes_payload and not re.search(r"\bdata-boxes=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
 
@@ -578,10 +673,21 @@ def assign_fast_source_refs(
         source_id = str(snippet.get("source_id", "") or "").strip()
         source_name = str(snippet.get("source_name", "Indexed file"))
         page_label = str(snippet.get("page_label", "") or "").strip()
+        unit_id = str(snippet.get("unit_id", "") or "").strip()
+        match_quality = str(snippet.get("match_quality", "") or "").strip() or "estimated"
+        try:
+            char_start = int(snippet.get("char_start", 0) or 0) if str(snippet.get("char_start", "")).strip() else 0
+        except Exception:
+            char_start = 0
+        try:
+            char_end = int(snippet.get("char_end", 0) or 0) if str(snippet.get("char_end", "")).strip() else 0
+        except Exception:
+            char_end = 0
         snippet_boxes = _normalize_highlight_boxes(snippet.get("highlight_boxes"))
         phrase = _snippet_signature_text(snippet.get("text", ""))
         snippet_strength = _snippet_strength_score(snippet)
-        key = (source_id or source_name, page_label, phrase)
+        dedup_span = unit_id if (MAIA_CITATION_UNIFIED_REFS_ENABLED and unit_id) else phrase
+        key = (source_id or source_name, page_label, dedup_span)
         ref_id = ref_by_key.get(key)
         if ref_id is None:
             ref_id = len(refs) + 1
@@ -598,6 +704,10 @@ def assign_fast_source_refs(
                     "page_label": page_label,
                     "label": label,
                     "phrase": phrase,
+                    "unit_id": unit_id,
+                    "char_start": char_start,
+                    "char_end": char_end,
+                    "match_quality": match_quality,
                     "highlight_boxes": snippet_boxes,
                     "strength_score": snippet_strength,
                     "source_type": _source_type_from_name(source_name),
@@ -616,10 +726,24 @@ def assign_fast_source_refs(
                     _score_value(existing_ref.get("strength_score")),
                     snippet_strength,
                 )
+                if unit_id and not str(existing_ref.get("unit_id", "")).strip():
+                    existing_ref["unit_id"] = unit_id
+                if match_quality and str(existing_ref.get("match_quality", "")).strip() in {"", "estimated"}:
+                    existing_ref["match_quality"] = match_quality
+                if char_start > 0 and int(existing_ref.get("char_start", 0) or 0) <= 0:
+                    existing_ref["char_start"] = char_start
+                if char_end > char_start and int(existing_ref.get("char_end", 0) or 0) <= 0:
+                    existing_ref["char_end"] = char_end
 
         enriched_item = dict(snippet)
         enriched_item["ref_id"] = ref_id
         enriched_item["strength_score"] = snippet_strength
+        enriched_item["unit_id"] = unit_id
+        if char_start > 0:
+            enriched_item["char_start"] = char_start
+        if char_end > char_start:
+            enriched_item["char_end"] = char_end
+        enriched_item["match_quality"] = match_quality
         if snippet_boxes:
             enriched_item["highlight_boxes"] = snippet_boxes
         enriched.append(enriched_item)
@@ -632,6 +756,7 @@ def assign_fast_source_refs(
                 -_score_value(ref.get("llm_trulens_score")),
                 str(ref.get("source_id", "") or ""),
                 str(ref.get("page_label", "") or ""),
+                str(ref.get("unit_id", "") or ""),
                 str(ref.get("phrase", "") or ""),
             ),
         )
@@ -784,6 +909,158 @@ def build_source_usage(
     return usage_rows
 
 
+def build_claim_signal_summary(
+    *,
+    answer_text: str,
+    refs: list[dict[str, Any]],
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    if enabled is None:
+        enabled = MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED
+    if not enabled:
+        return {}
+
+    text = str(answer_text or "")
+    if not text.strip() or not refs:
+        return {}
+
+    ref_by_id: dict[int, dict[str, Any]] = {
+        int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
+    }
+    if not ref_by_id:
+        return {}
+
+    rows: list[dict[str, Any]] = []
+    supported = 0
+    contradicted = 0
+    mixed = 0
+
+    for segment_match in _SENTENCE_SEGMENT_RE.finditer(text):
+        segment = segment_match.group(0)
+        if not segment.strip():
+            continue
+        ref_ids = {
+            int(match)
+            for match in re.findall(r"\[(\d{1,3})\]", segment)
+            if int(match) in ref_by_id
+        }
+        if not ref_ids:
+            continue
+
+        cleaned_claim = _clean_text(re.sub(r"\[(\d{1,3})\]", "", segment))
+        if len(cleaned_claim) < 16:
+            continue
+
+        support_votes = 0
+        contradiction_votes = 0
+        if len(ref_ids) >= 2:
+            for left_id, right_id in combinations(sorted(ref_ids), 2):
+                left = ref_by_id.get(left_id, {})
+                right = ref_by_id.get(right_id, {})
+                left_tokens = _tokens(
+                    " ".join(
+                        [
+                            str(left.get("phrase", "") or ""),
+                            str(left.get("label", "") or ""),
+                            str(left.get("source_name", "") or ""),
+                        ]
+                    )
+                )
+                right_tokens = _tokens(
+                    " ".join(
+                        [
+                            str(right.get("phrase", "") or ""),
+                            str(right.get("label", "") or ""),
+                            str(right.get("source_name", "") or ""),
+                        ]
+                    )
+                )
+                if not left_tokens or not right_tokens:
+                    continue
+                inter = len(left_tokens & right_tokens)
+                union = len(left_tokens | right_tokens)
+                jaccard = (inter / float(union)) if union > 0 else 0.0
+                if jaccard >= 0.22:
+                    support_votes += 1
+                elif jaccard <= 0.08:
+                    contradiction_votes += 1
+
+        if support_votes > 0 and contradiction_votes > 0:
+            status = "mixed"
+            mixed += 1
+        elif support_votes > 0:
+            status = "supported"
+            supported += 1
+        elif contradiction_votes > 0:
+            status = "contradicted"
+            contradicted += 1
+        else:
+            status = "insufficient"
+
+        rows.append(
+            {
+                "claim": cleaned_claim,
+                "ref_ids": sorted(ref_ids),
+                "status": status,
+                "support_votes": support_votes,
+                "contradiction_votes": contradiction_votes,
+            }
+        )
+        if len(rows) >= 16:
+            break
+
+    if not rows:
+        return {}
+    return {
+        "claims_evaluated": len(rows),
+        "supported_claims": supported,
+        "contradicted_claims": contradicted,
+        "mixed_claims": mixed,
+        "rows": rows,
+    }
+
+
+def build_citation_quality_metrics(
+    *,
+    snippets_with_refs: list[dict[str, Any]],
+    refs: list[dict[str, Any]],
+    answer_text: str,
+) -> dict[str, Any]:
+    cited_ref_ids = set(collect_cited_ref_ids(answer_text))
+    refs_with_boxes = sum(1 for ref in refs if _normalize_highlight_boxes(ref.get("highlight_boxes")))
+    refs_with_unit_id = sum(1 for ref in refs if str(ref.get("unit_id", "") or "").strip())
+    refs_with_offsets = sum(
+        1
+        for ref in refs
+        if (_to_int(ref.get("char_start", 0)) or 0) > 0
+        and (_to_int(ref.get("char_end", 0)) or 0) > (_to_int(ref.get("char_start", 0)) or 0)
+    )
+    match_quality_counter: dict[str, int] = {}
+    for ref in refs:
+        quality = str(ref.get("match_quality", "") or "").strip().lower() or "estimated"
+        match_quality_counter[quality] = int(match_quality_counter.get(quality, 0)) + 1
+    return {
+        "retrieved_snippets": len(snippets_with_refs),
+        "total_refs": len(refs),
+        "cited_refs": len(cited_ref_ids),
+        "refs_with_boxes": refs_with_boxes,
+        "refs_with_unit_id": refs_with_unit_id,
+        "refs_with_offsets": refs_with_offsets,
+        "anchor_attribute_completeness": (
+            round(
+                (
+                    (refs_with_boxes + refs_with_unit_id + refs_with_offsets)
+                    / float(max(1, len(refs) * 3))
+                ),
+                6,
+            )
+            if refs
+            else 0.0
+        ),
+        "match_quality_counts": match_quality_counter,
+    }
+
+
 def resolve_required_citation_mode(citation_mode: str | None) -> str:
     mode = (citation_mode or "").strip().lower()
     if mode == CITATION_MODE_INLINE:
@@ -853,6 +1130,10 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         boxes_match = _DETAILS_BOXES_RE.search(tag)
         strength_match = _DETAILS_STRENGTH_RE.search(tag)
+        unit_id_match = _DETAILS_UNIT_ID_RE.search(tag)
+        match_quality_match = _DETAILS_MATCH_QUALITY_RE.search(tag)
+        char_start_match = _DETAILS_CHAR_START_RE.search(tag)
+        char_end_match = _DETAILS_CHAR_END_RE.search(tag)
         if not page_match:
             summary_match = re.search(
                 r"<summary[^>]*>[\s\S]*?page\s+(\d{1,4})[\s\S]*?</summary>",
@@ -875,6 +1156,14 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
                 "label": f"Evidence {ref_id}",
                 "phrase": phrase,
                 "highlight_boxes": highlight_boxes,
+                "unit_id": unit_id_match.group(1).strip() if unit_id_match else "",
+                "match_quality": (
+                    match_quality_match.group(1).strip().lower()
+                    if match_quality_match
+                    else "estimated"
+                ),
+                "char_start": int(char_start_match.group(1)) if char_start_match else 0,
+                "char_end": int(char_end_match.group(1)) if char_end_match else 0,
                 "strength_score": _score_value(strength_match.group(1) if strength_match else 0.0),
             }
         )
@@ -974,14 +1263,40 @@ def build_fast_info_html(
 
         details_id = f" id='evidence-{ref_id}'" if ref_id > 0 else ""
         source_id = str(snippet.get("source_id", "") or "").strip()
+        unit_id = str(snippet.get("unit_id", "") or "").strip()
+        match_quality = str(snippet.get("match_quality", "") or "").strip().lower() or "estimated"
+        try:
+            char_start = int(snippet.get("char_start", 0) or 0) if str(snippet.get("char_start", "")).strip() else 0
+        except Exception:
+            char_start = 0
+        try:
+            char_end = int(snippet.get("char_end", 0) or 0) if str(snippet.get("char_end", "")).strip() else 0
+        except Exception:
+            char_end = 0
         details_page_attr = f" data-page='{page_label}'" if page_label else ""
         details_file_attr = (
             f" data-file-id='{html.escape(source_id, quote=True)}'" if source_id else ""
         )
+        details_unit_attr = (
+            f" data-unit-id='{html.escape(unit_id[:160], quote=True)}'" if unit_id else ""
+        )
+        details_match_quality_attr = (
+            f" data-match-quality='{html.escape(match_quality[:32], quote=True)}'"
+            if match_quality
+            else ""
+        )
+        details_char_start_attr = f" data-char-start='{char_start}'" if char_start > 0 else ""
+        details_char_end_attr = f" data-char-end='{char_end}'" if char_end > char_start else ""
         strength_score = _score_value(snippet.get("strength_score"))
+        strength_tier = _strength_tier(strength_score)
         details_strength_attr = (
             f" data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'"
             if strength_score > 0
+            else ""
+        )
+        details_strength_tier_attr = (
+            f" data-strength-tier='{strength_tier}'"
+            if MAIA_CITATION_STRENGTH_BADGES_ENABLED and strength_score > 0
             else ""
         )
         boxes_payload = _serialize_highlight_boxes(snippet.get("highlight_boxes"))
@@ -992,7 +1307,12 @@ def build_fast_info_html(
         if ref_id > 0:
             source_label = f"[{ref_id}] {source_name}"
         block = (
-            f"<details class='evidence'{details_id}{details_file_attr}{details_page_attr}{details_strength_attr}{details_boxes_attr} {'open' if not info_blocks else ''}>"
+            f"<details class='evidence'{details_id}{details_file_attr}{details_page_attr}"
+            f"{details_unit_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
+            f"{details_match_quality_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
+            f"{details_char_start_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
+            f"{details_char_end_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
+            f"{details_strength_attr}{details_strength_tier_attr}{details_boxes_attr} {'open' if not info_blocks else ''}>"
             f"<summary><i>{summary_label}</i></summary>"
             f"<div><b>Source:</b> {source_label}</div>"
             f"<div class='evidence-content'><b>Extract:</b> {excerpt}</div>"

@@ -151,6 +151,12 @@ function toCitationFromEvidence(params: {
     extract: row.extract || citationFocus.extract || row.title || row.source || "Evidence extract unavailable.",
     evidenceId: row.id,
     highlightBoxes: row.highlightBoxes || citationFocus.highlightBoxes,
+    strengthScore: row.strengthScore ?? citationFocus.strengthScore,
+    strengthTier: row.strengthTier ?? citationFocus.strengthTier,
+    matchQuality: row.matchQuality || citationFocus.matchQuality,
+    unitId: row.unitId || citationFocus.unitId,
+    charStart: row.charStart ?? citationFocus.charStart,
+    charEnd: row.charEnd ?? citationFocus.charEnd,
   };
 }
 
@@ -169,6 +175,12 @@ function toCitationFromPage(params: {
     extract: citationFocus.extract || title,
     evidenceId: citationFocus.evidenceId,
     highlightBoxes: citationFocus.highlightBoxes,
+    strengthScore: citationFocus.strengthScore,
+    strengthTier: citationFocus.strengthTier,
+    matchQuality: citationFocus.matchQuality,
+    unitId: citationFocus.unitId,
+    charStart: citationFocus.charStart,
+    charEnd: citationFocus.charEnd,
   };
 }
 

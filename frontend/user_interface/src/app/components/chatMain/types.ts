@@ -14,6 +14,8 @@ type ChatMainProps = {
     options?: {
       citationMode?: string;
       useMindmap?: boolean;
+      mindmapSettings?: Record<string, unknown>;
+      mindmapFocus?: Record<string, unknown>;
       agentMode?: "ask" | "company_agent";
       accessMode?: "restricted" | "full_access";
     },
@@ -27,6 +29,7 @@ type ChatMainProps = {
     options?: {
       reindex?: boolean;
       scope?: "persistent" | "chat_temp";
+      onUploadProgress?: (loadedBytes: number, totalBytes: number) => void;
     },
   ) => Promise<{
     id: string;
@@ -45,6 +48,10 @@ type ChatMainProps = {
   onCitationModeChange: (mode: string) => void;
   mindmapEnabled: boolean;
   onMindmapEnabledChange: (enabled: boolean) => void;
+  mindmapMaxDepth: number;
+  onMindmapMaxDepthChange: (depth: number) => void;
+  mindmapIncludeReasoning: boolean;
+  onMindmapIncludeReasoningChange: (enabled: boolean) => void;
   onCitationClick: (citation: CitationFocus) => void;
   agentMode: "ask" | "company_agent";
   onAgentModeChange: (mode: "ask" | "company_agent") => void;

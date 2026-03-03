@@ -406,6 +406,10 @@ def load_recent_chunks_for_fast_qa(
                 "page_label": page_label,
                 "image_origin": image_by_source.get(source_key, {}).get("image_origin"),
                 "highlight_boxes": highlight_boxes,
+                "unit_id": str(metadata.get("unit_id", "") or "").strip(),
+                "char_start": metadata.get("char_start"),
+                "char_end": metadata.get("char_end"),
+                "match_quality": str(metadata.get("match_quality", "") or "").strip() or "estimated",
                 "llm_trulens_score": _to_float(metadata.get("llm_trulens_score")) or 0.0,
                 "rerank_score": _to_float(metadata.get("rerank_score")) or 0.0,
                 "vector_score": (
@@ -481,6 +485,10 @@ def load_recent_chunks_for_fast_qa(
                 "page_label": str(image_payload.get("page_label", "") or ""),
                 "image_origin": image_payload.get("image_origin"),
                 "highlight_boxes": [],
+                "unit_id": "",
+                "char_start": 0,
+                "char_end": 0,
+                "match_quality": "estimated",
             }
         )
 

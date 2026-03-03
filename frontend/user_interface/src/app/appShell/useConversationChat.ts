@@ -17,10 +17,18 @@ import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from
 
 type AgentMode = "ask" | "company_agent";
 type AccessMode = "restricted" | "full_access";
+const MINDMAP_SETTINGS_STORAGE_KEY = "maia.conversation-mindmap-settings";
+type ConversationMindmapSettings = {
+  enabled: boolean;
+  maxDepth: number;
+  includeReasoningMap: boolean;
+};
 
 type SendMessageOptions = {
   citationMode?: string;
   useMindmap?: boolean;
+  mindmapSettings?: Record<string, unknown>;
+  mindmapFocus?: Record<string, unknown>;
   agentMode?: AgentMode;
   accessMode?: AccessMode;
 };
@@ -53,6 +61,25 @@ export function useConversationChat({
   const [infoText, setInfoText] = useState("");
   const [citationMode, setCitationMode] = useState("inline");
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
+  const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
+  const [mindmapIncludeReasoning, setMindmapIncludeReasoning] = useState(true);
+  const [conversationMindmapSettings, setConversationMindmapSettings] = useState<
+    Record<string, ConversationMindmapSettings>
+  >(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const raw = window.localStorage.getItem(MINDMAP_SETTINGS_STORAGE_KEY);
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw) as Record<string, ConversationMindmapSettings>;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
   const [composerMode, setComposerMode] = useState<AgentMode>("ask");
   const [accessMode, setAccessMode] = useState<AccessMode>("restricted");
@@ -99,6 +126,16 @@ export function useConversationChat({
     selectedProjectId,
   ]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      MINDMAP_SETTINGS_STORAGE_KEY,
+      JSON.stringify(conversationMindmapSettings),
+    );
+  }, [conversationMindmapSettings]);
+
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
       setSelectedConversationId(conversationId);
@@ -130,6 +167,12 @@ export function useConversationChat({
 
       const savedMode = conversationModes[conversationId] || "ask";
       setComposerMode(savedMode);
+      const mapSettings = conversationMindmapSettings[conversationId];
+      if (mapSettings) {
+        setMindmapEnabled(Boolean(mapSettings.enabled));
+        setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
+        setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
+      }
 
       if (hydratedTurns.length > 0) {
         const lastIdx = hydratedTurns.length - 1;
@@ -141,7 +184,7 @@ export function useConversationChat({
       setSelectedTurnIndex(null);
       setInfoText("");
     },
-    [conversationModes],
+    [conversationMindmapSettings, conversationModes],
   );
 
   const handleCreateConversation = useCallback(async () => {
@@ -308,6 +351,11 @@ export function useConversationChat({
           indexSelection,
           citation: options?.citationMode ?? citationMode,
           useMindmap: options?.useMindmap ?? mindmapEnabled,
+          mindmapSettings: options?.mindmapSettings ?? {
+            max_depth: mindmapMaxDepth,
+            include_reasoning_map: mindmapIncludeReasoning,
+          },
+          mindmapFocus: options?.mindmapFocus ?? {},
           agentMode: effectiveMode,
           accessMode: effectiveAccessMode,
         };
@@ -416,6 +464,17 @@ export function useConversationChat({
         }));
         setComposerMode(effectiveMode);
         setSelectedConversationId(response.conversation_id);
+        setConversationMindmapSettings((prev) => ({
+          ...prev,
+          [response.conversation_id]: {
+            enabled: Boolean(options?.useMindmap ?? mindmapEnabled),
+            maxDepth: Number((options?.mindmapSettings?.["max_depth"] as number) ?? mindmapMaxDepth) || 4,
+            includeReasoningMap: Boolean(
+              (options?.mindmapSettings?.["include_reasoning_map"] as boolean) ??
+                mindmapIncludeReasoning,
+            ),
+          },
+        }));
         setInfoText(response.info || "");
         setChatTurns((prev) => {
           const next = [...prev];
@@ -441,6 +500,7 @@ export function useConversationChat({
             humanReviewNotes: response.human_review_notes || null,
             webSummary: response.web_summary || {},
             infoPanel: response.info_panel || {},
+            mindmap: response.mindmap || {},
             activityRunId: response.activity_run_id || null,
             activityEvents: streamedEventsLocal,
           };
@@ -495,9 +555,12 @@ export function useConversationChat({
       composerMode,
       defaultIndexId,
       mindmapEnabled,
+      mindmapIncludeReasoning,
+      mindmapMaxDepth,
       refreshConversations,
       selectedConversationId,
       selectedProjectId,
+      setConversationMindmapSettings,
       setConversationModes,
       setConversationProjects,
     ],
@@ -545,6 +608,25 @@ export function useConversationChat({
     [selectedConversationId, setConversationModes],
   );
 
+  useEffect(() => {
+    if (!selectedConversationId) {
+      return;
+    }
+    setConversationMindmapSettings((prev) => ({
+      ...prev,
+      [selectedConversationId]: {
+        enabled: mindmapEnabled,
+        maxDepth: mindmapMaxDepth,
+        includeReasoningMap: mindmapIncludeReasoning,
+      },
+    }));
+  }, [
+    mindmapEnabled,
+    mindmapIncludeReasoning,
+    mindmapMaxDepth,
+    selectedConversationId,
+  ]);
+
   return {
     accessMode,
     activityEvents,
@@ -565,6 +647,8 @@ export function useConversationChat({
     isActivityStreaming,
     isSending,
     mindmapEnabled,
+    mindmapIncludeReasoning,
+    mindmapMaxDepth,
     refreshConversations,
     selectedConversationId,
     selectedTurnIndex,
@@ -574,6 +658,8 @@ export function useConversationChat({
     setComposerMode,
     setInfoText,
     setMindmapEnabled,
+    setMindmapIncludeReasoning,
+    setMindmapMaxDepth,
     visibleConversations,
   };
 }

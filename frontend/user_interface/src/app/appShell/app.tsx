@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
@@ -11,6 +11,10 @@ import {
   clearCitationDeepLinkInUrl,
   readCitationDeepLinkFromUrl,
 } from "../utils/citationDeepLink";
+import {
+  clearMindmapShareInUrl,
+  readMindmapShareFromUrl,
+} from "../utils/mindmapDeepLink";
 import { ResizeHandle } from "./ResizeHandle";
 import { useConversationChat } from "./useConversationChat";
 import { useFileLibrary } from "./useFileLibrary";
@@ -19,7 +23,9 @@ import { useProjectState } from "./useProjectState";
 
 export default function App() {
   const deepLinkHandledRef = useRef(false);
+  const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
+  const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -81,6 +87,36 @@ export default function App() {
   }, [
     chatState.handleSelectConversation,
     chatState.setCitationFocus,
+    layout.setActiveTab,
+    layout.setIsInfoPanelOpen,
+  ]);
+
+  useEffect(() => {
+    if (mindmapLinkHandledRef.current) {
+      return;
+    }
+    const shared = readMindmapShareFromUrl();
+    if (!shared) {
+      mindmapLinkHandledRef.current = true;
+      return;
+    }
+    mindmapLinkHandledRef.current = true;
+    const applyShare = async () => {
+      if (shared.conversationId) {
+        try {
+          await chatState.handleSelectConversation(shared.conversationId);
+        } catch {
+          // Continue rendering shared map even if conversation is unavailable.
+        }
+      }
+      setSharedMindmap(shared.map);
+      layout.setActiveTab("Chat");
+      layout.setIsInfoPanelOpen(true);
+      clearMindmapShareInUrl();
+    };
+    void applyShare();
+  }, [
+    chatState.handleSelectConversation,
     layout.setActiveTab,
     layout.setIsInfoPanelOpen,
   ]);
@@ -150,6 +186,12 @@ export default function App() {
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={(tab) => layout.setActiveTab(tab)}
+              mindmapEnabled={chatState.mindmapEnabled}
+              onMindmapEnabledChange={chatState.setMindmapEnabled}
+              mindmapMaxDepth={chatState.mindmapMaxDepth}
+              onMindmapMaxDepthChange={chatState.setMindmapMaxDepth}
+              mindmapIncludeReasoning={chatState.mindmapIncludeReasoning}
+              onMindmapIncludeReasoningChange={chatState.setMindmapIncludeReasoning}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -178,6 +220,10 @@ export default function App() {
               onCitationModeChange={chatState.setCitationMode}
               mindmapEnabled={chatState.mindmapEnabled}
               onMindmapEnabledChange={chatState.setMindmapEnabled}
+              mindmapMaxDepth={chatState.mindmapMaxDepth}
+              onMindmapMaxDepthChange={chatState.setMindmapMaxDepth}
+              mindmapIncludeReasoning={chatState.mindmapIncludeReasoning}
+              onMindmapIncludeReasoningChange={chatState.setMindmapIncludeReasoning}
               agentMode={chatState.composerMode}
               onAgentModeChange={chatState.handleAgentModeChange}
               accessMode={chatState.accessMode}
@@ -210,10 +256,40 @@ export default function App() {
                 assistantHtml={selectedTurn?.assistant || ""}
                 infoHtml={selectedTurn?.info || ""}
                 infoPanel={selectedTurn?.infoPanel || {}}
+                mindmap={
+                  selectedTurn?.mindmap && Object.keys(selectedTurn.mindmap || {}).length > 0
+                    ? selectedTurn.mindmap
+                    : sharedMindmap || {}
+                }
                 sourceUsage={selectedTurn?.sourceUsage || []}
                 indexId={fileLibrary.defaultIndexId}
                 onClearCitationFocus={() => chatState.setCitationFocus(null)}
                 onSelectCitationFocus={(citation) => chatState.setCitationFocus(citation)}
+                onAskMindmapNode={(node) => {
+                  const focusText = String(node.text || "").trim();
+                  const focusTitle = String(node.title || "").trim();
+                  const nextPrompt = focusTitle
+                    ? `Focus on "${focusTitle}" and answer the follow-up in detail.`
+                    : "Focus on the selected mind-map node and answer in detail.";
+                  void chatState.handleSendMessage(nextPrompt, undefined, {
+                    citationMode: chatState.citationMode,
+                    useMindmap: chatState.mindmapEnabled,
+                    mindmapSettings: {
+                      max_depth: chatState.mindmapMaxDepth,
+                      include_reasoning_map: chatState.mindmapIncludeReasoning,
+                    },
+                    mindmapFocus: {
+                      node_id: node.nodeId,
+                      title: focusTitle,
+                      text: focusText,
+                      page_ref: node.pageRef,
+                      source_id: node.sourceId,
+                      source_name: node.sourceName,
+                    },
+                    agentMode: chatState.composerMode,
+                    accessMode: chatState.accessMode,
+                  });
+                }}
               />
             ) : null}
           </>

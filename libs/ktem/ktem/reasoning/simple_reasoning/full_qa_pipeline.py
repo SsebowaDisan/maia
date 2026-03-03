@@ -1,6 +1,7 @@
 import logging
+import json
+import re
 import threading
-from textwrap import dedent
 from typing import Generator
 
 from decouple import config
@@ -17,6 +18,7 @@ from maia.indices.qa.citation_qa import (
     DEFAULT_QA_TEXT_PROMPT,
     AnswerWithContextPipeline,
 )
+from maia.mindmap.indexer import build_reasoning_map
 from maia.indices.qa.citation_qa_inline import AnswerWithInlineCitation
 from maia.indices.qa.format_context import PrepareEvidencePipeline
 from maia.indices.qa.utils import replace_think_tag_with_details
@@ -36,6 +38,8 @@ class FullQAPipeline(BaseReasoning):
 
     trigger_context: int = 150
     use_rewrite: bool = False
+    mindmap_max_depth: int = 4
+    include_reasoning_map: bool = True
 
     retrievers: list[BaseComponent]
 
@@ -48,6 +52,65 @@ class FullQAPipeline(BaseReasoning):
         )
     )
     add_query_context: AddQueryContextPipeline = AddQueryContextPipeline.withx()
+
+    @staticmethod
+    def _filter_docs_by_mindmap_focus(
+        docs: list[RetrievedDocument],
+        focus: dict | None,
+    ) -> list[RetrievedDocument]:
+        payload = focus if isinstance(focus, dict) else {}
+        if not payload or not docs:
+            return docs
+
+        source_id = str(payload.get("source_id", "") or "").strip()
+        source_name = str(payload.get("source_name", "") or "").strip().lower()
+        page_ref = str(payload.get("page_ref", "") or payload.get("page_label", "") or "").strip()
+        unit_id = str(payload.get("unit_id", "") or "").strip()
+        focus_text = str(payload.get("text", "") or "").strip().lower()
+
+        filtered = docs
+        if source_id:
+            filtered = [
+                doc
+                for doc in filtered
+                if str((doc.metadata or {}).get("source_id", "") or "").strip() == source_id
+            ]
+        elif source_name:
+            filtered = [
+                doc
+                for doc in filtered
+                if source_name
+                in str((doc.metadata or {}).get("file_name", "") or "").strip().lower()
+            ]
+        if page_ref:
+            page_filtered = [
+                doc
+                for doc in filtered
+                if str((doc.metadata or {}).get("page_label", "") or "").strip() == page_ref
+            ]
+            if page_filtered:
+                filtered = page_filtered
+        if unit_id:
+            unit_filtered = [
+                doc
+                for doc in filtered
+                if str((doc.metadata or {}).get("unit_id", "") or "").strip() == unit_id
+            ]
+            if unit_filtered:
+                filtered = unit_filtered
+
+        if focus_text and filtered:
+            focus_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", focus_text)}
+
+            def overlap_score(doc: RetrievedDocument) -> int:
+                text = str(doc.text or "").lower()
+                return sum(1 for token in focus_tokens if token in text)
+
+            ranked = sorted(filtered, key=overlap_score, reverse=True)
+            if ranked and overlap_score(ranked[0]) > 0:
+                filtered = ranked[: max(4, min(10, len(ranked)))]
+
+        return filtered or docs
 
     def retrieve(
         self, message: str, history: list
@@ -95,45 +158,44 @@ class FullQAPipeline(BaseReasoning):
 
         return docs, info
 
-    def prepare_mindmap(self, answer) -> Document | None:
-        mindmap = answer.metadata["mindmap"]
-        if mindmap:
-            mindmap_text = mindmap.text
-            mindmap_svg = dedent(
-                """
-                <div class="markmap">
-                <script type="text/template">
-                ---
-                markmap:
-                    colorFreezeLevel: 2
-                    activeNode:
-                        placement: center
-                    initialExpandLevel: 4
-                    maxWidth: 200
-                ---
-                {}
-                </script>
-                </div>
-                """
-            ).format(mindmap_text)
+    def _parse_mindmap_payload(self, raw_payload) -> dict:
+        if isinstance(raw_payload, dict):
+            return raw_payload
+        if isinstance(raw_payload, Document):
+            nested = raw_payload.metadata.get("mindmap")
+            if isinstance(nested, dict):
+                return nested
+            try:
+                parsed = json.loads(str(raw_payload.text or ""))
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        if isinstance(raw_payload, str):
+            try:
+                parsed = json.loads(raw_payload)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
 
-            mindmap_content = Document(
-                channel="info",
-                content=Render.collapsible(
-                    header="""
-                    <i>Mindmap</i>
-                    <a href="#" id='mindmap-toggle'>
-                        [Expand]</a>
-                    <a href="#" id='mindmap-export'>
-                        [Export]</a>""",
-                    content=mindmap_svg,
-                    open=True,
-                ),
+    def prepare_mindmap(self, answer, docs, question) -> Document | None:
+        raw_mindmap = (answer.metadata or {}).get("mindmap")
+        payload = self._parse_mindmap_payload(raw_mindmap)
+        if not payload:
+            return None
+
+        if self.include_reasoning_map and not isinstance(payload.get("reasoning_map"), dict):
+            payload["reasoning_map"] = build_reasoning_map(
+                question=str(question or ""),
+                answer_text=str(answer.text or ""),
+                context_nodes=list(payload.get("nodes", []))[:4],
             )
-        else:
-            mindmap_content = None
 
-        return mindmap_content
+        return Document(
+            channel="info",
+            content="",
+            metadata={"mindmap": payload},
+        )
 
     def prepare_citation_viz(self, answer, question, docs) -> Document | None:
         doc_texts = [doc.text for doc in docs]
@@ -156,7 +218,7 @@ class FullQAPipeline(BaseReasoning):
         with_citation, without_citation = self.answering_pipeline.prepare_citations(
             answer, docs
         )
-        mindmap_output = self.prepare_mindmap(answer)
+        mindmap_output = self.prepare_mindmap(answer, docs, question)
         citation_plot_output = self.prepare_citation_viz(answer, question, docs)
 
         if not with_citation and not without_citation:
@@ -213,6 +275,10 @@ class FullQAPipeline(BaseReasoning):
 
         print(f"Retrievers {self.retrievers}")
         docs, infos = self.retrieve(message, history)
+        docs = self._filter_docs_by_mindmap_focus(
+            docs,
+            kwargs.get("mindmap_focus", {}),
+        )
         print(f"Got {len(docs)} retrieved documents")
         yield from infos
 
@@ -235,6 +301,9 @@ class FullQAPipeline(BaseReasoning):
             evidence_mode=evidence_mode,
             images=images,
             conv_id=conv_id,
+            retrieved_docs=docs,
+            mindmap_max_depth=self.mindmap_max_depth,
+            include_reasoning_map=self.include_reasoning_map,
             **kwargs,
         )
 
@@ -298,6 +367,10 @@ class FullQAPipeline(BaseReasoning):
         ]
 
         pipeline.trigger_context = settings[f"{prefix}.trigger_context"]
+        pipeline.mindmap_max_depth = int(settings.get(f"{prefix}.mindmap_max_depth", 4) or 4)
+        pipeline.include_reasoning_map = bool(
+            settings.get(f"{prefix}.include_reasoning_map", True)
+        )
         pipeline.use_rewrite = states.get("app", {}).get("regen", False)
         if pipeline.rewrite_pipeline:
             pipeline.rewrite_pipeline.llm = llm
@@ -344,6 +417,17 @@ class FullQAPipeline(BaseReasoning):
             "create_mindmap": {
                 "name": "Create Mindmap",
                 "value": False,
+                "component": "checkbox",
+            },
+            "mindmap_max_depth": {
+                "name": "Mindmap max depth",
+                "value": 4,
+                "component": "dropdown",
+                "choices": [(str(i), i) for i in range(2, 9)],
+            },
+            "include_reasoning_map": {
+                "name": "Include reasoning map",
+                "value": True,
                 "component": "checkbox",
             },
             "create_citation_viz": {

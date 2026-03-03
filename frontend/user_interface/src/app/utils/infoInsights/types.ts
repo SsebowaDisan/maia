@@ -15,6 +15,11 @@ type EvidenceCard = {
   imageSrc?: string;
   highlightBoxes?: HighlightBox[];
   strengthScore?: number;
+  strengthTier?: number;
+  matchQuality?: string;
+  unitId?: string;
+  charStart?: number;
+  charEnd?: number;
 };
 
 type ClaimStatus = "supported" | "weak" | "missing";

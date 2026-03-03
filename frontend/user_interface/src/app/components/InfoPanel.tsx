@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { Check, ExternalLink, FileText, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { buildRawFileUrl } from "../../api/client";
 import type { SourceUsageRecord } from "../types";
 import { buildCitationDeepLink } from "../utils/citationDeepLink";
+import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { parseEvidence } from "../utils/infoInsights";
 import type { CitationFocus } from "../types";
 import { CitationPdfPreview } from "./CitationPdfPreview";
+import { MindmapViewer } from "./MindmapViewer";
 import { PdfEvidenceMap } from "./PdfEvidenceMap";
 
 interface InfoPanelProps {
@@ -15,10 +17,19 @@ interface InfoPanelProps {
   assistantHtml?: string;
   infoHtml?: string;
   infoPanel?: Record<string, unknown>;
+  mindmap?: Record<string, unknown>;
   sourceUsage?: SourceUsageRecord[];
   indexId?: number | null;
   onClearCitationFocus?: () => void;
   onSelectCitationFocus?: (citation: CitationFocus) => void;
+  onAskMindmapNode?: (payload: {
+    nodeId: string;
+    title: string;
+    text: string;
+    pageRef?: string;
+    sourceId?: string;
+    sourceName?: string;
+  }) => void;
   width?: number;
 }
 
@@ -28,14 +39,16 @@ export function InfoPanel({
   assistantHtml = "",
   infoHtml = "",
   infoPanel = {},
+  mindmap = {},
   sourceUsage = [],
   indexId = null,
   onClearCitationFocus,
   onSelectCitationFocus,
+  onAskMindmapNode,
   width = 340,
 }: InfoPanelProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const [activeTab, setActiveTab] = useState<"evidence" | "sources">("evidence");
+  const [activeTab, setActiveTab] = useState<"evidence" | "sources" | "mindmap">("evidence");
   const citationRawUrl = useMemo(() => {
     if (!citationFocus?.fileId) return null;
     return buildRawFileUrl(citationFocus.fileId, {
@@ -46,6 +59,37 @@ export function InfoPanel({
   const citationSourceLower = (citationFocus?.sourceName || "").toLowerCase();
   const citationIsImage = /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(citationSourceLower);
   const citationHasPageHint = Boolean(String(citationFocus?.page || "").trim());
+  const citationStrengthTier = useMemo(() => {
+    if (!citationFocus) {
+      return 0;
+    }
+    const directTier = Number(citationFocus.strengthTier || 0);
+    if (Number.isFinite(directTier) && directTier >= 1) {
+      return Math.max(1, Math.min(3, Math.round(directTier)));
+    }
+    const score = Number(citationFocus.strengthScore || 0);
+    if (!Number.isFinite(score) || score <= 0) {
+      return 0;
+    }
+    if (score >= 0.7) return 3;
+    if (score >= 0.42) return 2;
+    return 1;
+  }, [citationFocus]);
+  const citationStrengthDots = useMemo(() => {
+    if (citationStrengthTier <= 0) {
+      return "";
+    }
+    const filledDot = String.fromCharCode(0x25cf);
+    const emptyDot = String.fromCharCode(0x25cb);
+    return `${filledDot.repeat(citationStrengthTier)}${emptyDot.repeat(Math.max(0, 3 - citationStrengthTier))}`;
+  }, [citationStrengthTier]);
+  const citationMatchQualityLabel = useMemo(() => {
+    const quality = String(citationFocus?.matchQuality || "").trim().toLowerCase();
+    if (!quality) return "";
+    if (quality === "exact") return "Exact match";
+    if (quality === "fuzzy") return "Approximate match";
+    return "Estimated match";
+  }, [citationFocus]);
   const citationIsPdf =
     Boolean(citationRawUrl) &&
     !citationIsImage &&
@@ -58,8 +102,17 @@ export function InfoPanel({
     return {
       evidence: String(data.evidence || "Evidence"),
       sources: String(data.sources || "Sources"),
+      mindmap: String(data.mindmap || "Mind-map"),
     };
   }, [infoPanel]);
+  const mindmapPayload = useMemo(() => {
+    if (mindmap && typeof mindmap === "object" && Object.keys(mindmap).length > 0) {
+      return mindmap;
+    }
+    const panel = infoPanel && typeof infoPanel === "object" ? infoPanel : {};
+    const value = (panel as { mindmap?: unknown }).mindmap;
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  }, [infoPanel, mindmap]);
   const normalizedSourceUsage = useMemo(() => {
     const panel = infoPanel && typeof infoPanel === "object" ? infoPanel : {};
     const fromPanel = (panel as { source_usage?: unknown }).source_usage;
@@ -132,6 +185,38 @@ export function InfoPanel({
       ),
     [normalizedSourceUsage],
   );
+  const claimSignalSummary = useMemo(() => {
+    const panel = infoPanel && typeof infoPanel === "object" ? infoPanel : {};
+    const raw = (panel as { claim_signal_summary?: unknown }).claim_signal_summary;
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+    const record = raw as Record<string, unknown>;
+    const rows = Array.isArray(record.rows)
+      ? record.rows
+          .map((row) => {
+            if (!row || typeof row !== "object") {
+              return null;
+            }
+            const item = row as Record<string, unknown>;
+            return {
+              claim: String(item.claim || "").trim(),
+              status: String(item.status || "").trim().toLowerCase(),
+              ref_ids: Array.isArray(item.ref_ids)
+                ? item.ref_ids.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry))
+                : [],
+            };
+          })
+          .filter((row): row is { claim: string; status: string; ref_ids: number[] } => Boolean(row && row.claim))
+      : [];
+    return {
+      claimsEvaluated: Math.max(0, Number(record.claims_evaluated || 0)),
+      supportedClaims: Math.max(0, Number(record.supported_claims || 0)),
+      contradictedClaims: Math.max(0, Number(record.contradicted_claims || 0)),
+      mixedClaims: Math.max(0, Number(record.mixed_claims || 0)),
+      rows: rows.slice(0, 6),
+    };
+  }, [infoPanel]);
 
   useEffect(() => {
     if (citationFocus) {
@@ -185,6 +270,15 @@ export function InfoPanel({
           >
             {tabLabels.sources}
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("mindmap")}
+            className={`px-2.5 py-1 text-[11px] rounded-md transition-colors ${
+              activeTab === "mindmap" ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:bg-black/[0.04]"
+            }`}
+          >
+            {tabLabels.mindmap}
+          </button>
         </div>
       </div>
 
@@ -207,6 +301,23 @@ export function InfoPanel({
                 {citationFocus.page ? (
                   <span className="text-[10px] px-2 py-1 rounded-full bg-white border border-black/[0.08] text-[#6e6e73]">
                     page {citationFocus.page}
+                  </span>
+                ) : null}
+                {citationStrengthDots ? (
+                  <span
+                    className="text-[10px] px-2 py-1 rounded-full bg-white border border-black/[0.08] text-[#6e6e73]"
+                    title={
+                      Number.isFinite(Number(citationFocus?.strengthScore))
+                        ? `Strength ${Number(citationFocus?.strengthScore || 0).toFixed(3)}`
+                        : "Citation strength"
+                    }
+                  >
+                    {citationStrengthDots}
+                  </span>
+                ) : null}
+                {citationMatchQualityLabel ? (
+                  <span className="text-[10px] px-2 py-1 rounded-full bg-white border border-black/[0.08] text-[#6e6e73]">
+                    {citationMatchQualityLabel}
                   </span>
                 ) : null}
                 {citationRawUrl ? (
@@ -302,6 +413,37 @@ export function InfoPanel({
                 {dominanceWarning}
               </div>
             ) : null}
+            {claimSignalSummary ? (
+              <div className="rounded-xl border border-black/[0.08] bg-white p-3 text-[12px] text-[#4a4a4f]">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium text-[#1d1d1f]">Claim signals</p>
+                  <span className="text-[10px] text-[#6e6e73] uppercase">
+                    {claimSignalSummary.claimsEvaluated} claims
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-[11px] text-[#6e6e73]">
+                  <span>Supported: {claimSignalSummary.supportedClaims}</span>
+                  <span>Contradicted: {claimSignalSummary.contradictedClaims}</span>
+                  <span>Mixed: {claimSignalSummary.mixedClaims}</span>
+                </div>
+                {claimSignalSummary.rows.length ? (
+                  <div className="mt-2 space-y-1.5">
+                    {claimSignalSummary.rows.map((row, index) => (
+                      <div key={`${row.claim}:${index}`} className="rounded-lg bg-[#f7f7f9] px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-[#1d1d1f] truncate" title={row.claim}>
+                            {row.claim}
+                          </span>
+                          <span className="text-[10px] text-[#6e6e73] uppercase">
+                            {row.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {normalizedSourceUsage.length ? (
               <div className="space-y-2">
                 {normalizedSourceUsage.map((row) => {
@@ -328,7 +470,7 @@ export function InfoPanel({
                         <span>{row.retrieved_count} retrieved</span>
                       </div>
                       <div className="mt-1 text-[10px] text-[#8e8e93]">
-                        max strength {row.max_strength_score.toFixed(3)} · avg {row.avg_strength_score.toFixed(3)}
+                        max strength {row.max_strength_score.toFixed(3)} | avg {row.avg_strength_score.toFixed(3)}
                       </div>
                     </div>
                   );
@@ -341,7 +483,36 @@ export function InfoPanel({
             )}
           </div>
         ) : null}
+
+        {activeTab === "mindmap" ? (
+          <MindmapViewer
+            payload={mindmapPayload}
+            conversationId={selectedConversationId}
+            onAskNode={onAskMindmapNode}
+            onSaveMap={(payload) => {
+              const storageKey = "maia.saved-mindmaps";
+              try {
+                const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+                const convKey = String(selectedConversationId || "global");
+                const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
+                const next = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
+                existing[convKey] = next;
+                window.localStorage.setItem(storageKey, JSON.stringify(existing));
+                toast.success("Mind-map saved");
+              } catch {
+                toast.error("Unable to save mind-map");
+              }
+            }}
+            onShareMap={(payload) =>
+              buildMindmapShareLink({
+                map: payload as unknown as Record<string, unknown>,
+                conversationId: selectedConversationId,
+              })
+            }
+          />
+        ) : null}
       </div>
     </div>
   );
 }
+

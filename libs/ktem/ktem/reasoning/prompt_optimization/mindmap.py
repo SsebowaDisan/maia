@@ -1,10 +1,12 @@
 import logging
+import json
 from textwrap import dedent
 
 from ktem.llms.manager import llms
 
-from maia.base import BaseComponent, Document, HumanMessage, Node, SystemMessage
-from maia.llms import ChatLLM, PromptTemplate
+from maia.base import BaseComponent, Document, Node
+from maia.llms import ChatLLM
+from maia.mindmap.indexer import build_knowledge_map, serialize_map_payload
 
 logger = logging.getLogger(__name__)
 
@@ -35,63 +37,56 @@ MINDMAP_HTML_EXPORT_TEMPLATE = dedent(
 
 
 class CreateMindmapPipeline(BaseComponent):
-    """Create a mindmap from the question and context"""
+    """Create a structured mind-map/knowledge-map JSON payload."""
 
     llm: ChatLLM = Node(default_callback=lambda _: llms.get_default())
+    default_max_depth: int = 4
+    default_include_reasoning_map: bool = True
 
-    SYSTEM_PROMPT = """
-From now on you will behave as "MapGPT" and, for every text the user will submit, you are going to create a PlantUML mind map file for the inputted text to best describe main ideas. Format it as a code and remember that the mind map should be in the same language as the inputted context. You don't have to provide a general example for the mind map format before the user inputs the text.
-    """  # noqa: E501
-    MINDMAP_PROMPT_TEMPLATE = """
-Question:
-{question}
-
-Context:
-{context}
-
-Generate a sample PlantUML mindmap for based on the provided question and context above. Only includes context relevant to the question to produce the mindmap.
-
-Use the template like this:
-
-@startmindmap
-* Title
-** Item A
-*** Item B
-**** Item C
-*** Item D
-@endmindmap
-    """  # noqa: E501
-    prompt_template: str = MINDMAP_PROMPT_TEMPLATE
-
-    @classmethod
-    def convert_uml_to_markdown(cls, text: str) -> str:
-        start_phrase = "@startmindmap"
-        end_phrase = "@endmindmap"
-
+    def run(self, question: str, context: str, **kwargs) -> Document:  # type: ignore
+        documents = kwargs.get("documents") or kwargs.get("docs") or kwargs.get("retrieved_docs") or []
+        answer_text = str(kwargs.get("answer_text", "") or "")
+        source_type_hint = str(kwargs.get("source_type_hint", "") or "")
+        focus = kwargs.get("focus")
         try:
-            text = text.split(start_phrase)[-1]
-            text = text.split(end_phrase)[0]
-            text = text.strip().replace("*", "#")
-        except IndexError:
-            text = ""
-
-        return text
-
-    def run(self, question: str, context: str) -> Document:  # type: ignore
-        prompt_template = PromptTemplate(self.prompt_template)
-        prompt = prompt_template.populate(
-            question=question,
-            context=context,
+            max_depth = int(kwargs.get("max_depth", self.default_max_depth))
+        except Exception:
+            max_depth = self.default_max_depth
+        include_reasoning_map = bool(
+            kwargs.get("include_reasoning_map", self.default_include_reasoning_map)
         )
 
-        messages = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=prompt),
-        ]
-
-        uml_text = self.llm(messages).text
-        markdown_text = self.convert_uml_to_markdown(uml_text)
-
+        payload = build_knowledge_map(
+            question=str(question or ""),
+            context=str(context or ""),
+            documents=documents,
+            answer_text=answer_text,
+            max_depth=max_depth,
+            include_reasoning_map=include_reasoning_map,
+            source_type_hint=source_type_hint,
+            focus=focus if isinstance(focus, dict) else None,
+        )
         return Document(
-            text=markdown_text,
+            text=serialize_map_payload(payload),
+            metadata={"mindmap": payload},
         )
+
+    @staticmethod
+    def parse_payload(value: object) -> dict:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, Document):
+            payload = value.metadata.get("mindmap")
+            if isinstance(payload, dict):
+                return payload
+            try:
+                return json.loads(str(value.text or ""))
+            except Exception:
+                return {}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}

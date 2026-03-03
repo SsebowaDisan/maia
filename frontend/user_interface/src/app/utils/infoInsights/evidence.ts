@@ -130,6 +130,14 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     const highlightBoxes = parseHighlightBoxes(details.getAttribute("data-boxes"));
     const rawStrength = Number(details.getAttribute("data-strength") || "");
     const strengthScore = Number.isFinite(rawStrength) ? rawStrength : undefined;
+    const rawStrengthTier = Number(details.getAttribute("data-strength-tier") || "");
+    const strengthTier = Number.isFinite(rawStrengthTier) ? rawStrengthTier : undefined;
+    const matchQuality = (details.getAttribute("data-match-quality") || "").trim() || undefined;
+    const unitId = (details.getAttribute("data-unit-id") || "").trim() || undefined;
+    const rawCharStart = Number(details.getAttribute("data-char-start") || "");
+    const rawCharEnd = Number(details.getAttribute("data-char-end") || "");
+    const charStart = Number.isFinite(rawCharStart) ? rawCharStart : undefined;
+    const charEnd = Number.isFinite(rawCharEnd) ? rawCharEnd : undefined;
 
     return {
       id: detailsId || `evidence-${index + 1}`,
@@ -141,6 +149,11 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
       imageSrc,
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
       strengthScore,
+      strengthTier,
+      matchQuality,
+      unitId,
+      charStart,
+      charEnd,
     };
   });
 }

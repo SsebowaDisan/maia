@@ -113,6 +113,19 @@ def create_pipeline(
 
     if request.use_mindmap is not None:
         effective_settings["reasoning.options.simple.create_mindmap"] = request.use_mindmap
+    if isinstance(request.mindmap_settings, dict):
+        if "max_depth" in request.mindmap_settings:
+            try:
+                max_depth = int(request.mindmap_settings.get("max_depth", 4))
+            except Exception:
+                max_depth = 4
+            effective_settings["reasoning.options.simple.mindmap_max_depth"] = max(
+                2, min(8, max_depth)
+            )
+        if "include_reasoning_map" in request.mindmap_settings:
+            effective_settings["reasoning.options.simple.include_reasoning_map"] = bool(
+                request.mindmap_settings.get("include_reasoning_map")
+            )
 
     configured_citation_mode = effective_settings.get("reasoning.options.simple.highlight_citation")
     citation_mode_input = request.citation

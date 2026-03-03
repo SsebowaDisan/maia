@@ -11,12 +11,15 @@ from decouple import config
 from fastapi import HTTPException
 
 from ktem.pages.chat.common import STATE
+from maia.mindmap.indexer import build_knowledge_map
 
 from api.context import ApiContext
 from api.schemas import ChatRequest
 
 from .citations import (
     assign_fast_source_refs,
+    build_citation_quality_metrics,
+    build_claim_signal_summary,
     build_source_usage,
     build_fast_info_html,
     enforce_required_citations,
@@ -163,6 +166,64 @@ def _normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
         "sections": sections,
         "tone": tone,
     }
+
+
+def _apply_mindmap_focus(
+    snippets: list[dict[str, Any]],
+    focus: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    payload = dict(focus or {})
+    if not payload or not snippets:
+        return snippets
+
+    focus_source_id = str(payload.get("source_id", "") or "").strip()
+    focus_source_name = str(payload.get("source_name", "") or "").strip().lower()
+    focus_page = str(payload.get("page_ref") or payload.get("page_label") or "").strip()
+    focus_unit_id = str(payload.get("unit_id", "") or "").strip()
+    focus_text = str(payload.get("text", "") or "").strip().lower()
+
+    filtered = snippets
+    if focus_source_id:
+        filtered = [
+            row
+            for row in filtered
+            if str(row.get("source_id", "") or "").strip() == focus_source_id
+        ]
+    elif focus_source_name:
+        filtered = [
+            row
+            for row in filtered
+            if focus_source_name in str(row.get("source_name", "") or "").strip().lower()
+        ]
+    if focus_page:
+        page_filtered = [
+            row for row in filtered if str(row.get("page_label", "") or "").strip() == focus_page
+        ]
+        if page_filtered:
+            filtered = page_filtered
+    if focus_unit_id:
+        unit_filtered = [
+            row for row in filtered if str(row.get("unit_id", "") or "").strip() == focus_unit_id
+        ]
+        if unit_filtered:
+            filtered = unit_filtered
+
+    if focus_text and filtered:
+        focus_terms = {
+            token
+            for token in re.findall(r"[a-z0-9]{3,}", focus_text)
+            if len(token) >= 3
+        }
+
+        def overlap_score(row: dict[str, Any]) -> int:
+            text = str(row.get("text", "") or "").lower()
+            return sum(1 for term in focus_terms if term in text)
+
+        ranked = sorted(filtered, key=overlap_score, reverse=True)
+        if overlap_score(ranked[0]) > 0:
+            filtered = ranked[: max(4, min(10, len(ranked)))]
+
+    return filtered or snippets
 
 
 def _plan_adaptive_outline(
@@ -400,6 +461,10 @@ def run_fast_chat_turn(
     )
     if not snippets:
         return None
+    snippets = _apply_mindmap_focus(
+        snippets,
+        request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+    )
 
     snippets_with_refs, refs = assign_fast_source_refs(snippets)
     answer = call_openai_fast_qa(
@@ -430,6 +495,15 @@ def run_fast_chat_turn(
         answer_text=answer,
         enabled=MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
     )
+    claim_signal_summary = build_claim_signal_summary(
+        answer_text=answer,
+        refs=refs,
+    )
+    citation_quality_metrics = build_citation_quality_metrics(
+        snippets_with_refs=snippets_with_refs,
+        refs=refs,
+        answer_text=answer,
+    )
     max_citation_share = max(
         (float(item.get("citation_share", 0.0) or 0.0) for item in source_usage),
         default=0.0,
@@ -450,8 +524,30 @@ def run_fast_chat_turn(
         next_steps=[],
         web_summary={},
     )
+    mindmap_payload: dict[str, Any] = {}
+    if bool(request.use_mindmap):
+        map_settings = dict(request.mindmap_settings or {})
+        try:
+            map_depth = int(map_settings.get("max_depth", 4))
+        except Exception:
+            map_depth = 4
+        mindmap_payload = build_knowledge_map(
+            question=message,
+            context="\n\n".join(str(row.get("text", "") or "") for row in snippets[:8]),
+            documents=snippets,
+            answer_text=answer,
+            max_depth=max(2, min(8, map_depth)),
+            include_reasoning_map=bool(map_settings.get("include_reasoning_map", True)),
+            source_type_hint=str(map_settings.get("source_type_hint", "") or ""),
+            focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+        )
+        info_panel["mindmap"] = mindmap_payload
     if source_usage:
         info_panel["source_usage"] = source_usage
+    if claim_signal_summary:
+        info_panel["claim_signal_summary"] = claim_signal_summary
+    if citation_quality_metrics:
+        info_panel["citation_quality_metrics"] = citation_quality_metrics
     if source_dominance_warning:
         info_panel["source_dominance_warning"] = source_dominance_warning
     info_panel["citation_strength_ordering"] = bool(MAIA_CITATION_STRENGTH_ORDERING_ENABLED)
@@ -472,8 +568,11 @@ def run_fast_chat_turn(
             "actions_taken": [],
             "sources_used": [],
             "source_usage": source_usage,
+            "claim_signal_summary": claim_signal_summary,
+            "citation_quality_metrics": citation_quality_metrics,
             "next_recommended_steps": [],
             "info_panel": info_panel,
+            "mindmap": mindmap_payload,
         }
     )
 
@@ -500,7 +599,10 @@ def run_fast_chat_turn(
         "actions_taken": [],
         "sources_used": [],
         "source_usage": source_usage,
+        "claim_signal_summary": claim_signal_summary,
+        "citation_quality_metrics": citation_quality_metrics,
         "next_recommended_steps": [],
         "activity_run_id": None,
         "info_panel": info_panel,
+        "mindmap": mindmap_payload,
     }

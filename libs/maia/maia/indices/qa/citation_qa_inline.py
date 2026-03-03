@@ -1,5 +1,4 @@
 import re
-import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Generator
@@ -10,13 +9,13 @@ from maia.base import AIMessage, Document, HumanMessage, SystemMessage
 from maia.llms import PromptTemplate
 
 from .citation_qa import (
-    CITATION_TIMEOUT,
+    MAIA_CITATION_FUZZY_MATCH_ENABLED,
     MAX_IMAGES,
     AnswerWithContextPipeline,
     _compute_span_strength,
 )
 from .format_context import EVIDENCE_MODE_FIGURE
-from .utils import find_start_end_phrase
+from .utils import find_start_end_phrase, find_start_end_phrase_fuzzy
 
 DEFAULT_QA_CITATION_PROMPT = """
 Use the following pieces of context to answer the question at the end.
@@ -217,18 +216,6 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
         citation = None
         mindmap = None
 
-        def mindmap_call():
-            nonlocal mindmap
-            mindmap = self.create_mindmap_pipeline(context=evidence, question=question)
-
-        mindmap_thread = None
-
-        # execute function call in thread
-        if evidence:
-            if self.enable_mindmap:
-                mindmap_thread = threading.Thread(target=mindmap_call)
-                mindmap_thread.start()
-
         messages = []
         if self.system_prompt:
             messages.append(SystemMessage(content=self.system_prompt))
@@ -301,8 +288,21 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
 
         citation = self.answer_to_citations(output)
 
-        if mindmap_thread:
-            mindmap_thread.join(timeout=CITATION_TIMEOUT)
+        if self.enable_mindmap:
+            try:
+                mindmap = self.create_mindmap_pipeline(
+                    context=evidence,
+                    question=question,
+                    docs=kwargs.get("retrieved_docs", []),
+                    answer_text=final_answer,
+                    max_depth=kwargs.get("mindmap_max_depth", 4),
+                    include_reasoning_map=kwargs.get("include_reasoning_map", True),
+                    source_type_hint=kwargs.get("mindmap_source_type_hint", ""),
+                    focus=kwargs.get("mindmap_focus", {}),
+                )
+            except Exception as exc:
+                print("Mindmap generation failed:", exc)
+                mindmap = None
 
         # convert citation to link
         answer = Document(
@@ -343,17 +343,28 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
             best_match = None
             best_match_length = 0
             best_match_doc_idx = None
+            best_match_quality = "fuzzy"
 
             for doc in docs:
                 match, match_length = find_start_end_phrase(
                     start_phrase, end_phrase, doc.text
                 )
+                local_quality = "exact"
+                if match is None and MAIA_CITATION_FUZZY_MATCH_ENABLED:
+                    match, match_length = find_start_end_phrase_fuzzy(
+                        start_phrase=start_phrase,
+                        end_phrase=end_phrase,
+                        context=doc.text,
+                    )
+                    if match is not None:
+                        local_quality = "fuzzy"
                 if best_match is None or (
                     match is not None and match_length > best_match_length
                 ):
                     best_match = match
                     best_match_length = match_length
                     best_match_doc_idx = doc.doc_id
+                    best_match_quality = local_quality
 
             if best_match is not None and best_match_doc_idx is not None:
                 matched_doc = next(
@@ -369,14 +380,20 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
                     span_strength = _compute_span_strength(
                         doc=matched_doc,
                         span_text=span_text,
-                        is_exact_match=False,
+                        is_exact_match=(best_match_quality == "exact"),
                     )
                 spans[best_match_doc_idx].append(
                     {
                         "start": best_match[0],
                         "end": best_match[1],
+                        "char_start": best_match[0],
+                        "char_end": best_match[1],
+                        "unit_id": str((matched_doc.metadata or {}).get("unit_id", "") or "")
+                        if matched_doc is not None
+                        else "",
+                        "match_quality": best_match_quality,
                         "idx": evidence_idx,
-                        "is_exact_match": False,
+                        "is_exact_match": bool(best_match_quality == "exact"),
                         "strength_score": span_strength,
                     }
                 )

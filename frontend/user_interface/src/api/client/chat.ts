@@ -50,6 +50,8 @@ function sendChat(
     indexSelection?: Record<string, IndexSelection>;
     citation?: string;
     useMindmap?: boolean;
+    mindmapSettings?: Record<string, unknown>;
+    mindmapFocus?: Record<string, unknown>;
     agentMode?: "ask" | "company_agent";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
@@ -64,6 +66,8 @@ function sendChat(
       index_selection: options?.indexSelection ?? {},
       citation: options?.citation,
       use_mindmap: options?.useMindmap,
+      mindmap_settings: options?.mindmapSettings ?? {},
+      mindmap_focus: options?.mindmapFocus ?? {},
       agent_mode: options?.agentMode ?? "ask",
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,
@@ -108,6 +112,8 @@ async function sendChatStream(
     indexSelection?: Record<string, IndexSelection>;
     citation?: string;
     useMindmap?: boolean;
+    mindmapSettings?: Record<string, unknown>;
+    mindmapFocus?: Record<string, unknown>;
     agentMode?: "ask" | "company_agent";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
@@ -140,6 +146,8 @@ async function sendChatStream(
       index_selection: options?.indexSelection ?? {},
       citation: options?.citation,
       use_mindmap: options?.useMindmap,
+      mindmap_settings: options?.mindmapSettings ?? {},
+      mindmap_focus: options?.mindmapFocus ?? {},
       agent_mode: options?.agentMode ?? "ask",
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,

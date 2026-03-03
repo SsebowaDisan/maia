@@ -227,7 +227,12 @@ export function useFileLibrary() {
 
   const handleCreateFileIngestionJob = async (
     files: FileList,
-    options?: { reindex?: boolean; groupId?: string; scope?: "persistent" | "chat_temp" },
+    options?: {
+      reindex?: boolean;
+      groupId?: string;
+      scope?: "persistent" | "chat_temp";
+      onUploadProgress?: (loadedBytes: number, totalBytes: number) => void;
+    },
   ) => {
     if (!files.length) {
       throw new Error("No files selected.");
@@ -243,6 +248,7 @@ export function useFileLibrary() {
         groupId: options?.groupId,
         scope: options?.scope ?? "persistent",
         onUploadProgress: (loadedBytes, totalBytes) => {
+          options?.onUploadProgress?.(loadedBytes, totalBytes);
           setProgressFromUploadBytes(loadedBytes, totalBytes, "Uploading");
         },
       });
@@ -261,6 +267,7 @@ export function useFileLibrary() {
         const response = await handleUploadFiles(files, {
           reindex: options?.reindex ?? false,
           scope: options?.scope ?? "persistent",
+          onUploadProgress: options?.onUploadProgress,
         });
         const successFileIds = response.items
           .filter((item) => item.status === "success" && item.file_id)

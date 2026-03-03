@@ -22,7 +22,7 @@ from .format_context import (
     EVIDENCE_MODE_TABLE,
     EVIDENCE_MODE_TEXT,
 )
-from .utils import find_text
+from .utils import find_start_end_phrase_fuzzy, find_text, find_text_fuzzy
 
 try:
     from ktem.llms.manager import llms
@@ -41,6 +41,26 @@ MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
     False,
     cast=bool,
 )
+MAIA_CITATION_FUZZY_MATCH_ENABLED = config(
+    "MAIA_CITATION_FUZZY_MATCH_ENABLED",
+    True,
+    cast=bool,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL",
+    0.5,
+    cast=float,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_LLM = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_LLM",
+    0.4,
+    cast=float,
+)
+MAIA_CITATION_STRENGTH_WEIGHT_SPAN = config(
+    "MAIA_CITATION_STRENGTH_WEIGHT_SPAN",
+    0.1,
+    cast=float,
+)
 
 
 def _safe_float(value) -> float:
@@ -55,14 +75,21 @@ def _safe_float(value) -> float:
 
 def _compute_span_strength(*, doc: Document, span_text: str, is_exact_match: bool) -> float:
     metadata = getattr(doc, "metadata", {}) or {}
-    base = (
-        _safe_float(metadata.get("llm_trulens_score", 0.0))
-        + _safe_float(metadata.get("rerank_score", 0.0))
-        + _safe_float(metadata.get("vector_score", 0.0))
+    retrieval = max(
+        _safe_float(metadata.get("rerank_score", 0.0)),
+        _safe_float(metadata.get("vector_score", 0.0)),
+        min(1.0, _safe_float(metadata.get("score", 0.0)) / 25.0),
     )
-    exact_match_bonus = 0.05 if is_exact_match else 0.0
-    span_length_bonus = min(0.10, len(str(span_text or "")) / 4000.0)
-    return base + exact_match_bonus + span_length_bonus
+    llm_score = min(1.0, max(0.0, _safe_float(metadata.get("llm_trulens_score", 0.0))))
+    exact_bonus = 0.60 if is_exact_match else 0.0
+    span_length_bonus = min(0.40, len(str(span_text or "")) / 900.0)
+    span_bonus = min(1.0, exact_bonus + span_length_bonus)
+    weighted = (
+        retrieval * float(MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL)
+        + llm_score * float(MAIA_CITATION_STRENGTH_WEIGHT_LLM)
+        + span_bonus * float(MAIA_CITATION_STRENGTH_WEIGHT_SPAN)
+    )
+    return max(0.0, min(1.0, weighted))
 
 DEFAULT_QA_TEXT_PROMPT = (
     "Use the following pieces of context to answer the question at the end in detail with clear explanation. "  # noqa: E501
@@ -238,22 +265,13 @@ class AnswerWithContextPipeline(BaseComponent):
             nonlocal citation
             citation = self.citation_pipeline(context=evidence, question=question)
 
-        def mindmap_call():
-            nonlocal mindmap
-            mindmap = self.create_mindmap_pipeline(context=evidence, question=question)
-
         citation_thread = None
-        mindmap_thread = None
 
         # execute function call in thread
         if evidence:
             if self.enable_citation:
                 citation_thread = threading.Thread(target=citation_call)
                 citation_thread.start()
-
-            if self.enable_mindmap:
-                mindmap_thread = threading.Thread(target=mindmap_call)
-                mindmap_thread.start()
 
         output = ""
         logprobs = []
@@ -305,8 +323,21 @@ class AnswerWithContextPipeline(BaseComponent):
 
         if citation_thread:
             citation_thread.join(timeout=CITATION_TIMEOUT)
-        if mindmap_thread:
-            mindmap_thread.join(timeout=CITATION_TIMEOUT)
+        if self.enable_mindmap:
+            try:
+                mindmap = self.create_mindmap_pipeline(
+                    context=evidence,
+                    question=question,
+                    docs=kwargs.get("retrieved_docs", []),
+                    answer_text=output,
+                    max_depth=kwargs.get("mindmap_max_depth", 4),
+                    include_reasoning_map=kwargs.get("include_reasoning_map", True),
+                    source_type_hint=kwargs.get("mindmap_source_type_hint", ""),
+                    focus=kwargs.get("mindmap_focus", {}),
+                )
+            except Exception as exc:
+                print("Mindmap generation failed:", exc)
+                mindmap = None
 
         answer = Document(
             text=output,
@@ -328,29 +359,60 @@ class AnswerWithContextPipeline(BaseComponent):
             return spans
 
         evidences = answer.metadata["citation"].evidences
-        for quote in evidences:
-            matched_excerpts = []
+        for evidence in evidences:
+            quote = ""
+            start_phrase = ""
+            end_phrase = ""
+            if isinstance(evidence, str):
+                quote = evidence
+            else:
+                start_phrase = str(getattr(evidence, "start_phrase", "") or "").strip()
+                end_phrase = str(getattr(evidence, "end_phrase", "") or "").strip()
+                quote = " ".join([part for part in [start_phrase, end_phrase] if part]).strip()
+
             for doc in docs:
-                matches = find_text(quote, doc.text)
+                doc_text = str(doc.text or "")
+                matches = find_text(quote, doc_text) if quote else []
+                match_quality = "exact"
+                if not matches and start_phrase and end_phrase:
+                    fuzzy_span, _matched_length = find_start_end_phrase_fuzzy(
+                        start_phrase=start_phrase,
+                        end_phrase=end_phrase,
+                        context=doc_text,
+                    )
+                    if fuzzy_span is not None:
+                        matches = [fuzzy_span]
+                        match_quality = "fuzzy"
+                if not matches and MAIA_CITATION_FUZZY_MATCH_ENABLED and quote:
+                    matches = find_text_fuzzy(quote, doc_text)
+                    if matches:
+                        match_quality = "fuzzy"
 
                 for start, end in matches:
-                    if "|" not in doc.text[start:end]:
-                        span_text = doc.text[start:end]
+                    if "|" not in doc_text[start:end]:
+                        span_text = doc_text[start:end]
+                        is_exact_match = (
+                            match_quality == "exact"
+                            and bool(quote)
+                            and quote.lower() in doc_text.lower()
+                        )
                         spans[doc.doc_id].append(
                             {
                                 "start": start,
                                 "end": end,
-                                "is_exact_match": True,
+                                "char_start": start,
+                                "char_end": end,
+                                "unit_id": str((doc.metadata or {}).get("unit_id", "") or ""),
+                                "match_quality": "exact" if is_exact_match else "fuzzy",
+                                "is_exact_match": is_exact_match,
                                 "strength_score": _compute_span_strength(
                                     doc=doc,
                                     span_text=span_text,
-                                    is_exact_match=True,
+                                    is_exact_match=is_exact_match,
                                 ),
                             }
                         )
-                        matched_excerpts.append(span_text)
 
-            # print("Matched citation:", quote, matched_excerpts),
         return spans
 
     def prepare_citations(self, answer, docs) -> tuple[list[Document], list[Document]]:

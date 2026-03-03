@@ -34,6 +34,8 @@ class ChatPagePipelineMixin:
         state: dict,
         command_state: str | None,
         user_id: int,
+        session_mindmap_max_depth: int | str | None = None,
+        session_include_reasoning_map: bool | str | None = None,
         *selecteds,
     ):
         print(
@@ -67,6 +69,18 @@ class ChatPagePipelineMixin:
 
         if session_use_mindmap not in (DEFAULT_SETTING, None):
             settings["reasoning.options.simple.create_mindmap"] = session_use_mindmap
+        if session_mindmap_max_depth not in (DEFAULT_SETTING, None, ""):
+            try:
+                parsed_depth = int(session_mindmap_max_depth)
+            except Exception:
+                parsed_depth = 4
+            settings["reasoning.options.simple.mindmap_max_depth"] = max(
+                2, min(8, parsed_depth)
+            )
+        if session_include_reasoning_map not in (DEFAULT_SETTING, None, ""):
+            settings["reasoning.options.simple.include_reasoning_map"] = bool(
+                session_include_reasoning_map
+            )
 
         if session_use_citation not in (DEFAULT_SETTING, None):
             settings[
@@ -119,6 +133,8 @@ class ChatPagePipelineMixin:
         chat_state,
         command_state,
         user_id,
+        mindmap_max_depth=None,
+        include_reasoning_map=None,
         *selecteds,
     ):
         chat_input, chat_output = chat_history[-1]
@@ -139,6 +155,8 @@ class ChatPagePipelineMixin:
             chat_state,
             command_state,
             user_id,
+            mindmap_max_depth,
+            include_reasoning_map,
             *selecteds,
         )
         print("Reasoning state", reasoning_state)
