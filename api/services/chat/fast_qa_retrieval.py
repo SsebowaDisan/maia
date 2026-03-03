@@ -406,6 +406,14 @@ def load_recent_chunks_for_fast_qa(
                 "page_label": page_label,
                 "image_origin": image_by_source.get(source_key, {}).get("image_origin"),
                 "highlight_boxes": highlight_boxes,
+                "llm_trulens_score": _to_float(metadata.get("llm_trulens_score")) or 0.0,
+                "rerank_score": _to_float(metadata.get("rerank_score")) or 0.0,
+                "vector_score": (
+                    _to_float(metadata.get("vector_score"))
+                    or _to_float(metadata.get("score"))
+                    or 0.0
+                ),
+                "is_exact_match": bool(metadata.get("is_exact_match", False)),
             }
         )
 

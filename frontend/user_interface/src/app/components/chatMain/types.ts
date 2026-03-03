@@ -18,7 +18,28 @@ type ChatMainProps = {
       accessMode?: "restricted" | "full_access";
     },
   ) => Promise<void>;
-  onUploadFiles: (files: FileList) => Promise<UploadResponse>;
+  onUploadFiles: (
+    files: FileList,
+    options?: { onUploadProgress?: (loadedBytes: number, totalBytes: number) => void },
+  ) => Promise<UploadResponse>;
+  onCreateFileIngestionJob?: (
+    files: FileList,
+    options?: {
+      reindex?: boolean;
+      scope?: "persistent" | "chat_temp";
+    },
+  ) => Promise<{
+    id: string;
+    status: string;
+    total_items: number;
+    processed_items: number;
+    bytes_total?: number;
+    bytes_indexed?: number;
+    items: { status: string; file_id?: string; message?: string }[];
+    errors: string[];
+    file_ids: string[];
+    message: string;
+  }>;
   isSending: boolean;
   citationMode: string;
   onCitationModeChange: (mode: string) => void;

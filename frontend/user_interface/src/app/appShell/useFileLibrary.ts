@@ -24,11 +24,24 @@ import {
 
 export function useFileLibrary() {
   const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadProgressPercent, setUploadProgressPercent] = useState<number | null>(null);
+  const [uploadProgressLabel, setUploadProgressLabel] = useState("");
   const [fileCount, setFileCount] = useState(0);
   const [indexedFiles, setIndexedFiles] = useState<FileRecord[]>([]);
   const [fileGroups, setFileGroups] = useState<FileGroupRecord[]>([]);
   const [defaultIndexId, setDefaultIndexId] = useState<number | null>(null);
   const [ingestionJobs, setIngestionJobs] = useState<IngestionJob[]>([]);
+
+  const setProgressFromUploadBytes = (loadedBytes: number, totalBytes: number, label: string) => {
+    if (!totalBytes || totalBytes <= 0) {
+      setUploadProgressPercent(null);
+      setUploadProgressLabel(label);
+      return;
+    }
+    const percent = Math.max(0, Math.min(100, Math.round((loadedBytes / totalBytes) * 100)));
+    setUploadProgressPercent(percent);
+    setUploadProgressLabel(`${label} ${percent}%`);
+  };
 
   const refreshFileCount = useCallback(async () => {
     const filesPayload = await listFiles();
@@ -46,6 +59,36 @@ export function useFileLibrary() {
   const refreshIngestionJobs = useCallback(async () => {
     const jobs = await listIngestionJobs(80);
     setIngestionJobs(jobs);
+    const activeFileJob = jobs.find(
+      (job) =>
+        job.kind === "files" && (job.status === "queued" || job.status === "running"),
+    );
+    if (!activeFileJob) {
+      setUploadProgressPercent(null);
+      setUploadProgressLabel("");
+      return;
+    }
+
+    const totalBytes = Math.max(0, Number(activeFileJob.bytes_total || 0));
+    const indexedBytes = Math.max(0, Number(activeFileJob.bytes_indexed || 0));
+    const percent =
+      totalBytes > 0
+        ? Math.max(0, Math.min(100, Math.round((indexedBytes / totalBytes) * 100)))
+        : Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round(
+                ((Number(activeFileJob.processed_items || 0) /
+                  Math.max(1, Number(activeFileJob.total_items || 0))) *
+                  100),
+              ),
+            ),
+          );
+    setUploadProgressPercent(percent);
+    setUploadProgressLabel(
+      `Indexing ${activeFileJob.processed_items}/${activeFileJob.total_items} (${activeFileJob.status})`,
+    );
   }, []);
 
   useEffect(() => {
@@ -67,6 +110,7 @@ export function useFileLibrary() {
       scope?: "persistent" | "chat_temp";
       showStatus?: boolean;
       reindex?: boolean;
+      onUploadProgress?: (loadedBytes: number, totalBytes: number) => void;
     },
   ): Promise<UploadResponse> => {
     if (!files.length) {
@@ -77,14 +121,23 @@ export function useFileLibrary() {
     const showStatus = options?.showStatus ?? scope !== "chat_temp";
     if (showStatus) {
       setUploadStatus("Uploading files...");
+      setUploadProgressPercent(0);
+      setUploadProgressLabel("Uploading");
     }
     try {
       const response = await uploadFiles(files, {
         scope,
         reindex: options?.reindex ?? true,
+        onUploadProgress: (loadedBytes, totalBytes) => {
+          options?.onUploadProgress?.(loadedBytes, totalBytes);
+          if (!showStatus) return;
+          setProgressFromUploadBytes(loadedBytes, totalBytes, "Uploading");
+        },
       });
       const successCount = response.items.filter((item) => item.status === "success").length;
       if (showStatus) {
+        setUploadProgressPercent(100);
+        setUploadProgressLabel("Processing complete");
         if (response.errors.length > 0) {
           setUploadStatus(`Upload issue: ${response.errors[0]}`);
         } else {
@@ -97,16 +150,29 @@ export function useFileLibrary() {
       return response;
     } catch (error) {
       if (showStatus) {
+        setUploadProgressPercent(null);
+        setUploadProgressLabel("");
         setUploadStatus(`Upload failed: ${String(error)}`);
       }
       throw error;
+    } finally {
+      if (showStatus) {
+        window.setTimeout(() => {
+          setUploadProgressPercent(null);
+          setUploadProgressLabel("");
+        }, 1500);
+      }
     }
   };
 
-  const handleUploadFilesForChat = async (files: FileList): Promise<UploadResponse> => {
+  const handleUploadFilesForChat = async (
+    files: FileList,
+    options?: { onUploadProgress?: (loadedBytes: number, totalBytes: number) => void },
+  ): Promise<UploadResponse> => {
     return handleUploadFiles(files, {
       scope: "chat_temp",
       showStatus: false,
+      onUploadProgress: options?.onUploadProgress,
     });
   };
 
@@ -161,18 +227,27 @@ export function useFileLibrary() {
 
   const handleCreateFileIngestionJob = async (
     files: FileList,
-    options?: { reindex?: boolean },
+    options?: { reindex?: boolean; groupId?: string; scope?: "persistent" | "chat_temp" },
   ) => {
     if (!files.length) {
       throw new Error("No files selected.");
     }
 
     setUploadStatus("Queueing ingestion job...");
+    setUploadProgressPercent(0);
+    setUploadProgressLabel("Uploading");
     try {
       const job = await createFileIngestionJob(files, {
         reindex: options?.reindex ?? false,
         indexId: defaultIndexId ?? undefined,
+        groupId: options?.groupId,
+        scope: options?.scope ?? "persistent",
+        onUploadProgress: (loadedBytes, totalBytes) => {
+          setProgressFromUploadBytes(loadedBytes, totalBytes, "Uploading");
+        },
       });
+      setUploadProgressPercent(0);
+      setUploadProgressLabel("Indexing 0%");
       setUploadStatus(
         `Job queued: ${job.id.slice(0, 8)} (${job.total_items} item${job.total_items === 1 ? "" : "s"}).`,
       );
@@ -185,7 +260,22 @@ export function useFileLibrary() {
         );
         const response = await handleUploadFiles(files, {
           reindex: options?.reindex ?? false,
+          scope: options?.scope ?? "persistent",
         });
+        const successFileIds = response.items
+          .filter((item) => item.status === "success" && item.file_id)
+          .map((item) => String(item.file_id));
+        if (options?.groupId && successFileIds.length > 0 && (options?.scope ?? "persistent") === "persistent") {
+          try {
+            await moveFilesToGroup(successFileIds, {
+              groupId: options.groupId,
+              mode: "append",
+              indexId: defaultIndexId ?? undefined,
+            });
+          } catch {
+            // Preserve sync fallback result even if post-move fails.
+          }
+        }
         await refreshIngestionJobs();
         return {
           id: `fallback-sync-${Date.now()}`,
@@ -198,6 +288,9 @@ export function useFileLibrary() {
           processed_items: files.length,
           success_count: response.items.filter((item) => item.status === "success").length,
           failure_count: response.items.filter((item) => item.status !== "success").length,
+          bytes_total: Array.from(files).reduce((total, file) => total + file.size, 0),
+          bytes_persisted: Array.from(files).reduce((total, file) => total + file.size, 0),
+          bytes_indexed: Array.from(files).reduce((total, file) => total + file.size, 0),
           items: response.items,
           errors: response.errors,
           file_ids: response.file_ids,
@@ -210,6 +303,8 @@ export function useFileLibrary() {
         } as IngestionJob;
       }
       setUploadStatus(`Failed to queue file ingestion job: ${String(error)}`);
+      setUploadProgressPercent(null);
+      setUploadProgressLabel("");
       throw error;
     }
   };
@@ -268,6 +363,9 @@ export function useFileLibrary() {
           processed_items: total,
           success_count: response.items.filter((item) => item.status === "success").length,
           failure_count: response.items.filter((item) => item.status !== "success").length,
+          bytes_total: 0,
+          bytes_persisted: 0,
+          bytes_indexed: 0,
           items: response.items,
           errors: response.errors,
           file_ids: response.file_ids,
@@ -393,6 +491,8 @@ export function useFileLibrary() {
     handleUploadUrlsToLibrary,
     indexedFiles,
     ingestionJobs,
+    uploadProgressPercent,
+    uploadProgressLabel,
     refreshFileCount,
     refreshIngestionJobs,
     uploadStatus,

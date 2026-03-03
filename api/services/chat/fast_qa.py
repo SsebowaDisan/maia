@@ -17,6 +17,7 @@ from api.schemas import ChatRequest
 
 from .citations import (
     assign_fast_source_refs,
+    build_source_usage,
     build_fast_info_html,
     enforce_required_citations,
     normalize_fast_answer,
@@ -29,6 +30,9 @@ from .constants import (
     API_FAST_QA_MAX_SOURCES,
     API_FAST_QA_SOURCE_SCAN,
     API_FAST_QA_TEMPERATURE,
+    MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
+    MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD,
+    MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
     DEFAULT_SETTING,
 )
 from .conversation_store import (
@@ -420,6 +424,24 @@ def run_fast_chat_turn(
         info_html=info_text,
         citation_mode=resolved_citation_mode,
     )
+    source_usage = build_source_usage(
+        snippets_with_refs=snippets_with_refs,
+        refs=refs,
+        answer_text=answer,
+        enabled=MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
+    )
+    max_citation_share = max(
+        (float(item.get("citation_share", 0.0) or 0.0) for item in source_usage),
+        default=0.0,
+    )
+    source_dominance_detected = bool(
+        source_usage and max_citation_share > float(MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD)
+    )
+    source_dominance_warning = (
+        "This answer depends heavily on one source; consider reviewing other documents for broader context."
+        if source_dominance_detected
+        else ""
+    )
     info_panel = build_info_panel_copy(
         request_message=message,
         answer_text=answer,
@@ -427,6 +449,14 @@ def run_fast_chat_turn(
         mode="ask",
         next_steps=[],
         web_summary={},
+    )
+    if source_usage:
+        info_panel["source_usage"] = source_usage
+    if source_dominance_warning:
+        info_panel["source_dominance_warning"] = source_dominance_warning
+    info_panel["citation_strength_ordering"] = bool(MAIA_CITATION_STRENGTH_ORDERING_ENABLED)
+    info_panel["citation_strength_legend"] = (
+        "Citation numbers are strength-ordered: lower number means stronger supporting evidence."
     )
 
     messages = chat_history + [[message, answer]]
@@ -441,6 +471,7 @@ def run_fast_chat_turn(
             "activity_run_id": None,
             "actions_taken": [],
             "sources_used": [],
+            "source_usage": source_usage,
             "next_recommended_steps": [],
             "info_panel": info_panel,
         }
@@ -468,6 +499,7 @@ def run_fast_chat_turn(
         "mode": "ask",
         "actions_taken": [],
         "sources_used": [],
+        "source_usage": source_usage,
         "next_recommended_steps": [],
         "activity_run_id": None,
         "info_panel": info_panel,

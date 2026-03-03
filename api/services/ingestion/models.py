@@ -25,6 +25,9 @@ class IngestionJob(SQLModel, table=True):
     processed_items: int = Field(default=0)
     success_count: int = Field(default=0)
     failure_count: int = Field(default=0)
+    bytes_total: int = Field(default=0)
+    bytes_persisted: int = Field(default=0)
+    bytes_indexed: int = Field(default=0)
 
     # payload stores source descriptors:
     # files -> [{"name": "...", "path": "...", "size": 123}]

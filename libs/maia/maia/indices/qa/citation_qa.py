@@ -36,6 +36,33 @@ CITATION_TIMEOUT = 5.0
 CONTEXT_RELEVANT_WARNING_SCORE = config(
     "CONTEXT_RELEVANT_WARNING_SCORE", 0.3, cast=float
 )
+MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
+    "MAIA_CITATION_STRENGTH_ORDERING_ENABLED",
+    False,
+    cast=bool,
+)
+
+
+def _safe_float(value) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return 0.0
+    if parsed != parsed:
+        return 0.0
+    return parsed
+
+
+def _compute_span_strength(*, doc: Document, span_text: str, is_exact_match: bool) -> float:
+    metadata = getattr(doc, "metadata", {}) or {}
+    base = (
+        _safe_float(metadata.get("llm_trulens_score", 0.0))
+        + _safe_float(metadata.get("rerank_score", 0.0))
+        + _safe_float(metadata.get("vector_score", 0.0))
+    )
+    exact_match_bonus = 0.05 if is_exact_match else 0.0
+    span_length_bonus = min(0.10, len(str(span_text or "")) / 4000.0)
+    return base + exact_match_bonus + span_length_bonus
 
 DEFAULT_QA_TEXT_PROMPT = (
     "Use the following pieces of context to answer the question at the end in detail with clear explanation. "  # noqa: E501
@@ -308,13 +335,20 @@ class AnswerWithContextPipeline(BaseComponent):
 
                 for start, end in matches:
                     if "|" not in doc.text[start:end]:
+                        span_text = doc.text[start:end]
                         spans[doc.doc_id].append(
                             {
                                 "start": start,
                                 "end": end,
+                                "is_exact_match": True,
+                                "strength_score": _compute_span_strength(
+                                    doc=doc,
+                                    span_text=span_text,
+                                    is_exact_match=True,
+                                ),
                             }
                         )
-                        matched_excerpts.append(doc.text[start:end])
+                        matched_excerpts.append(span_text)
 
             # print("Matched citation:", quote, matched_excerpts),
         return spans
@@ -322,6 +356,7 @@ class AnswerWithContextPipeline(BaseComponent):
     def prepare_citations(self, answer, docs) -> tuple[list[Document], list[Document]]:
         """Prepare the citations to show on the UI"""
         with_citation, without_citation = [], []
+        with_citation_rows = []
         has_llm_score = any("llm_trulens_score" in doc.metadata for doc in docs)
 
         spans = self.match_evidence_with_context(answer, docs)
@@ -335,8 +370,19 @@ class AnswerWithContextPipeline(BaseComponent):
                 continue
             cur_doc = id2docs[_id]
             highlight_text = ""
-
-            ss = sorted(ss, key=lambda x: x["start"])
+            doc_strength = max(
+                [_safe_float(span.get("strength_score", 0.0)) for span in ss] or [0.0]
+            )
+            if MAIA_CITATION_STRENGTH_ORDERING_ENABLED:
+                ss = sorted(
+                    ss,
+                    key=lambda span: (
+                        -_safe_float(span.get("strength_score", 0.0)),
+                        span.get("start", 0),
+                    ),
+                )
+            else:
+                ss = sorted(ss, key=lambda x: x["start"])
             last_end = 0
             text = cur_doc.text[: ss[0]["start"]]
 
@@ -364,7 +410,7 @@ class AnswerWithContextPipeline(BaseComponent):
 
             text += cur_doc.text[ss[-1]["end"] :]
             # add to display list
-            with_citation.append(
+            with_citation_rows.append(
                 Document(
                     channel="info",
                     content=Render.collapsible_with_header_score(
@@ -373,8 +419,24 @@ class AnswerWithContextPipeline(BaseComponent):
                         highlight_text=highlight_text,
                         open_collapsible=True,
                     ),
+                    metadata={
+                        "doc_id": str(cur_doc.doc_id),
+                        "doc_strength_score": doc_strength,
+                        "span_strength_scores": [
+                            _safe_float(span.get("strength_score", 0.0)) for span in ss
+                        ],
+                    },
                 )
             )
+
+        if MAIA_CITATION_STRENGTH_ORDERING_ENABLED:
+            with_citation_rows.sort(
+                key=lambda row: (
+                    -_safe_float((row.metadata or {}).get("doc_strength_score", 0.0)),
+                    str((row.metadata or {}).get("doc_id", "")),
+                )
+            )
+        with_citation = with_citation_rows
 
         print("Got {} cited docs".format(len(with_citation)))
 

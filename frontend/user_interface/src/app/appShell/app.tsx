@@ -172,6 +172,7 @@ export default function App() {
               onUpdateUserTurn={chatState.handleUpdateUserTurn}
               onSendMessage={chatState.handleSendMessage}
               onUploadFiles={fileLibrary.handleUploadFilesForChat}
+              onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
               isSending={chatState.isSending}
               citationMode={chatState.citationMode}
               onCitationModeChange={chatState.setCitationMode}
@@ -208,6 +209,8 @@ export default function App() {
                 selectedConversationId={chatState.selectedConversationId}
                 assistantHtml={selectedTurn?.assistant || ""}
                 infoHtml={selectedTurn?.info || ""}
+                infoPanel={selectedTurn?.infoPanel || {}}
+                sourceUsage={selectedTurn?.sourceUsage || []}
                 indexId={fileLibrary.defaultIndexId}
                 onClearCitationFocus={() => chatState.setCitationFocus(null)}
                 onSelectCitationFocus={(citation) => chatState.setCitationFocus(citation)}
@@ -222,6 +225,7 @@ export default function App() {
             fileGroups={fileLibrary.fileGroups}
             onRefreshFiles={fileLibrary.refreshFileCount}
             onUploadFiles={fileLibrary.handleUploadFiles}
+            onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
             onUploadUrls={fileLibrary.handleUploadUrlsToLibrary}
             onDeleteFiles={fileLibrary.handleDeleteFiles}
             onMoveFilesToGroup={fileLibrary.handleMoveFilesToGroup}
@@ -231,6 +235,8 @@ export default function App() {
             ingestionJobs={fileLibrary.ingestionJobs}
             onRefreshIngestionJobs={fileLibrary.refreshIngestionJobs}
             uploadStatus={fileLibrary.uploadStatus}
+            uploadProgressPercent={fileLibrary.uploadProgressPercent}
+            uploadProgressLabel={fileLibrary.uploadProgressLabel}
           />
         ) : layout.activeTab === "Resources" ? (
           <ResourcesView />

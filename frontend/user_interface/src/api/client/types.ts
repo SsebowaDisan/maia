@@ -35,6 +35,17 @@ type AgentSourceRecord = {
   metadata?: Record<string, unknown>;
 };
 
+type SourceUsageRecord = {
+  source_id: string;
+  source_name: string;
+  source_type: string;
+  retrieved_count: number;
+  cited_count: number;
+  max_strength_score: number;
+  avg_strength_score: number;
+  citation_share: number;
+};
+
 type AgentActivityEvent = {
   event_schema_version?: string;
   event_id: string;
@@ -64,6 +75,7 @@ type ChatResponse = {
   mode: "ask" | "company_agent";
   actions_taken: AgentActionRecord[];
   sources_used: AgentSourceRecord[];
+  source_usage: SourceUsageRecord[];
   next_recommended_steps: string[];
   needs_human_review: boolean;
   human_review_notes: string | null;
@@ -161,6 +173,9 @@ type IngestionJob = {
   processed_items: number;
   success_count: number;
   failure_count: number;
+  bytes_total?: number;
+  bytes_persisted?: number;
+  bytes_indexed?: number;
   items: UploadItem[];
   errors: string[];
   file_ids: string[];
@@ -217,6 +232,7 @@ export type {
   IndexSelection,
   IngestionJob,
   MoveFilesToGroupResponse,
+  SourceUsageRecord,
   UploadItem,
   UploadResponse,
 };

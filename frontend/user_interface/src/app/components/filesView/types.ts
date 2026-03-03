@@ -23,6 +23,13 @@ interface FilesViewProps {
       reindex?: boolean;
     },
   ) => Promise<UploadResponse>;
+  onCreateFileIngestionJob?: (
+    files: FileList,
+    options?: {
+      reindex?: boolean;
+      groupId?: string;
+    },
+  ) => Promise<IngestionJob>;
   onUploadUrls?: (
     urlText: string,
     options?: {
@@ -52,6 +59,8 @@ interface FilesViewProps {
   ingestionJobs?: IngestionJob[];
   onRefreshIngestionJobs?: () => Promise<void>;
   uploadStatus?: string;
+  uploadProgressPercent?: number | null;
+  uploadProgressLabel?: string;
 }
 
 type FileKind = "all" | "pdf" | "office" | "text" | "image" | "other";

@@ -5,6 +5,11 @@ import json
 import re
 from typing import Any
 
+from .constants import (
+    MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
+    MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
+)
+
 CITATION_MODE_INLINE = "inline"
 CITATION_MODE_FOOTNOTE = "footnote"
 ALLOWED_CITATION_MODES = {"highlight", CITATION_MODE_INLINE, CITATION_MODE_FOOTNOTE}
@@ -27,6 +32,7 @@ _CITATION_ANCHOR_OPEN_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _DETAILS_BOXES_RE = re.compile(r"data-boxes=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_STRENGTH_RE = re.compile(r"data-strength=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 
@@ -126,6 +132,38 @@ def _snippet_signature_text(raw: Any, *, limit: int = 260) -> str:
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped.strip()
+
+
+def _score_value(raw: Any) -> float:
+    parsed = _to_float(raw)
+    return parsed if parsed is not None else 0.0
+
+
+def _snippet_strength_score(snippet: dict[str, Any]) -> float:
+    base = (
+        _score_value(snippet.get("llm_trulens_score"))
+        + _score_value(snippet.get("rerank_score"))
+        + _score_value(snippet.get("vector_score"))
+    )
+    exact_match_bonus = 0.05 if bool(snippet.get("is_exact_match", False)) else 0.0
+    span_text = str(snippet.get("text", "") or "")
+    span_length_bonus = min(0.10, len(span_text) / 4000.0)
+    # Keep retrieval score as a weak fallback signal when explicit model scores are absent.
+    retrieval_bonus = min(0.05, max(0.0, _score_value(snippet.get("score"))) / 1000.0)
+    return base + exact_match_bonus + span_length_bonus + retrieval_bonus
+
+
+def _source_type_from_name(source_name: str) -> str:
+    lowered = str(source_name or "").strip().lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return "url"
+    if lowered.endswith(".pdf"):
+        return "pdf"
+    if lowered.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg")):
+        return "image"
+    if lowered.endswith(".gdoc"):
+        return "gdoc"
+    return "file"
 
 
 def _tokens(text: str) -> set[str]:
@@ -341,6 +379,7 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     file_id = str(ref.get("source_id", "") or "").strip()
     page_label = str(ref.get("page_label", "") or "").strip()
     phrase = str(ref.get("phrase", "") or "").strip()
+    strength_score = _score_value(ref.get("strength_score"))
     boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
     attrs = [f"href='#evidence-{ref_id}'", f"id='citation-{ref_id}'", "class='citation'"]
     if file_id:
@@ -349,6 +388,8 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
         attrs.append(f"data-page='{html.escape(page_label, quote=True)}'")
     if phrase:
         attrs.append(f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'")
+    if strength_score > 0:
+        attrs.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
     if boxes_payload:
         attrs.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
     return f"<a {' '.join(attrs)}>[{ref_id}]</a>"
@@ -495,6 +536,7 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         file_id = str(ref.get("source_id", "") or "").strip()
         page_label = str(ref.get("page_label", "") or "").strip()
         phrase = str(ref.get("phrase", "") or "").strip()
+        strength_score = _score_value(ref.get("strength_score"))
         boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
 
         if file_id and not re.search(r"\bdata-file-id=['\"]", anchor_open, flags=re.IGNORECASE):
@@ -505,6 +547,8 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
             additions.append(
                 f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'"
             )
+        if strength_score > 0 and not re.search(r"\bdata-strength=['\"]", anchor_open, flags=re.IGNORECASE):
+            additions.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
         if boxes_payload and not re.search(r"\bdata-boxes=['\"]", anchor_open, flags=re.IGNORECASE):
             additions.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
 
@@ -517,11 +561,18 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
 
 def assign_fast_source_refs(
     snippets: list[dict[str, Any]],
+    *,
+    strength_ordering: bool | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ref_by_key: dict[tuple[str, str, str], int] = {}
     ref_index_by_id: dict[int, int] = {}
     refs: list[dict[str, Any]] = []
     enriched: list[dict[str, Any]] = []
+    ordering_enabled = (
+        MAIA_CITATION_STRENGTH_ORDERING_ENABLED
+        if strength_ordering is None
+        else bool(strength_ordering)
+    )
 
     for snippet in snippets:
         source_id = str(snippet.get("source_id", "") or "").strip()
@@ -529,6 +580,7 @@ def assign_fast_source_refs(
         page_label = str(snippet.get("page_label", "") or "").strip()
         snippet_boxes = _normalize_highlight_boxes(snippet.get("highlight_boxes"))
         phrase = _snippet_signature_text(snippet.get("text", ""))
+        snippet_strength = _snippet_strength_score(snippet)
         key = (source_id or source_name, page_label, phrase)
         ref_id = ref_by_key.get(key)
         if ref_id is None:
@@ -547,24 +599,189 @@ def assign_fast_source_refs(
                     "label": label,
                     "phrase": phrase,
                     "highlight_boxes": snippet_boxes,
+                    "strength_score": snippet_strength,
+                    "source_type": _source_type_from_name(source_name),
                 }
             )
-        elif snippet_boxes:
+        else:
             existing_idx = ref_index_by_id.get(ref_id)
             if existing_idx is not None:
                 existing_ref = refs[existing_idx]
-                existing_ref["highlight_boxes"] = _merge_highlight_boxes(
-                    _normalize_highlight_boxes(existing_ref.get("highlight_boxes")),
-                    snippet_boxes,
+                if snippet_boxes:
+                    existing_ref["highlight_boxes"] = _merge_highlight_boxes(
+                        _normalize_highlight_boxes(existing_ref.get("highlight_boxes")),
+                        snippet_boxes,
+                    )
+                existing_ref["strength_score"] = max(
+                    _score_value(existing_ref.get("strength_score")),
+                    snippet_strength,
                 )
 
         enriched_item = dict(snippet)
         enriched_item["ref_id"] = ref_id
+        enriched_item["strength_score"] = snippet_strength
         if snippet_boxes:
             enriched_item["highlight_boxes"] = snippet_boxes
         enriched.append(enriched_item)
 
+    if ordering_enabled and refs:
+        ranked_refs = sorted(
+            refs,
+            key=lambda ref: (
+                -_score_value(ref.get("strength_score")),
+                -_score_value(ref.get("llm_trulens_score")),
+                str(ref.get("source_id", "") or ""),
+                str(ref.get("page_label", "") or ""),
+                str(ref.get("phrase", "") or ""),
+            ),
+        )
+        old_to_new: dict[int, int] = {}
+        normalized_refs: list[dict[str, Any]] = []
+        for index, ref in enumerate(ranked_refs, start=1):
+            previous_id = int(ref.get("id", 0) or 0)
+            if previous_id > 0:
+                old_to_new[previous_id] = index
+            next_ref = dict(ref)
+            next_ref["id"] = index
+            normalized_refs.append(next_ref)
+        refs = normalized_refs
+        normalized_enriched: list[dict[str, Any]] = []
+        for row in enriched:
+            previous_id = int(row.get("ref_id", 0) or 0)
+            next_row = dict(row)
+            if previous_id > 0:
+                next_row["ref_id"] = old_to_new.get(previous_id, previous_id)
+            normalized_enriched.append(next_row)
+        enriched = sorted(
+            normalized_enriched,
+            key=lambda row: (
+                int(row.get("ref_id", 0) or 0),
+                -_score_value(row.get("strength_score")),
+            ),
+        )
+
     return enriched, refs
+
+
+def collect_cited_ref_ids(answer: str) -> list[int]:
+    text = str(answer or "")
+    if not text:
+        return []
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for match in re.finditer(r"(?:#evidence-|\[)(\d{1,4})(?:\]|['\"])", text):
+        ref_id = int(match.group(1))
+        if ref_id <= 0 or ref_id in seen:
+            continue
+        seen.add(ref_id)
+        ordered.append(ref_id)
+    return ordered
+
+
+def build_source_usage(
+    *,
+    snippets_with_refs: list[dict[str, Any]],
+    refs: list[dict[str, Any]],
+    answer_text: str,
+    enabled: bool | None = None,
+) -> list[dict[str, Any]]:
+    if enabled is None:
+        enabled = MAIA_SOURCE_USAGE_HEATMAP_ENABLED
+    if not enabled:
+        return []
+    if not snippets_with_refs and not refs:
+        return []
+
+    ref_by_id = {int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0}
+    cited_ref_ids = set(collect_cited_ref_ids(answer_text))
+
+    bucket_by_source: dict[str, dict[str, Any]] = {}
+    for snippet in snippets_with_refs:
+        source_id = str(snippet.get("source_id", "") or "").strip()
+        source_name = str(snippet.get("source_name", "Indexed file") or "Indexed file")
+        source_key = source_id or f"name:{source_name}"
+        bucket = bucket_by_source.get(source_key)
+        if bucket is None:
+            bucket = {
+                "source_id": source_id,
+                "source_name": source_name,
+                "source_type": _source_type_from_name(source_name),
+                "retrieved_count": 0,
+                "cited_count": 0,
+                "max_strength_score": 0.0,
+                "avg_strength_score": 0.0,
+                "_strength_total": 0.0,
+                "_strength_count": 0,
+            }
+            bucket_by_source[source_key] = bucket
+
+        bucket["retrieved_count"] = int(bucket.get("retrieved_count", 0)) + 1
+        strength = _score_value(snippet.get("strength_score"))
+        bucket["max_strength_score"] = max(_score_value(bucket.get("max_strength_score")), strength)
+        bucket["_strength_total"] = _score_value(bucket.get("_strength_total")) + strength
+        bucket["_strength_count"] = int(bucket.get("_strength_count", 0)) + 1
+
+        ref_id = int(snippet.get("ref_id", 0) or 0)
+        if ref_id > 0 and ref_id in cited_ref_ids:
+            bucket["cited_count"] = int(bucket.get("cited_count", 0)) + 1
+
+    # If citations were injected but not present in snippets list, backfill from refs.
+    for ref_id in cited_ref_ids:
+        ref = ref_by_id.get(ref_id)
+        if not ref:
+            continue
+        source_id = str(ref.get("source_id", "") or "").strip()
+        source_name = str(ref.get("source_name", "Indexed file") or "Indexed file")
+        source_key = source_id or f"name:{source_name}"
+        bucket = bucket_by_source.get(source_key)
+        if bucket is None:
+            strength = _score_value(ref.get("strength_score"))
+            bucket = {
+                "source_id": source_id,
+                "source_name": source_name,
+                "source_type": _source_type_from_name(source_name),
+                "retrieved_count": 0,
+                "cited_count": 1,
+                "max_strength_score": strength,
+                "avg_strength_score": strength,
+                "_strength_total": strength,
+                "_strength_count": 1,
+            }
+            bucket_by_source[source_key] = bucket
+            continue
+        bucket["cited_count"] = max(int(bucket.get("cited_count", 0)), 1)
+
+    total_cited = sum(max(0, int(bucket.get("cited_count", 0))) for bucket in bucket_by_source.values())
+    usage_rows: list[dict[str, Any]] = []
+    for bucket in bucket_by_source.values():
+        strength_count = max(1, int(bucket.get("_strength_count", 0)))
+        avg_strength = _score_value(bucket.get("_strength_total")) / float(strength_count)
+        cited_count = max(0, int(bucket.get("cited_count", 0)))
+        usage_rows.append(
+            {
+                "source_id": str(bucket.get("source_id", "") or ""),
+                "source_name": str(bucket.get("source_name", "Indexed file") or "Indexed file"),
+                "source_type": str(bucket.get("source_type", "file") or "file"),
+                "retrieved_count": max(0, int(bucket.get("retrieved_count", 0))),
+                "cited_count": cited_count,
+                "max_strength_score": round(_score_value(bucket.get("max_strength_score")), 6),
+                "avg_strength_score": round(avg_strength, 6),
+                "citation_share": round(
+                    (float(cited_count) / float(total_cited)) if total_cited > 0 else 0.0,
+                    6,
+                ),
+            }
+        )
+
+    usage_rows.sort(
+        key=lambda item: (
+            -int(item.get("cited_count", 0)),
+            -int(item.get("retrieved_count", 0)),
+            -_score_value(item.get("max_strength_score")),
+            str(item.get("source_name", "") or ""),
+        )
+    )
+    return usage_rows
 
 
 def resolve_required_citation_mode(citation_mode: str | None) -> str:
@@ -635,6 +852,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         source_id_match = re.search(r"data-file-id=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         boxes_match = _DETAILS_BOXES_RE.search(tag)
+        strength_match = _DETAILS_STRENGTH_RE.search(tag)
         if not page_match:
             summary_match = re.search(
                 r"<summary[^>]*>[\s\S]*?page\s+(\d{1,4})[\s\S]*?</summary>",
@@ -657,6 +875,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
                 "label": f"Evidence {ref_id}",
                 "phrase": phrase,
                 "highlight_boxes": highlight_boxes,
+                "strength_score": _score_value(strength_match.group(1) if strength_match else 0.0),
             }
         )
     refs.sort(key=lambda item: int(item.get("id", 0) or 0))
@@ -759,6 +978,12 @@ def build_fast_info_html(
         details_file_attr = (
             f" data-file-id='{html.escape(source_id, quote=True)}'" if source_id else ""
         )
+        strength_score = _score_value(snippet.get("strength_score"))
+        details_strength_attr = (
+            f" data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'"
+            if strength_score > 0
+            else ""
+        )
         boxes_payload = _serialize_highlight_boxes(snippet.get("highlight_boxes"))
         details_boxes_attr = (
             f" data-boxes='{html.escape(boxes_payload, quote=True)}'" if boxes_payload else ""
@@ -767,7 +992,7 @@ def build_fast_info_html(
         if ref_id > 0:
             source_label = f"[{ref_id}] {source_name}"
         block = (
-            f"<details class='evidence'{details_id}{details_file_attr}{details_page_attr}{details_boxes_attr} {'open' if not info_blocks else ''}>"
+            f"<details class='evidence'{details_id}{details_file_attr}{details_page_attr}{details_strength_attr}{details_boxes_attr} {'open' if not info_blocks else ''}>"
             f"<summary><i>{summary_label}</i></summary>"
             f"<div><b>Source:</b> {source_label}</div>"
             f"<div class='evidence-content'><b>Extract:</b> {excerpt}</div>"

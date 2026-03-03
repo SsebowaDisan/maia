@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { getIngestionJob } from "../../../api/client";
 import type { ChatAttachment, ChatTurn } from "../../types";
 import type { ChatMainProps, ComposerAttachment } from "./types";
+
+const CHAT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
+const CHAT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
@@ -15,6 +19,7 @@ type UseChatMainInteractionsParams = Pick<
   | "onSendMessage"
   | "onUpdateUserTurn"
   | "onUploadFiles"
+  | "onCreateFileIngestionJob"
 >;
 
 function useChatMainInteractions({
@@ -29,6 +34,7 @@ function useChatMainInteractions({
   onSendMessage,
   onUpdateUserTurn,
   onUploadFiles,
+  onCreateFileIngestionJob,
 }: UseChatMainInteractionsParams) {
   const [message, setMessage] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -266,18 +272,51 @@ function useChatMainInteractions({
       return;
     }
 
-    const pending = Array.from(selectedFiles).map((file, idx) => ({
+    const selectedRows = Array.from(selectedFiles);
+    const overSizeFile = selectedRows.find((file) => file.size > CHAT_MAX_FILE_SIZE_BYTES);
+    if (overSizeFile) {
+      showActionStatus(
+        `File "${overSizeFile.name}" is larger than 512 MB and cannot be uploaded.`,
+      );
+      event.target.value = "";
+      return;
+    }
+    const totalBytes = selectedRows.reduce((total, file) => total + file.size, 0);
+    if (totalBytes > CHAT_MAX_TOTAL_BYTES) {
+      showActionStatus("Selected files exceed the 1 GB total upload limit.");
+      event.target.value = "";
+      return;
+    }
+
+    const pending = selectedRows.map((file, idx) => ({
       id: `${Date.now()}-${idx}-${file.name}`,
       name: file.name,
       status: "uploading" as const,
+      message: "Uploading 0%",
       localUrl: URL.createObjectURL(file),
       mimeType: String(file.type || ""),
     }));
     setAttachments((prev) => [...prev, ...pending]);
 
-    setIsUploading(true);
-    try {
-      const response = await onUploadFiles(selectedFiles);
+    const updatePendingMessage = (text: string) => {
+      setAttachments((prev) =>
+        prev.map((attachment) =>
+          pending.some((item) => item.id === attachment.id)
+            ? {
+                ...attachment,
+                status: "uploading",
+                message: text,
+              }
+            : attachment,
+        ),
+      );
+    };
+
+    const applyUploadResult = (result: {
+      items: { status: string; file_id?: string; message?: string }[];
+      errors: string[];
+      file_ids: string[];
+    }) => {
       let successCursor = 0;
       setAttachments((prev) =>
         prev.map((attachment) => {
@@ -285,9 +324,9 @@ function useChatMainInteractions({
           if (pendingIdx === -1) {
             return attachment;
           }
-          const item = response.items[pendingIdx];
+          const item = result.items[pendingIdx];
           if (item?.status === "success") {
-            const mappedFileId = item.file_id || response.file_ids[successCursor] || undefined;
+            const mappedFileId = item.file_id || result.file_ids[successCursor] || undefined;
             successCursor += 1;
             return {
               ...attachment,
@@ -299,10 +338,96 @@ function useChatMainInteractions({
           return {
             ...attachment,
             status: "error",
-            message: item?.message || response.errors[0] || "Upload failed.",
+            message: item?.message || result.errors[0] || "Upload failed.",
           };
         }),
       );
+    };
+
+    const waitForIngestionJob = async (jobId: string) => {
+      const startedAt = Date.now();
+      const timeoutMs = 20 * 60 * 1000;
+      while (true) {
+        const job = await getIngestionJob(jobId);
+        const status = String(job.status || "").toLowerCase();
+        if (status === "completed") {
+          return job;
+        }
+        if (status === "failed" || status === "canceled") {
+          const reason = job.errors[0] || job.message || `Ingestion job ${job.status}`;
+          throw new Error(reason);
+        }
+
+        const bytesTotal = Number(job.bytes_total || 0);
+        const bytesIndexed = Number(job.bytes_indexed || 0);
+        const percent =
+          bytesTotal > 0
+            ? Math.max(0, Math.min(100, Math.round((bytesIndexed / bytesTotal) * 100)))
+            : Math.max(
+                0,
+                Math.min(
+                  100,
+                  Math.round(
+                    ((Number(job.processed_items || 0) / Math.max(1, Number(job.total_items || 0))) *
+                      100),
+                  ),
+                ),
+              );
+        updatePendingMessage(`Indexing ${percent}%`);
+
+        if (Date.now() - startedAt > timeoutMs) {
+          throw new Error("Ingestion timed out while indexing attachments.");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      }
+    };
+
+    setIsUploading(true);
+    try {
+      const hasVeryLargeFile = selectedRows.some((file) => file.size >= 100 * 1024 * 1024);
+      const shouldQueueAsyncJob =
+        Boolean(onCreateFileIngestionJob) &&
+        (hasVeryLargeFile || totalBytes >= 250 * 1024 * 1024 || selectedRows.length >= 8);
+
+      if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
+        updatePendingMessage("Indexing queued");
+        const queued = await onCreateFileIngestionJob(selectedFiles, {
+          reindex: true,
+          scope: "chat_temp",
+        });
+        showActionStatus(
+          `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
+        );
+        const finalJob = await waitForIngestionJob(queued.id);
+        applyUploadResult({
+          items: finalJob.items,
+          errors: finalJob.errors,
+          file_ids: finalJob.file_ids,
+        });
+      } else {
+        const response = await onUploadFiles(selectedFiles, {
+          onUploadProgress: (loadedBytes, totalBytesBytes) => {
+            if (!totalBytesBytes || totalBytesBytes <= 0) {
+              updatePendingMessage("Uploading");
+              return;
+            }
+            const percent = Math.max(
+              0,
+              Math.min(100, Math.round((loadedBytes / totalBytesBytes) * 100)),
+            );
+            if (percent >= 100) {
+              updatePendingMessage("Upload complete. Processing...");
+              return;
+            }
+            updatePendingMessage(`Uploading ${percent}%`);
+          },
+        });
+        applyUploadResult({
+          items: response.items,
+          errors: response.errors,
+          file_ids: response.file_ids,
+        });
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error || "Upload failed.");

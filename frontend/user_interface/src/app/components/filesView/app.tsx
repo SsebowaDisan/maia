@@ -15,6 +15,7 @@ export function FilesView({
   fileGroups = [],
   onRefreshFiles,
   onUploadFiles,
+  onCreateFileIngestionJob,
   onUploadUrls,
   onDeleteFiles,
   onMoveFilesToGroup,
@@ -24,6 +25,8 @@ export function FilesView({
   ingestionJobs = [],
   onRefreshIngestionJobs,
   uploadStatus = "",
+  uploadProgressPercent = null,
+  uploadProgressLabel = "",
 }: FilesViewProps) {
   const [uploadTab, setUploadTab] = useState<UploadTab>("upload");
   const [filterText, setFilterText] = useState("");
@@ -297,6 +300,7 @@ export function FilesView({
     onRenameFileGroup,
     onDeleteFileGroup,
     onUploadFiles,
+    onCreateFileIngestionJob,
     onUploadUrls,
     onRefreshIngestionJobs,
     onRefreshFiles,
@@ -356,6 +360,8 @@ export function FilesView({
         handleFileInputChange={handleFileInputChange}
         fileInputRef={fileInputRef}
         uploadStatus={uploadStatus}
+        uploadProgressPercent={uploadProgressPercent}
+        uploadProgressLabel={uploadProgressLabel}
         recentJobs={recentJobs}
         onRefreshIngestionJobs={onRefreshIngestionJobs}
       />

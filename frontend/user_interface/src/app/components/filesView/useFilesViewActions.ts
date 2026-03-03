@@ -1,7 +1,10 @@
 import type { ChangeEvent, Dispatch, DragEvent, RefObject, SetStateAction } from "react";
-import type { FileGroupRecord, FileRecord } from "../../../api/client";
+import type { FileGroupRecord, FileRecord, IngestionJob } from "../../../api/client";
 import { extractSuccessfulFileIds } from "./helpers";
 import type { DeleteConfirmationState, PendingDeleteJob } from "./types";
+
+const CLIENT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
+const CLIENT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 interface UseFilesViewActionsParams {
   onDeleteFiles?: (fileIds: string[]) => Promise<{
@@ -30,6 +33,10 @@ interface UseFilesViewActionsParams {
     errors: string[];
     items: { status: string; file_id?: string }[];
   }>;
+  onCreateFileIngestionJob?: (
+    files: FileList,
+    options?: { reindex?: boolean; groupId?: string },
+  ) => Promise<IngestionJob>;
   onUploadUrls?: (
     urlText: string,
     options?: {
@@ -91,6 +98,7 @@ function useFilesViewActions({
   onRenameFileGroup,
   onDeleteFileGroup,
   onUploadFiles,
+  onCreateFileIngestionJob,
   onUploadUrls,
   onRefreshIngestionJobs,
   onRefreshFiles,
@@ -383,6 +391,40 @@ function useFilesViewActions({
 
     setIsSubmitting(true);
     try {
+      const selectedFiles = Array.from(event.target.files);
+      const totalBytes = selectedFiles.reduce((total, file) => total + file.size, 0);
+      const overSizeFile = selectedFiles.find((file) => file.size > CLIENT_MAX_FILE_SIZE_BYTES);
+      if (overSizeFile) {
+        setActionMessage(
+          `File "${overSizeFile.name}" is larger than 512 MB and cannot be uploaded in one request.`,
+        );
+        window.setTimeout(() => setActionMessage(""), 3400);
+        return;
+      }
+      if (totalBytes > CLIENT_MAX_TOTAL_BYTES) {
+        setActionMessage("Selected files exceed 1 GB total request limit.");
+        window.setTimeout(() => setActionMessage(""), 3200);
+        return;
+      }
+      const hasVeryLargeFile = selectedFiles.some((file) => file.size >= 100 * 1024 * 1024);
+      const shouldQueueAsyncJob =
+        Boolean(onCreateFileIngestionJob) &&
+        (hasVeryLargeFile || totalBytes >= 250 * 1024 * 1024 || selectedFiles.length >= 8);
+
+      if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
+        const queued = await onCreateFileIngestionJob(event.target.files, {
+          reindex: forceReindex,
+          groupId: uploadGroupId,
+        });
+        setActionMessage(
+          `Queued ingestion job ${queued.id.slice(0, 8)} for ${queued.total_items} file(s). Files will appear in the selected group after indexing.`,
+        );
+        await onRefreshIngestionJobs?.();
+        await onRefreshFiles?.();
+        window.setTimeout(() => setActionMessage(""), 3200);
+        return;
+      }
+
       const response = await onUploadFiles(event.target.files, { reindex: forceReindex, scope: "persistent" });
       const successFileIds = extractSuccessfulFileIds(response);
       if (!successFileIds.length) {

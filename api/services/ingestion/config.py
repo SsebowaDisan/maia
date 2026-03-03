@@ -26,3 +26,33 @@ INGEST_WORKDIR = Path(
     str(config("MAIA_INGEST_WORKDIR", default=".maia_ingestion_jobs"))
 ).resolve()
 INGEST_KEEP_WORKDIR = bool(config("MAIA_INGEST_KEEP_WORKDIR", default=False, cast=bool))
+
+UPLOAD_USE_UNIFIED_PERSIST = bool(
+    config("MAIA_UPLOAD_USE_UNIFIED_PERSIST", default=True, cast=bool)
+)
+UPLOAD_SAVE_CONCURRENCY = max(
+    1, int(config("MAIA_UPLOAD_SAVE_CONCURRENCY", default=3, cast=int))
+)
+UPLOAD_MAX_FILES_PER_REQUEST = max(
+    1, int(config("MAIA_UPLOAD_MAX_FILES_PER_REQUEST", default=60, cast=int))
+)
+UPLOAD_MAX_FILE_SIZE_BYTES = max(
+    1,
+    int(
+        config(
+            "MAIA_UPLOAD_MAX_FILE_SIZE_BYTES",
+            default=1024 * 1024 * 512,  # 512 MiB
+            cast=int,
+        )
+    ),
+)
+UPLOAD_MAX_TOTAL_BYTES = max(
+    1,
+    int(
+        config(
+            "MAIA_UPLOAD_MAX_TOTAL_BYTES",
+            default=1024 * 1024 * 1024,  # 1 GiB
+            cast=int,
+        )
+    ),
+)

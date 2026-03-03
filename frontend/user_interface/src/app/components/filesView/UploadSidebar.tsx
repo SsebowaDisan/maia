@@ -21,6 +21,8 @@ interface UploadSidebarProps {
   handleFileInputChange: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   uploadStatus: string;
+  uploadProgressPercent?: number | null;
+  uploadProgressLabel?: string;
   recentJobs: IngestionJob[];
   onRefreshIngestionJobs?: () => Promise<void>;
 }
@@ -42,6 +44,8 @@ function UploadSidebar({
   handleFileInputChange,
   fileInputRef,
   uploadStatus,
+  uploadProgressPercent = null,
+  uploadProgressLabel = "",
   recentJobs,
   onRefreshIngestionJobs,
 }: UploadSidebarProps) {
@@ -139,6 +143,19 @@ function UploadSidebar({
       </div>
 
       {uploadStatus ? <p className="mt-3 text-[12px] text-[#6e6e73]">{uploadStatus}</p> : null}
+      {typeof uploadProgressPercent === "number" ? (
+        <div className="mt-2">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08]">
+            <div
+              className="h-full rounded-full bg-[#1d1d1f] transition-[width] duration-300"
+              style={{ width: `${Math.max(0, Math.min(100, uploadProgressPercent))}%` }}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-[#8d8d93]">
+            {uploadProgressLabel || `Progress ${uploadProgressPercent}%`}
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-8">
         <div className="flex items-center justify-between">

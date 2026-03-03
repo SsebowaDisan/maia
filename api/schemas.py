@@ -68,6 +68,9 @@ class IngestionJobResponse(BaseModel):
     processed_items: int
     success_count: int
     failure_count: int
+    bytes_total: int = 0
+    bytes_persisted: int = 0
+    bytes_indexed: int = 0
     items: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     file_ids: list[str] = Field(default_factory=list)
@@ -209,6 +212,17 @@ class AgentSourceRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SourceUsageRecord(BaseModel):
+    source_id: str = ""
+    source_name: str = "Indexed file"
+    source_type: str = "file"
+    retrieved_count: int = 0
+    cited_count: int = 0
+    max_strength_score: float = 0.0
+    avg_strength_score: float = 0.0
+    citation_share: float = 0.0
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
     conversation_name: str
@@ -220,6 +234,7 @@ class ChatResponse(BaseModel):
     mode: Literal["ask", "company_agent"] = "ask"
     actions_taken: list[AgentActionRecord] = Field(default_factory=list)
     sources_used: list[AgentSourceRecord] = Field(default_factory=list)
+    source_usage: list[SourceUsageRecord] = Field(default_factory=list)
     next_recommended_steps: list[str] = Field(default_factory=list)
     needs_human_review: bool = False
     human_review_notes: str | None = None

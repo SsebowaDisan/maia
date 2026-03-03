@@ -6,9 +6,9 @@ from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
-INFO_TABS = ("evidence", "claims")
-SIGNAL_KEYS = ("evidence", "claims")
-EMPTY_KEYS = ("evidence", "claims")
+INFO_TABS = ("evidence", "claims", "sources")
+SIGNAL_KEYS = ("evidence", "claims", "sources")
+EMPTY_KEYS = ("evidence", "claims", "sources")
 
 
 def _clean_text(value: Any, *, max_len: int = 220) -> str:
@@ -65,6 +65,8 @@ def _normalize_payload(raw: dict[str, Any] | None) -> dict[str, Any]:
     signal_title = _clean_text(raw.get("signal_title"), max_len=32)
     support_subtitle = _clean_text(raw.get("support_subtitle"), max_len=72)
     focus_claim_label = _clean_text(raw.get("focus_claim_label"), max_len=32)
+    source_dominance_label = _clean_text(raw.get("source_dominance_label"), max_len=96)
+    citation_strength_legend = _clean_text(raw.get("citation_strength_legend"), max_len=140)
 
     normalized: dict[str, Any] = {}
     if panel_title:
@@ -75,6 +77,10 @@ def _normalize_payload(raw: dict[str, Any] | None) -> dict[str, Any]:
         normalized["support_subtitle"] = support_subtitle
     if focus_claim_label:
         normalized["focus_claim_label"] = focus_claim_label
+    if source_dominance_label:
+        normalized["source_dominance_label"] = source_dominance_label
+    if citation_strength_legend:
+        normalized["citation_strength_legend"] = citation_strength_legend
     if tab_labels:
         normalized["tab_labels"] = tab_labels
     if signal_labels:
@@ -118,9 +124,11 @@ def build_info_panel_copy(
         '"signal_title":"string",'
         '"support_subtitle":"string",'
         '"focus_claim_label":"string",'
-        '"tab_labels":{"evidence":"string","claims":"string"},'
-        '"signal_labels":{"evidence":"string","claims":"string"},'
-        '"empty_states":{"evidence":"string","claims":"string"}'
+        '"source_dominance_label":"string",'
+        '"citation_strength_legend":"string",'
+        '"tab_labels":{"evidence":"string","claims":"string","sources":"string"},'
+        '"signal_labels":{"evidence":"string","claims":"string","sources":"string"},'
+        '"empty_states":{"evidence":"string","claims":"string","sources":"string"}'
         "}\n"
         "Rules:\n"
         "- Tailor wording to this exact request/answer context.\n"

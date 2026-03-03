@@ -25,3 +25,18 @@ API_FAST_QA_MAX_CHUNKS_PER_SOURCE = config(
     cast=int,
 )
 API_FAST_QA_TEMPERATURE = config("MAIA_FAST_QA_TEMPERATURE", default=0.2, cast=float)
+MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
+    "MAIA_CITATION_STRENGTH_ORDERING_ENABLED",
+    default=False,
+    cast=bool,
+)
+MAIA_SOURCE_USAGE_HEATMAP_ENABLED = config(
+    "MAIA_SOURCE_USAGE_HEATMAP_ENABLED",
+    default=False,
+    cast=bool,
+)
+MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD = config(
+    "MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD",
+    default=0.60,
+    cast=float,
+)

@@ -5,6 +5,7 @@ type ConversationMessageMeta = {
   mode?: "ask" | "company_agent";
   actions_taken?: ChatTurn["actionsTaken"];
   sources_used?: ChatTurn["sourcesUsed"];
+  source_usage?: ChatTurn["sourceUsage"];
   next_recommended_steps?: string[];
   needs_human_review?: boolean;
   human_review_notes?: string | null;
@@ -44,6 +45,7 @@ export function buildConversationTurns(
     mode: messageMeta[index]?.mode || "ask",
     actionsTaken: messageMeta[index]?.actions_taken || [],
     sourcesUsed: messageMeta[index]?.sources_used || [],
+    sourceUsage: messageMeta[index]?.source_usage || [],
     nextRecommendedSteps: messageMeta[index]?.next_recommended_steps || [],
     needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
     humanReviewNotes: messageMeta[index]?.human_review_notes || null,

@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
+import logging
 from pathlib import Path
 from queue import Empty, Queue
 import shutil
 import threading
+from time import perf_counter
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import inspect, text
 from sqlmodel import SQLModel, Session, select
 
 from api.context import get_context
 from api.services.settings_service import load_user_settings
-from api.services.upload_service import index_files, index_urls
+from api.services.upload_service import index_files, index_urls, move_files_to_group
 from ktem.db.engine import engine
 
 from .config import (
@@ -31,15 +34,70 @@ from .config import (
 from .models import IngestionJob
 from .serialization import as_json_safe, job_to_payload
 
+logger = logging.getLogger(__name__)
+
 
 class IngestionJobManager:
     def __init__(self) -> None:
         SQLModel.metadata.create_all(engine)
+        self._ensure_schema_columns()
         self._queue: Queue[str] = Queue()
         self._workers: list[threading.Thread] = []
         self._stop_event = threading.Event()
         self._started = False
         self._enqueue_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
+        self._metrics: dict[str, int] = {
+            "jobs_created_files": 0,
+            "jobs_created_urls": 0,
+            "jobs_completed": 0,
+            "jobs_failed": 0,
+            "files_moved_to_group": 0,
+        }
+
+    def _ensure_schema_columns(self) -> None:
+        required_int_columns = {
+            "bytes_total": 0,
+            "bytes_persisted": 0,
+            "bytes_indexed": 0,
+        }
+        try:
+            inspector = inspect(engine)
+            existing_columns = {
+                str(column.get("name", "")).strip().lower()
+                for column in inspector.get_columns("maia_ingestion_job")
+            }
+        except Exception:
+            return
+
+        missing = [
+            (name, default)
+            for name, default in required_int_columns.items()
+            if name.lower() not in existing_columns
+        ]
+        if not missing:
+            return
+
+        for column_name, default_value in missing:
+            statement = text(
+                f"ALTER TABLE maia_ingestion_job "
+                f"ADD COLUMN {column_name} INTEGER NOT NULL DEFAULT {int(default_value)}"
+            )
+            try:
+                with engine.begin() as connection:
+                    connection.execute(statement)
+            except Exception as exc:
+                logger.warning(
+                    "Unable to add ingestion schema column '%s': %s",
+                    column_name,
+                    exc,
+                )
+
+    def _inc_metric(self, key: str, amount: int = 1) -> None:
+        if not key:
+            return
+        with self._metrics_lock:
+            self._metrics[key] = int(self._metrics.get(key, 0)) + int(amount)
 
     def start(self) -> None:
         if self._started:
@@ -92,10 +150,13 @@ class IngestionJobManager:
         index_id: int | None,
         reindex: bool,
         files: list[dict[str, Any]],
+        group_id: str | None = None,
+        scope: str = "persistent",
     ) -> dict[str, Any]:
         if not files:
             raise HTTPException(status_code=400, detail="No files were provided.")
 
+        bytes_total = sum(int((item or {}).get("size") or 0) for item in files)
         now = datetime.utcnow()
         job = IngestionJob(
             user_id=user_id,
@@ -104,7 +165,14 @@ class IngestionJobManager:
             index_id=index_id,
             reindex=bool(reindex),
             total_items=len(files),
-            payload={"files": [as_json_safe(item) for item in files]},
+            bytes_total=bytes_total,
+            bytes_persisted=bytes_total,
+            bytes_indexed=0,
+            payload={
+                "files": [as_json_safe(item) for item in files],
+                "target_group_id": str(group_id or "").strip() or None,
+                "scope": str(scope or "persistent"),
+            },
             date_created=now,
             date_updated=now,
         )
@@ -115,6 +183,7 @@ class IngestionJobManager:
             created = job_to_payload(job)
 
         self.enqueue(job.id)
+        self._inc_metric("jobs_created_files")
         return created
 
     def create_url_job(
@@ -145,6 +214,9 @@ class IngestionJobManager:
             index_id=index_id,
             reindex=bool(reindex),
             total_items=len(cleaned_urls),
+            bytes_total=0,
+            bytes_persisted=0,
+            bytes_indexed=0,
             payload={
                 "urls": cleaned_urls,
                 "web_crawl_depth": int(web_crawl_depth),
@@ -163,6 +235,7 @@ class IngestionJobManager:
             created = job_to_payload(job)
 
         self.enqueue(job.id)
+        self._inc_metric("jobs_created_urls")
         return created
 
     def enqueue(self, job_id: str) -> None:
@@ -235,14 +308,23 @@ class IngestionJobManager:
             yield values[start : start + batch_size]
 
     def _run_file_job(self, job_id: str) -> None:
+        started_at = perf_counter()
         with Session(engine) as session:
             job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
             if job is None:
                 return
-            files_payload = list((job.payload or {}).get("files") or [])
+            payload = job.payload or {}
+            files_payload = list(payload.get("files") or [])
+            target_group_id = str(payload.get("target_group_id") or "").strip() or None
+            scope = str(payload.get("scope") or "persistent")
             user_id = job.user_id
             index_id = job.index_id
             reindex = bool(job.reindex)
+            bytes_total = int(getattr(job, "bytes_total", 0) or 0)
+            bytes_persisted = int(getattr(job, "bytes_persisted", 0) or 0)
+            if bytes_total <= 0:
+                bytes_total = sum(int((entry or {}).get("size") or 0) for entry in files_payload)
+                bytes_persisted = max(bytes_persisted, bytes_total)
 
         context = get_context()
         settings = load_user_settings(context=context, user_id=user_id)
@@ -253,9 +335,11 @@ class IngestionJobManager:
         processed = 0
         success_count = 0
         failure_count = 0
+        indexed_bytes = 0
 
         for batch in self._iterate_batches(files_payload, INGEST_FILE_BATCH_SIZE):
             batch_paths: list[Path] = []
+            batch_bytes = 0
             for entry in batch:
                 raw_path = str((entry or {}).get("path", "")).strip()
                 if not raw_path:
@@ -263,16 +347,27 @@ class IngestionJobManager:
                 candidate = Path(raw_path)
                 if candidate.exists() and candidate.is_file():
                     batch_paths.append(candidate)
+                    file_size = int((entry or {}).get("size") or 0)
+                    if file_size <= 0:
+                        try:
+                            file_size = int(candidate.stat().st_size)
+                        except Exception:
+                            file_size = 0
+                    batch_bytes += max(0, file_size)
 
             if not batch_paths:
                 processed += len(batch)
                 failure_count += len(batch)
                 all_errors.append("File batch had no readable files on disk.")
+                indexed_bytes = min(bytes_total, indexed_bytes + batch_bytes)
                 self._update_progress(
                     job_id=job_id,
                     processed_items=processed,
                     success_count=success_count,
                     failure_count=failure_count,
+                    bytes_total=bytes_total,
+                    bytes_persisted=bytes_persisted,
+                    bytes_indexed=indexed_bytes,
                     items=all_items,
                     errors=all_errors,
                     file_ids=all_file_ids,
@@ -287,6 +382,7 @@ class IngestionJobManager:
                 index_id=index_id,
                 reindex=reindex,
                 settings=settings,
+                scope=scope,
             )
             batch_items = list(response.get("items") or [])
             batch_errors = [str(err) for err in list(response.get("errors") or [])]
@@ -307,29 +403,68 @@ class IngestionJobManager:
             batch_failures = max(0, len(batch_items) - batch_successes) + unmatched
             success_count += batch_successes
             failure_count += batch_failures
+            indexed_bytes = min(bytes_total, indexed_bytes + batch_bytes)
 
             self._update_progress(
                 job_id=job_id,
                 processed_items=processed,
                 success_count=success_count,
                 failure_count=failure_count,
+                bytes_total=bytes_total,
+                bytes_persisted=bytes_persisted,
+                bytes_indexed=indexed_bytes,
                 items=all_items,
                 errors=all_errors,
                 file_ids=all_file_ids,
                 debug=all_debug,
             )
 
+        if target_group_id and all_file_ids:
+            try:
+                move_result = move_files_to_group(
+                    context=context,
+                    user_id=user_id,
+                    index_id=index_id,
+                    file_ids=all_file_ids,
+                    group_id=target_group_id,
+                    group_name=None,
+                    mode="append",
+                )
+                moved_ids = list(move_result.get("moved_ids") or [])
+                self._inc_metric("files_moved_to_group", amount=len(moved_ids))
+                all_debug.append(
+                    f"Moved {len(moved_ids)} indexed file(s) to group {target_group_id}."
+                )
+            except Exception as exc:
+                all_errors.append(f"Indexed files could not be moved to group: {exc}")
+
         self._mark_completed(
             job_id=job_id,
             processed_items=processed,
             success_count=success_count,
             failure_count=failure_count,
+            bytes_total=bytes_total,
+            bytes_persisted=bytes_persisted,
+            bytes_indexed=min(bytes_total, max(0, indexed_bytes)),
             items=all_items,
             errors=all_errors,
             file_ids=all_file_ids,
             debug=all_debug,
         )
         self._cleanup_file_payload(job_id)
+        logger.info(
+            "Ingestion file job completed",
+            extra={
+                "job_id": job_id,
+                "user_id": user_id,
+                "index_id": index_id,
+                "processed_items": processed,
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "bytes_total": bytes_total,
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+            },
+        )
 
     def _run_url_job(self, job_id: str) -> None:
         with Session(engine) as session:
@@ -397,6 +532,9 @@ class IngestionJobManager:
                 processed_items=processed,
                 success_count=success_count,
                 failure_count=failure_count,
+                bytes_total=0,
+                bytes_persisted=0,
+                bytes_indexed=0,
                 items=all_items,
                 errors=all_errors,
                 file_ids=all_file_ids,
@@ -408,6 +546,9 @@ class IngestionJobManager:
             processed_items=processed,
             success_count=success_count,
             failure_count=failure_count,
+            bytes_total=0,
+            bytes_persisted=0,
+            bytes_indexed=0,
             items=all_items,
             errors=all_errors,
             file_ids=all_file_ids,
@@ -421,6 +562,9 @@ class IngestionJobManager:
         processed_items: int,
         success_count: int,
         failure_count: int,
+        bytes_total: int,
+        bytes_persisted: int,
+        bytes_indexed: int,
         items: list[dict[str, Any]],
         errors: list[str],
         file_ids: list[str],
@@ -435,6 +579,9 @@ class IngestionJobManager:
             job.processed_items = int(processed_items)
             job.success_count = int(success_count)
             job.failure_count = int(failure_count)
+            job.bytes_total = int(max(0, bytes_total))
+            job.bytes_persisted = int(max(0, bytes_persisted))
+            job.bytes_indexed = int(max(0, bytes_indexed))
             job.items = [as_json_safe(item) for item in items]
             job.errors = [str(err) for err in errors]
             # Preserve insertion order while deduplicating.
@@ -452,6 +599,9 @@ class IngestionJobManager:
         processed_items: int,
         success_count: int,
         failure_count: int,
+        bytes_total: int,
+        bytes_persisted: int,
+        bytes_indexed: int,
         items: list[dict[str, Any]],
         errors: list[str],
         file_ids: list[str],
@@ -465,6 +615,9 @@ class IngestionJobManager:
             job.processed_items = int(processed_items)
             job.success_count = int(success_count)
             job.failure_count = int(failure_count)
+            job.bytes_total = int(max(0, bytes_total))
+            job.bytes_persisted = int(max(0, bytes_persisted))
+            job.bytes_indexed = int(max(0, bytes_indexed))
             job.items = [as_json_safe(item) for item in items]
             job.errors = [str(err) for err in errors]
             job.file_ids = list(dict.fromkeys([str(fid) for fid in file_ids if fid]))
@@ -474,6 +627,7 @@ class IngestionJobManager:
             job.date_updated = datetime.utcnow()
             session.add(job)
             session.commit()
+        self._inc_metric("jobs_completed")
 
     def _mark_failed(self, job_id: str, reason: str) -> None:
         with Session(engine) as session:
@@ -487,6 +641,7 @@ class IngestionJobManager:
             job.date_updated = datetime.utcnow()
             session.add(job)
             session.commit()
+        self._inc_metric("jobs_failed")
         self._cleanup_file_payload(job_id)
 
     def _cleanup_file_payload(self, job_id: str) -> None:

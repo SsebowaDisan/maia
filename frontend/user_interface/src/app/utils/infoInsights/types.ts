@@ -14,6 +14,7 @@ type EvidenceCard = {
   extract: string;
   imageSrc?: string;
   highlightBoxes?: HighlightBox[];
+  strengthScore?: number;
 };
 
 type ClaimStatus = "supported" | "weak" | "missing";

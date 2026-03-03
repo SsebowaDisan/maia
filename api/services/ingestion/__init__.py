@@ -13,6 +13,11 @@ from .config import (
     JOB_STATUS_QUEUED,
     JOB_STATUS_RUNNING,
     TERMINAL_JOB_STATUSES,
+    UPLOAD_MAX_FILE_SIZE_BYTES,
+    UPLOAD_MAX_FILES_PER_REQUEST,
+    UPLOAD_MAX_TOTAL_BYTES,
+    UPLOAD_SAVE_CONCURRENCY,
+    UPLOAD_USE_UNIFIED_PERSIST,
 )
 from .manager import IngestionJobManager
 from .models import IngestionJob
@@ -30,6 +35,11 @@ __all__ = [
     "INGEST_URL_BATCH_SIZE",
     "INGEST_WORKDIR",
     "INGEST_KEEP_WORKDIR",
+    "UPLOAD_USE_UNIFIED_PERSIST",
+    "UPLOAD_SAVE_CONCURRENCY",
+    "UPLOAD_MAX_FILES_PER_REQUEST",
+    "UPLOAD_MAX_FILE_SIZE_BYTES",
+    "UPLOAD_MAX_TOTAL_BYTES",
     "IngestionJob",
     "IngestionJobManager",
     "as_json_safe",

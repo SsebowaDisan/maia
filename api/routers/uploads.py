@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import shutil
 from mimetypes import guess_type
-import tempfile
 from pathlib import Path
+from time import perf_counter
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -27,7 +29,16 @@ from api.schemas import (
     UploadResponse,
     UploadUrlsRequest,
 )
-from api.services.ingestion_service import INGEST_WORKDIR, get_ingestion_manager
+from api.services.ingestion_service import (
+    INGEST_KEEP_WORKDIR,
+    INGEST_WORKDIR,
+    UPLOAD_MAX_FILE_SIZE_BYTES,
+    UPLOAD_MAX_FILES_PER_REQUEST,
+    UPLOAD_MAX_TOTAL_BYTES,
+    UPLOAD_SAVE_CONCURRENCY,
+    UPLOAD_USE_UNIFIED_PERSIST,
+    get_ingestion_manager,
+)
 from api.services.settings_service import load_user_settings
 from api.services.upload_service import (
     create_file_group,
@@ -43,6 +54,7 @@ from api.services.upload_service import (
 )
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
+logger = logging.getLogger(__name__)
 
 
 def _unique_target_path(directory: Path, original_name: str) -> Path:
@@ -74,43 +86,197 @@ async def _store_upload_file(upload: UploadFile, directory: Path) -> Path:
     return target
 
 
+def _bytes_to_human(value: int) -> str:
+    size = float(max(0, int(value)))
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    unit_idx = 0
+    while size >= 1024 and unit_idx < len(units) - 1:
+        size /= 1024.0
+        unit_idx += 1
+    return f"{size:.1f} {units[unit_idx]}"
+
+
+def _enforce_upload_limits(files: list[UploadFile], request: Request) -> None:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were provided.")
+
+    if len(files) > UPLOAD_MAX_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Too many files in one request ({len(files)}). "
+                f"Max allowed is {UPLOAD_MAX_FILES_PER_REQUEST}."
+            ),
+        )
+
+    raw_content_length = str((request.headers.get("content-length") if request else "") or "").strip()
+    if raw_content_length:
+        try:
+            content_length = int(raw_content_length)
+        except Exception:
+            content_length = 0
+        if content_length > UPLOAD_MAX_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Request payload is too large. "
+                    f"Max total upload size is {_bytes_to_human(UPLOAD_MAX_TOTAL_BYTES)}."
+                ),
+            )
+
+
+def _cleanup_persisted_uploads(saved_files: list[dict[str, object]]) -> None:
+    if INGEST_KEEP_WORKDIR:
+        return
+
+    parent_dirs: set[Path] = set()
+    for item in saved_files:
+        raw_path = str((item or {}).get("path", "")).strip()
+        if not raw_path:
+            continue
+        path_obj = Path(raw_path)
+        try:
+            if path_obj.exists() and path_obj.is_file():
+                path_obj.unlink(missing_ok=True)
+        except Exception:
+            pass
+        parent = path_obj.parent
+        if str(parent).startswith(str(INGEST_WORKDIR)):
+            parent_dirs.add(parent)
+
+    for directory in parent_dirs:
+        try:
+            if directory.exists() and directory.is_dir():
+                shutil.rmtree(directory, ignore_errors=True)
+        except Exception:
+            pass
+
+
 async def _persist_uploaded_files(files: list[UploadFile]) -> list[dict[str, object]]:
     if not files:
         raise HTTPException(status_code=400, detail="No files were provided.")
 
     job_dir = INGEST_WORKDIR / "incoming" / uuid.uuid4().hex
     job_dir.mkdir(parents=True, exist_ok=True)
-    saved: list[dict[str, object]] = []
-    for upload in files:
-        target = await _store_upload_file(upload, job_dir)
-        saved.append(
-            {
+
+    semaphore = asyncio.Semaphore(UPLOAD_SAVE_CONCURRENCY)
+    persisted: list[dict[str, object] | None] = [None] * len(files)
+
+    async def _persist_one(position: int, upload: UploadFile) -> None:
+        async with semaphore:
+            target = await _store_upload_file(upload, job_dir)
+            file_size = int(target.stat().st_size)
+            if file_size > UPLOAD_MAX_FILE_SIZE_BYTES:
+                try:
+                    target.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f'File "{Path(upload.filename or target.name).name}" exceeds max size '
+                        f"({_bytes_to_human(file_size)} > "
+                        f"{_bytes_to_human(UPLOAD_MAX_FILE_SIZE_BYTES)})."
+                    ),
+                )
+            persisted[position] = {
                 "name": Path(upload.filename or target.name).name,
                 "path": str(target.resolve()),
-                "size": int(target.stat().st_size),
+                "size": file_size,
             }
+
+    tasks = [asyncio.create_task(_persist_one(idx, upload)) for idx, upload in enumerate(files)]
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        saved_so_far = [item for item in persisted if item is not None]
+        _cleanup_persisted_uploads(saved_so_far)  # best-effort cleanup on partial failure
+        raise
+
+    saved = [item for item in persisted if item is not None]
+    total_bytes = sum(int((item or {}).get("size") or 0) for item in saved)
+    if total_bytes > UPLOAD_MAX_TOTAL_BYTES:
+        _cleanup_persisted_uploads(saved)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Combined file size exceeds max upload size. "
+                f"Max total is {_bytes_to_human(UPLOAD_MAX_TOTAL_BYTES)}."
+            ),
         )
     return saved
 
 
+async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[dict[str, object]]:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were provided.")
+
+    job_dir = INGEST_WORKDIR / "incoming" / uuid.uuid4().hex
+    job_dir.mkdir(parents=True, exist_ok=True)
+    persisted: list[dict[str, object]] = []
+    for upload in files:
+        target = await _store_upload_file(upload, job_dir)
+        file_size = int(target.stat().st_size)
+        if file_size > UPLOAD_MAX_FILE_SIZE_BYTES:
+            _cleanup_persisted_uploads(persisted)
+            try:
+                target.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f'File "{Path(upload.filename or target.name).name}" exceeds max size '
+                    f"({_bytes_to_human(file_size)} > "
+                    f"{_bytes_to_human(UPLOAD_MAX_FILE_SIZE_BYTES)})."
+                ),
+            )
+        persisted.append(
+            {
+                "name": Path(upload.filename or target.name).name,
+                "path": str(target.resolve()),
+                "size": file_size,
+            }
+        )
+    total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
+    if total_bytes > UPLOAD_MAX_TOTAL_BYTES:
+        _cleanup_persisted_uploads(persisted)
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Combined file size exceeds max upload size. "
+                f"Max total is {_bytes_to_human(UPLOAD_MAX_TOTAL_BYTES)}."
+            ),
+        )
+    return persisted
+
+
 @router.post("/files", response_model=UploadResponse)
 async def upload_files(
+    request: Request,
     files: list[UploadFile] = File(default_factory=list),
     index_id: int | None = Form(default=None),
     reindex: bool = Form(default=True),
     scope: str = Form(default="persistent"),
     user_id: str = Depends(get_current_user_id),
 ):
+    _enforce_upload_limits(files, request)
     context = get_context()
     settings = load_user_settings(context=context, user_id=user_id)
+    started_at = perf_counter()
+    persisted_files: list[dict[str, object]] = []
 
-    with tempfile.TemporaryDirectory(prefix="maia_upload_") as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        file_paths: list[Path] = []
-        for upload in files:
-            target = await _store_upload_file(upload, tmp_path)
-            file_paths.append(target)
+    try:
+        if UPLOAD_USE_UNIFIED_PERSIST:
+            persisted_files = await _persist_uploaded_files(files)
+        else:
+            persisted_files = await _persist_uploaded_files_sequential(files)
 
+        file_paths = [Path(str(item.get("path", ""))) for item in persisted_files]
         response = await run_in_threadpool(
             index_files,
             context=context,
@@ -121,25 +287,64 @@ async def upload_files(
             settings=settings,
             scope=scope,
         )
-
-    return response
+        return response
+    finally:
+        _cleanup_persisted_uploads(persisted_files)
+        elapsed_ms = int((perf_counter() - started_at) * 1000)
+        logger.info(
+            "Sync file upload request completed",
+            extra={
+                "user_id": user_id,
+                "index_id": index_id,
+                "scope": scope,
+                "file_count": len(files),
+                "persisted_file_count": len(persisted_files),
+                "persisted_bytes": sum(int((item or {}).get("size") or 0) for item in persisted_files),
+                "elapsed_ms": elapsed_ms,
+            },
+        )
 
 
 @router.post("/files/jobs", response_model=IngestionJobResponse)
 async def create_file_ingestion_job(
+    request: Request,
     files: list[UploadFile] = File(default_factory=list),
     index_id: int | None = Form(default=None),
     reindex: bool = Form(default=True),
+    group_id: str | None = Form(default=None),
+    scope: str = Form(default="persistent"),
     user_id: str = Depends(get_current_user_id),
 ):
-    persisted = await _persist_uploaded_files(files)
+    _enforce_upload_limits(files, request)
+    started_at = perf_counter()
+    persisted = (
+        await _persist_uploaded_files(files)
+        if UPLOAD_USE_UNIFIED_PERSIST
+        else await _persist_uploaded_files_sequential(files)
+    )
+    total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
     manager = get_ingestion_manager()
-    return manager.create_file_job(
+    job = manager.create_file_job(
         user_id=user_id,
         index_id=index_id,
         reindex=reindex,
         files=persisted,
+        group_id=group_id,
+        scope=scope,
     )
+    logger.info(
+        "Queued file ingestion job",
+        extra={
+            "user_id": user_id,
+            "index_id": index_id,
+            "group_id": group_id,
+            "scope": scope,
+            "file_count": len(persisted),
+            "persisted_bytes": total_bytes,
+            "elapsed_ms": int((perf_counter() - started_at) * 1000),
+        },
+    )
+    return job
 
 
 @router.post("/urls", response_model=UploadResponse)

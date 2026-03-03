@@ -435,6 +435,7 @@ export function useConversationChat({
             mode: effectiveReturnedMode,
             actionsTaken: response.actions_taken || [],
             sourcesUsed: response.sources_used || [],
+            sourceUsage: response.source_usage || [],
             nextRecommendedSteps: response.next_recommended_steps || [],
             needsHumanReview: Boolean(response.needs_human_review),
             humanReviewNotes: response.human_review_notes || null,

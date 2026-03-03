@@ -107,6 +107,7 @@ function ChatMain({
   onUpdateUserTurn,
   onSendMessage,
   onUploadFiles,
+  onCreateFileIngestionJob,
   isSending,
   citationMode,
   onCitationClick,
@@ -129,6 +130,7 @@ function ChatMain({
     onSendMessage,
     onUpdateUserTurn,
     onUploadFiles,
+    onCreateFileIngestionJob,
   });
 
   const handleTurnClick = (

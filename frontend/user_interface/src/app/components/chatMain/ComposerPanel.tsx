@@ -53,11 +53,11 @@ function ComposerPanel({
   const canSubmit = Boolean(message.trim()) && !isUploading && !isSending;
   const sendDisabled = !canSubmit;
 
-  const attachmentStatusLabel = (status: ComposerAttachment["status"]) => {
-    if (status === "uploading") {
-      return "Uploading";
+  const attachmentStatusLabel = (attachment: ComposerAttachment) => {
+    if (attachment.status === "uploading") {
+      return attachment.message || "Uploading";
     }
-    if (status === "error") {
+    if (attachment.status === "error") {
       return "Failed";
     }
     return "";
@@ -168,9 +168,9 @@ function ComposerPanel({
                             <FileText className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
                           )}
                           <span className="truncate">{attachment.name}</span>
-                          {attachmentStatusLabel(attachment.status) ? (
+                          {attachmentStatusLabel(attachment) ? (
                             <span className="shrink-0 text-[10px] text-[#8d8d93]">
-                              {attachmentStatusLabel(attachment.status)}
+                              {attachmentStatusLabel(attachment)}
                             </span>
                           ) : null}
                         </button>

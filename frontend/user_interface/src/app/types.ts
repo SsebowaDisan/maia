@@ -12,6 +12,7 @@ export type ChatTurn = {
   mode?: "ask" | "company_agent";
   actionsTaken?: AgentActionRecord[];
   sourcesUsed?: AgentSourceRecord[];
+  sourceUsage?: SourceUsageRecord[];
   nextRecommendedSteps?: string[];
   activityRunId?: string | null;
   activityEvents?: AgentActivityEvent[];
@@ -38,6 +39,17 @@ export type AgentSourceRecord = {
   file_id?: string | null;
   score?: number | null;
   metadata?: Record<string, unknown>;
+};
+
+export type SourceUsageRecord = {
+  source_id: string;
+  source_name: string;
+  source_type: string;
+  retrieved_count: number;
+  cited_count: number;
+  max_strength_score: number;
+  avg_strength_score: number;
+  citation_share: number;
 };
 
 export type AgentActivityEvent = {

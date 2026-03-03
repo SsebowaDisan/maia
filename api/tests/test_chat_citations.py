@@ -1,6 +1,7 @@
 from api.services.chat.citations import (
     assign_fast_source_refs,
     append_required_citation_suffix,
+    build_source_usage,
     build_fast_info_html,
     enforce_required_citations,
     resolve_required_citation_mode,
@@ -167,6 +168,92 @@ def test_build_fast_info_html_emits_data_boxes_attribute() -> None:
         ]
     )
     assert "data-boxes='[{&quot;x&quot;:0.1,&quot;y&quot;:0.2,&quot;width&quot;:0.3,&quot;height&quot;:0.04}]'" in info_html
+
+
+def test_build_fast_info_html_emits_strength_attribute_when_available() -> None:
+    info_html = build_fast_info_html(
+        [
+            {
+                "ref_id": 1,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "2",
+                "text": "Evidence text",
+                "strength_score": 0.73125,
+            }
+        ]
+    )
+    assert "data-strength='0.731250'" in info_html
+
+
+def test_assign_fast_source_refs_strength_ordering_renumbers_refs() -> None:
+    snippets = [
+        {
+            "source_id": "file-1",
+            "source_name": "Low.pdf",
+            "page_label": "1",
+            "text": "lower strength snippet",
+            "llm_trulens_score": 0.1,
+            "rerank_score": 0.0,
+            "vector_score": 0.0,
+        },
+        {
+            "source_id": "file-2",
+            "source_name": "High.pdf",
+            "page_label": "2",
+            "text": "higher strength snippet",
+            "llm_trulens_score": 0.8,
+            "rerank_score": 0.2,
+            "vector_score": 0.1,
+        },
+    ]
+    enriched, refs = assign_fast_source_refs(snippets, strength_ordering=True)
+    assert refs[0]["source_name"] == "High.pdf"
+    assert refs[0]["id"] == 1
+    high_ref = next(item for item in enriched if item["source_name"] == "High.pdf")
+    low_ref = next(item for item in enriched if item["source_name"] == "Low.pdf")
+    assert int(high_ref["ref_id"]) == 1
+    assert int(low_ref["ref_id"]) == 2
+
+
+def test_build_source_usage_aggregates_retrieved_and_cited_counts() -> None:
+    snippets = [
+        {
+            "source_id": "file-1",
+            "source_name": "A.pdf",
+            "ref_id": 1,
+            "strength_score": 0.8,
+        },
+        {
+            "source_id": "file-1",
+            "source_name": "A.pdf",
+            "ref_id": 1,
+            "strength_score": 0.4,
+        },
+        {
+            "source_id": "file-2",
+            "source_name": "B.pdf",
+            "ref_id": 2,
+            "strength_score": 0.2,
+        },
+    ]
+    refs = [
+        {"id": 1, "source_id": "file-1", "source_name": "A.pdf"},
+        {"id": 2, "source_id": "file-2", "source_name": "B.pdf"},
+    ]
+    answer = "Main claim <a class='citation' href='#evidence-1'>[1]</a>."
+    usage = build_source_usage(
+        snippets_with_refs=snippets,
+        refs=refs,
+        answer_text=answer,
+        enabled=True,
+    )
+    assert len(usage) == 2
+    top = usage[0]
+    assert top["source_id"] == "file-1"
+    assert top["retrieved_count"] == 2
+    assert top["cited_count"] >= 1
+    assert 0.0 <= float(top["citation_share"]) <= 1.0
 
 
 def test_enforce_required_citations_realigns_model_ref_to_matching_evidence() -> None:

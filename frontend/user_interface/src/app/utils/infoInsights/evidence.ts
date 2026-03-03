@@ -128,6 +128,8 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
     const highlightBoxes = parseHighlightBoxes(details.getAttribute("data-boxes"));
+    const rawStrength = Number(details.getAttribute("data-strength") || "");
+    const strengthScore = Number.isFinite(rawStrength) ? rawStrength : undefined;
 
     return {
       id: detailsId || `evidence-${index + 1}`,
@@ -138,6 +140,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
       extract,
       imageSrc,
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+      strengthScore,
     };
   });
 }

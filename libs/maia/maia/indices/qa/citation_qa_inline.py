@@ -9,7 +9,12 @@ import numpy as np
 from maia.base import AIMessage, Document, HumanMessage, SystemMessage
 from maia.llms import PromptTemplate
 
-from .citation_qa import CITATION_TIMEOUT, MAX_IMAGES, AnswerWithContextPipeline
+from .citation_qa import (
+    CITATION_TIMEOUT,
+    MAX_IMAGES,
+    AnswerWithContextPipeline,
+    _compute_span_strength,
+)
 from .format_context import EVIDENCE_MODE_FIGURE
 from .utils import find_start_end_phrase
 
@@ -351,11 +356,28 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
                     best_match_doc_idx = doc.doc_id
 
             if best_match is not None and best_match_doc_idx is not None:
+                matched_doc = next(
+                    (doc for doc in docs if str(doc.doc_id) == str(best_match_doc_idx)),
+                    None,
+                )
+                span_text = ""
+                span_strength = 0.0
+                if matched_doc is not None:
+                    span_text = str(
+                        matched_doc.text[best_match[0] : best_match[1]] if matched_doc.text else ""
+                    )
+                    span_strength = _compute_span_strength(
+                        doc=matched_doc,
+                        span_text=span_text,
+                        is_exact_match=False,
+                    )
                 spans[best_match_doc_idx].append(
                     {
                         "start": best_match[0],
                         "end": best_match[1],
                         "idx": evidence_idx,
+                        "is_exact_match": False,
+                        "strength_score": span_strength,
                     }
                 )
         return spans

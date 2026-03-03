@@ -1,4 +1,4 @@
-import { API_BASE, request } from "./core";
+import { ACTIVE_USER_ID, API_BASE, request, withUserIdQuery } from "./core";
 import type {
   BulkDeleteFilesResponse,
   DeleteFileGroupResponse,
@@ -14,11 +14,58 @@ function getRawFileUrl(fileId: string): string {
   return `${API_BASE}/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
 }
 
+type UploadProgressCallback = (loadedBytes: number, totalBytes: number) => void;
+
+function requestMultipartWithProgress<T>(
+  path: string,
+  formData: FormData,
+  onUploadProgress?: UploadProgressCallback,
+) {
+  if (!onUploadProgress) {
+    return request<T>(path, {
+      method: "POST",
+      body: formData,
+    });
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const relativePath = withUserIdQuery(path);
+    const url = `${API_BASE}${relativePath}`;
+    xhr.open("POST", url, true);
+    if (ACTIVE_USER_ID) {
+      xhr.setRequestHeader("X-User-Id", ACTIVE_USER_ID);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) {
+        return;
+      }
+      onUploadProgress(event.loaded, event.total);
+    };
+    xhr.onerror = () => {
+      reject(new Error("Network error while uploading files."));
+    };
+    xhr.onload = () => {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(xhr.responseText || `Request failed: ${xhr.status}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(xhr.responseText || "{}") as T);
+      } catch (error) {
+        reject(new Error(`Invalid JSON response: ${String(error)}`));
+      }
+    };
+    xhr.send(formData);
+  });
+}
+
 async function uploadFiles(
   files: FileList,
   options?: {
     reindex?: boolean;
     scope?: "persistent" | "chat_temp";
+    onUploadProgress?: UploadProgressCallback;
   },
 ) {
   const formData = new FormData();
@@ -28,10 +75,11 @@ async function uploadFiles(
   formData.append("reindex", String(options?.reindex ?? true));
   formData.append("scope", options?.scope ?? "persistent");
 
-  return request<UploadResponse>("/api/uploads/files", {
-    method: "POST",
-    body: formData,
-  });
+  return requestMultipartWithProgress<UploadResponse>(
+    "/api/uploads/files",
+    formData,
+    options?.onUploadProgress,
+  );
 }
 
 function uploadUrls(
@@ -249,6 +297,9 @@ async function createFileIngestionJob(
   options?: {
     reindex?: boolean;
     indexId?: number;
+    groupId?: string;
+    scope?: "persistent" | "chat_temp";
+    onUploadProgress?: UploadProgressCallback;
   },
 ) {
   const formData = new FormData();
@@ -259,11 +310,18 @@ async function createFileIngestionJob(
   if (typeof options?.indexId === "number") {
     formData.append("index_id", String(options.indexId));
   }
+  if (options?.groupId) {
+    formData.append("group_id", options.groupId);
+  }
+  if (options?.scope) {
+    formData.append("scope", options.scope);
+  }
 
-  return request<IngestionJob>("/api/uploads/files/jobs", {
-    method: "POST",
-    body: formData,
-  });
+  return requestMultipartWithProgress<IngestionJob>(
+    "/api/uploads/files/jobs",
+    formData,
+    options?.onUploadProgress,
+  );
 }
 
 function createUrlIngestionJob(
