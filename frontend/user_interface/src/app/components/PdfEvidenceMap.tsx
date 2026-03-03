@@ -91,12 +91,6 @@ const BRANCH_COLORS = [
   "#14b8a6",
 ];
 
-const LAYOUT_OPTIONS: Array<{ value: LayoutMode; label: string; title: string }> = [
-  { value: "left", label: "L", title: "Left layout" },
-  { value: "center", label: "C", title: "Center layout" },
-  { value: "right", label: "R", title: "Right layout" },
-];
-
 const CANVAS_STORAGE_PREFIX = "maia.mindmap.canvas.v1";
 
 function branchColorAt(index: number): string {
@@ -754,11 +748,13 @@ function buildGraph(params: {
         sourceHandle: childSide === "right" ? "source-right" : "source-left",
         target: child.id,
         targetHandle: childSide === "right" ? "target-left" : "target-right",
-        type: "bezier",
+        type: "smoothstep",
+        pathOptions: { borderRadius: 34, offset: 12 },
         style: {
           stroke: child.data.branchColor,
-          strokeWidth: child.data.kind === "evidence" ? (childIsTraceNode ? 2.4 : 1.9) : (childIsTraceNode ? 2.7 : 1.9),
-          opacity: childIsTraceNode ? 0.88 : 0.38,
+          strokeWidth: child.data.kind === "evidence" ? (childIsTraceNode ? 1.9 : 1.4) : (childIsTraceNode ? 2.2 : 1.5),
+          opacity: childIsTraceNode ? 0.84 : 0.3,
+          strokeLinecap: "round",
         },
       });
       pushNode(child);
@@ -786,10 +782,11 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
   const isPlaceholder = data.kind === "placeholder";
   const usageClaimCount = Number(data.usageClaimCount || 0);
   const usageEvidenceCount = Number(data.usageEvidenceCount || 0);
-  const hasUsageBadges = usageClaimCount > 0 || usageEvidenceCount > 0;
+  const hasUsageMeta = usageClaimCount > 0 || usageEvidenceCount > 0;
+  const isUsed = Boolean(data.active) || hasUsageMeta;
   const borderColor = isRoot
     ? "rgba(17, 17, 19, 1)"
-    : data.active
+    : isUsed
       ? "rgba(17, 17, 19, 0.26)"
       : isSection
         ? "rgba(0, 0, 0, 0.08)"
@@ -797,10 +794,12 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
   const dotColor = data.branchColor || "#7a7a86";
   const bgColor = isRoot
     ? "#111113"
-    : data.active
-      ? "rgba(255, 244, 186, 0.88)"
+    : isSection
+      ? "rgba(255, 255, 255, 0.9)"
+      : isUsed
+        ? "rgba(255, 246, 202, 0.52)"
       : isClaim
-        ? "rgba(255, 255, 255, 0.86)"
+        ? "rgba(255, 255, 255, 0.7)"
         : "transparent";
   const textColor = isRoot ? "#ffffff" : "#1d1d1f";
 
@@ -812,7 +811,7 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
 
   return (
     <div
-      className={`${isRoot ? "min-w-[180px] max-w-[300px] rounded-2xl border px-3 py-2.5 shadow-[0_12px_32px_rgba(0,0,0,0.24)]" : "min-w-[160px] max-w-[340px] rounded-lg border px-1.5 py-1.5"} transition-colors`}
+      className={`${isRoot ? "min-w-[188px] max-w-[320px] rounded-2xl border px-3 py-2.5 shadow-[0_12px_32px_rgba(0,0,0,0.24)]" : isSection ? "min-w-[180px] max-w-[360px] rounded-xl border px-2 py-1.5 shadow-[0_1px_6px_rgba(0,0,0,0.05)]" : "min-w-[150px] max-w-[350px] rounded-lg border px-1.5 py-1"} transition-colors`}
       style={{
         borderColor,
         background: bgColor,
@@ -850,12 +849,12 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
       <div className="flex items-start gap-2" style={{ color: textColor }}>
         {!isRoot ? (
           <span
-            className="mt-[6px] h-2.5 w-2.5 shrink-0 rounded-full border border-white shadow-[0_0_0_1px_rgba(0,0,0,0.1)]"
+            className="mt-[6px] h-2.5 w-2.5 shrink-0 rounded-full border border-white/90 shadow-[0_0_0_1px_rgba(0,0,0,0.08)]"
             style={{ background: dotColor }}
           />
         ) : null}
         <div className="min-w-0 flex-1">
-          <p className={`${isRoot ? "text-[12px] font-semibold tracking-[0.01em]" : isSection ? "text-[13px] font-semibold" : "text-[13px] font-medium"} truncate`}>
+          <p className={`${isRoot ? "text-[12px] font-semibold tracking-[0.01em]" : isSection ? "text-[13px] font-semibold" : isEvidence ? "text-[12px] font-medium" : "text-[12.5px] font-medium"} truncate`}>
             {data.title}
           </p>
           {data.subtitle ? (
@@ -863,19 +862,12 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
               {data.subtitle}
             </p>
           ) : null}
-          {hasUsageBadges && !isRoot ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {usageClaimCount > 0 ? (
-                <span className="inline-flex items-center rounded-full border border-black/[0.1] bg-white px-1.5 py-[1px] text-[10px] font-medium text-[#2d2d31]">
-                  {usageClaimCount} claim{usageClaimCount > 1 ? "s" : ""}
-                </span>
-              ) : null}
-              {usageEvidenceCount > 0 ? (
-                <span className="inline-flex items-center rounded-full border border-black/[0.1] bg-[#fff5cc] px-1.5 py-[1px] text-[10px] font-medium text-[#6a5200]">
-                  {usageEvidenceCount} cite{usageEvidenceCount > 1 ? "s" : ""}
-                </span>
-              ) : null}
-            </div>
+          {hasUsageMeta && !isRoot ? (
+            <p className="mt-1 text-[10px] text-[#6e6e73]">
+              {usageClaimCount > 0 ? `${usageClaimCount} claim${usageClaimCount > 1 ? "s" : ""}` : "0 claims"}
+              {" | "}
+              {usageEvidenceCount} cite{usageEvidenceCount > 1 ? "s" : ""}
+            </p>
           ) : null}
         </div>
 
@@ -896,10 +888,10 @@ function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
 
       {!isRoot ? (
         <div
-          className="mt-1 h-[2px] rounded-full"
+          className="mt-1 h-[1.5px] rounded-full"
           style={{
             background: dotColor,
-            opacity: isEvidence ? 0.62 : data.active ? 0.55 : 0.32,
+            opacity: isEvidence ? 0.54 : isUsed ? 0.58 : 0.22,
           }}
         />
       ) : null}
@@ -971,7 +963,7 @@ export function PdfEvidenceMap({
       setNodePositionsByLayout(createEmptyPositionState());
       return;
     }
-    setLayoutMode(stored.layoutMode);
+    setLayoutMode("left");
     setCollapsedNodeIds(new Set(stored.collapsedNodeIds));
     setNodePositionsByLayout(stored.nodePositionsByLayout);
   }, [canvasStorageKey]);
@@ -1279,12 +1271,12 @@ export function PdfEvidenceMap({
     : isAnimatingLayout
       ? "Arranging map..."
       : graph.sectionCount > 0
-        ? `${graph.sectionCount} sections · ${graph.tracedClaimCount} claims · ${graph.tracedEvidenceCount} cites`
+        ? `${graph.sectionCount} sections, ${graph.tracedClaimCount} claims traced, ${graph.tracedEvidenceCount} citations`
         : "Mind map";
 
   return (
     <div className="mb-3 overflow-hidden rounded-2xl border border-black/[0.08] bg-white">
-      <div className="h-[360px] w-full bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.9),rgba(243,244,248,0.95)_45%,rgba(241,242,245,1))]">
+      <div className="h-[380px] w-full bg-[#fbfbfd]">
         <ReactFlow
           nodes={displayNodes}
           edges={displayEdges}
@@ -1299,9 +1291,9 @@ export function PdfEvidenceMap({
           minZoom={0.2}
           maxZoom={1.8}
           proOptions={{ hideAttribution: true }}
-          nodesDraggable
+          nodesDraggable={false}
           nodesConnectable={false}
-          elementsSelectable
+          elementsSelectable={false}
           panOnDrag
           zoomOnScroll
           zoomOnPinch
@@ -1372,25 +1364,7 @@ export function PdfEvidenceMap({
                     <RotateCcw className="h-3.5 w-3.5 text-[#6e6e73]" />
                     Reset layout
                   </button>
-                  <div className="mt-1 rounded-lg border border-black/[0.08] bg-[#f7f7f9] p-1">
-                    <p className="px-1 pb-1 text-[10px] uppercase tracking-wide text-[#8e8e93]">Layout</p>
-                    <div className="inline-flex items-center rounded-full border border-black/[0.08] bg-white p-0.5">
-                      {LAYOUT_OPTIONS.map((option) => {
-                        const isActive = layoutMode === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => setLayoutMode(option.value)}
-                            className={`h-6 w-6 rounded-full text-[11px] font-semibold transition-colors ${isActive ? "bg-[#1d1d1f] text-white" : "text-[#6e6e73] hover:bg-black/[0.05]"}`}
-                            title={option.title}
-                          >
-                            {option.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <p className="px-2 pt-1 text-[10px] text-[#8e8e93]">Layout follows PDF structure flow.</p>
                 </div>
               ) : null}
             </div>

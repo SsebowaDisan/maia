@@ -66,6 +66,7 @@ export function useFileLibrary() {
     options?: {
       scope?: "persistent" | "chat_temp";
       showStatus?: boolean;
+      reindex?: boolean;
     },
   ): Promise<UploadResponse> => {
     if (!files.length) {
@@ -78,7 +79,10 @@ export function useFileLibrary() {
       setUploadStatus("Uploading files...");
     }
     try {
-      const response = await uploadFiles(files, { scope });
+      const response = await uploadFiles(files, {
+        scope,
+        reindex: options?.reindex ?? true,
+      });
       const successCount = response.items.filter((item) => item.status === "success").length;
       if (showStatus) {
         if (response.errors.length > 0) {
@@ -179,7 +183,9 @@ export function useFileLibrary() {
         setUploadStatus(
           "Async ingestion endpoint unavailable on this server. Uploading with sync fallback...",
         );
-        const response = await handleUploadFiles(files);
+        const response = await handleUploadFiles(files, {
+          reindex: options?.reindex ?? false,
+        });
         await refreshIngestionJobs();
         return {
           id: `fallback-sync-${Date.now()}`,

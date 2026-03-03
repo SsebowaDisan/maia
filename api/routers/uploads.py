@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from mimetypes import guess_type
 import tempfile
 from pathlib import Path
@@ -58,6 +59,21 @@ def _unique_target_path(directory: Path, original_name: str) -> Path:
     return directory / f"{stem}-{uuid.uuid4().hex}{suffix}"
 
 
+def _copy_upload_file(upload: UploadFile, target: Path) -> None:
+    upload.file.seek(0)
+    with target.open("wb") as handle:
+        shutil.copyfileobj(upload.file, handle, length=8 * 1024 * 1024)
+
+
+async def _store_upload_file(upload: UploadFile, directory: Path) -> Path:
+    target = _unique_target_path(directory, upload.filename or "upload.bin")
+    try:
+        await run_in_threadpool(_copy_upload_file, upload, target)
+    finally:
+        await upload.close()
+    return target
+
+
 async def _persist_uploaded_files(files: list[UploadFile]) -> list[dict[str, object]]:
     if not files:
         raise HTTPException(status_code=400, detail="No files were provided.")
@@ -66,14 +82,7 @@ async def _persist_uploaded_files(files: list[UploadFile]) -> list[dict[str, obj
     job_dir.mkdir(parents=True, exist_ok=True)
     saved: list[dict[str, object]] = []
     for upload in files:
-        target = _unique_target_path(job_dir, upload.filename or "upload.bin")
-        with target.open("wb") as handle:
-            while True:
-                chunk = await upload.read(1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-        await upload.close()
+        target = await _store_upload_file(upload, job_dir)
         saved.append(
             {
                 "name": Path(upload.filename or target.name).name,
@@ -96,12 +105,10 @@ async def upload_files(
     settings = load_user_settings(context=context, user_id=user_id)
 
     with tempfile.TemporaryDirectory(prefix="maia_upload_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
         file_paths: list[Path] = []
         for upload in files:
-            filename = Path(upload.filename or "upload.bin").name
-            target = Path(tmp_dir) / filename
-            content = await upload.read()
-            target.write_bytes(content)
+            target = await _store_upload_file(upload, tmp_path)
             file_paths.append(target)
 
         response = await run_in_threadpool(
