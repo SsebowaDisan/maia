@@ -7,6 +7,7 @@ type CitationDeepLinkPayload = {
   sourceName: string;
   page?: string;
   extract: string;
+  claimText?: string;
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
   unitId?: string;
@@ -19,6 +20,7 @@ type CitationDeepLinkPayload = {
 
 const PARAM_KEY = "citation";
 const MAX_EXTRACT_CHARS = 260;
+const MAX_CLAIM_CHARS = 420;
 
 function normalizeText(value: unknown, maxChars: number): string {
   const raw = String(value || "").replace(/\s+/g, " ").trim();
@@ -109,6 +111,7 @@ function toPayload(params: {
     sourceName: normalizeText(citationFocus.sourceName, 320) || "Indexed source",
     page: normalizePage(citationFocus.page),
     extract: normalizeText(citationFocus.extract, MAX_EXTRACT_CHARS),
+    claimText: normalizeText(citationFocus.claimText, MAX_CLAIM_CHARS) || undefined,
     evidenceId: normalizeText(citationFocus.evidenceId, 80) || undefined,
     highlightBoxes: normalizeHighlightBoxes(citationFocus.highlightBoxes),
     unitId: normalizeText(citationFocus.unitId, 180) || undefined,
@@ -128,6 +131,7 @@ function payloadToFocus(payload: CitationDeepLinkPayload): CitationFocus {
     extract:
       normalizeText(payload.extract, MAX_EXTRACT_CHARS) ||
       "No extract available for this citation.",
+    claimText: normalizeText(payload.claimText, MAX_CLAIM_CHARS) || undefined,
     evidenceId: normalizeText(payload.evidenceId, 80) || undefined,
     highlightBoxes: normalizeHighlightBoxes(payload.highlightBoxes),
     unitId: normalizeText(payload.unitId, 180) || undefined,
@@ -170,6 +174,7 @@ function decodeCitationPayload(encoded: string): {
       sourceName: normalizeText(parsed.sourceName, 320) || "Indexed source",
       page: normalizePage(parsed.page),
       extract: normalizeText(parsed.extract, MAX_EXTRACT_CHARS),
+      claimText: normalizeText(parsed.claimText, MAX_CLAIM_CHARS) || undefined,
       evidenceId: normalizeText(parsed.evidenceId, 80) || undefined,
       highlightBoxes: normalizeHighlightBoxes(parsed.highlightBoxes),
       unitId: normalizeText(parsed.unitId, 180) || undefined,

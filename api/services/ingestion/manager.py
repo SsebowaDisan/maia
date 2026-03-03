@@ -339,6 +339,7 @@ class IngestionJobManager:
 
         for batch in self._iterate_batches(files_payload, INGEST_FILE_BATCH_SIZE):
             batch_paths: list[Path] = []
+            batch_meta: dict[str, dict[str, Any]] = {}
             batch_bytes = 0
             for entry in batch:
                 raw_path = str((entry or {}).get("path", "")).strip()
@@ -347,6 +348,11 @@ class IngestionJobManager:
                 candidate = Path(raw_path)
                 if candidate.exists() and candidate.is_file():
                     batch_paths.append(candidate)
+                    try:
+                        resolved = str(candidate.resolve())
+                    except Exception:
+                        resolved = raw_path
+                    batch_meta[resolved] = dict(entry or {})
                     file_size = int((entry or {}).get("size") or 0)
                     if file_size <= 0:
                         try:
@@ -383,6 +389,7 @@ class IngestionJobManager:
                 reindex=reindex,
                 settings=settings,
                 scope=scope,
+                uploaded_file_meta=batch_meta,
             )
             batch_items = list(response.get("items") or [])
             batch_errors = [str(err) for err in list(response.get("errors") or [])]

@@ -56,3 +56,25 @@ UPLOAD_MAX_TOTAL_BYTES = max(
         )
     ),
 )
+UPLOAD_STREAM_CHUNK_BYTES = max(
+    64 * 1024,
+    int(
+        config(
+            "MAIA_UPLOAD_STREAM_CHUNK_BYTES",
+            default=1024 * 1024,  # 1 MiB
+            cast=int,
+        )
+    ),
+)
+
+_raw_upload_reader_mode = str(
+    config("MAIA_UPLOAD_INDEX_READER_MODE", default="default")
+).strip()
+UPLOAD_INDEX_READER_MODE = (
+    _raw_upload_reader_mode
+    if _raw_upload_reader_mode in {"default", "ocr", "adobe", "azure-di", "docling"}
+    else "default"
+)
+UPLOAD_INDEX_QUICK_MODE = bool(
+    config("MAIA_UPLOAD_INDEX_QUICK_MODE", default=True, cast=bool)
+)

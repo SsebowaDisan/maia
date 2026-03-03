@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import threading
 import time
-import re
 from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Generator, Optional
@@ -39,6 +40,7 @@ class IndexPipeline(BaseComponent):
     private: bool = False
     run_embedding_in_thread: bool = False
     embedding: BaseEmbeddings
+    file_hash_chunk_size_bytes: int = 1024 * 1024
 
     @Node.auto(depends_on=["Source", "Index", "embedding"])
     def vector_indexing(self) -> VectorIndexing:
@@ -287,15 +289,54 @@ class IndexPipeline(BaseComponent):
 
         return file_id
 
-    def store_file(self, file_path: Path) -> str:
-        with file_path.open("rb") as fi:
-            file_hash = sha256(fi.read()).hexdigest()
+    @staticmethod
+    def _is_sha256_hex(value: str) -> bool:
+        candidate = str(value or "").strip().lower()
+        return len(candidate) == 64 and all(ch in "0123456789abcdef" for ch in candidate)
 
-        shutil.copy(file_path, self.FSPath / file_hash)
+    def _compute_sha256(self, file_path: Path) -> str:
+        digest = sha256()
+        chunk_size = max(64 * 1024, int(self.file_hash_chunk_size_bytes or 1024 * 1024))
+        with file_path.open("rb") as handle:
+            while True:
+                chunk = handle.read(chunk_size)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def store_file(
+        self,
+        file_path: Path,
+        *,
+        precomputed_sha256: str | None = None,
+        precomputed_size: int | None = None,
+    ) -> str:
+        file_hash = str(precomputed_sha256 or "").strip().lower()
+        if not self._is_sha256_hex(file_hash):
+            file_hash = self._compute_sha256(file_path)
+
+        file_size = 0
+        if precomputed_size is not None:
+            try:
+                file_size = max(0, int(precomputed_size))
+            except Exception:
+                file_size = 0
+        if file_size <= 0:
+            file_size = int(file_path.stat().st_size)
+
+        target_path = self.FSPath / file_hash
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if not target_path.exists():
+            try:
+                os.link(file_path, target_path)
+            except Exception:
+                shutil.copy2(file_path, target_path)
+
         source = self.Source(
             name=file_path.name,
             path=file_hash,
-            size=file_path.stat().st_size,
+            size=file_size,
             user=self.user_id,  # type: ignore
         )
         with Session(engine) as session:
@@ -373,10 +414,26 @@ class IndexPipeline(BaseComponent):
         if isinstance(file_path, Path):
             file_path = file_path.resolve()
 
+        uploaded_file_meta = kwargs.get("uploaded_file_meta")
+        file_meta: dict = {}
+        if isinstance(file_path, Path) and isinstance(uploaded_file_meta, dict):
+            resolved_key = str(file_path)
+            row = uploaded_file_meta.get(resolved_key)
+            if isinstance(row, dict):
+                file_meta = row
+
         stored_file_path: Path | None = None
         file_id = self.get_id_if_exists(file_path)
 
         if isinstance(file_path, Path):
+            precomputed_sha256 = str(file_meta.get("checksum") or "").strip() or None
+            precomputed_size = None
+            raw_size = file_meta.get("size")
+            if raw_size is not None and str(raw_size).strip():
+                try:
+                    precomputed_size = int(raw_size)
+                except Exception:
+                    precomputed_size = None
             if file_id is not None:
                 if not reindex:
                     raise ValueError(
@@ -386,9 +443,17 @@ class IndexPipeline(BaseComponent):
                 else:
                     yield Document(f" => Removing old {file_path.name}", channel="debug")
                     self.delete_file(file_id)
-                    file_id = self.store_file(file_path)
+                    file_id = self.store_file(
+                        file_path,
+                        precomputed_sha256=precomputed_sha256,
+                        precomputed_size=precomputed_size,
+                    )
             else:
-                file_id = self.store_file(file_path)
+                file_id = self.store_file(
+                    file_path,
+                    precomputed_sha256=precomputed_sha256,
+                    precomputed_size=precomputed_size,
+                )
             stored_file_path = self.get_stored_file_path(file_id)
         else:
             if file_id is not None:

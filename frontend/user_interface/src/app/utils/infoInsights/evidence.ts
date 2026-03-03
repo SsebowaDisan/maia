@@ -72,6 +72,26 @@ function parseHighlightBoxes(raw: string | null): HighlightBox[] {
   }
 }
 
+function parseHighlightBoxesFromDetails(details: Element): HighlightBox[] {
+  const fromBoxes = parseHighlightBoxes(details.getAttribute("data-boxes"));
+  if (fromBoxes.length) {
+    return fromBoxes;
+  }
+  const fromBboxes = parseHighlightBoxes(details.getAttribute("data-bboxes"));
+  if (fromBboxes.length) {
+    return fromBboxes;
+  }
+  const candidate = details.querySelector("[data-boxes], [data-bboxes]");
+  if (!candidate) {
+    return [];
+  }
+  const nestedBoxes = parseHighlightBoxes(candidate.getAttribute("data-boxes"));
+  if (nestedBoxes.length) {
+    return nestedBoxes;
+  }
+  return parseHighlightBoxes(candidate.getAttribute("data-bboxes"));
+}
+
 function parseEvidence(infoHtml: string): EvidenceCard[] {
   if (!infoHtml.trim()) {
     return [];
@@ -127,7 +147,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     const pageAttr = (details.getAttribute("data-page") || "").trim();
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
-    const highlightBoxes = parseHighlightBoxes(details.getAttribute("data-boxes"));
+    const highlightBoxes = parseHighlightBoxesFromDetails(details);
     const rawStrength = Number(details.getAttribute("data-strength") || "");
     const strengthScore = Number.isFinite(rawStrength) ? rawStrength : undefined;
     const rawStrengthTier = Number(details.getAttribute("data-strength-tier") || "");

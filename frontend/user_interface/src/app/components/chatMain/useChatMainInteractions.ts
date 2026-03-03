@@ -331,6 +331,7 @@ function useChatMainInteractions({
       errors: string[];
       file_ids: string[];
     }) => {
+      const failedMessages: string[] = [];
       let successCursor = 0;
       setAttachments((prev) =>
         prev.map((attachment) => {
@@ -349,13 +350,24 @@ function useChatMainInteractions({
               fileId: mappedFileId,
             };
           }
+          const failureMessage = item?.message || result.errors[0] || "Upload failed.";
+          failedMessages.push(failureMessage);
           return {
             ...attachment,
             status: "error",
-            message: item?.message || result.errors[0] || "Upload failed.",
+            message: failureMessage,
           };
         }),
       );
+      if (failedMessages.length > 0) {
+        const reason = String(failedMessages[0] || "Upload failed.").trim();
+        const compact = reason.length > 120 ? `${reason.slice(0, 117)}...` : reason;
+        showActionStatus(`Upload failed: ${compact}`);
+      } else {
+        showActionStatus(
+          `Uploaded ${pending.length} file${pending.length === 1 ? "" : "s"} successfully.`,
+        );
+      }
     };
 
     const waitForIngestionJob = async (jobId: string) => {
@@ -425,6 +437,7 @@ function useChatMainInteractions({
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error || "Upload failed.");
+      const compact = errorMessage.length > 120 ? `${errorMessage.slice(0, 117)}...` : errorMessage;
       setAttachments((prev) =>
         prev.map((attachment) =>
           pending.some((item) => item.id === attachment.id)
@@ -436,6 +449,7 @@ function useChatMainInteractions({
             : attachment,
         ),
       );
+      showActionStatus(`Upload failed: ${compact}`);
     } finally {
       setIsUploading(false);
       event.target.value = "";

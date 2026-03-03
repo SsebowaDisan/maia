@@ -15,9 +15,12 @@ from .config import (
     TERMINAL_JOB_STATUSES,
     UPLOAD_MAX_FILE_SIZE_BYTES,
     UPLOAD_MAX_FILES_PER_REQUEST,
+    UPLOAD_STREAM_CHUNK_BYTES,
     UPLOAD_MAX_TOTAL_BYTES,
     UPLOAD_SAVE_CONCURRENCY,
     UPLOAD_USE_UNIFIED_PERSIST,
+    UPLOAD_INDEX_READER_MODE,
+    UPLOAD_INDEX_QUICK_MODE,
 )
 from .manager import IngestionJobManager
 from .models import IngestionJob
@@ -39,7 +42,10 @@ __all__ = [
     "UPLOAD_SAVE_CONCURRENCY",
     "UPLOAD_MAX_FILES_PER_REQUEST",
     "UPLOAD_MAX_FILE_SIZE_BYTES",
+    "UPLOAD_STREAM_CHUNK_BYTES",
     "UPLOAD_MAX_TOTAL_BYTES",
+    "UPLOAD_INDEX_READER_MODE",
+    "UPLOAD_INDEX_QUICK_MODE",
     "IngestionJob",
     "IngestionJobManager",
     "as_json_safe",

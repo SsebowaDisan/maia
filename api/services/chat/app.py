@@ -12,6 +12,7 @@ from tzlocal import get_localzone
 from maia.base import Document
 
 from ktem.pages.chat.common import STATE
+from ktem.llms.manager import llms
 
 from api.context import ApiContext
 from api.schemas import ChatRequest
@@ -35,6 +36,23 @@ from .streaming import (
     chunk_text_for_stream,
     make_activity_stream_event,
 )
+
+
+def _default_model_looks_local_ollama() -> bool:
+    try:
+        default_name = str(llms.get_default_name() or "").strip()
+    except Exception:
+        return False
+    if default_name.startswith("ollama::"):
+        return True
+    try:
+        info = llms.info().get(default_name, {})
+    except Exception:
+        return False
+    spec = info.get("spec", {}) if isinstance(info, dict) else {}
+    if not isinstance(spec, dict):
+        return False
+    return str(spec.get("api_key") or "").strip().lower() == "ollama"
 
 
 def _read_persisted_workspace_ids(chat_state: dict[str, Any]) -> dict[str, str]:
@@ -415,8 +433,10 @@ def stream_chat_turn(
                 if text:
                     yield {"type": "debug", "message": text}
     except HTTPException as exc:
+        logger.exception("Chat pipeline raised HTTPException: %s", exc)
         pipeline_error = exc
     except Exception as exc:
+        logger.exception("Chat pipeline raised Exception: %s", exc)
         pipeline_error = exc
 
     if pipeline_error is not None and not answer_text:
@@ -521,6 +541,11 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             logger.exception("Fast ask path failed; falling back to streaming pipeline: %s", exc)
 
     timeout_seconds = int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45)
+    if _default_model_looks_local_ollama():
+        local_timeout = int(
+            getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA", 180) or 180
+        )
+        timeout_seconds = max(timeout_seconds, local_timeout)
 
     def consume_stream() -> dict[str, Any]:
         iterator = stream_chat_turn(context=context, user_id=user_id, request=request)

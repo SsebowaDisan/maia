@@ -142,13 +142,15 @@ function toCitationFromEvidence(params: {
   fileId?: string;
   sourceName: string;
   citationFocus: CitationFocus;
+  claimText?: string;
 }): CitationFocus {
-  const { row, fileId, sourceName, citationFocus } = params;
+  const { row, fileId, sourceName, citationFocus, claimText } = params;
   return {
     fileId: row.fileId || fileId || citationFocus.fileId,
     sourceName: row.source || sourceName || citationFocus.sourceName || "Indexed source",
     page: row.page || citationFocus.page,
     extract: row.extract || citationFocus.extract || row.title || row.source || "Evidence extract unavailable.",
+    claimText: claimText || citationFocus.claimText,
     evidenceId: row.id,
     highlightBoxes: row.highlightBoxes || citationFocus.highlightBoxes,
     strengthScore: row.strengthScore ?? citationFocus.strengthScore,
@@ -166,13 +168,15 @@ function toCitationFromPage(params: {
   fileId?: string;
   sourceName: string;
   citationFocus: CitationFocus;
+  claimText?: string;
 }): CitationFocus {
-  const { page, title, fileId, sourceName, citationFocus } = params;
+  const { page, title, fileId, sourceName, citationFocus, claimText } = params;
   return {
     fileId: fileId || citationFocus.fileId,
     sourceName: sourceName || citationFocus.sourceName || "Indexed source",
     page: page || citationFocus.page,
     extract: citationFocus.extract || title,
+    claimText: claimText || citationFocus.claimText,
     evidenceId: citationFocus.evidenceId,
     highlightBoxes: citationFocus.highlightBoxes,
     strengthScore: citationFocus.strengthScore,
@@ -474,10 +478,11 @@ function buildGraph(params: {
   };
 
   const fallbackRef = evidenceRefFromId(citationFocus.evidenceId || "");
+  const fallbackClaimText = String(citationFocus.claimText || citationFocus.extract || "").trim();
   const normalizedClaims = claimTraces.length
     ? claimTraces.slice(0, 14)
-    : citationFocus.extract
-      ? [{ id: "claim-fallback", text: citationFocus.extract, evidenceRefs: fallbackRef ? [fallbackRef] : [] }]
+    : fallbackClaimText
+      ? [{ id: "claim-fallback", text: fallbackClaimText, evidenceRefs: fallbackRef ? [fallbackRef] : [] }]
       : [];
 
   const orphanClaimNodes: MindmapTreeNode[] = [];
@@ -541,7 +546,13 @@ function buildGraph(params: {
         evidenceId: normalizeEvidenceId(row.id),
         active: isEvidenceActive(row, citationFocus),
         branchColor: claimColor,
-        citation: toCitationFromEvidence({ row, fileId, sourceName, citationFocus }),
+        citation: toCitationFromEvidence({
+          row,
+          fileId,
+          sourceName,
+          citationFocus,
+          claimText: claim.text,
+        }),
       },
       children: [],
     }));
@@ -571,6 +582,7 @@ function buildGraph(params: {
                 fileId,
                 sourceName,
                 citationFocus,
+                claimText: claim.text,
               })
             : undefined),
       },

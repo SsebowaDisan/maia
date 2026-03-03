@@ -100,6 +100,18 @@ function parseHighlightBoxes(...candidates: Array<string | undefined | null>): C
   return [];
 }
 
+function extractCitationClaimText(citationAnchor: HTMLAnchorElement): string {
+  const claimHost =
+    citationAnchor.closest("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6") ||
+    citationAnchor.parentElement;
+  const raw = normalizeCitationExtract(
+    claimHost?.textContent || "",
+    citationAnchor.textContent?.trim(),
+  );
+  const cleaned = raw.replace(/(?:\[\d{1,4}\]|【\d{1,4}】)/g, "").replace(/\s+/g, " ").trim();
+  return cleaned.length >= 16 ? cleaned : "";
+}
+
 function ChatMain({
   chatTurns,
   selectedTurnIndex,
@@ -159,6 +171,11 @@ function ChatMain({
       const evidenceId = href.startsWith("#") ? href.slice(1) : "";
       const evidenceCards = parseEvidence(turn.info || "");
       const matchedEvidence = evidenceCards.find((card) => card.id === evidenceId) || null;
+      const fallbackEvidence =
+        matchedEvidence ||
+        evidenceCards.find((card) => Boolean(card.fileId)) ||
+        evidenceCards[0] ||
+        null;
       const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
       const pageAttr = citationAnchor.getAttribute("data-page") || "";
       const phraseAttr =
@@ -177,7 +194,7 @@ function ChatMain({
       const charEndAttr = Number(citationAnchor.getAttribute("data-char-end") || "");
       const attachmentFileId =
         (turn.attachments || []).find((attachment) => Boolean(attachment.fileId))?.fileId || "";
-      const sourceName = (matchedEvidence?.source || "Indexed source").replace(
+      const sourceName = (matchedEvidence?.source || fallbackEvidence?.source || "Indexed source").replace(
         /^\[\d+\]\s*/,
         "",
       );
@@ -187,14 +204,16 @@ function ChatMain({
       );
 
       onCitationClick({
-        fileId: fileIdAttr || matchedEvidence?.fileId || attachmentFileId,
+        fileId: fileIdAttr || matchedEvidence?.fileId || fallbackEvidence?.fileId || attachmentFileId,
         sourceName,
-        page: normalizePageLabel(pageAttr, matchedEvidence?.page),
+        page: normalizePageLabel(pageAttr, matchedEvidence?.page, fallbackEvidence?.page),
         extract: normalizeCitationExtract(
           phraseAttr,
           matchedEvidence?.extract,
+          fallbackEvidence?.extract,
           citationAnchor.textContent?.trim(),
         ),
+        claimText: extractCitationClaimText(citationAnchor) || undefined,
         evidenceId: evidenceId || undefined,
         highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
         strengthScore: Number.isFinite(strengthAttr)

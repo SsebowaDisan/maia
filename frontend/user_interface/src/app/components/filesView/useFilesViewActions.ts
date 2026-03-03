@@ -406,12 +406,7 @@ function useFilesViewActions({
         window.setTimeout(() => setActionMessage(""), 3200);
         return;
       }
-      const hasVeryLargeFile = selectedFiles.some((file) => file.size >= 100 * 1024 * 1024);
-      const shouldQueueAsyncJob =
-        Boolean(onCreateFileIngestionJob) &&
-        (hasVeryLargeFile || totalBytes >= 250 * 1024 * 1024 || selectedFiles.length >= 8);
-
-      if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
+      if (onCreateFileIngestionJob) {
         const queued = await onCreateFileIngestionJob(event.target.files, {
           reindex: forceReindex,
           groupId: uploadGroupId,

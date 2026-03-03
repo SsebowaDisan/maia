@@ -3,6 +3,7 @@ from api.services.chat.citations import (
     append_required_citation_suffix,
     build_source_usage,
     build_fast_info_html,
+    collect_cited_ref_ids,
     enforce_required_citations,
     resolve_required_citation_mode,
 )
@@ -105,6 +106,40 @@ def test_enforce_required_citations_adds_data_boxes_to_anchor() -> None:
     )
     assert "class='citation'" in answer
     assert "data-boxes='[{&quot;x&quot;:0.12,&quot;y&quot;:0.2,&quot;width&quot;:0.3,&quot;height&quot;:0.04}]'" in answer
+
+
+def test_enforce_required_citations_accepts_data_bboxes_from_info_panel() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' "
+        "data-page='5' data-bboxes='[{&quot;x&quot;:0.22,&quot;y&quot;:0.3,&quot;width&quot;:0.21,&quot;height&quot;:0.05}]' open>"
+        "<summary><i>Evidence [1]</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> bounded evidence phrase</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer="Claim with citation marker [1].",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "class='citation'" in answer
+    assert "data-boxes='[{&quot;x&quot;:0.22,&quot;y&quot;:0.3,&quot;width&quot;:0.21,&quot;height&quot;:0.05}]'" in answer
+
+
+def test_enforce_required_citations_converts_curly_brace_markers() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='2' open>"
+        "<summary><i>Evidence [1]</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> citation evidence</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer="Claim supported by source {1}.",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "class='citation'" in answer
+    assert "href='#evidence-1'" in answer
+    assert "{1}" not in answer
 
 
 def test_assign_fast_source_refs_assigns_distinct_refs_for_distinct_excerpts() -> None:
@@ -295,3 +330,59 @@ def test_enforce_required_citations_cites_each_claim_sentence() -> None:
     assert answer.count("class='citation'") >= 2
     assert "href='#evidence-1'" in answer
     assert "href='#evidence-2'" in answer
+
+
+def test_enforce_required_citations_normalizes_visible_numbers_and_hides_duplicates() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
+        "<summary><i>Evidence [1] - page 1</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> first reference evidence</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-4' data-file-id='file-1' data-page='4'>"
+        "<summary><i>Evidence [4] - page 4</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> fourth reference evidence</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer="Claim one [4]. Claim two [1]. Claim one again [4].",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+
+    assert answer.count("class='citation'") == 2
+    assert answer.count(">[1]</a>") == 1
+    assert answer.count(">[2]</a>") == 1
+    assert ">[4]</a>" not in answer
+    assert "href='#evidence-4'" in answer
+    assert "href='#evidence-1'" in answer
+
+
+def test_enforce_required_citations_removes_stale_raw_markers_outside_anchors() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
+        "<summary><i>Evidence [1] - page 1</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> first reference evidence</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-4' data-file-id='file-1' data-page='4'>"
+        "<summary><i>Evidence [4] - page 4</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> fourth reference evidence</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer="Claim one [4]. Claim two [1]. Stale marker [99]. Claim one again [4].",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+
+    assert "[99]" not in answer
+    assert answer.count("class='citation'") == 2
+    assert answer.count(">[1]</a>") == 1
+    assert answer.count(">[2]</a>") == 1
+
+
+def test_collect_cited_ref_ids_uses_anchor_target_ids_when_present() -> None:
+    answer = (
+        "Claim <a class='citation' href='#evidence-4' id='citation-4'>[1]</a> "
+        "and <a class='citation' href='#evidence-1' id='citation-1'>[2]</a>."
+    )
+    assert collect_cited_ref_ids(answer) == [4, 1]

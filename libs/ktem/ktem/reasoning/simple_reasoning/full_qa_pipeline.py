@@ -295,6 +295,11 @@ class FullQAPipeline(BaseReasoning):
         else:
             scoring_thread = None
 
+        answer_kwargs = dict(kwargs)
+        answer_kwargs.setdefault("mindmap_max_depth", self.mindmap_max_depth)
+        answer_kwargs.setdefault("include_reasoning_map", self.include_reasoning_map)
+        answer_kwargs.setdefault("mindmap_map_type", self.mindmap_map_type)
+
         answer = yield from self.answering_pipeline.stream(
             question=message,
             history=history,
@@ -303,10 +308,7 @@ class FullQAPipeline(BaseReasoning):
             images=images,
             conv_id=conv_id,
             retrieved_docs=docs,
-            mindmap_max_depth=self.mindmap_max_depth,
-            include_reasoning_map=self.include_reasoning_map,
-            mindmap_map_type=self.mindmap_map_type,
-            **kwargs,
+            **answer_kwargs,
         )
 
         processed_answer = replace_think_tag_with_details(answer.text)

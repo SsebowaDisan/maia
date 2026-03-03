@@ -75,13 +75,17 @@ export function InfoPanel({
     if (score >= 0.42) return 2;
     return 1;
   }, [citationFocus]);
-  const citationStrengthDots = useMemo(() => {
+  const citationStrengthLabel = useMemo(() => {
     if (citationStrengthTier <= 0) {
       return "";
     }
-    const filledDot = String.fromCharCode(0x25cf);
-    const emptyDot = String.fromCharCode(0x25cb);
-    return `${filledDot.repeat(citationStrengthTier)}${emptyDot.repeat(Math.max(0, 3 - citationStrengthTier))}`;
+    if (citationStrengthTier >= 3) {
+      return "Strong evidence";
+    }
+    if (citationStrengthTier >= 2) {
+      return "Moderate evidence";
+    }
+    return "Supporting evidence";
   }, [citationStrengthTier]);
   const citationMatchQualityLabel = useMemo(() => {
     const quality = String(citationFocus?.matchQuality || "").trim().toLowerCase();
@@ -161,7 +165,7 @@ export function InfoPanel({
     if (text) {
       return text;
     }
-    return "Citation numbers are strength-ordered: lower number means stronger supporting evidence.";
+    return "Citation numbers are normalized per answer: each source appears once and numbering starts at 1.";
   }, [infoPanel]);
   const dominanceWarning = useMemo(() => {
     const panel = infoPanel && typeof infoPanel === "object" ? infoPanel : {};
@@ -303,7 +307,7 @@ export function InfoPanel({
                     page {citationFocus.page}
                   </span>
                 ) : null}
-                {citationStrengthDots ? (
+                {citationStrengthLabel ? (
                   <span
                     className="text-[10px] px-2 py-1 rounded-full bg-white border border-black/[0.08] text-[#6e6e73]"
                     title={
@@ -312,7 +316,7 @@ export function InfoPanel({
                         : "Citation strength"
                     }
                   >
-                    {citationStrengthDots}
+                    {citationStrengthLabel}
                   </span>
                 ) : null}
                 {citationMatchQualityLabel ? (
@@ -364,10 +368,11 @@ export function InfoPanel({
                   }}
                 />
                 <CitationPdfPreview
-                  key={`${citationFocus?.fileId || "file"}:${citationFocus?.page || "1"}:${String(citationFocus?.extract || "").slice(0, 64)}:${JSON.stringify(citationFocus?.highlightBoxes || []).slice(0, 120)}`}
+                  key={`${citationFocus?.fileId || "file"}:${citationFocus?.page || "1"}:${String(citationFocus?.extract || "").slice(0, 64)}:${String(citationFocus?.claimText || "").slice(0, 64)}:${JSON.stringify(citationFocus?.highlightBoxes || []).slice(0, 120)}`}
                   fileUrl={citationRawUrl}
                   page={citationFocus.page}
                   highlightText={citationFocus.extract}
+                  highlightQuery={citationFocus.claimText}
                   highlightBoxes={citationFocus.highlightBoxes}
                 />
               </>
@@ -515,4 +520,3 @@ export function InfoPanel({
     </div>
   );
 }
-

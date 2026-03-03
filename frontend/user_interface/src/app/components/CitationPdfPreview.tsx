@@ -14,6 +14,7 @@ interface CitationPdfPreviewProps {
   fileUrl: string;
   page?: string;
   highlightText: string;
+  highlightQuery?: string;
   highlightBoxes?: CitationHighlightBox[];
 }
 
@@ -258,95 +259,6 @@ function buildOverlayRectsForRange(
     .filter((rect): rect is OverlayRect => Boolean(rect));
 }
 
-function evidenceTokens(rawEvidence: string): string[] {
-  return Array.from(
-    new Set(
-      normalizeSearchText(rawEvidence)
-        .split(" ")
-        .map((token) => token.trim())
-        .filter((token) => token.length >= 4),
-    ),
-  )
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 36);
-}
-
-function segmentHasEvidenceToken(segmentText: string, tokens: string[]): boolean {
-  return tokens.some((token) => segmentText.includes(token));
-}
-
-function trimRangeToEvidenceTokens(
-  range: SpanRange,
-  segments: SpanSegment[],
-  tokens: string[],
-): SpanRange {
-  let startIndex = range.startIndex;
-  let endIndex = range.endIndex;
-  while (
-    startIndex < endIndex &&
-    !segmentHasEvidenceToken(segments[startIndex]?.text || "", tokens)
-  ) {
-    startIndex += 1;
-  }
-  while (
-    endIndex > startIndex &&
-    !segmentHasEvidenceToken(segments[endIndex]?.text || "", tokens)
-  ) {
-    endIndex -= 1;
-  }
-  return { startIndex, endIndex };
-}
-
-function findWindowByTokenOverlap(
-  segments: SpanSegment[],
-  tokens: string[],
-): SpanRange | null {
-  if (!segments.length || tokens.length < 2) {
-    return null;
-  }
-
-  const maxWindow = Math.min(14, Math.max(6, Math.ceil(tokens.length * 1.3)));
-  const minHits = Math.min(6, Math.max(2, Math.ceil(tokens.length * 0.24)));
-  let best: { startIndex: number; endIndex: number; hits: number; density: number } | null =
-    null;
-
-  for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
-    let windowText = "";
-    const matched = new Set<string>();
-    const maxEnd = Math.min(segments.length - 1, startIndex + maxWindow - 1);
-    for (let endIndex = startIndex; endIndex <= maxEnd; endIndex += 1) {
-      windowText += (windowText ? " " : "") + (segments[endIndex]?.text || "");
-      for (const token of tokens) {
-        if (!matched.has(token) && windowText.includes(token)) {
-          matched.add(token);
-        }
-      }
-      const hits = matched.size;
-      if (hits < minHits) {
-        continue;
-      }
-      const spanLength = endIndex - startIndex + 1;
-      const density = hits / Math.max(1, spanLength);
-      if (
-        !best ||
-        hits > best.hits ||
-        (hits === best.hits && density > best.density)
-      ) {
-        best = { startIndex, endIndex, hits, density };
-      }
-    }
-  }
-
-  if (!best) {
-    return null;
-  }
-  return trimRangeToEvidenceTokens(
-    { startIndex: best.startIndex, endIndex: best.endIndex },
-    segments,
-    tokens,
-  );
-}
-
 function collectSpanSegments(pageContainer: HTMLElement): {
   segments: SpanSegment[];
   combined: string;
@@ -415,14 +327,12 @@ function findHighlightRange(
     segments: SpanSegment[];
     combined: string;
     candidates: string[];
-    rawEvidence: string;
   },
 ): SpanRange | null {
-  const { segments, combined, candidates, rawEvidence } = params;
+  const { segments, combined, candidates } = params;
   if (!segments.length || !combined) {
     return null;
   }
-  const tokens = evidenceTokens(rawEvidence);
   for (const candidate of candidates) {
     const hitIndex = combined.indexOf(candidate);
     if (hitIndex < 0) {
@@ -437,14 +347,14 @@ function findHighlightRange(
       return range;
     }
   }
-
-  return findWindowByTokenOverlap(segments, tokens);
+  return null;
 }
 
 export function CitationPdfPreview({
   fileUrl,
   page,
   highlightText,
+  highlightQuery,
   highlightBoxes,
 }: CitationPdfPreviewProps) {
   const requestedPageSafe = parsePageNumber(page);
@@ -464,18 +374,25 @@ export function CitationPdfPreview({
   const [activeTargetPage, setActiveTargetPage] = useState(
     requestedPageSafe,
   );
-  const searchCandidates = useMemo(() => buildSearchCandidates(highlightText), [highlightText]);
+  const searchCandidates = useMemo(() => {
+    const merged = [
+      ...buildSearchCandidates(highlightText),
+      ...buildSearchCandidates(highlightQuery || ""),
+    ];
+    return Array.from(new Set(merged)).sort((a, b) => b.length - a.length).slice(0, 80);
+  }, [highlightQuery, highlightText]);
   const externalOverlayRects = useMemo(
     () => normalizeExternalOverlayRects(highlightBoxes),
     [highlightBoxes],
   );
   const highlightRequestKey = useMemo(() => {
     const normalizedEvidence = normalizeSearchText(highlightText).slice(0, 220);
+    const normalizedQuery = normalizeSearchText(highlightQuery || "").slice(0, 220);
     const overlayKey = externalOverlayRects
       .map((item) => `${item.leftPct},${item.topPct},${item.widthPct},${item.heightPct}`)
       .join("|");
-    return `${fileUrl}::${requestedPageSafe}::${normalizedEvidence}::${overlayKey}`;
-  }, [externalOverlayRects, fileUrl, highlightText, requestedPageSafe]);
+    return `${fileUrl}::${requestedPageSafe}::${normalizedEvidence}::${normalizedQuery}::${overlayKey}`;
+  }, [externalOverlayRects, fileUrl, highlightQuery, highlightText, requestedPageSafe]);
 
   const clampPage = (value: number) => Math.min(Math.max(1, value), Math.max(1, numPages));
 
@@ -577,7 +494,6 @@ export function CitationPdfPreview({
       segments,
       combined,
       candidates: searchCandidates,
-      rawEvidence: highlightText,
     });
     if (!highlightRange) {
       return false;

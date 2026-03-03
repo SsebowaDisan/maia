@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import shutil
 from mimetypes import guess_type
@@ -8,6 +9,7 @@ from pathlib import Path
 from time import perf_counter
 import uuid
 
+import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -34,6 +36,7 @@ from api.services.ingestion_service import (
     INGEST_WORKDIR,
     UPLOAD_MAX_FILE_SIZE_BYTES,
     UPLOAD_MAX_FILES_PER_REQUEST,
+    UPLOAD_STREAM_CHUNK_BYTES,
     UPLOAD_MAX_TOTAL_BYTES,
     UPLOAD_SAVE_CONCURRENCY,
     UPLOAD_USE_UNIFIED_PERSIST,
@@ -71,19 +74,48 @@ def _unique_target_path(directory: Path, original_name: str) -> Path:
     return directory / f"{stem}-{uuid.uuid4().hex}{suffix}"
 
 
-def _copy_upload_file(upload: UploadFile, target: Path) -> None:
-    upload.file.seek(0)
-    with target.open("wb") as handle:
-        shutil.copyfileobj(upload.file, handle, length=8 * 1024 * 1024)
+def _raise_file_too_large(*, file_name: str, file_size: int) -> None:
+    raise HTTPException(
+        status_code=413,
+        detail=(
+            f'File "{file_name}" exceeds max size '
+            f"({_bytes_to_human(file_size)} > "
+            f"{_bytes_to_human(UPLOAD_MAX_FILE_SIZE_BYTES)})."
+        ),
+    )
 
 
-async def _store_upload_file(upload: UploadFile, directory: Path) -> Path:
+async def _store_upload_file(upload: UploadFile, directory: Path) -> dict[str, object]:
     target = _unique_target_path(directory, upload.filename or "upload.bin")
+    file_name = Path(upload.filename or target.name).name
+    total_size = 0
+    digest = hashlib.sha256()
     try:
-        await run_in_threadpool(_copy_upload_file, upload, target)
+        async with await anyio.open_file(target, "wb") as handle:
+            while True:
+                chunk = await upload.read(UPLOAD_STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > UPLOAD_MAX_FILE_SIZE_BYTES:
+                    _raise_file_too_large(file_name=file_name, file_size=total_size)
+                await handle.write(chunk)
+                digest.update(chunk)
+    except Exception:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
     finally:
         await upload.close()
-    return target
+
+    return {
+        "name": file_name,
+        "path": str(target.resolve()),
+        "size": int(total_size),
+        "checksum": digest.hexdigest(),
+    }
 
 
 def _bytes_to_human(value: int) -> str:
@@ -164,26 +196,7 @@ async def _persist_uploaded_files(files: list[UploadFile]) -> list[dict[str, obj
 
     async def _persist_one(position: int, upload: UploadFile) -> None:
         async with semaphore:
-            target = await _store_upload_file(upload, job_dir)
-            file_size = int(target.stat().st_size)
-            if file_size > UPLOAD_MAX_FILE_SIZE_BYTES:
-                try:
-                    target.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise HTTPException(
-                    status_code=413,
-                    detail=(
-                        f'File "{Path(upload.filename or target.name).name}" exceeds max size '
-                        f"({_bytes_to_human(file_size)} > "
-                        f"{_bytes_to_human(UPLOAD_MAX_FILE_SIZE_BYTES)})."
-                    ),
-                )
-            persisted[position] = {
-                "name": Path(upload.filename or target.name).name,
-                "path": str(target.resolve()),
-                "size": file_size,
-            }
+            persisted[position] = await _store_upload_file(upload, job_dir)
 
     tasks = [asyncio.create_task(_persist_one(idx, upload)) for idx, upload in enumerate(files)]
     try:
@@ -219,29 +232,7 @@ async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[di
     job_dir.mkdir(parents=True, exist_ok=True)
     persisted: list[dict[str, object]] = []
     for upload in files:
-        target = await _store_upload_file(upload, job_dir)
-        file_size = int(target.stat().st_size)
-        if file_size > UPLOAD_MAX_FILE_SIZE_BYTES:
-            _cleanup_persisted_uploads(persisted)
-            try:
-                target.unlink(missing_ok=True)
-            except Exception:
-                pass
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f'File "{Path(upload.filename or target.name).name}" exceeds max size '
-                    f"({_bytes_to_human(file_size)} > "
-                    f"{_bytes_to_human(UPLOAD_MAX_FILE_SIZE_BYTES)})."
-                ),
-            )
-        persisted.append(
-            {
-                "name": Path(upload.filename or target.name).name,
-                "path": str(target.resolve()),
-                "size": file_size,
-            }
-        )
+        persisted.append(await _store_upload_file(upload, job_dir))
     total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
     if total_bytes > UPLOAD_MAX_TOTAL_BYTES:
         _cleanup_persisted_uploads(persisted)
@@ -277,6 +268,16 @@ async def upload_files(
             persisted_files = await _persist_uploaded_files_sequential(files)
 
         file_paths = [Path(str(item.get("path", ""))) for item in persisted_files]
+        uploaded_file_meta: dict[str, dict[str, object]] = {}
+        for item in persisted_files:
+            raw_path = str((item or {}).get("path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                resolved = str(Path(raw_path).resolve())
+            except Exception:
+                resolved = raw_path
+            uploaded_file_meta[resolved] = dict(item)
         response = await run_in_threadpool(
             index_files,
             context=context,
@@ -286,6 +287,7 @@ async def upload_files(
             reindex=reindex,
             settings=settings,
             scope=scope,
+            uploaded_file_meta=uploaded_file_meta,
         )
         return response
     finally:

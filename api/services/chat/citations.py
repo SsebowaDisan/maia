@@ -39,7 +39,12 @@ _CITATION_ANCHOR_OPEN_RE = re.compile(
     r"<a\b[^>]*class=['\"][^'\"]*\bcitation\b[^'\"]*['\"][^>]*>",
     flags=re.IGNORECASE,
 )
+_CITATION_ANCHOR_RE = re.compile(
+    r"(<a\b[^>]*class=['\"][^'\"]*\bcitation\b[^'\"]*['\"][^>]*>)([\s\S]*?)(</a>)",
+    flags=re.IGNORECASE,
+)
 _DETAILS_BOXES_RE = re.compile(r"data-boxes=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_BBOXES_RE = re.compile(r"data-bboxes=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _DETAILS_STRENGTH_RE = re.compile(r"data-strength=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _DETAILS_UNIT_ID_RE = re.compile(r"data-unit-id=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _DETAILS_MATCH_QUALITY_RE = re.compile(r"data-match-quality=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
@@ -47,6 +52,7 @@ _DETAILS_CHAR_START_RE = re.compile(r"data-char-start=['\"](\d{1,12})['\"]", fla
 _DETAILS_CHAR_END_RE = re.compile(r"data-char-end=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
+_INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})")
 
 
 def _to_float(value: Any) -> float | None:
@@ -326,7 +332,7 @@ def _inject_claim_citations_in_line(
         cleaned = _clean_text(segment)
         should_cite = _is_claim_like_fragment(segment)
         already_cited = bool(
-            re.search(r"\[\d{1,3}\]", segment)
+            re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", segment)
             or "class='citation'" in segment
             or 'class="citation"' in segment
         )
@@ -390,7 +396,7 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
         return text
 
     body, tail = _split_answer_for_inline_injection(text)
-    if not re.search(r"\[\d{1,3}\]", body):
+    if not _INLINE_REF_TOKEN_RE.search(body):
         return text
 
     max_ref = max(int(ref.get("id", 0) or 0) for ref in refs) if refs else 0
@@ -409,7 +415,7 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
             return match.group(0)
         return f"[{best_ref_id}]"
 
-    realigned_body = re.sub(r"\[(\d{1,3})\]", replace_ref, body)
+    realigned_body = _INLINE_REF_TOKEN_RE.sub(replace_ref, body)
     if tail:
         return f"{realigned_body.rstrip()}\n\n{tail.lstrip()}"
     return realigned_body
@@ -512,7 +518,7 @@ def _has_inline_citation_markers(answer: str) -> bool:
     return bool(
         "class='citation'" in text
         or 'class="citation"' in text
-        or re.search(r"\[\d{1,3}\]", text)
+        or _INLINE_REF_TOKEN_RE.search(text)
     )
 
 
@@ -652,6 +658,61 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         return f"{anchor_open[:-1]} {' '.join(additions)}>"
 
     return _CITATION_ANCHOR_OPEN_RE.sub(replace_open, text)
+
+
+def _normalize_visible_inline_citations(answer: str) -> str:
+    text = str(answer or "")
+    if not text:
+        return text
+
+    ref_to_display: dict[int, int] = {}
+    seen_ref_ids: set[int] = set()
+    next_display_id = 1
+
+    def replace_anchor(match: re.Match[str]) -> str:
+        nonlocal next_display_id
+        anchor_open, _anchor_label, anchor_close = match.groups()
+        ref_id = _ref_id_from_anchor_open(anchor_open)
+        if ref_id <= 0:
+            return match.group(0)
+
+        display_id = ref_to_display.get(ref_id)
+        if display_id is None:
+            display_id = next_display_id
+            ref_to_display[ref_id] = display_id
+            next_display_id += 1
+
+        if ref_id in seen_ref_ids:
+            return ""
+        seen_ref_ids.add(ref_id)
+        if not re.search(r"\bdata-citation-number=['\"]", anchor_open, flags=re.IGNORECASE):
+            anchor_open = f"{anchor_open[:-1]} data-citation-number='{display_id}'>"
+        return f"{anchor_open}[{display_id}]{anchor_close}"
+
+    normalized = _CITATION_ANCHOR_RE.sub(replace_anchor, text)
+    if normalized == text:
+        return text
+
+    # Remove raw citation markers that remain outside anchor tags (for example stale [4]).
+    rebuilt: list[str] = []
+    cursor = 0
+    for match in _CITATION_ANCHOR_RE.finditer(normalized):
+        outside = normalized[cursor : match.start()]
+        outside = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", outside)
+        rebuilt.append(outside)
+        rebuilt.append(match.group(0))
+        cursor = match.end()
+    tail = normalized[cursor:]
+    tail = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", tail)
+    rebuilt.append(tail)
+    normalized = "".join(rebuilt)
+
+    normalized = re.sub(r"\s{2,}", " ", normalized)
+    normalized = re.sub(r"[ \t]+\n", "\n", normalized)
+    normalized = re.sub(r"\n[ \t]+", "\n", normalized)
+    normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
+    normalized = re.sub(r"\(\s*\)", "", normalized)
+    return normalized
 
 
 def assign_fast_source_refs(
@@ -794,7 +855,15 @@ def collect_cited_ref_ids(answer: str) -> list[int]:
         return []
     seen: set[int] = set()
     ordered: list[int] = []
-    for match in re.finditer(r"(?:#evidence-|\[)(\d{1,4})(?:\]|['\"])", text):
+    for match in re.finditer(r"#evidence-(\d{1,4})", text, flags=re.IGNORECASE):
+        ref_id = int(match.group(1))
+        if ref_id <= 0 or ref_id in seen:
+            continue
+        seen.add(ref_id)
+        ordered.append(ref_id)
+    if ordered:
+        return ordered
+    for match in _INLINE_REF_TOKEN_RE.finditer(text):
         ref_id = int(match.group(1))
         if ref_id <= 0 or ref_id in seen:
             continue
@@ -941,13 +1010,25 @@ def build_claim_signal_summary(
             continue
         ref_ids = {
             int(match)
-            for match in re.findall(r"\[(\d{1,3})\]", segment)
+            for match in re.findall(r"#evidence-(\d{1,4})", segment, flags=re.IGNORECASE)
             if int(match) in ref_by_id
         }
         if not ref_ids:
+            ref_ids = {
+                int(match)
+                for match in re.findall(r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})", segment)
+                if int(match) in ref_by_id
+            }
+        if not ref_ids:
             continue
 
-        cleaned_claim = _clean_text(re.sub(r"\[(\d{1,3})\]", "", segment))
+        cleaned_claim = _clean_text(
+            re.sub(
+                r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})",
+                "",
+                _CITATION_ANCHOR_RE.sub("", segment),
+            )
+        )
         if len(cleaned_claim) < 16:
             continue
 
@@ -1082,22 +1163,25 @@ def render_fast_citation_links(
     if "class='citation'" in answer or 'class="citation"' in answer:
         # Already linked: avoid a second replacement pass that can nest anchors.
         enriched = _augment_existing_citation_anchors(answer, refs)
-        return _inject_inline_citations(enriched, refs)
+        enriched = _inject_inline_citations(enriched, refs)
+        return _normalize_visible_inline_citations(enriched)
 
     ref_by_id: dict[int, dict[str, Any]] = {
         int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
     }
-    max_ref = len(ref_by_id)
 
     def replace_ref(match: re.Match[str]) -> str:
         ref_num = int(match.group(1))
-        if ref_num < 1 or ref_num > max_ref:
+        if ref_num < 1:
             return match.group(0)
-        ref = ref_by_id.get(ref_num, {})
+        ref = ref_by_id.get(ref_num)
+        if not ref:
+            return match.group(0)
         return _citation_anchor(ref) or match.group(0)
 
-    enriched = re.sub(r"\[(\d{1,3})\]", replace_ref, answer)
+    enriched = _INLINE_REF_TOKEN_RE.sub(replace_ref, answer)
     enriched = _inject_inline_citations(enriched, refs)
+    enriched = _normalize_visible_inline_citations(enriched)
 
     if "class='citation'" in enriched or 'class="citation"' in enriched:
         return enriched
@@ -1106,7 +1190,7 @@ def render_fast_citation_links(
         return enriched
 
     fallback_refs = " ".join([_citation_anchor(ref) for ref in refs[: min(3, len(refs))] if _citation_anchor(ref)])
-    return f"{enriched}\n\nEvidence: {fallback_refs}"
+    return _normalize_visible_inline_citations(f"{enriched}\n\nEvidence: {fallback_refs}")
 
 
 def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
@@ -1129,6 +1213,8 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         source_id_match = re.search(r"data-file-id=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         boxes_match = _DETAILS_BOXES_RE.search(tag)
+        if not boxes_match:
+            boxes_match = _DETAILS_BBOXES_RE.search(tag)
         strength_match = _DETAILS_STRENGTH_RE.search(tag)
         unit_id_match = _DETAILS_UNIT_ID_RE.search(tag)
         match_quality_match = _DETAILS_MATCH_QUALITY_RE.search(tag)
@@ -1234,6 +1320,21 @@ def normalize_fast_answer(answer: str) -> str:
     malformed_bold = bool(re.search(r"#{2,6}\s*\*\*|\*\*[^*]+-\s*\*\*", text))
     if malformed_bold or text.count("**") % 2 == 1:
         text = text.replace("**", "")
+
+    # Drop duplicated long paragraphs that models sometimes emit twice.
+    blocks = [row.strip() for row in text.split("\n\n")]
+    deduped_blocks: list[str] = []
+    seen_signatures: set[str] = set()
+    for block in blocks:
+        if not block:
+            continue
+        signature = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", block)
+        signature = re.sub(r"\s+", " ", signature).strip().lower()
+        if len(signature) >= 120 and signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        deduped_blocks.append(block)
+    text = "\n\n".join(deduped_blocks)
 
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

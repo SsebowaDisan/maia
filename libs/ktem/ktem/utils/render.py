@@ -112,7 +112,14 @@ class Render:
         phrase = "true"
         if not highlight_text:
             try:
-                lang = str(detect(text.replace("\n", " "))["lang"]).strip().lower()
+                detection = detect(text.replace("\n", " "))
+                lang = ""
+                if isinstance(detection, dict):
+                    lang = str(detection.get("lang") or "").strip().lower()
+                elif isinstance(detection, list) and detection:
+                    first = detection[0]
+                    if isinstance(first, dict):
+                        lang = str(first.get("lang") or "").strip().lower()
                 phrase = "false" if lang in {"ja", "cn", "zh"} else "true"
             except Exception as exc:
                 print(exc)

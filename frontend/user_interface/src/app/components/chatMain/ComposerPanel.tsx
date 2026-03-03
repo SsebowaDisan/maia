@@ -58,7 +58,12 @@ function ComposerPanel({
       return attachment.message || "Uploading";
     }
     if (attachment.status === "error") {
-      return "Failed";
+      const detail = String(attachment.message || "").trim();
+      if (!detail) {
+        return "Failed";
+      }
+      const compact = detail.length > 42 ? `${detail.slice(0, 39)}...` : detail;
+      return `Failed: ${compact}`;
     }
     return "";
   };

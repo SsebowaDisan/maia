@@ -82,6 +82,41 @@ def _default_embedding_uses_placeholder_key() -> bool:
     return False
 
 
+def _llm_uses_placeholder_key(llm_name: str) -> bool:
+    name = str(llm_name or "").strip()
+    if not name:
+        return True
+    try:
+        all_info = llms.info()
+    except Exception:
+        return True
+    info = all_info.get(name, {})
+    spec = info.get("spec", {}) if isinstance(info, dict) else {}
+    if not isinstance(spec, dict):
+        return False
+
+    has_api_key_field = False
+    for key, value in spec.items():
+        if not isinstance(key, str):
+            continue
+        if "api_key" not in key.lower():
+            continue
+        has_api_key_field = True
+        if _is_placeholder_api_key(value):
+            return True
+
+    # Local models usually do not expose api_key fields.
+    return False if not has_api_key_field else False
+
+
+def _default_llm_uses_placeholder_key() -> bool:
+    try:
+        default_name = llms.get_default_name()
+    except Exception:
+        return True
+    return _llm_uses_placeholder_key(default_name)
+
+
 def _ensure_local_embedding_default() -> None:
     # If current default requires an external key but only placeholder values are
     # configured, switch to a local embedding to keep uploads/indexing functional.
@@ -126,12 +161,13 @@ def _ensure_openai_llm_default() -> None:
 
     try:
         all_info = llms.info()
+        default_is_placeholder = _default_llm_uses_placeholder_key()
         has_explicit_default = any(
             bool(item.get("default"))
             for item in all_info.values()
             if isinstance(item, dict)
         )
-        should_default_if_new = not has_explicit_default
+        should_default_if_new = (not has_explicit_default) or default_is_placeholder
 
         if openai_name not in llms.options():
             llms.add(name=openai_name, spec=openai_spec, default=should_default_if_new)
@@ -142,10 +178,47 @@ def _ensure_openai_llm_default() -> None:
         merged_spec = dict(existing_spec) if isinstance(existing_spec, dict) else {}
         merged_spec.update(openai_spec)
         keep_default = bool(existing_info.get("default")) if isinstance(existing_info, dict) else False
-        llms.update(name=openai_name, spec=merged_spec, default=keep_default)
+        llms.update(
+            name=openai_name,
+            spec=merged_spec,
+            default=bool(keep_default or default_is_placeholder),
+        )
     except Exception:
         # Keep API startup resilient even if model pool update fails.
         return
+
+
+def _ensure_viable_llm_default() -> None:
+    # If current default uses placeholder credentials, promote the first model
+    # with non-placeholder credentials (for example OpenAI with real key, or
+    # local Ollama entries that use api_key=ollama).
+    if not _default_llm_uses_placeholder_key():
+        return
+
+    try:
+        all_info = llms.info()
+    except Exception:
+        return
+
+    candidate_names: list[str] = []
+    if "openai" in all_info:
+        candidate_names.append("openai")
+    for name in all_info.keys():
+        if name not in candidate_names:
+            candidate_names.append(name)
+
+    for name in candidate_names:
+        if _llm_uses_placeholder_key(name):
+            continue
+        info = all_info.get(name, {})
+        spec = info.get("spec", {}) if isinstance(info, dict) else {}
+        if not isinstance(spec, dict):
+            continue
+        try:
+            llms.update(name=name, spec=dict(spec), default=True)
+            return
+        except Exception:
+            continue
 
 
 def _ensure_openai_embedding_default() -> None:
@@ -199,6 +272,7 @@ def _ensure_openai_embedding_default() -> None:
 @lru_cache(maxsize=1)
 def get_context() -> ApiContext:
     _ensure_openai_llm_default()
+    _ensure_viable_llm_default()
     _ensure_openai_embedding_default()
     _ensure_local_embedding_default()
     app = KtemApp()

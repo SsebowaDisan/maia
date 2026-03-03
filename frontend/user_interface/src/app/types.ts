@@ -83,6 +83,7 @@ export type CitationFocus = {
   sourceName: string;
   page?: string;
   extract: string;
+  claimText?: string;
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
   unitId?: string;

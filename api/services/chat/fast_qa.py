@@ -342,7 +342,8 @@ def call_openai_fast_qa(
         citation_instruction = (
             "Cite factual claims with source refs in square brackets like [1], [2]. "
             "Every major claim should have at least one citation. "
-            "Use the most specific ref excerpt that directly supports each cited claim."
+            "Use the most specific ref excerpt that directly supports each cited claim. "
+            "Number refs sequentially starting at [1] and reuse the same ref number when citing the same evidence."
         )
     temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
     outline = _plan_adaptive_outline(
@@ -556,7 +557,7 @@ def run_fast_chat_turn(
         info_panel["source_dominance_warning"] = source_dominance_warning
     info_panel["citation_strength_ordering"] = bool(MAIA_CITATION_STRENGTH_ORDERING_ENABLED)
     info_panel["citation_strength_legend"] = (
-        "Citation numbers are strength-ordered: lower number means stronger supporting evidence."
+        "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."
     )
 
     messages = chat_history + [[message, answer]]
