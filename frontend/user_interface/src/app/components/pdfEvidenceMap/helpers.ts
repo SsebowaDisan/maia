@@ -59,16 +59,20 @@ function parseClaimTraces(assistantHtml: string): ClaimTrace[] {
       if (hrefMatch?.[1]) {
         refs.add(Number.parseInt(hrefMatch[1], 10));
       }
-      const textMatch = String(anchor.textContent || "").match(/\[(\d{1,4})\]/);
-      if (textMatch?.[1]) {
-        refs.add(Number.parseInt(textMatch[1], 10));
+      const textMatch = String(anchor.textContent || "").match(
+        /(?:\[(\d{1,4})\]|【(\d{1,4})】)/,
+      );
+      const textRef = textMatch?.[1] || textMatch?.[2];
+      if (textRef) {
+        refs.add(Number.parseInt(textRef, 10));
       }
     });
 
     if (!refs.size) {
-      for (const match of blockText.matchAll(/\[(\d{1,4})\]/g)) {
-        if (match?.[1]) {
-          refs.add(Number.parseInt(match[1], 10));
+      for (const match of blockText.matchAll(/(?:\[(\d{1,4})\]|【(\d{1,4})】)/g)) {
+        const textRef = match?.[1] || match?.[2];
+        if (textRef) {
+          refs.add(Number.parseInt(textRef, 10));
         }
       }
     }
@@ -77,7 +81,10 @@ function parseClaimTraces(assistantHtml: string): ClaimTrace[] {
       continue;
     }
 
-    const claimText = truncate(blockText.replace(/\[\d{1,4}\]/g, "").trim(), 130);
+    const claimText = truncate(
+      blockText.replace(/(?:\[\d{1,4}\]|【\d{1,4}】)/g, "").trim(),
+      130,
+    );
     if (!claimText) {
       continue;
     }

@@ -29,7 +29,7 @@ function normalizeCitationExtract(...candidates: Array<string | undefined | null
     if (!raw) {
       continue;
     }
-    if (/^\[\d{1,4}\]$/.test(raw)) {
+    if (/^(?:\[\d{1,4}\]|【\d{1,4}】)$/.test(raw)) {
       continue;
     }
     if (raw.length <= MAX_EXTRACT_CHARS) {

@@ -52,6 +52,10 @@ END_PHRASE: string
 // (in the form [number])
 // Try to include the number after each facts / statements you make.
 // You can create as many citations as you need.
+// Citation numbering rules:
+// - Assign citation numbers sequentially starting from 1.
+// - Reuse the same number when citing the same source span.
+// - Do not reuse a number for a different source span.
 FINAL ANSWER
 string
 
@@ -80,6 +84,10 @@ START_CITATION = "CITATION LIST"
 CITATION_PATTERN = r"citation【(\d+)】"
 START_ANSWER_PATTERN = "start_phrase:"
 END_ANSWER_PATTERN = "end_phrase:"
+INLINE_CITATION_RE = re.compile(r"【(\d+)】|\[(\d+)\]")
+MERGED_INLINE_CITATION_RE = re.compile(
+    r"【\s*(\d+\s*(?:,\s*\d+\s*)+)】|\[\s*(\d+\s*(?:,\s*\d+\s*)+)\]"
+)
 
 
 @dataclass
@@ -157,45 +165,102 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
 
         return citations
 
+    @staticmethod
+    def _split_merged_citations(answer: str) -> str:
+        def split_match(match: re.Match) -> str:
+            payload = (match.group(1) or match.group(2) or "").strip()
+            if not payload:
+                return match.group(0)
+            parts = []
+            for raw in payload.split(","):
+                cleaned = raw.strip()
+                if not cleaned.isdigit():
+                    return match.group(0)
+                parts.append(str(int(cleaned)))
+            if len(parts) <= 1:
+                return match.group(0)
+            return "".join(f"【{part}】" for part in parts)
+
+        return MERGED_INLINE_CITATION_RE.sub(split_match, str(answer or ""))
+
+    @staticmethod
+    def _extract_citation_indices(answer: str) -> list[int]:
+        indices: list[int] = []
+        for match in INLINE_CITATION_RE.finditer(str(answer or "")):
+            raw_value = match.group(1) or match.group(2)
+            if not raw_value:
+                continue
+            try:
+                indices.append(int(raw_value))
+            except ValueError:
+                continue
+        return indices
+
+    @staticmethod
+    def _normalize_citation_mapping(
+        answer: str, citations: list[InlineEvidence]
+    ) -> tuple[str, dict[int, int]]:
+        normalized_answer = AnswerWithInlineCitation._split_merged_citations(answer)
+        seen: set[int] = set()
+        ordered_indices: list[int] = []
+
+        for idx in AnswerWithInlineCitation._extract_citation_indices(normalized_answer):
+            if idx in seen:
+                continue
+            seen.add(idx)
+            ordered_indices.append(idx)
+
+        for evidence_pos, evidence in enumerate(citations):
+            evidence_idx = evidence.idx if evidence.idx is not None else evidence_pos + 1
+            if evidence_idx in seen:
+                continue
+            seen.add(evidence_idx)
+            ordered_indices.append(evidence_idx)
+
+        mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(ordered_indices, start=1)}
+        return normalized_answer, mapping
+
+    @staticmethod
+    def _apply_citation_mapping(answer: str, index_mapping: dict[int, int]) -> str:
+        text = str(answer or "")
+        if not index_mapping:
+            return text
+
+        def replace(match: re.Match) -> str:
+            raw_value = match.group(1) or match.group(2)
+            if not raw_value:
+                return match.group(0)
+            try:
+                old_idx = int(raw_value)
+            except ValueError:
+                return match.group(0)
+            new_idx = index_mapping.get(old_idx, old_idx)
+            return f"【{new_idx}】"
+
+        return INLINE_CITATION_RE.sub(replace, text)
+
     def replace_citation_with_link(self, answer: str):
-        # Define the regex pattern to match 【number】
-        pattern = r"【\d+】"
-        alternate_pattern = r"\[\d+\]"
+        answer = self._split_merged_citations(answer)
+        seen: set[int] = set()
 
-        # Regular expression to match merged citations
-        multi_pattern = r"【([\d,\s]+)】"
-
-        # Function to replace merged citations with independent ones
-        def split_citations(match):
-            # Extract the numbers, split by comma, and create individual citations
-            numbers = match.group(1).split(",")
-            return "".join(f"【{num.strip()}】" for num in numbers)
-
-        # Replace merged citations in the text
-        answer = re.sub(multi_pattern, split_citations, answer)
-
-        # Find all citations in the answer
-        matches = list(re.finditer(pattern, answer))
-        if not matches:
-            matches = list(re.finditer(alternate_pattern, answer))
-
-        matched_citations = set()
-        for match in matches:
-            citation = match.group()
-            matched_citations.add(citation)
-
-        for citation in matched_citations:
-            citation_id = citation[1:-1]
-            answer = answer.replace(
-                citation,
-                (
-                    "<a href='#' class='citation' "
-                    f"id='mark-{citation_id}'>【{citation_id}】</a>"
-                ),
+        def replace(match: re.Match) -> str:
+            raw_value = match.group(1) or match.group(2)
+            if not raw_value:
+                return ""
+            try:
+                citation_id = int(raw_value)
+            except ValueError:
+                return ""
+            if citation_id in seen:
+                return ""
+            seen.add(citation_id)
+            return (
+                "<a href='#' class='citation' "
+                f"id='mark-{citation_id}'>【{citation_id}】</a>"
             )
 
+        answer = INLINE_CITATION_RE.sub(replace, answer)
         answer = answer.replace(START_CITATION, "")
-
         return answer
 
     def stream(  # type: ignore
@@ -291,6 +356,16 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
             qa_score = None
 
         citation = self.answer_to_citations(output)
+        normalized_answer, citation_mapping = self._normalize_citation_mapping(
+            final_answer, citation
+        )
+        if citation_mapping:
+            for evidence_pos, evidence in enumerate(citation):
+                evidence_idx = evidence.idx if evidence.idx is not None else evidence_pos + 1
+                evidence.idx = citation_mapping.get(evidence_idx, evidence_idx)
+            normalized_answer = self._apply_citation_mapping(
+                normalized_answer, citation_mapping
+            )
 
         if self.enable_mindmap:
             try:
@@ -311,17 +386,18 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
 
         # convert citation to link
         answer = Document(
-            text=final_answer,
+            text=normalized_answer,
             metadata={
                 "citation_viz": self.enable_citation_viz,
                 "mindmap": mindmap,
                 "citation": citation,
+                "citation_index_mapping": citation_mapping,
                 "qa_score": qa_score,
             },
         )
 
         # yield the final answer
-        final_answer = self.replace_citation_with_link(final_answer)
+        final_answer = self.replace_citation_with_link(normalized_answer)
 
         if final_answer:
             yield Document(channel="chat", content=None)
