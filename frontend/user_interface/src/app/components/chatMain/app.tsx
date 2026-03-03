@@ -1,5 +1,6 @@
 import { type MouseEvent as ReactMouseEvent } from "react";
 import type { ChatTurn } from "../../types";
+import type { CitationHighlightBox } from "../../types";
 import { parseEvidence } from "../../utils/infoInsights";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
@@ -22,6 +23,7 @@ function normalizePageLabel(...candidates: Array<string | undefined | null>): st
 }
 
 function normalizeCitationExtract(...candidates: Array<string | undefined | null>): string {
+  const MAX_EXTRACT_CHARS = 260;
   for (const candidate of candidates) {
     const raw = String(candidate || "").replace(/\s+/g, " ").trim();
     if (!raw) {
@@ -30,9 +32,72 @@ function normalizeCitationExtract(...candidates: Array<string | undefined | null
     if (/^\[\d{1,4}\]$/.test(raw)) {
       continue;
     }
-    return raw;
+    if (raw.length <= MAX_EXTRACT_CHARS) {
+      return raw;
+    }
+    const clipped = raw.slice(0, MAX_EXTRACT_CHARS);
+    const sentenceCut = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+    if (sentenceCut >= 120) {
+      return clipped.slice(0, sentenceCut + 1).trim();
+    }
+    const wordCut = clipped.lastIndexOf(" ");
+    if (wordCut >= 120) {
+      return clipped.slice(0, wordCut).trim();
+    }
+    return clipped.trim();
   }
   return "No extract available for this citation.";
+}
+
+function parseHighlightBoxes(...candidates: Array<string | undefined | null>): CitationHighlightBox[] {
+  const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        continue;
+      }
+      const boxes: CitationHighlightBox[] = [];
+      for (const row of parsed) {
+        if (!row || typeof row !== "object") {
+          continue;
+        }
+        const x = Number((row as Record<string, unknown>).x);
+        const y = Number((row as Record<string, unknown>).y);
+        const width = Number((row as Record<string, unknown>).width);
+        const height = Number((row as Record<string, unknown>).height);
+        if (![x, y, width, height].every((value) => Number.isFinite(value))) {
+          continue;
+        }
+        const nx = clamp01(x);
+        const ny = clamp01(y);
+        const nw = Math.max(0, Math.min(1 - nx, width));
+        const nh = Math.max(0, Math.min(1 - ny, height));
+        if (nw < 0.002 || nh < 0.002) {
+          continue;
+        }
+        boxes.push({
+          x: Number(nx.toFixed(6)),
+          y: Number(ny.toFixed(6)),
+          width: Number(nw.toFixed(6)),
+          height: Number(nh.toFixed(6)),
+        });
+        if (boxes.length >= 24) {
+          break;
+        }
+      }
+      if (boxes.length) {
+        return boxes;
+      }
+    } catch {
+      // Ignore malformed payloads and continue with other candidates.
+    }
+  }
+  return [];
 }
 
 function ChatMain({
@@ -90,11 +155,16 @@ function ChatMain({
         citationAnchor.getAttribute("data-phrase") ||
         citationAnchor.getAttribute("data-search") ||
         "";
+      const boxesAttr = citationAnchor.getAttribute("data-boxes") || "";
       const attachmentFileId =
         (turn.attachments || []).find((attachment) => Boolean(attachment.fileId))?.fileId || "";
       const sourceName = (matchedEvidence?.source || "Indexed source").replace(
         /^\[\d+\]\s*/,
         "",
+      );
+      const highlightBoxes = parseHighlightBoxes(
+        boxesAttr,
+        JSON.stringify(matchedEvidence?.highlightBoxes || []),
       );
 
       onCitationClick({
@@ -107,6 +177,7 @@ function ChatMain({
           citationAnchor.textContent?.trim(),
         ),
         evidenceId: evidenceId || undefined,
+        highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
       });
       return;
     }

@@ -31,6 +31,214 @@ def _page_label_sort_key(raw: Any) -> int:
         return 0
 
 
+def _to_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed != parsed:  # NaN
+        return None
+    return parsed
+
+
+def _normalize_xywh(
+    *,
+    x: Any,
+    y: Any,
+    width: Any,
+    height: Any,
+    page_width: float | None,
+    page_height: float | None,
+) -> dict[str, float] | None:
+    left = _to_float(x)
+    top = _to_float(y)
+    w = _to_float(width)
+    h = _to_float(height)
+    if left is None or top is None or w is None or h is None:
+        return None
+    if (
+        page_width
+        and page_height
+        and page_width > 1.0
+        and page_height > 1.0
+        and (left > 1.0 or top > 1.0 or w > 1.0 or h > 1.0)
+    ):
+        left /= page_width
+        top /= page_height
+        w /= page_width
+        h /= page_height
+    left = max(0.0, min(1.0, left))
+    top = max(0.0, min(1.0, top))
+    w = max(0.0, min(1.0 - left, w))
+    h = max(0.0, min(1.0 - top, h))
+    if w < 0.002 or h < 0.002:
+        return None
+    return {
+        "x": round(left, 6),
+        "y": round(top, 6),
+        "width": round(w, 6),
+        "height": round(h, 6),
+    }
+
+
+def _normalize_xyxy(
+    *,
+    x0: Any,
+    y0: Any,
+    x1: Any,
+    y1: Any,
+    page_width: float | None,
+    page_height: float | None,
+) -> dict[str, float] | None:
+    left = _to_float(x0)
+    top = _to_float(y0)
+    right = _to_float(x1)
+    bottom = _to_float(y1)
+    if left is None or top is None or right is None or bottom is None:
+        return None
+    width = right - left
+    height = bottom - top
+    return _normalize_xywh(
+        x=left,
+        y=top,
+        width=width,
+        height=height,
+        page_width=page_width,
+        page_height=page_height,
+    )
+
+
+def _normalize_points_box(
+    points: Any,
+    *,
+    page_width: float | None,
+    page_height: float | None,
+) -> dict[str, float] | None:
+    if not isinstance(points, list) or len(points) < 2:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for point in points:
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            px = _to_float(point[0])
+            py = _to_float(point[1])
+        elif isinstance(point, dict):
+            px = _to_float(point.get("x"))
+            py = _to_float(point.get("y"))
+        else:
+            px = None
+            py = None
+        if px is None or py is None:
+            continue
+        xs.append(px)
+        ys.append(py)
+    if len(xs) < 2 or len(ys) < 2:
+        return None
+    return _normalize_xyxy(
+        x0=min(xs),
+        y0=min(ys),
+        x1=max(xs),
+        y1=max(ys),
+        page_width=page_width,
+        page_height=page_height,
+    )
+
+
+def _extract_highlight_boxes(metadata: dict[str, Any]) -> list[dict[str, float]]:
+    page_width = _to_float(metadata.get("page_width") or metadata.get("pdf_page_width"))
+    page_height = _to_float(metadata.get("page_height") or metadata.get("pdf_page_height"))
+
+    candidates: list[Any] = []
+    for key in ("highlight_boxes", "boxes", "box", "bbox", "bounding_box", "location", "coordinates"):
+        value = metadata.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            if key in ("box", "bbox", "bounding_box") and len(value) == 4 and not isinstance(value[0], (list, dict, tuple)):
+                candidates.append(value)
+            else:
+                candidates.extend(value)
+        else:
+            candidates.append(value)
+
+    boxes: list[dict[str, float]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for candidate in candidates:
+        normalized: dict[str, float] | None = None
+        if isinstance(candidate, dict):
+            if {"x", "y", "width", "height"}.issubset(candidate):
+                normalized = _normalize_xywh(
+                    x=candidate.get("x"),
+                    y=candidate.get("y"),
+                    width=candidate.get("width"),
+                    height=candidate.get("height"),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+            elif {"x0", "y0", "x1", "y1"}.issubset(candidate):
+                normalized = _normalize_xyxy(
+                    x0=candidate.get("x0"),
+                    y0=candidate.get("y0"),
+                    x1=candidate.get("x1"),
+                    y1=candidate.get("y1"),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+            elif {"l", "t", "r", "b"}.issubset(candidate):
+                normalized = _normalize_xyxy(
+                    x0=candidate.get("l"),
+                    y0=candidate.get("t"),
+                    x1=candidate.get("r"),
+                    y1=candidate.get("b"),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+            elif isinstance(candidate.get("points"), list):
+                normalized = _normalize_points_box(
+                    candidate.get("points"),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+            elif isinstance(candidate.get("location"), list):
+                normalized = _normalize_points_box(
+                    candidate.get("location"),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+        elif isinstance(candidate, (list, tuple)):
+            if len(candidate) == 4:
+                normalized = _normalize_xyxy(
+                    x0=candidate[0],
+                    y0=candidate[1],
+                    x1=candidate[2],
+                    y1=candidate[3],
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+            else:
+                normalized = _normalize_points_box(
+                    list(candidate),
+                    page_width=page_width,
+                    page_height=page_height,
+                )
+
+        if not normalized:
+            continue
+        key = (
+            normalized["x"],
+            normalized["y"],
+            normalized["width"],
+            normalized["height"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        boxes.append(normalized)
+        if len(boxes) >= 24:
+            break
+    return boxes
+
+
 def load_recent_chunks_for_fast_qa(
     context: ApiContext,
     user_id: str,
@@ -140,6 +348,7 @@ def load_recent_chunks_for_fast_qa(
         metadata = getattr(doc, "metadata", {}) or {}
         doc_type = str(metadata.get("type", "") or "")
         page_label = str(metadata.get("page_label", "") or "")
+        highlight_boxes = _extract_highlight_boxes(metadata)
 
         source_id = target_to_source.get(doc_id, "")
         source_name = str(metadata.get("file_name", "") or "") or source_name_by_id.get(
@@ -196,6 +405,7 @@ def load_recent_chunks_for_fast_qa(
                 "doc_type": doc_type,
                 "page_label": page_label,
                 "image_origin": image_by_source.get(source_key, {}).get("image_origin"),
+                "highlight_boxes": highlight_boxes,
             }
         )
 
@@ -262,6 +472,7 @@ def load_recent_chunks_for_fast_qa(
                 "doc_type": str(image_payload.get("doc_type", "") or "thumbnail"),
                 "page_label": str(image_payload.get("page_label", "") or ""),
                 "image_origin": image_payload.get("image_origin"),
+                "highlight_boxes": [],
             }
         )
 

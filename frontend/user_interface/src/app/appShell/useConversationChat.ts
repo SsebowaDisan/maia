@@ -229,6 +229,15 @@ export function useConversationChat({
       const effectiveAccessMode = options?.accessMode ?? accessMode;
       const delayedPendingAssistantMessage =
         effectiveMode === "company_agent" ? "Starting my desktop..." : "Thinking....";
+      const firstAttachedFile = (attachments || []).find((item) => Boolean(item.fileId));
+      if (firstAttachedFile?.fileId) {
+        setCitationFocus({
+          fileId: firstAttachedFile.fileId,
+          sourceName: String(firstAttachedFile.name || "Uploaded file"),
+          extract: "",
+          evidenceId: `send-file-preview-${Date.now()}`,
+        });
+      }
 
       const attachedFileIds = (attachments || [])
         .map((item) => item.fileId)

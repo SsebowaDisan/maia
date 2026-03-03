@@ -64,11 +64,14 @@ def _to_summary(conv: Conversation) -> dict:
 
 def list_conversations(user_id: str) -> list[dict]:
     with Session(engine) as session:
-        rows = session.exec(
-            select(Conversation)
-            .where(Conversation.user == user_id)
-            .order_by(Conversation.date_updated.desc())  # type: ignore[attr-defined]
-        ).all()
+        def _load_rows() -> list[Conversation]:
+            return session.exec(
+                select(Conversation)
+                .where(Conversation.user == user_id)
+                .order_by(Conversation.date_updated.desc())  # type: ignore[attr-defined]
+            ).all()
+
+        rows = _load_rows()
 
         backfilled = 0
         icon_refreshed = 0
@@ -120,7 +123,12 @@ def list_conversations(user_id: str) -> list[dict]:
 
         if backfilled or icon_refreshed:
             session.commit()
-    return [_to_summary(row) for row in rows]
+            # Commit expires ORM state; reload rows before converting to summaries.
+            rows = _load_rows()
+
+        # Build summaries while the session is still active to avoid detached-instance
+        # refresh issues on deferred/expired attributes.
+        return [_to_summary(row) for row in rows]
 
 
 def create_conversation(user_id: str, name: str | None, is_public: bool) -> dict:

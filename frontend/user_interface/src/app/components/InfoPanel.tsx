@@ -1,22 +1,35 @@
-import { useMemo } from "react";
-import { ExternalLink, FileText } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, ExternalLink, FileText, Link2 } from "lucide-react";
+import { toast } from "sonner";
 import { buildRawFileUrl } from "../../api/client";
+import { buildCitationDeepLink } from "../utils/citationDeepLink";
+import { parseEvidence } from "../utils/infoInsights";
 import type { CitationFocus } from "../types";
 import { CitationPdfPreview } from "./CitationPdfPreview";
+import { PdfEvidenceMap } from "./PdfEvidenceMap";
 
 interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
+  selectedConversationId?: string | null;
+  assistantHtml?: string;
+  infoHtml?: string;
   indexId?: number | null;
   onClearCitationFocus?: () => void;
+  onSelectCitationFocus?: (citation: CitationFocus) => void;
   width?: number;
 }
 
 export function InfoPanel({
   citationFocus = null,
+  selectedConversationId = null,
+  assistantHtml = "",
+  infoHtml = "",
   indexId = null,
   onClearCitationFocus,
+  onSelectCitationFocus,
   width = 340,
 }: InfoPanelProps) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const citationRawUrl = useMemo(() => {
     if (!citationFocus?.fileId) return null;
     return buildRawFileUrl(citationFocus.fileId, {
@@ -31,6 +44,27 @@ export function InfoPanel({
     Boolean(citationRawUrl) &&
     !citationIsImage &&
     (citationSourceLower.endsWith(".pdf") || citationHasPageHint || !citationSourceLower);
+  const evidenceCards = useMemo(() => parseEvidence(infoHtml || ""), [infoHtml]);
+
+  const handleCopyCitationLink = async () => {
+    if (!citationFocus) {
+      return;
+    }
+    const deepLink = buildCitationDeepLink({
+      citationFocus,
+      conversationId: selectedConversationId,
+    });
+    try {
+      await navigator.clipboard.writeText(deepLink);
+      setCopyState("copied");
+      toast.success("Citation link copied");
+      window.setTimeout(() => setCopyState("idle"), 1800);
+    } catch {
+      setCopyState("failed");
+      toast.error("Unable to copy citation link");
+      window.setTimeout(() => setCopyState("idle"), 1800);
+    }
+  };
 
   return (
     <div
@@ -73,16 +107,46 @@ export function InfoPanel({
                     Open
                   </a>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={handleCopyCitationLink}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white border border-black/[0.08] text-[#1d1d1f] text-[10px] hover:bg-black/[0.03] transition-colors"
+                  title="Copy deep-link to this citation"
+                >
+                  {copyState === "copied" ? <Check className="w-3 h-3" /> : <Link2 className="w-3 h-3" />}
+                  {copyState === "copied"
+                    ? "Copied"
+                    : copyState === "failed"
+                      ? "Retry"
+                      : "Copy link"}
+                </button>
               </div>
             </div>
 
             {citationRawUrl && citationIsPdf ? (
-              <CitationPdfPreview
-                key={`${citationFocus?.fileId || "file"}:${citationFocus?.page || "1"}:${String(citationFocus?.extract || "").slice(0, 64)}`}
-                fileUrl={citationRawUrl}
-                page={citationFocus.page}
-                highlightText={citationFocus.extract}
-              />
+              <>
+                <PdfEvidenceMap
+                  fileUrl={citationRawUrl}
+                  conversationId={selectedConversationId || undefined}
+                  fileId={citationFocus.fileId}
+                  sourceName={citationFocus.sourceName}
+                  citationFocus={citationFocus}
+                  assistantHtml={assistantHtml}
+                  evidenceCards={evidenceCards}
+                  onNavigateCitation={(next) => {
+                    if (onSelectCitationFocus) {
+                      onSelectCitationFocus(next);
+                    }
+                  }}
+                />
+                <CitationPdfPreview
+                  key={`${citationFocus?.fileId || "file"}:${citationFocus?.page || "1"}:${String(citationFocus?.extract || "").slice(0, 64)}:${JSON.stringify(citationFocus?.highlightBoxes || []).slice(0, 120)}`}
+                  fileUrl={citationRawUrl}
+                  page={citationFocus.page}
+                  highlightText={citationFocus.extract}
+                  highlightBoxes={citationFocus.highlightBoxes}
+                />
+              </>
             ) : null}
 
             {citationRawUrl && citationIsImage ? (
@@ -116,4 +180,3 @@ export function InfoPanel({
     </div>
   );
 }
-

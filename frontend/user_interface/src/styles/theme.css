@@ -213,12 +213,20 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
-.citation-pdf mark.citation-pdf-hit {
-  background: rgba(255, 214, 10, 0.82);
-  border-radius: 3px;
-  padding: 0 1px;
-  box-shadow: 0 0 0 1px rgba(166, 119, 0, 0.32);
-  color: inherit;
+.citation-pdf .citation-pdf-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+}
+
+.citation-pdf .citation-pdf-overlay-rect {
+  position: absolute;
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(255, 219, 77, 0.62), rgba(255, 196, 0, 0.58));
+  border: 1px solid rgba(171, 120, 0, 0.52);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.58) inset, 0 0 0 1px rgba(171, 120, 0, 0.18);
+  mix-blend-mode: multiply;
 }
 
 @keyframes command-dock-reveal {

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
@@ -7,6 +7,10 @@ import { InfoPanel } from "../components/InfoPanel";
 import { ResourcesView } from "../components/ResourcesView";
 import { SettingsView } from "../components/SettingsView";
 import { TopNav } from "../components/TopNav";
+import {
+  clearCitationDeepLinkInUrl,
+  readCitationDeepLinkFromUrl,
+} from "../utils/citationDeepLink";
 import { ResizeHandle } from "./ResizeHandle";
 import { useConversationChat } from "./useConversationChat";
 import { useFileLibrary } from "./useFileLibrary";
@@ -14,6 +18,8 @@ import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
 
 export default function App() {
+  const deepLinkHandledRef = useRef(false);
+  const lastAutoOpenCitationKeyRef = useRef("");
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -47,12 +53,74 @@ export default function App() {
     fileLibrary.refreshIngestionJobs,
   ]);
 
+  useEffect(() => {
+    if (deepLinkHandledRef.current) {
+      return;
+    }
+    const deepLinkPayload = readCitationDeepLinkFromUrl();
+    if (!deepLinkPayload) {
+      deepLinkHandledRef.current = true;
+      return;
+    }
+    deepLinkHandledRef.current = true;
+
+    const applyDeepLink = async () => {
+      if (deepLinkPayload.conversationId) {
+        try {
+          await chatState.handleSelectConversation(deepLinkPayload.conversationId);
+        } catch {
+          // Keep preview behavior even if conversation no longer exists.
+        }
+      }
+      chatState.setCitationFocus(deepLinkPayload.citationFocus);
+      layout.setActiveTab("Chat");
+      layout.setIsInfoPanelOpen(true);
+      clearCitationDeepLinkInUrl();
+    };
+    void applyDeepLink();
+  }, [
+    chatState.handleSelectConversation,
+    chatState.setCitationFocus,
+    layout.setActiveTab,
+    layout.setIsInfoPanelOpen,
+  ]);
+
+  useEffect(() => {
+    const focus = chatState.citationFocus;
+    const nextKey = focus?.fileId
+      ? `${focus.fileId}:${focus.page || ""}:${String(focus.extract || "").slice(0, 96)}:${String(focus.evidenceId || "")}:${String(focus.sourceName || "").slice(0, 64)}`
+      : "";
+    if (!nextKey) {
+      return;
+    }
+    if (nextKey === lastAutoOpenCitationKeyRef.current) {
+      return;
+    }
+    lastAutoOpenCitationKeyRef.current = nextKey;
+    if (layout.activeTab !== "Chat") {
+      layout.setActiveTab("Chat");
+    }
+    if (!layout.isInfoPanelOpen) {
+      layout.setIsInfoPanelOpen(true);
+    }
+  }, [
+    chatState.citationFocus,
+    layout.activeTab,
+    layout.isInfoPanelOpen,
+    layout.setActiveTab,
+    layout.setIsInfoPanelOpen,
+  ]);
+
   const selectedSidebarConversationId =
     chatState.selectedConversationId &&
     chatState.visibleConversations.some(
       (conversation) => conversation.id === chatState.selectedConversationId,
     )
       ? chatState.selectedConversationId
+      : null;
+  const selectedTurn =
+    chatState.selectedTurnIndex !== null
+      ? chatState.chatTurns[chatState.selectedTurnIndex] || null
       : null;
 
   return (
@@ -137,8 +205,12 @@ export default function App() {
               <InfoPanel
                 width={layout.infoPanelWidth}
                 citationFocus={chatState.citationFocus}
+                selectedConversationId={chatState.selectedConversationId}
+                assistantHtml={selectedTurn?.assistant || ""}
+                infoHtml={selectedTurn?.info || ""}
                 indexId={fileLibrary.defaultIndexId}
                 onClearCitationFocus={() => chatState.setCitationFocus(null)}
+                onSelectCitationFocus={(citation) => chatState.setCitationFocus(citation)}
               />
             ) : null}
           </>

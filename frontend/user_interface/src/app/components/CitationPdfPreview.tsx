@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
+import type { CitationHighlightBox } from "../types";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -13,14 +14,19 @@ interface CitationPdfPreviewProps {
   fileUrl: string;
   page?: string;
   highlightText: string;
-}
-
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  highlightBoxes?: CitationHighlightBox[];
 }
 
 function normalizeWhitespace(input: string): string {
   return String(input || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeSearchText(input: string): string {
+  return normalizeWhitespace(input)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function parsePageNumber(pageLabel?: string): number {
@@ -33,63 +39,414 @@ function parsePageNumber(pageLabel?: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function buildExactPhrases(text: string): string[] {
-  const normalized = normalizeWhitespace(text).toLowerCase();
-  if (!normalized) {
+function buildSearchCandidates(rawText: string): string[] {
+  const normalized = normalizeSearchText(rawText);
+  if (!normalized || normalized.length < 8) {
     return [];
   }
-  const sentenceParts = normalized
-    .split(/(?<=[.!?])\s+|[\n\r]+/)
-    .map((part) => normalizeWhitespace(part))
-    .filter((part) => part.length >= 12 && part.length <= 320);
-  const candidates = [normalized, ...sentenceParts].filter(
-    (part) => part.length >= 12 && part.length <= 320,
-  );
-  return Array.from(new Set(candidates)).slice(0, 10);
-}
+  const primaryChunks = normalized
+    .split(/[.!?;\n\r]+/)
+    .map((chunk) => normalizeSearchText(chunk))
+    .filter((chunk) => chunk.length >= 10);
 
-function buildPhraseFragments(phrases: string[]): string[] {
-  const fragments: string[] = [];
-  for (const phrase of phrases) {
-    const words = phrase.split(" ").filter(Boolean);
-    if (words.length < 4) {
+  const ngrams: string[] = [];
+  const seededChunks = [normalized, ...primaryChunks.slice(0, 8)];
+  for (const chunk of seededChunks) {
+    const words = chunk.split(" ").filter(Boolean);
+    if (words.length < 3) {
       continue;
     }
-    const windowSize = Math.min(8, words.length);
-    for (let idx = 0; idx <= words.length - windowSize; idx += 1) {
-      const fragment = words.slice(idx, idx + windowSize).join(" ").trim();
-      if (fragment.length >= 16) {
-        fragments.push(fragment);
+    const maxWidth = Math.min(12, words.length);
+    const minWidth = Math.min(3, maxWidth);
+    for (let width = maxWidth; width >= minWidth; width -= 1) {
+      for (let idx = 0; idx <= words.length - width; idx += 1) {
+        const phrase = words.slice(idx, idx + width).join(" ").trim();
+        if (phrase.length >= 12) {
+          ngrams.push(phrase);
+        }
+        if (ngrams.length >= 80) {
+          break;
+        }
       }
-      if (fragments.length >= 28) {
-        return Array.from(new Set(fragments));
+      if (ngrams.length >= 80) {
+        break;
+      }
+    }
+    if (ngrams.length >= 80) {
+      break;
+    }
+  }
+  return Array.from(new Set([normalized, ...primaryChunks, ...ngrams]))
+    .filter((candidate) => candidate.length >= 10)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 80);
+}
+
+type SpanSegment = {
+  node: HTMLSpanElement;
+  start: number;
+  end: number;
+  text: string;
+};
+
+type SpanRange = {
+  startIndex: number;
+  endIndex: number;
+};
+
+type OverlayRect = {
+  leftPct: number;
+  topPct: number;
+  widthPct: number;
+  heightPct: number;
+};
+
+type PixelRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+function overlayRectsEqual(a: OverlayRect[], b: OverlayRect[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      Math.abs(left.leftPct - right.leftPct) > 0.01 ||
+      Math.abs(left.topPct - right.topPct) > 0.01 ||
+      Math.abs(left.widthPct - right.widthPct) > 0.01 ||
+      Math.abs(left.heightPct - right.heightPct) > 0.01
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeExternalOverlayRects(
+  boxes: CitationHighlightBox[] | undefined,
+): OverlayRect[] {
+  if (!Array.isArray(boxes) || !boxes.length) {
+    return [];
+  }
+  const normalized: OverlayRect[] = [];
+  for (const box of boxes) {
+    if (!box || typeof box !== "object") {
+      continue;
+    }
+    const x = Number(box.x);
+    const y = Number(box.y);
+    const width = Number(box.width);
+    const height = Number(box.height);
+    if (![x, y, width, height].every((value) => Number.isFinite(value))) {
+      continue;
+    }
+    const left = Math.max(0, Math.min(1, x));
+    const top = Math.max(0, Math.min(1, y));
+    const normalizedWidth = Math.max(0, Math.min(1 - left, width));
+    const normalizedHeight = Math.max(0, Math.min(1 - top, height));
+    if (normalizedWidth < 0.002 || normalizedHeight < 0.002) {
+      continue;
+    }
+    normalized.push({
+      leftPct: Number((left * 100).toFixed(4)),
+      topPct: Number((top * 100).toFixed(4)),
+      widthPct: Number((normalizedWidth * 100).toFixed(4)),
+      heightPct: Number((normalizedHeight * 100).toFixed(4)),
+    });
+    if (normalized.length >= 24) {
+      break;
+    }
+  }
+  return normalized;
+}
+
+function mergeRectsByLine(rects: PixelRect[]): PixelRect[] {
+  if (!rects.length) {
+    return [];
+  }
+  const sorted = [...rects].sort((a, b) => {
+    const topDiff = a.top - b.top;
+    if (Math.abs(topDiff) > 1) {
+      return topDiff;
+    }
+    return a.left - b.left;
+  });
+  const merged: PixelRect[] = [];
+  for (const rect of sorted) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push({ ...rect });
+      continue;
+    }
+
+    const verticalOverlap =
+      Math.min(previous.top + previous.height, rect.top + rect.height) -
+      Math.max(previous.top, rect.top);
+    const sameLine =
+      verticalOverlap >= Math.min(previous.height, rect.height) * 0.45 &&
+      Math.abs(previous.top - rect.top) <= Math.max(previous.height, rect.height) * 0.7;
+    const closeHorizontally = rect.left <= previous.left + previous.width + 10;
+
+    if (sameLine && closeHorizontally) {
+      const left = Math.min(previous.left, rect.left);
+      const right = Math.max(previous.left + previous.width, rect.left + rect.width);
+      const top = Math.min(previous.top, rect.top);
+      const bottom = Math.max(previous.top + previous.height, rect.top + rect.height);
+      previous.left = left;
+      previous.top = top;
+      previous.width = right - left;
+      previous.height = bottom - top;
+      continue;
+    }
+    merged.push({ ...rect });
+  }
+  return merged;
+}
+
+function buildOverlayRectsForRange(
+  pageSurface: HTMLElement,
+  segments: SpanSegment[],
+  range: SpanRange,
+): OverlayRect[] {
+  const surfaceRect = pageSurface.getBoundingClientRect();
+  if (surfaceRect.width <= 0 || surfaceRect.height <= 0) {
+    return [];
+  }
+
+  const rawRects: PixelRect[] = [];
+  for (let index = range.startIndex; index <= range.endIndex; index += 1) {
+    const node = segments[index]?.node;
+    if (!node) {
+      continue;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      continue;
+    }
+    rawRects.push({
+      left: rect.left - surfaceRect.left,
+      top: rect.top - surfaceRect.top,
+      width: rect.width,
+      height: rect.height,
+    });
+  }
+
+  const mergedRects = mergeRectsByLine(rawRects);
+  return mergedRects
+    .map((rect) => {
+      const padX = 1.2;
+      const padY = 0.8;
+      const leftPx = Math.max(0, rect.left - padX);
+      const topPx = Math.max(0, rect.top - padY);
+      const widthPx = Math.min(surfaceRect.width - leftPx, rect.width + padX * 2);
+      const heightPx = Math.min(surfaceRect.height - topPx, rect.height + padY * 2);
+      if (widthPx <= 0 || heightPx <= 0) {
+        return null;
+      }
+      return {
+        leftPct: (leftPx / surfaceRect.width) * 100,
+        topPct: (topPx / surfaceRect.height) * 100,
+        widthPct: (widthPx / surfaceRect.width) * 100,
+        heightPct: (heightPx / surfaceRect.height) * 100,
+      };
+    })
+    .filter((rect): rect is OverlayRect => Boolean(rect));
+}
+
+function evidenceTokens(rawEvidence: string): string[] {
+  return Array.from(
+    new Set(
+      normalizeSearchText(rawEvidence)
+        .split(" ")
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 4),
+    ),
+  )
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 36);
+}
+
+function segmentHasEvidenceToken(segmentText: string, tokens: string[]): boolean {
+  return tokens.some((token) => segmentText.includes(token));
+}
+
+function trimRangeToEvidenceTokens(
+  range: SpanRange,
+  segments: SpanSegment[],
+  tokens: string[],
+): SpanRange {
+  let startIndex = range.startIndex;
+  let endIndex = range.endIndex;
+  while (
+    startIndex < endIndex &&
+    !segmentHasEvidenceToken(segments[startIndex]?.text || "", tokens)
+  ) {
+    startIndex += 1;
+  }
+  while (
+    endIndex > startIndex &&
+    !segmentHasEvidenceToken(segments[endIndex]?.text || "", tokens)
+  ) {
+    endIndex -= 1;
+  }
+  return { startIndex, endIndex };
+}
+
+function findWindowByTokenOverlap(
+  segments: SpanSegment[],
+  tokens: string[],
+): SpanRange | null {
+  if (!segments.length || tokens.length < 2) {
+    return null;
+  }
+
+  const maxWindow = Math.min(14, Math.max(6, Math.ceil(tokens.length * 1.3)));
+  const minHits = Math.min(6, Math.max(2, Math.ceil(tokens.length * 0.24)));
+  let best: { startIndex: number; endIndex: number; hits: number; density: number } | null =
+    null;
+
+  for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
+    let windowText = "";
+    const matched = new Set<string>();
+    const maxEnd = Math.min(segments.length - 1, startIndex + maxWindow - 1);
+    for (let endIndex = startIndex; endIndex <= maxEnd; endIndex += 1) {
+      windowText += (windowText ? " " : "") + (segments[endIndex]?.text || "");
+      for (const token of tokens) {
+        if (!matched.has(token) && windowText.includes(token)) {
+          matched.add(token);
+        }
+      }
+      const hits = matched.size;
+      if (hits < minHits) {
+        continue;
+      }
+      const spanLength = endIndex - startIndex + 1;
+      const density = hits / Math.max(1, spanLength);
+      if (
+        !best ||
+        hits > best.hits ||
+        (hits === best.hits && density > best.density)
+      ) {
+        best = { startIndex, endIndex, hits, density };
       }
     }
   }
-  return Array.from(new Set(fragments));
+
+  if (!best) {
+    return null;
+  }
+  return trimRangeToEvidenceTokens(
+    { startIndex: best.startIndex, endIndex: best.endIndex },
+    segments,
+    tokens,
+  );
 }
 
-function applyHighlights(text: string, terms: string[]): { html: string; matched: boolean } {
-  if (!text || !terms.length) {
-    return { html: text, matched: false };
+function collectSpanSegments(pageContainer: HTMLElement): {
+  segments: SpanSegment[];
+  combined: string;
+} {
+  const textLayer =
+    pageContainer.querySelector<HTMLElement>(".react-pdf__Page__textContent") ||
+    pageContainer.querySelector<HTMLElement>(".textLayer");
+  let spanNodes = Array.from(textLayer?.querySelectorAll<HTMLSpanElement>("span") || []);
+  if (!spanNodes.length) {
+    // Fallback for renderer/classname variants.
+    spanNodes = Array.from(pageContainer.querySelectorAll<HTMLSpanElement>(".react-pdf__Page span"));
   }
-  let highlighted = text;
-  let matched = false;
-  for (const term of terms) {
-    const regex = new RegExp(`(${escapeRegExp(term)})`, "gi");
-    if (regex.test(highlighted)) {
-      regex.lastIndex = 0;
-      highlighted = highlighted.replace(
-        regex,
-        `<mark class="citation-pdf-hit">$1</mark>`,
-      );
-      matched = true;
+  const segments: SpanSegment[] = [];
+  let cursor = 0;
+  let combined = "";
+  for (const node of spanNodes) {
+    const text = normalizeSearchText(node.textContent || "");
+    if (!text) {
+      continue;
+    }
+    const start = cursor;
+    combined += text;
+    cursor += text.length;
+    const end = cursor;
+    combined += " ";
+    cursor += 1;
+    segments.push({ node, start, end, text });
+  }
+  return { segments, combined };
+}
+
+function rangeForMatch(
+  params: {
+    segments: SpanSegment[];
+    matchStart: number;
+    matchEnd: number;
+  },
+): SpanRange | null {
+  const { segments, matchStart, matchEnd } = params;
+  if (!segments.length || matchEnd <= matchStart) {
+    return null;
+  }
+  let startIndex = -1;
+  let endIndex = -1;
+  for (let idx = 0; idx < segments.length; idx += 1) {
+    const segment = segments[idx];
+    if (segment.end <= matchStart) {
+      continue;
+    }
+    if (segment.start >= matchEnd) {
+      break;
+    }
+    if (startIndex === -1) {
+      startIndex = idx;
+    }
+    endIndex = idx;
+  }
+  if (startIndex === -1 || endIndex === -1) {
+    return null;
+  }
+  return { startIndex, endIndex };
+}
+
+function findHighlightRange(
+  params: {
+    segments: SpanSegment[];
+    combined: string;
+    candidates: string[];
+    rawEvidence: string;
+  },
+): SpanRange | null {
+  const { segments, combined, candidates, rawEvidence } = params;
+  if (!segments.length || !combined) {
+    return null;
+  }
+  const tokens = evidenceTokens(rawEvidence);
+  for (const candidate of candidates) {
+    const hitIndex = combined.indexOf(candidate);
+    if (hitIndex < 0) {
+      continue;
+    }
+    const range = rangeForMatch({
+      segments,
+      matchStart: hitIndex,
+      matchEnd: hitIndex + candidate.length,
+    });
+    if (range) {
+      return range;
     }
   }
-  return { html: highlighted, matched };
+
+  return findWindowByTokenOverlap(segments, tokens);
 }
 
-export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdfPreviewProps) {
+export function CitationPdfPreview({
+  fileUrl,
+  page,
+  highlightText,
+  highlightBoxes,
+}: CitationPdfPreviewProps) {
   const requestedPageSafe = parsePageNumber(page);
   const [numPages, setNumPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(requestedPageSafe);
@@ -97,17 +454,28 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
   const [docReady, setDocReady] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const pageSurfaceRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const overlayRectsByPageRef = useRef<Record<number, OverlayRect[]>>({});
+  const appliedHighlightKeyRef = useRef("");
   const syncLockRef = useRef(false);
   const highlightFocusAttemptsRef = useRef(0);
   const highlightFocusTimerRef = useRef<number | null>(null);
+  const [overlayRectsByPage, setOverlayRectsByPage] = useState<Record<number, OverlayRect[]>>({});
   const [activeTargetPage, setActiveTargetPage] = useState(
     requestedPageSafe,
   );
-  const highlightPhrases = useMemo(() => buildExactPhrases(highlightText), [highlightText]);
-  const highlightFragments = useMemo(
-    () => buildPhraseFragments(highlightPhrases),
-    [highlightPhrases],
+  const searchCandidates = useMemo(() => buildSearchCandidates(highlightText), [highlightText]);
+  const externalOverlayRects = useMemo(
+    () => normalizeExternalOverlayRects(highlightBoxes),
+    [highlightBoxes],
   );
+  const highlightRequestKey = useMemo(() => {
+    const normalizedEvidence = normalizeSearchText(highlightText).slice(0, 220);
+    const overlayKey = externalOverlayRects
+      .map((item) => `${item.leftPct},${item.topPct},${item.widthPct},${item.heightPct}`)
+      .join("|");
+    return `${fileUrl}::${requestedPageSafe}::${normalizedEvidence}::${overlayKey}`;
+  }, [externalOverlayRects, fileUrl, highlightText, requestedPageSafe]);
 
   const clampPage = (value: number) => Math.min(Math.max(1, value), Math.max(1, numPages));
 
@@ -130,31 +498,119 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
     }
   };
 
-  const tryFocusHighlight = (targetPage: number) => {
-    const safePage = clampPage(targetPage);
-    const target = pageRefs.current[safePage];
-    if (!target) {
-      return false;
+  const applyOverlayRects = (targetPage: number, rects: OverlayRect[]) => {
+    const nextPayload = { [targetPage]: rects };
+    const currentPayload = overlayRectsByPageRef.current;
+    const currentRects = currentPayload[targetPage] || [];
+    const hasOnlyTargetPage =
+      Object.keys(currentPayload).length === 1 && Boolean(currentPayload[targetPage]);
+    if (hasOnlyTargetPage && overlayRectsEqual(currentRects, rects)) {
+      return;
     }
-    const hit = target.querySelector<HTMLElement>("mark.citation-pdf-hit");
-    if (!hit) {
-      return false;
+    overlayRectsByPageRef.current = nextPayload;
+    setOverlayRectsByPage(nextPayload);
+  };
+
+  const clearHighlights = () => {
+    const hasHighlights = Object.keys(overlayRectsByPageRef.current).length > 0;
+    overlayRectsByPageRef.current = {};
+    if (hasHighlights) {
+      setOverlayRectsByPage({});
     }
+    appliedHighlightKeyRef.current = "";
+  };
+
+  const scrollToOverlayRect = (params: {
+    pageSurface: HTMLElement;
+    page: number;
+    overlayRect: OverlayRect;
+  }) => {
+    const { pageSurface, page: targetPage, overlayRect } = params;
+    const container = scrollRef.current;
+    if (!container) {
+      return;
+    }
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageSurface.getBoundingClientRect();
+    const targetTopPx = pageRect.top - containerRect.top + container.scrollTop;
+    const overlayCenterPx =
+      (overlayRect.topPct / 100) * pageRect.height + ((overlayRect.heightPct / 100) * pageRect.height) / 2;
+    const desiredTop =
+      targetTopPx + overlayCenterPx - Math.max(56, container.clientHeight * 0.35);
     syncLockRef.current = true;
-    hit.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-    setCurrentPage(safePage);
+    container.scrollTo({
+      top: Math.max(0, desiredTop),
+      behavior: "smooth",
+    });
+    setCurrentPage(targetPage);
     window.setTimeout(() => {
       syncLockRef.current = false;
     }, 240);
+  };
+
+  const tryFocusHighlight = (targetPage: number, appliedKey: string) => {
+    const safePage = clampPage(targetPage);
+    const pageSurface = pageSurfaceRefs.current[safePage];
+    if (!pageSurface) {
+      return false;
+    }
+    const currentRects = overlayRectsByPageRef.current[safePage] || [];
+    if (appliedHighlightKeyRef.current === appliedKey && currentRects.length > 0) {
+      return true;
+    }
+    if (externalOverlayRects.length) {
+      applyOverlayRects(safePage, externalOverlayRects);
+      scrollToOverlayRect({
+        pageSurface,
+        page: safePage,
+        overlayRect: externalOverlayRects[0],
+      });
+      appliedHighlightKeyRef.current = appliedKey;
+      return true;
+    }
+    if (!searchCandidates.length) {
+      appliedHighlightKeyRef.current = appliedKey;
+      return true;
+    }
+    const { segments, combined } = collectSpanSegments(pageSurface);
+    const highlightRange = findHighlightRange({
+      segments,
+      combined,
+      candidates: searchCandidates,
+      rawEvidence: highlightText,
+    });
+    if (!highlightRange) {
+      return false;
+    }
+
+    const overlayRects = buildOverlayRectsForRange(pageSurface, segments, highlightRange);
+    if (!overlayRects.length) {
+      return false;
+    }
+    applyOverlayRects(safePage, overlayRects);
+    scrollToOverlayRect({
+      pageSurface,
+      page: safePage,
+      overlayRect: overlayRects[0],
+    });
+    appliedHighlightKeyRef.current = appliedKey;
     return true;
   };
 
-  const scheduleHighlightFocus = (targetPage: number) => {
+  const scheduleHighlightFocus = (targetPage: number, options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
+    const safePage = clampPage(targetPage);
+    const appliedKey = `${highlightRequestKey}::${safePage}`;
+    const currentRects = overlayRectsByPageRef.current[safePage] || [];
+    if (!force && appliedHighlightKeyRef.current === appliedKey && currentRects.length > 0) {
+      return;
+    }
     stopHighlightFocusTimer();
+    clearHighlights();
     highlightFocusAttemptsRef.current = 0;
-    const maxAttempts = 12;
+    const maxAttempts = externalOverlayRects.length ? 18 : 80;
     const tick = () => {
-      const hitFound = tryFocusHighlight(targetPage);
+      const hitFound = tryFocusHighlight(safePage, appliedKey);
       if (hitFound) {
         stopHighlightFocusTimer();
         return;
@@ -169,17 +625,6 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
     highlightFocusTimerRef.current = window.setTimeout(tick, 140);
   };
 
-  const buildCustomTextRenderer = (pageNumber: number) => ({ str }: { str: string }) => {
-    if (!str || pageNumber !== activeTargetPage) {
-      return str;
-    }
-    const exactMatch = applyHighlights(str, highlightPhrases);
-    if (exactMatch.matched) {
-      return exactMatch.html;
-    }
-    return applyHighlights(str, highlightFragments).html;
-  };
-
   useEffect(() => {
     setDocReady(false);
     setNumPages(1);
@@ -187,7 +632,11 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
     setActiveTargetPage(requestedPageSafe);
     stopHighlightFocusTimer();
     highlightFocusAttemptsRef.current = 0;
+    appliedHighlightKeyRef.current = "";
     pageRefs.current = {};
+    pageSurfaceRefs.current = {};
+    overlayRectsByPageRef.current = {};
+    setOverlayRectsByPage({});
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
@@ -216,16 +665,15 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
     setActiveTargetPage(target);
     const timer = window.setTimeout(() => {
       scrollToPage(target, "smooth");
-      if (highlightPhrases.length || highlightFragments.length) {
-        scheduleHighlightFocus(target);
-      }
+      scheduleHighlightFocus(target);
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [docReady, numPages, requestedPageSafe, highlightPhrases, highlightFragments]);
+  }, [docReady, numPages, requestedPageSafe, searchCandidates, highlightText, externalOverlayRects]);
 
   useEffect(() => {
     return () => {
       stopHighlightFocusTimer();
+      clearHighlights();
     };
   }, []);
 
@@ -266,6 +714,7 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
             const next = clampPage(currentPage - 1);
             setActiveTargetPage(next);
             scrollToPage(next, "smooth");
+            scheduleHighlightFocus(next);
           }}
           disabled={currentPage <= 1}
           className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
@@ -282,6 +731,7 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
             const next = clampPage(currentPage + 1);
             setActiveTargetPage(next);
             scrollToPage(next, "smooth");
+            scheduleHighlightFocus(next);
           }}
           disabled={currentPage >= numPages}
           className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
@@ -325,13 +775,38 @@ export function CitationPdfPreview({ fileUrl, page, highlightText }: CitationPdf
               } bg-white p-1`}
             >
               <div className="px-2 py-1 text-[10px] text-[#6e6e73]">Page {pageNumber}</div>
-              <Page
-                pageNumber={pageNumber}
-                width={pageWidth}
-                renderAnnotationLayer
-                renderTextLayer
-                customTextRenderer={buildCustomTextRenderer(pageNumber)}
-              />
+              <div
+                ref={(node) => {
+                  pageSurfaceRefs.current[pageNumber] = node;
+                }}
+                className="citation-pdf-page-surface relative mx-auto w-fit"
+              >
+                <Page
+                  pageNumber={pageNumber}
+                  width={pageWidth}
+                  renderAnnotationLayer
+                  renderTextLayer
+                  onRenderTextLayerSuccess={() => {
+                    if (pageNumber === activeTargetPage && !overlayRectsByPage[pageNumber]?.length) {
+                      scheduleHighlightFocus(pageNumber);
+                    }
+                  }}
+                />
+                <div className="citation-pdf-overlay" aria-hidden>
+                  {(overlayRectsByPage[pageNumber] || []).map((rect, index) => (
+                    <div
+                      key={`${pageNumber}:${index}:${Math.round(rect.leftPct * 10)}:${Math.round(rect.topPct * 10)}`}
+                      className="citation-pdf-overlay-rect"
+                      style={{
+                        left: `${rect.leftPct}%`,
+                        top: `${rect.topPct}%`,
+                        width: `${rect.widthPct}%`,
+                        height: `${rect.heightPct}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           ))}
         </Document>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import time
 from collections.abc import Callable, Generator
 from typing import Any
@@ -54,6 +55,51 @@ def _source_file_id(source: Any) -> str:
         if value:
             return value
     return ""
+
+
+def _source_highlight_boxes(source: Any) -> list[dict[str, float]]:
+    metadata = _source_metadata(source)
+    raw = metadata.get("highlight_boxes")
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, float]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            x = float(item.get("x", 0.0))
+            y = float(item.get("y", 0.0))
+            width = float(item.get("width", 0.0))
+            height = float(item.get("height", 0.0))
+        except Exception:
+            continue
+        left = max(0.0, min(1.0, x))
+        top = max(0.0, min(1.0, y))
+        normalized_width = max(0.0, min(1.0 - left, width))
+        normalized_height = max(0.0, min(1.0 - top, height))
+        if normalized_width < 0.002 or normalized_height < 0.002:
+            continue
+        key = (
+            round(left, 6),
+            round(top, 6),
+            round(normalized_width, 6),
+            round(normalized_height, 6),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "x": key[0],
+                "y": key[1],
+                "width": key[2],
+                "height": key[3],
+            }
+        )
+        if len(normalized) >= 24:
+            break
+    return normalized
 
 
 def finalize_run(
@@ -303,6 +349,7 @@ def finalize_run(
         page_label = html.escape(_source_page_label(source))
         source_extract = html.escape(_source_extract(source))
         file_id = html.escape(_source_file_id(source), quote=True)
+        source_boxes = _source_highlight_boxes(source)
         detail = (
             f"<a href='{url}' target='_blank' rel='noopener noreferrer'>{url}</a>"
             if url
@@ -310,13 +357,18 @@ def finalize_run(
         )
         details_file_attr = f" data-file-id='{file_id}'" if file_id else ""
         details_page_attr = f" data-page='{page_label}'" if page_label else ""
+        details_boxes_attr = (
+            f" data-boxes='{html.escape(json.dumps(source_boxes, separators=(',', ':'), ensure_ascii=True), quote=True)}'"
+            if source_boxes
+            else ""
+        )
         extract_block = (
             f"<div class='evidence-content'><b>Extract:</b> {source_extract}</div>"
             if source_extract
             else ""
         )
         info_block = (
-            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_page_attr} {'open' if idx == 1 else ''}>"
+            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_page_attr}{details_boxes_attr} {'open' if idx == 1 else ''}>"
             f"<summary><i>Evidence [{idx}]</i></summary>"
             f"<div><b>Source:</b> [{idx}] {label}</div>"
             f"{extract_block}"

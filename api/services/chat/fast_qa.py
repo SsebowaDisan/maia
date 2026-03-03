@@ -276,7 +276,8 @@ def call_openai_fast_qa(
     else:
         citation_instruction = (
             "Cite factual claims with source refs in square brackets like [1], [2]. "
-            "Every major claim should have at least one citation."
+            "Every major claim should have at least one citation. "
+            "Use the most specific ref excerpt that directly supports each cited claim."
         )
     temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
     outline = _plan_adaptive_outline(

@@ -58,10 +58,18 @@ export type AgentActivityEvent = {
   metadata: Record<string, unknown>;
 };
 
+export type CitationHighlightBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type CitationFocus = {
   fileId?: string;
   sourceName: string;
   page?: string;
   extract: string;
   evidenceId?: string;
+  highlightBoxes?: CitationHighlightBox[];
 };

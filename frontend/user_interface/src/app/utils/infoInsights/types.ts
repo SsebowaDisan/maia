@@ -1,3 +1,10 @@
+type HighlightBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type EvidenceCard = {
   id: string;
   title: string;
@@ -6,6 +13,7 @@ type EvidenceCard = {
   fileId?: string;
   extract: string;
   imageSrc?: string;
+  highlightBoxes?: HighlightBox[];
 };
 
 type ClaimStatus = "supported" | "weak" | "missing";
@@ -22,4 +30,5 @@ export type {
   ClaimInsight,
   ClaimStatus,
   EvidenceCard,
+  HighlightBox,
 };
