@@ -3,10 +3,15 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Any
 
-from decouple import config
+try:
+    from decouple import config
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal CI env
+    def config(name: str, default: Any = None, **_: Any) -> Any:
+        return os.getenv(name, default)
 
 
 def _bootstrap_local_imports() -> None:

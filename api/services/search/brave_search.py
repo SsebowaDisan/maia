@@ -4,7 +4,10 @@ import os
 import time
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal CI env
+    httpx = None  # type: ignore[assignment]
 
 from api.services.search.errors import BraveSearchError
 
@@ -42,6 +45,12 @@ class BraveSearchService:
         max_retries: int = BRAVE_MAX_RETRIES,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        if httpx is None:
+            raise BraveSearchError(
+                code="brave_dependency_missing",
+                message="Brave search dependency is missing: install httpx.",
+                status_code=500,
+            )
         self.api_key = str(api_key or os.getenv("BRAVE_SEARCH_API_KEY", "")).strip()
         self.timeout_seconds = max(5, int(timeout_seconds))
         self.max_retries = max(0, int(max_retries))
