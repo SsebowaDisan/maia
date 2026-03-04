@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlmodel import Session, select
 
@@ -10,6 +11,85 @@ from ktem.db.models import engine
 from api.context import ApiContext
 
 from .constants import API_FAST_QA_MAX_CHUNKS_PER_SOURCE, API_FAST_QA_MAX_SOURCES
+
+_QUERY_URL_RE = re.compile(r"https?://[^\s\])>\"']+", flags=re.IGNORECASE)
+
+
+def _normalize_host(raw_value: Any) -> str:
+    text = str(raw_value or "").strip().lower()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = f"https://{text}"
+    try:
+        parsed = urlparse(text)
+    except Exception:
+        return ""
+    host = (parsed.netloc or "").strip().lower()
+    if not host:
+        return ""
+    if "@" in host:
+        host = host.split("@", 1)[1]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _extract_target_hosts(query: str) -> list[str]:
+    seen: set[str] = set()
+    hosts: list[str] = []
+    for match in _QUERY_URL_RE.finditer(str(query or "")):
+        host = _normalize_host(match.group(0))
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        hosts.append(host)
+    return hosts
+
+
+def _host_matches_target(host: str, target_hosts: set[str]) -> bool:
+    if not host or not target_hosts:
+        return False
+    for target_host in target_hosts:
+        if host == target_host:
+            return True
+        if host.endswith(f".{target_host}") or target_host.endswith(f".{host}"):
+            return True
+    return False
+
+
+def _matches_target_hosts(
+    *,
+    source_name: str,
+    metadata: dict[str, Any],
+    target_hosts: set[str],
+) -> bool:
+    if not target_hosts:
+        return False
+    host_candidates = {
+        _normalize_host(source_name),
+        _normalize_host(metadata.get("page_url")),
+        _normalize_host(metadata.get("source_url")),
+        _normalize_host(metadata.get("file_name")),
+    }
+    return any(_host_matches_target(host, target_hosts) for host in host_candidates if host)
+
+
+def _extract_query_terms(query: str, *, max_terms: int = 20) -> list[str]:
+    ordered_terms: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[a-zA-Z0-9]+", str(query or "").lower()):
+        if len(token) < 3 or token.isdigit():
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        ordered_terms.append(token)
+        if len(ordered_terms) >= max_terms:
+            break
+    return ordered_terms
 
 
 def _page_label_sort_key(raw: Any) -> int:
@@ -316,27 +396,9 @@ def load_recent_chunks_for_fast_qa(
     except Exception:
         return []
 
-    stopwords = {
-        "about",
-        "document",
-        "file",
-        "pdf",
-        "summary",
-        "summarize",
-        "overview",
-        "describe",
-        "this",
-        "that",
-        "what",
-        "which",
-        "with",
-        "from",
-        "tell",
-    }
-    query_terms = [
-        t for t in re.findall(r"[a-zA-Z0-9]+", query.lower()) if len(t) > 2 and t not in stopwords
-    ][:16]
+    query_terms = _extract_query_terms(query, max_terms=20)
     broad_query = len(query_terms) <= 2
+    target_hosts = set(_extract_target_hosts(query))
 
     scored_text: list[dict[str, Any]] = []
     image_by_source: dict[str, dict[str, Any]] = {}
@@ -356,10 +418,25 @@ def load_recent_chunks_for_fast_qa(
             "Indexed file",
         )
         source_name_lower = source_name.lower()
+        source_url = str(
+            metadata.get("source_url")
+            or metadata.get("page_url")
+            or (source_name if source_name_lower.startswith(("http://", "https://")) else "")
+            or ""
+        ).strip()
         source_key = source_id or f"name:{source_name}"
+        target_host_match = _matches_target_hosts(
+            source_name=source_name,
+            metadata=metadata,
+            target_hosts=target_hosts,
+        )
 
         image_origin = metadata.get("image_origin")
-        if isinstance(image_origin, str) and image_origin.startswith("data:image/"):
+        if (
+            isinstance(image_origin, str)
+            and image_origin.startswith("data:image/")
+            and (not target_hosts or target_host_match)
+        ):
             existing = image_by_source.get(source_key)
             if existing is None or (
                 doc_type == "thumbnail" and existing.get("doc_type") != "thumbnail"
@@ -367,9 +444,11 @@ def load_recent_chunks_for_fast_qa(
                 image_by_source[source_key] = {
                     "source_id": source_id,
                     "source_name": source_name,
+                    "source_url": source_url,
                     "doc_type": doc_type,
                     "page_label": page_label,
                     "image_origin": image_origin,
+                    "target_host_match": target_host_match,
                 }
 
         raw_text = str(getattr(doc, "text", "") or "")
@@ -394,6 +473,11 @@ def load_recent_chunks_for_fast_qa(
             score += 8
         if source_name_lower.startswith("http://") or source_name_lower.startswith("https://"):
             score -= 1
+        if target_hosts:
+            if target_host_match:
+                score += 42
+            else:
+                score -= 18
 
         scored_text.append(
             {
@@ -401,6 +485,7 @@ def load_recent_chunks_for_fast_qa(
                 "source_id": source_id,
                 "source_key": source_key,
                 "source_name": source_name,
+                "source_url": source_url,
                 "text": text[:1200],
                 "doc_type": doc_type,
                 "page_label": page_label,
@@ -418,11 +503,22 @@ def load_recent_chunks_for_fast_qa(
                     or 0.0
                 ),
                 "is_exact_match": bool(metadata.get("is_exact_match", False)),
+                "target_host_match": target_host_match,
             }
         )
 
     if not scored_text and not image_by_source:
         return []
+
+    if target_hosts:
+        host_matched_text = [row for row in scored_text if bool(row.get("target_host_match"))]
+        if host_matched_text:
+            scored_text = host_matched_text
+            image_by_source = {
+                key: value
+                for key, value in image_by_source.items()
+                if bool(value.get("target_host_match"))
+            }
 
     # Backfill image payload after full pass so thumbnail/text ordering does not matter.
     for item in scored_text:
@@ -431,23 +527,13 @@ def load_recent_chunks_for_fast_qa(
         source_key = str(item.get("source_key", ""))
         item["image_origin"] = image_by_source.get(source_key, {}).get("image_origin")
 
-    # For direct file-scoped queries, include broad context instead of strict keyword slices.
-    if mode == "select" and selected_ids:
-        scored_text.sort(
-            key=lambda item: (
-                item.get("source_name", ""),
-                _page_label_sort_key(item.get("page_label")),
-                -len(str(item.get("text", ""))),
-            )
-        )
-        selected_text = scored_text[: chunk_limit * 2]
-    else:
-        scored_text.sort(key=lambda item: int(item.get("score", 0)), reverse=True)
+    def _ranked_chunk_selection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ranked_rows = sorted(rows, key=lambda item: int(item.get("score", 0)), reverse=True)
         source_cap = max(1, int(API_FAST_QA_MAX_CHUNKS_PER_SOURCE))
         max_distinct_sources = max(1, int(API_FAST_QA_MAX_SOURCES))
-        selected_text = []
+        chosen: list[dict[str, Any]] = []
         per_source_count: dict[str, int] = {}
-        for item in scored_text:
+        for item in ranked_rows:
             source_key = str(item.get("source_key", ""))
             if not source_key:
                 continue
@@ -457,17 +543,41 @@ def load_recent_chunks_for_fast_qa(
             source_hits = per_source_count.get(source_key, 0)
             if source_hits >= source_cap:
                 continue
-            selected_text.append(item)
+            chosen.append(item)
             per_source_count[source_key] = source_hits + 1
-            if len(selected_text) >= chunk_limit:
+            if len(chosen) >= chunk_limit:
                 break
-        if len(selected_text) < chunk_limit:
-            for item in scored_text:
-                if item in selected_text:
+        if len(chosen) < chunk_limit:
+            for item in ranked_rows:
+                if item in chosen:
                     continue
-                selected_text.append(item)
-                if len(selected_text) >= chunk_limit:
+                chosen.append(item)
+                if len(chosen) >= chunk_limit:
                     break
+        return chosen
+
+    # In select mode, keep broad context only for one-source exploratory prompts.
+    # For multi-source selection, URL-targeted prompts, or more specific questions,
+    # prefer ranked retrieval to keep follow-up answers grounded and relevant.
+    if mode == "select" and selected_ids:
+        use_broad_selected_context = (
+            len(selected_ids) == 1
+            and not target_hosts
+            and len(query_terms) <= 2
+        )
+        if use_broad_selected_context:
+            scored_text.sort(
+                key=lambda item: (
+                    item.get("source_name", ""),
+                    _page_label_sort_key(item.get("page_label")),
+                    -len(str(item.get("text", ""))),
+                )
+            )
+            selected_text = scored_text[: chunk_limit * 2]
+        else:
+            selected_text = _ranked_chunk_selection(scored_text)
+    else:
+        selected_text = _ranked_chunk_selection(scored_text)
 
     # Add image-only sources if no text was selected from that source.
     selected_sources = {str(item.get("source_key", "")) for item in selected_text}
@@ -480,6 +590,7 @@ def load_recent_chunks_for_fast_qa(
                 "source_id": str(image_payload.get("source_id", "") or ""),
                 "source_key": source_key,
                 "source_name": str(image_payload.get("source_name", "") or "Indexed file"),
+                "source_url": str(image_payload.get("source_url", "") or ""),
                 "text": "Image evidence available for visual analysis.",
                 "doc_type": str(image_payload.get("doc_type", "") or "thumbnail"),
                 "page_label": str(image_payload.get("page_label", "") or ""),

@@ -5,6 +5,7 @@ from api.services.upload import (
     create_file_group,
     delete_file_group,
     delete_indexed_files,
+    delete_indexed_urls,
     get_index,
     index_files,
     index_urls,
@@ -27,4 +28,5 @@ __all__ = [
     "rename_file_group",
     "delete_file_group",
     "delete_indexed_files",
+    "delete_indexed_urls",
 ]

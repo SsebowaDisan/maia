@@ -1,6 +1,118 @@
 import { normalizeText, plainText } from "./text";
 import type { EvidenceCard, HighlightBox } from "./types";
 
+function normalizeHttpUrl(rawValue: unknown): string {
+  const value = String(rawValue || "").split(/\s+/).join(" ").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeUrlToken(rawValue: unknown): string {
+  const value = String(rawValue || "")
+    .trim()
+    .replace(/^[("'`<\[]+/, "")
+    .replace(/[>"'`)\],.;:!?]+$/, "");
+  return normalizeHttpUrl(value);
+}
+
+const ARTIFACT_URL_PATH_SEGMENTS = new Set([
+  "extract",
+  "source",
+  "link",
+  "evidence",
+  "citation",
+  "title",
+  "markdown",
+  "content",
+  "published",
+  "time",
+  "url",
+]);
+
+function isLikelyLabelArtifactUrl(rawValue: unknown): boolean {
+  const candidate = normalizeHttpUrl(rawValue);
+  if (!candidate) {
+    return false;
+  }
+  try {
+    const parsed = new URL(candidate);
+    const segments = String(parsed.pathname || "")
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => segment.trim().toLowerCase());
+    if (segments.length !== 1) {
+      return false;
+    }
+    const token = segments[0].replace(/[:]+$/, "");
+    return ARTIFACT_URL_PATH_SEGMENTS.has(token);
+  } catch {
+    return false;
+  }
+}
+
+function extractExplicitSourceUrl(detailText: string): string {
+  const normalizedText = String(detailText || "");
+  const patterns = [
+    /\bURL\s*Source\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bpage_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource\s*url\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalizedText.match(pattern);
+    const candidate = normalizeUrlToken(match?.[1] || "");
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function extractFirstHttpUrl(detailText: string): string {
+  const matches = String(detailText || "").match(/https?:\/\/[^\s<>'")\]]+/gi) || [];
+  for (const candidate of matches) {
+    const normalized = normalizeUrlToken(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function choosePreferredUrl(candidates: Array<string | null | undefined>): string {
+  for (const rawCandidate of candidates) {
+    const normalized = normalizeHttpUrl(rawCandidate);
+    if (!normalized) {
+      continue;
+    }
+    if (isLikelyLabelArtifactUrl(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return "";
+}
+
+function extractSourceUrl(details: Element): string {
+  const detailText = normalizeText(details.textContent || "");
+  const explicitTextUrl = extractExplicitSourceUrl(detailText);
+  const attrUrl = normalizeHttpUrl(details.getAttribute("data-source-url"));
+  const linkNode = details.querySelector("a[href^='http://'], a[href^='https://']");
+  const href = normalizeHttpUrl(linkNode?.getAttribute("href"));
+  const firstHttpUrl = extractFirstHttpUrl(detailText);
+  return choosePreferredUrl([explicitTextUrl, attrUrl, href, firstHttpUrl]);
+}
+
 function toFiniteNumber(value: unknown): number | null {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -144,6 +256,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     }
 
     const imageSrc = details.querySelector("img")?.getAttribute("src") || undefined;
+    const sourceUrl = extractSourceUrl(details) || undefined;
     const pageAttr = (details.getAttribute("data-page") || "").trim();
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
@@ -163,6 +276,7 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
       id: detailsId || `evidence-${index + 1}`,
       title: summary,
       source,
+      sourceUrl,
       page: pageAttr || pageMatch?.[1],
       fileId,
       extract,

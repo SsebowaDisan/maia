@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -12,6 +13,120 @@ from ktem.db.engine import engine
 from api.context import ApiContext
 
 from .common import get_index, normalize_ids, serialize_group_record
+
+
+def _normalize_url_for_match(value: str, *, keep_query: bool = True) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    scheme = str(parsed.scheme or "").strip().lower()
+    if scheme not in {"http", "https"}:
+        return ""
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return ""
+    try:
+        port = parsed.port
+    except Exception:
+        port = None
+    default_port = 80 if scheme == "http" else 443
+    netloc = host if not port or port == default_port else f"{host}:{port}"
+    path = str(parsed.path or "/").strip() or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    query = str(parsed.query or "").strip() if keep_query else ""
+    normalized = urlunparse((scheme, netloc, path, "", query, ""))
+    if normalized.endswith("/") and path == "/" and not query:
+        return normalized[:-1]
+    return normalized
+
+
+def _url_signatures(value: str) -> set[str]:
+    full = _normalize_url_for_match(value, keep_query=True)
+    if not full:
+        return set()
+    parsed = urlparse(full)
+    base = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+    if base.endswith("/") and parsed.path == "/":
+        base = base[:-1]
+    signatures = {full.lower(), base.lower()}
+    if parsed.path in {"", "/"} and not parsed.query:
+        signatures.add(f"{parsed.scheme}://{parsed.netloc}/".lower())
+    return {item for item in signatures if item}
+
+
+def _source_url_candidates(source: Any) -> list[str]:
+    values: list[str] = []
+    name_value = str(getattr(source, "name", "") or "").strip()
+    if name_value:
+        values.append(name_value)
+    path_value = str(getattr(source, "path", "") or "").strip()
+    if path_value.startswith("http://") or path_value.startswith("https://"):
+        values.append(path_value)
+    note = getattr(source, "note", None)
+    if isinstance(note, dict):
+        for key in (
+            "source_url",
+            "url",
+            "page_url",
+            "canonical_url",
+            "original_url",
+            "link",
+        ):
+            value = str(note.get(key, "") or "").strip()
+            if value:
+                values.append(value)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _match_requested_urls_to_sources(
+    requested_urls: list[str],
+    source_rows: list[Any],
+) -> tuple[dict[str, list[str]], list[str]]:
+    ordered_urls: list[str] = []
+    requested_signatures: dict[str, set[str]] = {}
+    for raw_url in requested_urls:
+        value = str(raw_url or "").strip()
+        if not value or value in requested_signatures:
+            continue
+        signatures = _url_signatures(value)
+        if not signatures:
+            continue
+        requested_signatures[value] = signatures
+        ordered_urls.append(value)
+
+    matched: dict[str, set[str]] = {url: set() for url in ordered_urls}
+    for source in source_rows:
+        source_id = str(getattr(source, "id", "") or "").strip()
+        if not source_id:
+            continue
+        source_signatures: set[str] = set()
+        for candidate in _source_url_candidates(source):
+            source_signatures.update(_url_signatures(candidate))
+        if not source_signatures:
+            continue
+        for raw_url, signatures in requested_signatures.items():
+            if signatures.intersection(source_signatures):
+                matched[raw_url].add(source_id)
+
+    unresolved = [url for url in ordered_urls if not matched[url]]
+    resolved = {
+        url: sorted(source_ids)
+        for url, source_ids in matched.items()
+        if source_ids
+    }
+    return resolved, unresolved
 
 
 def get_accessible_file_ids(
@@ -368,3 +483,107 @@ def delete_indexed_files(
             )
 
     return {"index_id": index.id, "deleted_ids": deleted_ids, "failed": failed}
+
+
+def delete_indexed_urls(
+    context: ApiContext,
+    user_id: str,
+    index_id: int | None,
+    urls: list[str],
+) -> dict[str, Any]:
+    cleaned_urls = normalize_ids(urls)
+    if not cleaned_urls:
+        raise HTTPException(status_code=400, detail="No URLs were provided.")
+
+    index = get_index(context, index_id)
+    Source = index._resources["Source"]
+    is_private = bool(index.config.get("private", False))
+
+    with Session(engine) as session:
+        statement = select(Source)
+        if is_private:
+            statement = statement.where(Source.user == user_id)
+        source_rows = [row[0] for row in session.execute(statement).all()]
+
+    url_to_source_ids, unresolved_urls = _match_requested_urls_to_sources(
+        requested_urls=cleaned_urls,
+        source_rows=source_rows,
+    )
+    source_ids = sorted(
+        {
+            source_id
+            for mapped_ids in url_to_source_ids.values()
+            for source_id in mapped_ids
+            if source_id
+        }
+    )
+
+    failed: list[dict[str, Any]] = [
+        {
+            "url": url,
+            "status": "failed",
+            "message": "No indexed source matched this URL.",
+        }
+        for url in unresolved_urls
+    ]
+
+    if not source_ids:
+        return {
+            "index_id": index.id,
+            "deleted_ids": [],
+            "deleted_urls": [],
+            "failed": failed,
+        }
+
+    delete_result = delete_indexed_files(
+        context=context,
+        user_id=user_id,
+        index_id=index.id,
+        file_ids=source_ids,
+    )
+    deleted_set = {str(file_id) for file_id in delete_result.get("deleted_ids", [])}
+    failed_by_id: dict[str, str] = {}
+    for row in delete_result.get("failed", []):
+        file_id = str(row.get("file_id", "") or "").strip()
+        if not file_id:
+            continue
+        failed_by_id[file_id] = str(row.get("message", "") or "").strip() or "Delete failed."
+
+    deleted_urls: list[str] = []
+    for url in cleaned_urls:
+        mapped_ids = url_to_source_ids.get(url, [])
+        if not mapped_ids:
+            continue
+        if any(source_id in deleted_set for source_id in mapped_ids):
+            deleted_urls.append(url)
+            continue
+        messages = [
+            failed_by_id[source_id]
+            for source_id in mapped_ids
+            if source_id in failed_by_id and failed_by_id[source_id]
+        ]
+        failed.append(
+            {
+                "url": url,
+                "status": "failed",
+                "message": "; ".join(dict.fromkeys(messages))
+                if messages
+                else "Delete failed for matched URL sources.",
+            }
+        )
+
+    deduped_failed: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for row in failed:
+        url = str(row.get("url", "") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        deduped_failed.append(row)
+
+    return {
+        "index_id": int(delete_result.get("index_id", index.id)),
+        "deleted_ids": [str(file_id) for file_id in delete_result.get("deleted_ids", [])],
+        "deleted_urls": deleted_urls,
+        "failed": deduped_failed,
+    }

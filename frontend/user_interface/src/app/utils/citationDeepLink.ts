@@ -4,6 +4,8 @@ type CitationDeepLinkPayload = {
   version: 1;
   conversationId?: string;
   fileId?: string;
+  sourceUrl?: string;
+  sourceType?: "file" | "website";
   sourceName: string;
   page?: string;
   extract: string;
@@ -108,6 +110,8 @@ function toPayload(params: {
     version: 1,
     conversationId: normalizeText(conversationId, 120) || undefined,
     fileId: normalizeText(citationFocus.fileId, 220) || undefined,
+    sourceUrl: normalizeText(citationFocus.sourceUrl, 720) || undefined,
+    sourceType: citationFocus.sourceType === "website" ? "website" : "file",
     sourceName: normalizeText(citationFocus.sourceName, 320) || "Indexed source",
     page: normalizePage(citationFocus.page),
     extract: normalizeText(citationFocus.extract, MAX_EXTRACT_CHARS),
@@ -126,6 +130,8 @@ function toPayload(params: {
 function payloadToFocus(payload: CitationDeepLinkPayload): CitationFocus {
   return {
     fileId: normalizeText(payload.fileId, 220) || undefined,
+    sourceUrl: normalizeText(payload.sourceUrl, 720) || undefined,
+    sourceType: payload.sourceType === "website" ? "website" : "file",
     sourceName: normalizeText(payload.sourceName, 320) || "Indexed source",
     page: normalizePage(payload.page),
     extract:
@@ -171,6 +177,8 @@ function decodeCitationPayload(encoded: string): {
       version: 1,
       conversationId: normalizeText(parsed.conversationId, 120) || undefined,
       fileId: normalizeText(parsed.fileId, 220) || undefined,
+      sourceUrl: normalizeText(parsed.sourceUrl, 720) || undefined,
+      sourceType: parsed.sourceType === "website" ? "website" : "file",
       sourceName: normalizeText(parsed.sourceName, 320) || "Indexed source",
       page: normalizePage(parsed.page),
       extract: normalizeText(parsed.extract, MAX_EXTRACT_CHARS),

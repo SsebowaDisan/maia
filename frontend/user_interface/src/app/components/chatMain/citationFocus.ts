@@ -2,7 +2,109 @@ import type { ChatTurn, CitationFocus, CitationHighlightBox } from "../../types"
 import { parseEvidence } from "../../utils/infoInsights";
 import type { EvidenceCard } from "../../utils/infoInsights";
 
-const CITATION_ANCHOR_SELECTOR = "a.citation, a[href^='#evidence-'], a[data-file-id]";
+const CITATION_ANCHOR_SELECTOR = "a.citation, a[href^='#evidence-'], a[data-file-id], a[data-source-url]";
+
+function normalizeHttpUrl(rawValue: unknown): string {
+  const value = String(rawValue || "").split(/\s+/).join(" ").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeUrlToken(rawValue: unknown): string {
+  const value = String(rawValue || "")
+    .trim()
+    .replace(/^[("'`<\[]+/, "")
+    .replace(/[>"'`)\],.;:!?]+$/, "");
+  return normalizeHttpUrl(value);
+}
+
+const ARTIFACT_URL_PATH_SEGMENTS = new Set([
+  "extract",
+  "source",
+  "link",
+  "evidence",
+  "citation",
+  "title",
+  "markdown",
+  "content",
+  "published",
+  "time",
+  "url",
+]);
+
+function isLikelyLabelArtifactUrl(rawValue: unknown): boolean {
+  const candidate = normalizeHttpUrl(rawValue);
+  if (!candidate) {
+    return false;
+  }
+  try {
+    const parsed = new URL(candidate);
+    const segments = String(parsed.pathname || "")
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => segment.trim().toLowerCase());
+    if (segments.length !== 1) {
+      return false;
+    }
+    const token = segments[0].replace(/[:]+$/, "");
+    return ARTIFACT_URL_PATH_SEGMENTS.has(token);
+  } catch {
+    return false;
+  }
+}
+
+function extractExplicitSourceUrl(rawText: unknown): string {
+  const text = String(rawText || "");
+  const patterns = [
+    /\bURL\s*Source\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bpage_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource\s*url\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = normalizeUrlToken(match?.[1] || "");
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function extractFirstHttpUrl(rawText: unknown): string {
+  const matches = String(rawText || "").match(/https?:\/\/[^\s<>'")\]]+/gi) || [];
+  for (const candidate of matches) {
+    const normalized = normalizeUrlToken(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function choosePreferredSourceUrl(candidates: Array<string | null | undefined>): string {
+  for (const rawCandidate of candidates) {
+    const normalized = normalizeHttpUrl(rawCandidate);
+    if (!normalized) {
+      continue;
+    }
+    if (isLikelyLabelArtifactUrl(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return "";
+}
 
 function normalizePageLabel(...candidates: Array<string | undefined | null>): string | undefined {
   for (const candidate of candidates) {
@@ -242,6 +344,7 @@ function resolveCitationFocusFromAnchor(params: {
   const evidenceCards = params.evidenceCards || parseEvidence(turn.info || "");
   const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
   const pageAttr = citationAnchor.getAttribute("data-page") || "";
+  const sourceUrlAttr = citationAnchor.getAttribute("data-source-url") || "";
   const phraseAttr =
     citationAnchor.getAttribute("data-phrase") ||
     citationAnchor.getAttribute("data-search") ||
@@ -289,6 +392,29 @@ function resolveCitationFocusFromAnchor(params: {
   const sourceName = (matchedEvidence?.source || fallbackEvidence?.source || "Indexed source")
     .replace(/^\[\d+\]\s*/, "")
     .trim();
+  const resolvedFileId = fileIdAttr || matchedEvidence?.fileId || fallbackEvidence?.fileId || attachmentFileId;
+  const sourceNameLooksUrl = /^https?:\/\//i.test(sourceName);
+  const sourceUrl = choosePreferredSourceUrl([
+    extractExplicitSourceUrl(phraseAttr),
+    extractExplicitSourceUrl(matchedEvidence?.extract || ""),
+    extractExplicitSourceUrl(fallbackEvidence?.extract || ""),
+    sourceUrlAttr,
+    matchedEvidence?.sourceUrl,
+    fallbackEvidence?.sourceUrl,
+    sourceName.startsWith("http://") || sourceName.startsWith("https://") ? sourceName : "",
+    extractFirstHttpUrl(phraseAttr),
+  ]);
+  let sourceUrlLooksBinaryDocument = false;
+  if (sourceUrl) {
+    try {
+      const parsedSourceUrl = new URL(sourceUrl);
+      sourceUrlLooksBinaryDocument = /\.(pdf|png|jpe?g|gif|webp|bmp|tiff?|svg)$/i.test(
+        parsedSourceUrl.pathname || "",
+      );
+    } catch {
+      sourceUrlLooksBinaryDocument = false;
+    }
+  }
 
   const highlightBoxes = parseHighlightBoxes(
     boxesAttr,
@@ -303,7 +429,14 @@ function resolveCitationFocusFromAnchor(params: {
     : matchedEvidence?.strengthTier;
 
   const focus: CitationFocus = {
-    fileId: fileIdAttr || matchedEvidence?.fileId || fallbackEvidence?.fileId || attachmentFileId,
+    fileId: resolvedFileId,
+    sourceUrl: sourceUrl || undefined,
+    sourceType:
+      sourceUrl && !sourceUrlLooksBinaryDocument
+        ? "website"
+        : sourceUrl && sourceNameLooksUrl && !resolvedFileId
+          ? "website"
+          : "file",
     sourceName: sourceName || "Indexed source",
     page: normalizePageLabel(pageAttr, matchedEvidence?.page, fallbackEvidence?.page),
     extract: normalizeCitationExtract(

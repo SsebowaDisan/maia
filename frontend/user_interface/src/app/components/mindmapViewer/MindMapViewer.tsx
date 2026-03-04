@@ -64,8 +64,10 @@ export function MindMapViewer({
   payload: rawPayload,
   conversationId = null,
   maxDepth = 4,
+  viewerHeight = 520,
   onAskNode,
 }: MindMapViewerProps) {
+  const effectiveViewerHeight = Math.max(260, Math.min(1200, Math.round(Number(viewerHeight) || 520)));
   const basePayload = useMemo(() => toMindmapPayload(rawPayload), [rawPayload]);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<string[]>([]);
   const [activeMapType, setActiveMapType] = useState<"structure" | "evidence">("structure");
@@ -380,7 +382,7 @@ export function MindMapViewer({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[#1f2a41] bg-[#01040a] shadow-[0_18px_54px_-30px_rgba(0,0,0,0.8)]">
-      <div className="h-[520px] w-full">
+      <div className="w-full" style={{ height: `${effectiveViewerHeight}px` }}>
         <ReactFlow
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}

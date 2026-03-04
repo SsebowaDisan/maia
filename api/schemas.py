@@ -136,6 +136,24 @@ class BulkDeleteFilesResponse(BaseModel):
     failed: list[FileActionResult] = Field(default_factory=list)
 
 
+class BulkDeleteUrlsRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list)
+    index_id: int | None = None
+
+
+class UrlActionResult(BaseModel):
+    url: str
+    status: str
+    message: str | None = None
+
+
+class BulkDeleteUrlsResponse(BaseModel):
+    index_id: int
+    deleted_ids: list[str] = Field(default_factory=list)
+    deleted_urls: list[str] = Field(default_factory=list)
+    failed: list[UrlActionResult] = Field(default_factory=list)
+
+
 class FileGroupRecord(BaseModel):
     id: str
     name: str

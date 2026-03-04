@@ -19,6 +19,8 @@ from api.context import get_context
 from api.schemas import (
     BulkDeleteFilesRequest,
     BulkDeleteFilesResponse,
+    BulkDeleteUrlsRequest,
+    BulkDeleteUrlsResponse,
     CreateFileGroupRequest,
     DeleteFileGroupResponse,
     FileListResponse,
@@ -47,6 +49,7 @@ from api.services.upload_service import (
     create_file_group,
     delete_file_group,
     delete_indexed_files,
+    delete_indexed_urls,
     index_files,
     index_urls,
     list_file_groups,
@@ -434,6 +437,20 @@ def delete_files(
         user_id=user_id,
         index_id=payload.index_id,
         file_ids=payload.file_ids,
+    )
+
+
+@router.post("/urls/delete", response_model=BulkDeleteUrlsResponse)
+def delete_urls(
+    payload: BulkDeleteUrlsRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    context = get_context()
+    return delete_indexed_urls(
+        context=context,
+        user_id=user_id,
+        index_id=payload.index_id,
+        urls=payload.urls,
     )
 
 

@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any
 from urllib.error import HTTPError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from decouple import config
@@ -51,6 +52,25 @@ from .info_panel_copy import build_info_panel_copy
 from .pipeline import is_placeholder_api_key
 
 logger = logging.getLogger(__name__)
+_ARTIFACT_URL_PATH_SEGMENTS = {
+    "extract",
+    "source",
+    "link",
+    "evidence",
+    "citation",
+    "title",
+    "markdown",
+    "content",
+    "published",
+    "time",
+    "url",
+}
+MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_ENABLED = bool(
+    config("MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_ENABLED", default=True, cast=bool)
+)
+MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE = float(
+    config("MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE", default=0.58, cast=float)
+)
 
 
 def _extract_text_content(raw_content: Any) -> str:
@@ -127,6 +147,545 @@ def _truncate_for_log(value: Any, limit: int = 1600) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}...(+{len(text) - limit} chars)"
+
+
+def _extract_first_url(text: str) -> str:
+    match = re.search(r"https?://[^\s\])>\"']+", str(text or ""), flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(0).rstrip(".,;:!?")
+
+
+def _extract_urls(text: str, *, max_urls: int = 6) -> list[str]:
+    seen: set[str] = set()
+    rows: list[str] = []
+    for match in re.finditer(r"https?://[^\s\])>\"']+", str(text or ""), flags=re.IGNORECASE):
+        value = _normalize_http_url(match.group(0).rstrip(".,;:!?"))
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        rows.append(value)
+        if len(rows) >= max(1, int(max_urls)):
+            break
+    return rows
+
+
+def _extract_urls_from_history(
+    chat_history: list[list[str]],
+    *,
+    max_urls: int = 6,
+) -> list[str]:
+    seen: set[str] = set()
+    urls: list[str] = []
+    for turn in reversed(chat_history[-8:]):
+        if not isinstance(turn, list) or not turn:
+            continue
+        user_text = str(turn[0] or "")
+        for value in _extract_urls(user_text, max_urls=max_urls):
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            urls.append(value)
+            if len(urls) >= max(1, int(max_urls)):
+                return urls
+    return urls
+
+
+def _resolve_contextual_url_targets(
+    *,
+    question: str,
+    chat_history: list[list[str]],
+    max_urls: int = 6,
+) -> list[str]:
+    explicit_targets = _extract_urls(question, max_urls=max_urls)
+    if explicit_targets:
+        return explicit_targets
+
+    history_targets = _extract_urls_from_history(chat_history, max_urls=max_urls)
+    if not history_targets:
+        return []
+
+    normalized_question = " ".join(str(question or "").split()).strip()
+    if not normalized_question:
+        return history_targets[:1]
+
+    api_key, base_url, model, _config_source = _resolve_fast_qa_llm_config()
+    if is_placeholder_api_key(api_key):
+        # Fallback heuristic when classifier LLM is unavailable.
+        return history_targets[:1] if len(normalized_question) <= 220 else []
+
+    history_rows: list[str] = []
+    for row in chat_history[-4:]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split())[:220]
+        assistant_text = " ".join(str(row[1] or "").split())[:220]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    prompt = (
+        "Decide whether the latest user message should inherit website context from recent conversation.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"inherit":true,"url":"https://example.com","reason":"short string"}\n'
+        "Rules:\n"
+        "- inherit=true only when the latest message is a follow-up that depends on prior website context.\n"
+        "- inherit=false when the latest message is a new topic unrelated to previous URLs.\n"
+        "- If inherit=true, url must be one of the candidate URLs provided.\n"
+        "- Prefer the most recent relevant candidate URL.\n\n"
+        f"Latest user message:\n{normalized_question}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Candidate URLs:\n{chr(10).join(history_targets[:3])}"
+    )
+    request_payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia URL-context resolver. "
+                    "Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=request_payload,
+            timeout_seconds=8,
+        )
+        parsed = _parse_json_object(str(raw or ""))
+        if not isinstance(parsed, dict):
+            return history_targets[:1]
+        inherit = bool(parsed.get("inherit"))
+        if not inherit:
+            return []
+        requested_url = _normalize_http_url(parsed.get("url"))
+        if requested_url and requested_url in history_targets:
+            return [requested_url]
+        return history_targets[:1]
+    except Exception:
+        logger.exception("fast_qa_url_context_resolution_failed")
+        return history_targets[:1] if len(normalized_question) <= 220 else []
+
+
+def _rewrite_followup_question_for_retrieval(
+    *,
+    question: str,
+    chat_history: list[list[str]],
+    target_urls: list[str] | None = None,
+) -> tuple[str, bool, str]:
+    normalized_question = " ".join(str(question or "").split()).strip()
+    if not normalized_question:
+        return "", False, "empty-question"
+    urls = [value for value in (target_urls or []) if _normalize_http_url(value)]
+    if not chat_history:
+        if urls and not _extract_urls(normalized_question, max_urls=2):
+            return f"{normalized_question} {urls[0]}", False, "no-history-appended-url-context"
+        return normalized_question, False, "no-history"
+
+    api_key, base_url, model, _config_source = _resolve_fast_qa_llm_config()
+    if is_placeholder_api_key(api_key):
+        if urls and not _extract_urls(normalized_question, max_urls=2):
+            return f"{normalized_question} {urls[0]}", True, "llm-unavailable-appended-url-context"
+        return normalized_question, True, "llm-unavailable"
+
+    history_rows: list[str] = []
+    for row in chat_history[-6:]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split())[:260]
+        assistant_text = " ".join(str(row[1] or "").split())[:260]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    prompt = (
+        "Rewrite the latest user message into a standalone retrieval query for evidence search.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"standalone_query":"string","is_follow_up":true,"reason":"short string"}\n'
+        "Rules:\n"
+        "- Resolve pronouns and context dependencies using recent conversation.\n"
+        "- Keep the query faithful to the user's intent; do not add unsupported assumptions.\n"
+        "- If a primary URL context exists, keep that URL/domain in the query.\n"
+        "- Keep query concise and retrieval-oriented.\n\n"
+        f"Latest user message:\n{normalized_question}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Primary URL context:\n{', '.join(urls[:3]) or '(none)'}"
+    )
+    request_payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia retrieval-query rewriter. "
+                    "Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=request_payload,
+            timeout_seconds=10,
+        )
+        parsed = _parse_json_object(str(raw or ""))
+        if not isinstance(parsed, dict):
+            rewritten = normalized_question
+            if urls and not _extract_urls(rewritten, max_urls=2):
+                rewritten = f"{rewritten} {urls[0]}"
+            return rewritten, bool(urls), "parse-failed"
+
+        rewritten = " ".join(str(parsed.get("standalone_query") or "").split()).strip()
+        if not rewritten:
+            rewritten = normalized_question
+        is_follow_up = bool(parsed.get("is_follow_up"))
+        reason = " ".join(str(parsed.get("reason") or "").split()).strip()[:180] or "ok"
+
+        if len(rewritten) > 480:
+            rewritten = rewritten[:480].rsplit(" ", 1)[0].strip()
+        if urls and not _extract_urls(rewritten, max_urls=2):
+            rewritten = f"{rewritten} {urls[0]}".strip()
+        return rewritten, is_follow_up or bool(urls), reason
+    except Exception:
+        logger.exception("fast_qa_followup_query_rewrite_failed")
+        fallback = normalized_question
+        if urls and not _extract_urls(fallback, max_urls=2):
+            fallback = f"{fallback} {urls[0]}"
+        return fallback, bool(urls), "rewrite-failed"
+
+
+def _expand_retrieval_query_for_gap(
+    *,
+    question: str,
+    current_query: str,
+    chat_history: list[list[str]],
+    snippets: list[dict[str, Any]],
+    insufficiency_reason: str,
+    target_urls: list[str] | None = None,
+) -> tuple[str, str]:
+    normalized_question = " ".join(str(question or "").split()).strip()
+    normalized_current = " ".join(str(current_query or "").split()).strip()
+    if not normalized_current:
+        normalized_current = normalized_question
+    urls = [value for value in (target_urls or []) if _normalize_http_url(value)]
+    if not normalized_current:
+        return "", "empty-query"
+
+    api_key, base_url, model, _config_source = _resolve_fast_qa_llm_config()
+    if is_placeholder_api_key(api_key):
+        if urls and not _extract_urls(normalized_current, max_urls=2):
+            return f"{normalized_current} {urls[0]}", "llm-unavailable-appended-url-context"
+        return normalized_current, "llm-unavailable"
+
+    history_rows: list[str] = []
+    for row in chat_history[-6:]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split())[:220]
+        assistant_text = " ".join(str(row[1] or "").split())[:220]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    evidence_rows: list[str] = []
+    for idx, row in enumerate(snippets[:8], start=1):
+        source_name = " ".join(str(row.get("source_name", "Indexed file") or "").split())[:180]
+        source_url = " ".join(str(row.get("source_url", "") or "").split())[:220]
+        excerpt = " ".join(str(row.get("text", "") or "").split())[:360]
+        is_primary = bool(row.get("is_primary_source"))
+        parts = [f"[{idx}]", f"source={source_name}", f"primary={'yes' if is_primary else 'no'}"]
+        if source_url:
+            parts.append(f"url={source_url}")
+        parts.append(f"excerpt={excerpt}")
+        evidence_rows.append(" | ".join(parts))
+    evidence_text = "\n".join(evidence_rows) if evidence_rows else "(none)"
+
+    prompt = (
+        "Generate an improved retrieval query for a follow-up evidence search.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"expanded_query":"string","reason":"short string"}\n'
+        "Rules:\n"
+        "- Keep intent identical to the user question.\n"
+        "- Resolve follow-up references using chat history.\n"
+        "- Include concrete entities and details needed to fill missing evidence gaps.\n"
+        "- Preserve primary URL/domain context when provided.\n"
+        "- Keep query concise and retrieval-oriented.\n"
+        "- Do not fabricate facts.\n\n"
+        f"User question:\n{normalized_question}\n\n"
+        f"Current retrieval query:\n{normalized_current}\n\n"
+        f"Evidence insufficiency reason:\n{insufficiency_reason or '(none)'}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Primary URL context:\n{', '.join(urls[:3]) or '(none)'}\n\n"
+        f"Current snippets:\n{evidence_text}"
+    )
+    request_payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia retrieval-query optimizer. "
+                    "Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=request_payload,
+            timeout_seconds=10,
+        )
+        parsed = _parse_json_object(str(raw or ""))
+        if not isinstance(parsed, dict):
+            expanded = normalized_current
+            if urls and not _extract_urls(expanded, max_urls=2):
+                expanded = f"{expanded} {urls[0]}".strip()
+            return expanded, "parse-failed"
+
+        expanded = " ".join(str(parsed.get("expanded_query") or "").split()).strip()
+        if not expanded:
+            expanded = normalized_current
+        if len(expanded) > 480:
+            expanded = expanded[:480].rsplit(" ", 1)[0].strip()
+        if urls and not _extract_urls(expanded, max_urls=2):
+            expanded = f"{expanded} {urls[0]}".strip()
+        reason = " ".join(str(parsed.get("reason") or "").split()).strip()[:180] or "ok"
+        return expanded, reason
+    except Exception:
+        logger.exception("fast_qa_retrieval_query_expansion_failed")
+        fallback = normalized_current
+        if urls and not _extract_urls(fallback, max_urls=2):
+            fallback = f"{fallback} {urls[0]}".strip()
+        return fallback, "expand-failed"
+
+
+def _normalize_http_url(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip()
+    if not value:
+        return ""
+    value = value.strip(" <>\"'`")
+    value = value.rstrip(".,;:!?")
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if not parsed.netloc:
+        return ""
+    path_segments = [
+        segment.strip().lower()
+        for segment in str(parsed.path or "").split("/")
+        if segment.strip()
+    ]
+    if len(path_segments) == 1 and path_segments[0].rstrip(":") in _ARTIFACT_URL_PATH_SEGMENTS:
+        return ""
+    normalized_path = parsed.path.rstrip("/")
+    return parsed._replace(path=normalized_path, fragment="").geturl()
+
+
+def _normalize_host(raw_value: Any) -> str:
+    value = _normalize_http_url(raw_value)
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    host = str(parsed.netloc or "").strip().lower()
+    if not host:
+        return ""
+    if "@" in host:
+        host = host.split("@", 1)[1]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _host_matches(left_host: str, right_host: str) -> bool:
+    if not left_host or not right_host:
+        return False
+    return (
+        left_host == right_host
+        or left_host.endswith(f".{right_host}")
+        or right_host.endswith(f".{left_host}")
+    )
+
+
+def _selected_source_ids(selected_payload: dict[str, list[Any]]) -> set[str]:
+    ids: set[str] = set()
+    for value in (selected_payload or {}).values():
+        if not isinstance(value, list) or len(value) < 2:
+            continue
+        mode = str(value[0] or "").strip().lower()
+        if mode != "select":
+            continue
+        file_ids = value[1] if isinstance(value[1], list) else []
+        for file_id in file_ids:
+            normalized = str(file_id or "").strip()
+            if normalized:
+                ids.add(normalized)
+    return ids
+
+
+def _snippet_score(row: dict[str, Any]) -> float:
+    try:
+        return float(row.get("score", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _annotate_primary_sources(
+    *,
+    question: str,
+    snippets: list[dict[str, Any]],
+    selected_payload: dict[str, list[Any]],
+    target_urls: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    if not snippets:
+        return [], ""
+
+    selected_ids = _selected_source_ids(selected_payload)
+    resolved_target_urls = (
+        [value for value in (target_urls or []) if _normalize_http_url(value)]
+        or _extract_urls(question, max_urls=6)
+    )
+    has_url_targets = bool(resolved_target_urls)
+    target_url_set = {value for value in resolved_target_urls if value}
+    target_hosts = {
+        _normalize_host(value)
+        for value in resolved_target_urls
+        if _normalize_host(value)
+    }
+    target_paths = {
+        str(urlparse(value).path or "").strip().lower()
+        for value in resolved_target_urls
+        if value
+    }
+
+    annotated: list[dict[str, Any]] = []
+    primary_count = 0
+    for row in snippets:
+        item = dict(row)
+        source_id = str(item.get("source_id", "") or "").strip()
+        source_url = _normalize_http_url(
+            item.get("source_url")
+            or item.get("page_url")
+            or item.get("url")
+            or item.get("source_name")
+        )
+        source_host = _normalize_host(source_url)
+        source_path = str(urlparse(source_url).path or "").strip().lower() if source_url else ""
+
+        exact_url_match = bool(source_url and source_url in target_url_set)
+        path_match = bool(source_path and source_path in target_paths and source_path not in {"", "/"})
+        host_match = bool(
+            source_host
+            and target_hosts
+            and any(_host_matches(source_host, host) for host in target_hosts)
+        )
+        selected_match = bool(source_id and source_id in selected_ids)
+
+        if has_url_targets:
+            # For URL-targeted prompts, treat URL/domain/path matches as primary;
+            # prior user-selected files should not override URL grounding.
+            is_primary = exact_url_match or path_match or host_match
+        else:
+            is_primary = selected_match or exact_url_match or path_match or host_match
+        item["source_url"] = source_url
+        item["is_primary_source"] = bool(is_primary)
+        if is_primary:
+            primary_count += 1
+            item["score"] = _snippet_score(item) + 80.0
+        annotated.append(item)
+
+    if primary_count <= 0:
+        return annotated, ""
+
+    sort_rows = sorted(
+        annotated,
+        key=lambda row: (
+            0 if bool(row.get("is_primary_source")) else 1,
+            -_snippet_score(row),
+            str(row.get("source_name", "") or ""),
+            str(row.get("page_label", "") or ""),
+        ),
+    )
+    if resolved_target_urls:
+        primary_note = f"Primary source target from user or conversation context: {', '.join(resolved_target_urls[:3])}"
+    elif selected_ids:
+        primary_note = (
+            "Primary source target from user-selected file(s): "
+            f"{', '.join(sorted(selected_ids)[:3])}"
+        )
+    else:
+        primary_note = "Primary source target inferred from user-provided sources."
+    return sort_rows, primary_note
+
+
+def _prioritize_primary_evidence(
+    snippets: list[dict[str, Any]],
+    *,
+    max_keep: int,
+    max_secondary: int = 2,
+) -> list[dict[str, Any]]:
+    if not snippets:
+        return []
+    keep_limit = max(1, int(max_keep))
+    ordered = sorted(
+        [dict(row) for row in snippets],
+        key=lambda row: (
+            0 if bool(row.get("is_primary_source")) else 1,
+            -_snippet_score(row),
+            str(row.get("source_name", "") or ""),
+            str(row.get("page_label", "") or ""),
+        ),
+    )
+    primary_rows = [row for row in ordered if bool(row.get("is_primary_source"))]
+    secondary_rows = [row for row in ordered if not bool(row.get("is_primary_source"))]
+    if not primary_rows:
+        return ordered[:keep_limit]
+
+    keep_secondary = min(max(0, int(max_secondary)), max(0, keep_limit - 1))
+    result: list[dict[str, Any]] = []
+    result.extend(primary_rows[:keep_limit])
+    if len(result) < keep_limit:
+        remaining_slots = min(keep_limit - len(result), keep_secondary)
+        result.extend(secondary_rows[:remaining_slots])
+    return result[:keep_limit]
+
+
+def _build_no_relevant_evidence_answer(
+    question: str,
+    *,
+    target_url: str = "",
+) -> str:
+    resolved_target_url = _normalize_http_url(target_url) or _extract_first_url(question)
+    if resolved_target_url:
+        return (
+            f"I could not find indexed evidence for {resolved_target_url} in this project context. "
+            "Not visible in indexed content. If needed, run website indexing or online search for that URL, then ask again."
+        )
+    return (
+        "I could not find relevant evidence in indexed project files and recent conversation context for this question. "
+        "Not visible in indexed content."
+    )
 
 
 def _resolve_fast_qa_llm_config() -> tuple[str, str, str, str]:
@@ -269,6 +828,298 @@ def _apply_mindmap_focus(
     return filtered or snippets
 
 
+def _select_relevant_snippets_with_llm(
+    *,
+    question: str,
+    chat_history: list[list[str]],
+    snippets: list[dict[str, Any]],
+    max_keep: int,
+) -> list[dict[str, Any]]:
+    if not snippets:
+        return []
+
+    keep_limit = max(1, int(max_keep))
+    candidate_window = max(keep_limit, min(len(snippets), keep_limit * 3))
+    candidates = snippets[:candidate_window]
+
+    api_key, base_url, model, _config_source = _resolve_fast_qa_llm_config()
+    if is_placeholder_api_key(api_key):
+        return candidates[:keep_limit]
+
+    history_rows: list[str] = []
+    for row in chat_history[-4:]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split())[:280]
+        assistant_text = " ".join(str(row[1] or "").split())[:280]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    candidate_rows: list[str] = []
+    for idx, row in enumerate(candidates, start=1):
+        source_name = " ".join(str(row.get("source_name", "Indexed file") or "").split())[:180]
+        source_url = " ".join(str(row.get("source_url", "") or "").split())[:220]
+        page_label = " ".join(str(row.get("page_label", "") or "").split())[:48]
+        unit_id = " ".join(str(row.get("unit_id", "") or "").split())[:96]
+        doc_type = " ".join(str(row.get("doc_type", "") or "").split())[:40]
+        is_primary = bool(row.get("is_primary_source"))
+        excerpt = " ".join(str(row.get("text", "") or "").split())[:420]
+        parts = [f"[{idx}]", f"source={source_name}"]
+        if source_url:
+            parts.append(f"url={source_url}")
+        if page_label:
+            parts.append(f"page={page_label}")
+        if unit_id:
+            parts.append(f"unit={unit_id}")
+        if doc_type:
+            parts.append(f"type={doc_type}")
+        parts.append(f"primary={'yes' if is_primary else 'no'}")
+        parts.append(f"excerpt={excerpt}")
+        candidate_rows.append(" | ".join(parts))
+
+    prompt = (
+        "Select evidence snippets that are directly relevant for answering the user question.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"keep_ids":[1,2],"reason":"short string"}\n'
+        "Rules:\n"
+        "- Use both the current question and recent conversation context.\n"
+        "- Keep only snippets that directly support the asked answer.\n"
+        "- Remove snippets that are off-topic or implementation detail not asked by the user.\n"
+        "- If a candidate is marked primary=yes, prefer it over primary=no when relevance is similar.\n"
+        "- Keep non-primary snippets only as secondary context.\n"
+        "- If the question includes a URL/domain and candidates do not match it, return an empty keep_ids list.\n"
+        f"- Keep between 0 and {keep_limit} snippet ids.\n"
+        "- IDs are 1-based and must reference only the provided candidate list.\n"
+        "- Do not fabricate ids.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Candidate snippets:\n{chr(10).join(candidate_rows)}"
+    )
+    request_payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia relevance selector. "
+                    "Return strict JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    try:
+        raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=request_payload,
+            timeout_seconds=14,
+        )
+        parsed = _parse_json_object(str(raw or ""))
+        if not isinstance(parsed, dict):
+            return candidates[:keep_limit]
+        keep_ids_raw = parsed.get("keep_ids")
+        if not isinstance(keep_ids_raw, list):
+            return candidates[:keep_limit]
+        keep_ids: list[int] = []
+        seen: set[int] = set()
+        for value in keep_ids_raw:
+            try:
+                parsed_id = int(str(value).strip())
+            except Exception:
+                continue
+            if parsed_id < 1 or parsed_id > len(candidates) or parsed_id in seen:
+                continue
+            seen.add(parsed_id)
+            keep_ids.append(parsed_id)
+            if len(keep_ids) >= keep_limit:
+                break
+        if not keep_ids:
+            return []
+        return [candidates[idx - 1] for idx in keep_ids]
+    except Exception:
+        logger.exception("fast_qa_relevance_selector_failed")
+        return candidates[:keep_limit]
+
+
+def _assess_evidence_sufficiency_with_llm(
+    *,
+    question: str,
+    chat_history: list[list[str]],
+    snippets: list[dict[str, Any]],
+    primary_source_note: str = "",
+    require_primary_source: bool = False,
+) -> tuple[bool, float, str]:
+    if not snippets:
+        return False, 0.0, "No snippets selected."
+    if require_primary_source and not any(bool(row.get("is_primary_source")) for row in snippets):
+        return False, 0.0, "No primary-source snippets selected."
+    if not MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_ENABLED:
+        return True, 1.0, "Sufficiency check disabled."
+
+    api_key, base_url, model, _config_source = _resolve_fast_qa_llm_config()
+    if is_placeholder_api_key(api_key):
+        # Fail open when classifier LLM is unavailable.
+        return True, 0.5, "Classifier unavailable."
+
+    history_rows: list[str] = []
+    for row in chat_history[-4:]:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        user_text = " ".join(str(row[0] or "").split())[:260]
+        assistant_text = " ".join(str(row[1] or "").split())[:260]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    candidate_rows: list[str] = []
+    for idx, row in enumerate(snippets[:10], start=1):
+        source_name = " ".join(str(row.get("source_name", "Indexed file") or "").split())[:180]
+        source_url = " ".join(str(row.get("source_url", "") or "").split())[:220]
+        page_label = " ".join(str(row.get("page_label", "") or "").split())[:48]
+        is_primary = bool(row.get("is_primary_source"))
+        excerpt = " ".join(str(row.get("text", "") or "").split())[:520]
+        parts = [f"[{idx}]", f"source={source_name}", f"primary={'yes' if is_primary else 'no'}"]
+        if source_url:
+            parts.append(f"url={source_url}")
+        if page_label:
+            parts.append(f"page={page_label}")
+        parts.append(f"excerpt={excerpt}")
+        candidate_rows.append(" | ".join(parts))
+
+    prompt = (
+        "Assess whether the selected evidence is sufficient to answer the latest user question professionally and specifically.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"sufficient":true,"confidence":0.0,"reason":"short string","missing":"short string"}\n'
+        "Rules:\n"
+        "- sufficient=true only if the evidence contains direct support for the requested details.\n"
+        "- sufficient=false when the evidence is generic and does not directly answer the asked question.\n"
+        "- For follow-up questions, resolve references like 'their' from recent conversation context.\n"
+        "- Avoid permissive judgments: if key details are absent, return sufficient=false.\n"
+        f"- require_primary_source={'yes' if require_primary_source else 'no'}.\n"
+        "- confidence must be between 0.0 and 1.0.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Primary source guidance:\n{primary_source_note or '(none)'}\n\n"
+        f"Recent conversation:\n{history_text}\n\n"
+        f"Selected snippets:\n{chr(10).join(candidate_rows)}"
+    )
+    request_payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are Maia evidence sufficiency checker. "
+                    "Be strict and return JSON only."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        raw = _call_openai_chat_text(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload=request_payload,
+            timeout_seconds=10,
+        )
+        parsed = _parse_json_object(str(raw or ""))
+        if not isinstance(parsed, dict):
+            return True, 0.5, "Parse failed; fail-open."
+        sufficient = bool(parsed.get("sufficient"))
+        try:
+            confidence = float(parsed.get("confidence", 0.0) or 0.0)
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        reason = " ".join(str(parsed.get("reason", "") or "").split())[:220] or "No reason provided."
+        threshold = max(
+            0.05,
+            min(0.95, float(MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE)),
+        )
+        if not sufficient:
+            return False, confidence, reason
+        if confidence > 0.0 and confidence < (threshold * 0.75):
+            return False, confidence, f"Low confidence: {reason}"
+        return True, confidence, reason
+    except Exception:
+        logger.exception("fast_qa_evidence_sufficiency_check_failed")
+        return True, 0.5, "Check failed; fail-open."
+
+
+def _finalize_retrieved_snippets(
+    *,
+    question: str,
+    chat_history: list[list[str]],
+    retrieved_snippets: list[dict[str, Any]],
+    selected_payload: dict[str, list[Any]],
+    target_urls: list[str],
+    mindmap_focus: dict[str, Any] | None,
+    max_keep: int,
+) -> tuple[list[dict[str, Any]], str, str]:
+    primary_source_note = (
+        f"Primary source target from user or conversation context: {', '.join(target_urls[:3])}"
+        if target_urls
+        else ""
+    )
+    if not retrieved_snippets:
+        return [], primary_source_note, "no_snippets"
+
+    snippets, primary_source_note = _annotate_primary_sources(
+        question=question,
+        snippets=retrieved_snippets,
+        selected_payload=selected_payload,
+        target_urls=target_urls,
+    )
+    if target_urls and not any(bool(row.get("is_primary_source")) for row in snippets):
+        return [], primary_source_note, "no_primary_for_url"
+
+    snippets = _apply_mindmap_focus(
+        snippets,
+        mindmap_focus if isinstance(mindmap_focus, dict) else {},
+    )
+    prioritized_pool = sorted(
+        [dict(row) for row in snippets],
+        key=lambda row: (
+            0 if bool(row.get("is_primary_source")) else 1,
+            -_snippet_score(row),
+            str(row.get("source_name", "") or ""),
+            str(row.get("page_label", "") or ""),
+        ),
+    )
+    secondary_cap = 0 if target_urls else 2
+    llm_selected = _select_relevant_snippets_with_llm(
+        question=question,
+        chat_history=chat_history,
+        snippets=prioritized_pool,
+        max_keep=max_keep,
+    )
+    if not llm_selected and any(bool(row.get("is_primary_source")) for row in prioritized_pool):
+        selected = _prioritize_primary_evidence(
+            prioritized_pool,
+            max_keep=max_keep,
+            max_secondary=secondary_cap,
+        )
+    else:
+        selected = _prioritize_primary_evidence(
+            llm_selected,
+            max_keep=max_keep,
+            max_secondary=secondary_cap,
+        )
+
+    if target_urls and selected and not any(bool(row.get("is_primary_source")) for row in selected):
+        return [], primary_source_note, "no_primary_after_selection"
+    if target_urls and not selected:
+        return [], primary_source_note, "no_relevant_snippets_for_url"
+    if not selected:
+        return [], primary_source_note, "no_relevant_snippets"
+    return selected, primary_source_note, ""
+
+
 def _plan_adaptive_outline(
     *,
     api_key: str,
@@ -297,8 +1148,8 @@ def _plan_adaptive_outline(
         '{ "style": "string", "detail_level": "high", "sections": [{"title":"string","goal":"string","format":"paragraphs|bullets|table|mixed"}], "tone": "string" }\n'
         "Rules:\n"
         "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
-        "- Keep the final answer detailed.\n"
-        "- Use 2-6 sections.\n"
+        "- Match detail level to user intent; direct questions should stay focused and concise.\n"
+        "- Use 1-6 sections.\n"
         "- Section titles must be specific, professional, and tied to concrete entities in the request/evidence.\n"
         "- Do not default to reusable company-profile or marketing-report skeletons unless explicitly requested.\n"
         "- If user intent is unclear/noisy, produce one section focused on a clarifying question instead of assumptions.\n"
@@ -368,6 +1219,7 @@ def call_openai_fast_qa(
     chat_history: list[list[str]],
     refs: list[dict[str, Any]],
     citation_mode: str | None,
+    primary_source_note: str = "",
 ) -> str | None:
     api_key, base_url, model, config_source = _resolve_fast_qa_llm_config()
     logger.warning(
@@ -392,11 +1244,14 @@ def call_openai_fast_qa(
         text = str(snippet.get("text", "") or "").strip()
         doc_type = str(snippet.get("doc_type", "") or "").strip()
         ref_id = int(snippet.get("ref_id", 0) or 0)
+        is_primary = bool(snippet.get("is_primary_source"))
         header_parts = [f"Ref: [{ref_id}] Source: {source_name}"]
         if page_label:
             header_parts.append(f"Page: {page_label}")
         if doc_type:
             header_parts.append(f"Type: {doc_type}")
+        if is_primary:
+            header_parts.append("Priority: primary")
         context_blocks.append(f"{' | '.join(header_parts)}\nExcerpt: {text}")
 
     visual_evidence: list[tuple[str, str, str, int]] = []
@@ -450,25 +1305,33 @@ def call_openai_fast_qa(
     output_instruction = (
         "Output format rules:\n"
         "- Follow the provided response blueprint while adapting when evidence is missing.\n"
-        "- Render blueprint sections as markdown headings when there are multiple sections.\n"
-        "- Keep the answer detailed, specific, and professional.\n"
-        "- For broad or research-oriented questions, provide a richer multi-section answer with meaningful headings and evidence-backed depth.\n"
+        "- Keep the answer directly relevant to the user's question.\n"
+        "- Start with a direct answer in the first sentence.\n"
+        "- Render blueprint sections as markdown headings only when there are multiple meaningful sections.\n"
+        "- For direct questions, give a direct answer first, then provide evidence-backed supporting detail.\n"
+        "- For broad or research-oriented questions, provide richer multi-section depth.\n"
         "- Choose structure per query (narrative paragraphs, headed sections, bullets, or tables); do not reuse a single fixed layout across responses.\n"
         "- Use natural prose by default; use headings, bullets, or tables only when they improve clarity.\n"
         "- Do not lead with isolated quoted fragments or decorative callouts unless the user explicitly asks for direct quotes.\n"
         "- Prefer complete sentences and coherent paragraphs over stylized snippets.\n"
         "- Keep section titles specific to the request domain; avoid generic reusable labels and reusable report skeletons.\n"
+        "- Avoid promotional tone, filler, and repetitive phrasing.\n"
+        "- Avoid unsupported inference; do not use 'typically', 'may', or similar hedging unless evidence explicitly indicates uncertainty.\n"
+        "- For entity/detail lookup questions, provide exact fields from evidence instead of generic summaries.\n"
+        "- When adding website links, avoid placeholder anchor text like 'here'; use meaningful link text.\n"
         "- If intent is unclear, ask one focused clarifying question and avoid speculative summaries.\n"
         "- Distinguish confirmed facts from inference when confidence is limited.\n"
         "- If information is missing, say: Not visible in indexed content.\n"
         "- Use clean markdown and avoid malformed formatting."
     )
     prompt = (
-        "Use the provided indexed context to answer the user question in detail. "
+        "Use the provided indexed context to answer the user question. "
         "When multiple sources are relevant, synthesize across them and call out agreements or differences. "
         "When a question asks what a PDF/image is about, adapt the structure to the document type and available evidence instead of a fixed template. "
         "If visual evidence is provided, use it to improve detail while clearly signaling assumptions. "
+        "If a primary source target is present, prioritize that source in the answer and keep other sources secondary. "
         f"{citation_instruction}\n\n"
+        f"Primary source guidance:\n{primary_source_note or '(none)'}\n\n"
         f"Response blueprint (generated by Maia planner):\n{json.dumps(outline, ensure_ascii=True)}\n\n"
         f"{output_instruction}\n\n"
         f"Source index:\n{refs_text or '(none)'}\n\n"
@@ -492,10 +1355,11 @@ def call_openai_fast_qa(
                 {
                     "role": "system",
                     "content": (
-                        "You are Maia. Provide faithful, high-detail answers from indexed evidence. "
+                        "You are Maia. Provide faithful answers from indexed evidence. "
                         "Adapt structure to the user's question and evidence; do not force fixed section templates. "
                         "Use concise sections and bullet points only when useful. "
-                        "Keep output professional and avoid isolated stylized quote snippets."
+                        "Keep output professional and specific. "
+                        "Do not infer details that are not explicitly supported by evidence."
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -569,43 +1433,231 @@ def run_fast_chat_turn(
         existing_selected=data_source.get("selected", {}),
         requested_selected=request.index_selection,
     )
+    url_targets = _resolve_contextual_url_targets(
+        question=message,
+        chat_history=chat_history,
+        max_urls=6,
+    )
+    retrieval_query, is_follow_up, rewrite_reason = _rewrite_followup_question_for_retrieval(
+        question=message,
+        chat_history=chat_history,
+        target_urls=url_targets,
+    )
+    retrieval_query = retrieval_query or message
+    logger.warning(
+        "fast_qa_retrieval_query follow_up=%s rewrite_reason=%s query=%s targets=%s question=%s",
+        bool(is_follow_up),
+        _truncate_for_log(rewrite_reason, 120),
+        _truncate_for_log(retrieval_query, 220),
+        ",".join(url_targets[:3]) if url_targets else "(none)",
+        _truncate_for_log(message, 220),
+    )
 
-    snippets = load_recent_chunks_for_fast_qa(
+    retrieval_max_sources = max(API_FAST_QA_SOURCE_SCAN, API_FAST_QA_MAX_SOURCES)
+    retrieval_max_chunks = max(18, int(API_FAST_QA_MAX_SNIPPETS) * 3)
+    max_keep = max(1, int(API_FAST_QA_MAX_SNIPPETS))
+
+    raw_snippets = load_recent_chunks_for_fast_qa(
         context=context,
         user_id=user_id,
         selected_payload=selected_payload,
-        query=message,
-        max_sources=max(API_FAST_QA_SOURCE_SCAN, API_FAST_QA_MAX_SOURCES),
-        max_chunks=max(10, API_FAST_QA_MAX_SNIPPETS),
+        query=retrieval_query,
+        max_sources=retrieval_max_sources,
+        max_chunks=retrieval_max_chunks,
     )
-    if not snippets:
-        logger.warning(
-            "fast_qa_skipped reason=no_snippets question=%s",
-            _truncate_for_log(message, 220),
-        )
-        return None
-    snippets = _apply_mindmap_focus(
-        snippets,
-        request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+    snippets, primary_source_note, selection_reason = _finalize_retrieved_snippets(
+        question=message,
+        chat_history=chat_history,
+        retrieved_snippets=raw_snippets,
+        selected_payload=selected_payload,
+        target_urls=url_targets,
+        mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+        max_keep=max_keep,
     )
 
-    snippets_with_refs, refs = assign_fast_source_refs(snippets)
-    answer = call_openai_fast_qa(
-        question=message,
-        snippets=snippets_with_refs,
-        chat_history=chat_history,
-        refs=refs,
-        citation_mode=request.citation,
-    )
-    if not answer:
+    if selection_reason == "no_snippets" and retrieval_query != message:
         logger.warning(
-            "fast_qa_skipped reason=no_model_answer snippets=%d refs=%d question=%s",
-            len(snippets_with_refs),
-            len(refs),
+            "fast_qa_retrieval_retry fallback=literal_query first_query=%s question=%s",
+            _truncate_for_log(retrieval_query, 220),
+            _truncate_for_log(message, 220),
+        )
+        raw_snippets = load_recent_chunks_for_fast_qa(
+            context=context,
+            user_id=user_id,
+            selected_payload=selected_payload,
+            query=message,
+            max_sources=retrieval_max_sources,
+            max_chunks=retrieval_max_chunks,
+        )
+        snippets, primary_source_note, selection_reason = _finalize_retrieved_snippets(
+            question=message,
+            chat_history=chat_history,
+            retrieved_snippets=raw_snippets,
+            selected_payload=selected_payload,
+            target_urls=url_targets,
+            mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            max_keep=max_keep,
+        )
+
+    if selection_reason == "no_snippets":
+        logger.warning(
+            "fast_qa_skipped reason=no_snippets query=%s question=%s",
+            _truncate_for_log(retrieval_query, 220),
+            _truncate_for_log(message, 220),
+        )
+        if url_targets:
+            logger.warning(
+                "fast_qa_skipped reason=no_snippets_for_url_context targets=%s question=%s",
+                ",".join(url_targets[:3]),
+                _truncate_for_log(message, 220),
+            )
+        return None
+    if selection_reason == "no_primary_for_url":
+        logger.warning(
+            "fast_qa_skipped reason=no_primary_for_url targets=%s question=%s",
+            ",".join(url_targets[:3]),
             _truncate_for_log(message, 220),
         )
         return None
-    answer = normalize_fast_answer(answer)
+    if selection_reason == "no_primary_after_selection":
+        logger.warning(
+            "fast_qa_skipped reason=no_primary_after_selection targets=%s question=%s",
+            ",".join(url_targets[:3]),
+            _truncate_for_log(message, 220),
+        )
+        return None
+    if selection_reason == "no_relevant_snippets_for_url":
+        logger.warning(
+            "fast_qa_skipped reason=no_relevant_snippets_for_url targets=%s question=%s",
+            ",".join(url_targets[:3]),
+            _truncate_for_log(message, 220),
+        )
+        return None
+
+    evidence_sufficient, evidence_confidence, evidence_reason = _assess_evidence_sufficiency_with_llm(
+        question=message,
+        chat_history=chat_history,
+        snippets=snippets,
+        primary_source_note=primary_source_note,
+        require_primary_source=bool(url_targets),
+    )
+    should_retry_retrieval = (
+        not evidence_sufficient
+        and bool(message)
+        and (
+            bool(url_targets)
+            or bool(is_follow_up)
+            or bool(chat_history)
+        )
+    )
+    if should_retry_retrieval:
+        expanded_query, expansion_reason = _expand_retrieval_query_for_gap(
+            question=message,
+            current_query=retrieval_query,
+            chat_history=chat_history,
+            snippets=snippets,
+            insufficiency_reason=evidence_reason,
+            target_urls=url_targets,
+        )
+        expanded_query = expanded_query or retrieval_query
+        logger.warning(
+            "fast_qa_retrieval_second_pass reason=%s insufficiency=%s query=%s question=%s",
+            _truncate_for_log(expansion_reason, 140),
+            _truncate_for_log(evidence_reason, 180),
+            _truncate_for_log(expanded_query, 220),
+            _truncate_for_log(message, 220),
+        )
+        if expanded_query != retrieval_query or selection_reason in {"no_relevant_snippets", ""}:
+            second_raw_snippets = load_recent_chunks_for_fast_qa(
+                context=context,
+                user_id=user_id,
+                selected_payload=selected_payload,
+                query=expanded_query,
+                max_sources=max(retrieval_max_sources, API_FAST_QA_MAX_SOURCES + 16),
+                max_chunks=max(retrieval_max_chunks, int(API_FAST_QA_MAX_SNIPPETS) * 5),
+            )
+            second_snippets, second_primary_note, second_selection_reason = _finalize_retrieved_snippets(
+                question=message,
+                chat_history=chat_history,
+                retrieved_snippets=second_raw_snippets,
+                selected_payload=selected_payload,
+                target_urls=url_targets,
+                mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+                max_keep=max_keep,
+            )
+            if second_selection_reason in {
+                "no_primary_for_url",
+                "no_primary_after_selection",
+                "no_relevant_snippets_for_url",
+            }:
+                logger.warning(
+                    "fast_qa_retrieval_second_pass_skipped reason=%s targets=%s question=%s",
+                    second_selection_reason,
+                    ",".join(url_targets[:3]),
+                    _truncate_for_log(message, 220),
+                )
+            elif second_selection_reason != "no_snippets":
+                second_sufficient, second_confidence, second_reason = _assess_evidence_sufficiency_with_llm(
+                    question=message,
+                    chat_history=chat_history,
+                    snippets=second_snippets,
+                    primary_source_note=second_primary_note,
+                    require_primary_source=bool(url_targets),
+                )
+                if second_snippets and (
+                    second_sufficient
+                    or second_confidence > evidence_confidence
+                    or not snippets
+                ):
+                    snippets = second_snippets
+                    primary_source_note = second_primary_note
+                    evidence_sufficient = second_sufficient
+                    evidence_confidence = second_confidence
+                    evidence_reason = second_reason
+                    retrieval_query = expanded_query
+                    logger.warning(
+                        "fast_qa_retrieval_second_pass_applied sufficient=%s confidence=%.3f note=%s",
+                        bool(evidence_sufficient),
+                        float(evidence_confidence),
+                        _truncate_for_log(evidence_reason, 180),
+                    )
+    if bool(url_targets) and not evidence_sufficient:
+        logger.warning(
+            "fast_qa_skipped reason=insufficient_evidence_for_url targets=%s confidence=%.3f note=%s question=%s",
+            ",".join(url_targets[:3]),
+            float(evidence_confidence),
+            _truncate_for_log(evidence_reason, 180),
+            _truncate_for_log(message, 220),
+        )
+        return None
+
+    if snippets:
+        snippets_with_refs, refs = assign_fast_source_refs(snippets)
+        answer = call_openai_fast_qa(
+            question=message,
+            snippets=snippets_with_refs,
+            chat_history=chat_history,
+            refs=refs,
+            citation_mode=request.citation,
+            primary_source_note=primary_source_note,
+        )
+        if not answer:
+            logger.warning(
+                "fast_qa_skipped reason=no_model_answer snippets=%d refs=%d question=%s",
+                len(snippets_with_refs),
+                len(refs),
+                _truncate_for_log(message, 220),
+            )
+            return None
+        answer = normalize_fast_answer(answer)
+    else:
+        logger.warning(
+            "fast_qa_no_relevant_snippets question=%s",
+            _truncate_for_log(message, 220),
+        )
+        snippets_with_refs, refs = [], []
+        answer = _build_no_relevant_evidence_answer(message)
+
     resolved_citation_mode = resolve_required_citation_mode(request.citation)
     answer = render_fast_citation_links(
         answer=answer,
@@ -689,6 +1741,8 @@ def run_fast_chat_turn(
         info_panel["citation_quality_metrics"] = citation_quality_metrics
     if source_dominance_warning:
         info_panel["source_dominance_warning"] = source_dominance_warning
+    if primary_source_note:
+        info_panel["primary_source_note"] = primary_source_note
     info_panel["citation_strength_ordering"] = bool(MAIA_CITATION_STRENGTH_ORDERING_ENABLED)
     info_panel["citation_strength_legend"] = (
         "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."

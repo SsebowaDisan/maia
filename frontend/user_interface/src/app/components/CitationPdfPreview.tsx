@@ -28,6 +28,7 @@ interface CitationPdfPreviewProps {
   highlightText: string;
   highlightQuery?: string;
   highlightBoxes?: CitationHighlightBox[];
+  viewerHeight?: number;
 }
 
 export function CitationPdfPreview({
@@ -36,7 +37,9 @@ export function CitationPdfPreview({
   highlightText,
   highlightQuery,
   highlightBoxes,
+  viewerHeight = 420,
 }: CitationPdfPreviewProps) {
+  const effectiveViewerHeight = Math.max(220, Math.min(1200, Math.round(Number(viewerHeight) || 420)));
   const requestedPageSafe = parsePageNumber(page);
   const [numPages, setNumPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(requestedPageSafe);
@@ -337,7 +340,11 @@ export function CitationPdfPreview({
         </button>
       </div>
 
-      <div ref={scrollRef} className="h-[420px] overflow-y-auto overflow-x-hidden bg-[#f2f2f7] p-2">
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto overflow-x-hidden bg-[#f2f2f7] p-2"
+        style={{ height: `${effectiveViewerHeight}px` }}
+      >
         <Document
           file={fileUrl}
           onLoadSuccess={({ numPages: loadedPages }) => {

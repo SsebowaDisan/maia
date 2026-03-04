@@ -16,6 +16,7 @@ from api.routers.integrations import router as integrations_router
 from api.routers.mindmap import router as mindmap_router
 from api.routers.settings import router as settings_router
 from api.routers.uploads import router as uploads_router
+from api.routers.web_preview import router as web_preview_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.ingestion_service import get_ingestion_manager
@@ -42,6 +43,7 @@ app.include_router(mindmap_router)
 app.include_router(agent_router)
 app.include_router(integrations_router)
 app.include_router(metrics_router)
+app.include_router(web_preview_router)
 
 
 @app.on_event("startup")

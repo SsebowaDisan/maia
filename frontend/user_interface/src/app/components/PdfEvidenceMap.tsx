@@ -147,6 +147,8 @@ function toCitationFromEvidence(params: {
   const { row, fileId, sourceName, citationFocus, claimText } = params;
   return {
     fileId: row.fileId || fileId || citationFocus.fileId,
+    sourceUrl: row.sourceUrl || citationFocus.sourceUrl,
+    sourceType: row.sourceUrl || citationFocus.sourceUrl ? "website" : "file",
     sourceName: row.source || sourceName || citationFocus.sourceName || "Indexed source",
     page: row.page || citationFocus.page,
     extract: row.extract || citationFocus.extract || row.title || row.source || "Evidence extract unavailable.",
@@ -173,6 +175,8 @@ function toCitationFromPage(params: {
   const { page, title, fileId, sourceName, citationFocus, claimText } = params;
   return {
     fileId: fileId || citationFocus.fileId,
+    sourceUrl: citationFocus.sourceUrl,
+    sourceType: citationFocus.sourceType,
     sourceName: sourceName || citationFocus.sourceName || "Indexed source",
     page: page || citationFocus.page,
     extract: citationFocus.extract || title,

@@ -23,8 +23,9 @@ from .utils import find_start_end_phrase, find_start_end_phrase_fuzzy
 
 DEFAULT_QA_CITATION_PROMPT = """
 Use the following pieces of context to answer the question at the end.
-Provide DETAILED ansswer with clear explanation.
-Format answer with easy to follow bullets / paragraphs.
+Provide a focused answer that is directly relevant to the question.
+Include only necessary details from the context.
+Format answer with easy to follow bullets / paragraphs only when useful.
 If you don't know the answer, just say that you don't know, don't try to make up an answer.
 Use the same language as the question to response.
 

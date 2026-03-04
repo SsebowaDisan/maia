@@ -46,6 +46,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "rel",
     "target",
     "data-file-id",
+    "data-source-url",
     "data-page",
     "data-phrase",
     "data-strength",
@@ -70,6 +71,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "id",
     "open",
     "data-file-id",
+    "data-source-url",
     "data-page",
     "data-strength",
     "data-strength-tier",
@@ -182,8 +184,58 @@ function sanitizeHtml(html: string): string {
   return doc.body.innerHTML;
 }
 
+const CITATION_HTML_ANCHOR_RE =
+  /<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>[\s\S]*?<\/a>/gi;
+
+function detachTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
+  let url = String(rawUrl || "").trim();
+  let trailing = "";
+  while (/[.,;:!?]$/.test(url)) {
+    trailing = `${url.slice(-1)}${trailing}`;
+    url = url.slice(0, -1);
+  }
+  return { url, trailing };
+}
+
+function repairCitationBrokenLinks(input: string): string {
+  let text = String(input || "");
+  if (!text || !/<a\b/i.test(text) || text.toLowerCase().indexOf("citation") < 0) {
+    return text;
+  }
+
+  text = text.replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, (fullMatch, label, rawUrl) => {
+    const urlChunk = String(rawUrl || "");
+    const citationAnchors = urlChunk.match(CITATION_HTML_ANCHOR_RE) || [];
+    if (!citationAnchors.length) {
+      return fullMatch;
+    }
+    const mergedUrl = urlChunk.replace(CITATION_HTML_ANCHOR_RE, "").replace(/\s+/g, "").trim();
+    const normalized = detachTrailingUrlPunctuation(mergedUrl);
+    if (!normalized.url || !/^https?:\/\//i.test(normalized.url)) {
+      return fullMatch;
+    }
+    return `[${label}](${normalized.url})${citationAnchors.join("")}${normalized.trailing}`;
+  });
+
+  text = text.replace(
+    /(https?:\/\/[^\s<>()]*?)((?:<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>[\s\S]*?<\/a>)+)([^\s<>()]*)/gi,
+    (fullMatch, leftUrl, anchors, rightUrlPart) => {
+      const mergedUrl = `${String(leftUrl || "")}${String(rightUrlPart || "")}`
+        .replace(/\s+/g, "")
+        .trim();
+      const normalized = detachTrailingUrlPunctuation(mergedUrl);
+      if (!normalized.url || !/^https?:\/\//i.test(normalized.url)) {
+        return fullMatch;
+      }
+      return `${normalized.url}${String(anchors || "")}${normalized.trailing}`;
+    },
+  );
+
+  return text;
+}
+
 function normalizeMarkdownBlocks(input: string): string {
-  let normalized = input.replace(/\r\n/g, "\n");
+  let normalized = repairCitationBrokenLinks(input.replace(/\r\n/g, "\n"));
   // Some streamed payloads may lose newline before headings or list markers.
   normalized = normalized.replace(/([^\n])\s(#{1,6}\s+)/g, "$1\n\n$2");
   normalized = normalized.replace(/(#{1,6}[^\n]+)\s+(\d+\.\s+)/g, "$1\n$2");

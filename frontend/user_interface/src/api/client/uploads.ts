@@ -1,6 +1,7 @@
 import { ACTIVE_USER_ID, API_BASE, request, withUserIdQuery } from "./core";
 import type {
   BulkDeleteFilesResponse,
+  BulkDeleteUrlsResponse,
   DeleteFileGroupResponse,
   FileGroupListResponse,
   FileGroupResponse,
@@ -133,6 +134,22 @@ function deleteFiles(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       file_ids: fileIds,
+      index_id: options?.indexId,
+    }),
+  });
+}
+
+function deleteUrls(
+  urls: string[],
+  options?: {
+    indexId?: number;
+  },
+) {
+  return request<BulkDeleteUrlsResponse>("/api/uploads/urls/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      urls,
       index_id: options?.indexId,
     }),
   });
@@ -384,6 +401,7 @@ export {
   createUrlIngestionJob,
   deleteFileGroup,
   deleteFiles,
+  deleteUrls,
   getIngestionJob,
   getRawFileUrl,
   listFileGroups,

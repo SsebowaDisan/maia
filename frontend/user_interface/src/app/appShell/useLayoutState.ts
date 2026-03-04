@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CENTER_PANEL_MIN,
-  LEFT_PANEL_MAX,
   LEFT_PANEL_MIN,
-  RIGHT_PANEL_MAX,
   RIGHT_PANEL_MIN,
   STORAGE_KEYS,
 } from "./constants";
@@ -52,8 +50,8 @@ export function useLayoutState() {
       RIGHT_PANEL_MIN,
       availableWidth - CENTER_PANEL_MIN - (isSidebarCollapsed ? 64 : sidebarWidth),
     );
-    const nextLeft = clamp(sidebarWidth, LEFT_PANEL_MIN, Math.min(LEFT_PANEL_MAX, leftMax));
-    const nextRight = clamp(infoPanelWidth, RIGHT_PANEL_MIN, Math.min(RIGHT_PANEL_MAX, rightMax));
+    const nextLeft = clamp(sidebarWidth, LEFT_PANEL_MIN, leftMax);
+    const nextRight = clamp(infoPanelWidth, RIGHT_PANEL_MIN, rightMax);
     if (nextLeft !== sidebarWidth) {
       setSidebarWidth(nextLeft);
     }
@@ -68,6 +66,10 @@ export function useLayoutState() {
     }
 
     const onMove = (event: MouseEvent) => {
+      if ((event.buttons & 1) !== 1) {
+        setResizeSide(null);
+        return;
+      }
       const layout = layoutRef.current;
       if (!layout) {
         return;
@@ -80,7 +82,7 @@ export function useLayoutState() {
           availableWidth - CENTER_PANEL_MIN - (isInfoPanelOpen ? infoPanelWidth : 0),
         );
         const proposed = event.clientX - bounds.left;
-        setSidebarWidth(clamp(proposed, LEFT_PANEL_MIN, Math.min(LEFT_PANEL_MAX, maxLeft)));
+        setSidebarWidth(clamp(proposed, LEFT_PANEL_MIN, maxLeft));
       }
       if (resizeSide === "right" && isInfoPanelOpen) {
         const maxRight = Math.max(
@@ -88,22 +90,33 @@ export function useLayoutState() {
           availableWidth - CENTER_PANEL_MIN - (isSidebarCollapsed ? 64 : sidebarWidth),
         );
         const proposed = bounds.right - event.clientX;
-        setInfoPanelWidth(clamp(proposed, RIGHT_PANEL_MIN, Math.min(RIGHT_PANEL_MAX, maxRight)));
+        setInfoPanelWidth(clamp(proposed, RIGHT_PANEL_MIN, maxRight));
       }
     };
 
     const onStop = () => setResizeSide(null);
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        onStop();
+      }
+    };
     const previousCursor = document.body.style.cursor;
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onStop);
+    window.addEventListener("mouseleave", onStop);
+    window.addEventListener("blur", onStop);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       document.body.style.cursor = previousCursor;
       document.body.style.userSelect = previousUserSelect;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onStop);
+      window.removeEventListener("mouseleave", onStop);
+      window.removeEventListener("blur", onStop);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [resizeSide, isInfoPanelOpen, isSidebarCollapsed, infoPanelWidth, sidebarWidth]);
 

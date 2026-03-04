@@ -3,24 +3,37 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from copy import deepcopy
 from datetime import datetime
+import re
+import threading
+from time import monotonic
 from typing import Any, Generator
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from sqlmodel import Session, select
 from theflow.settings import settings as flowsettings
 from tzlocal import get_localzone
 
 from maia.base import Document
 
+from ktem.db.models import engine
 from ktem.pages.chat.common import STATE
 from ktem.llms.manager import llms
+from ktem.utils.commands import WEB_SEARCH_COMMAND
 
 from api.context import ApiContext
-from api.schemas import ChatRequest
+from api.schemas import ChatRequest, IndexSelection
 from api.services.agent.orchestrator import get_orchestrator
+from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.settings_service import load_user_settings
+from api.services.upload_service import index_urls
 
-from .constants import API_CHAT_FAST_PATH, logger
-from .citations import append_required_citation_suffix, enforce_required_citations
+from .constants import API_CHAT_FAST_PATH, DEFAULT_SETTING, logger
+from .citations import (
+    append_required_citation_suffix,
+    enforce_required_citations,
+    normalize_info_evidence_html,
+)
 from .conversation_store import (
     build_selected_payload,
     get_or_create_conversation,
@@ -36,6 +49,11 @@ from .streaming import (
     chunk_text_for_stream,
     make_activity_stream_event,
 )
+
+_HTTP_URL_RE = re.compile(r"https?://[^\s\])>\"']+", flags=re.IGNORECASE)
+_AUTO_URL_INDEX_MARKER = "__auto_url_indexed"
+_AUTO_URL_CACHE_LOCK = threading.Lock()
+_AUTO_URL_INDEX_CACHE: dict[str, tuple[float, list[str]]] = {}
 
 
 def _default_model_looks_local_ollama() -> bool:
@@ -53,6 +71,816 @@ def _default_model_looks_local_ollama() -> bool:
     if not isinstance(spec, dict):
         return False
     return str(spec.get("api_key") or "").strip().lower() == "ollama"
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return float(default)
+    if parsed != parsed:
+        return float(default)
+    return float(parsed)
+
+
+def _int_or_default(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _normalize_http_url(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if not str(parsed.netloc or "").strip():
+        return ""
+    normalized_path = str(parsed.path or "").rstrip("/") or "/"
+    return parsed._replace(
+        scheme=str(parsed.scheme or "").lower(),
+        netloc=str(parsed.netloc or "").lower(),
+        path=normalized_path,
+        fragment="",
+    ).geturl()
+
+
+def _should_auto_web_fallback(
+    *,
+    message: str,
+    chat_history: list[list[str]],
+) -> bool:
+    if not env_bool("MAIA_CHAT_AUTO_WEB_FALLBACK_ENABLED", default=True):
+        return False
+    # Deterministic guard: explicit URL questions should route to web when fast local retrieval failed.
+    if _HTTP_URL_RE.search(str(message or "")):
+        return True
+    # Deterministic guard: follow-up questions after a recent URL turn should
+    # keep web retrieval enabled when fast local retrieval could not answer.
+    for turn in reversed(chat_history[-4:]):
+        if not isinstance(turn, list) or not turn:
+            continue
+        if _HTTP_URL_RE.search(str(turn[0] or "")):
+            return True
+
+    history_rows: list[str] = []
+    for turn in chat_history[-4:]:
+        if not isinstance(turn, list) or len(turn) < 2:
+            continue
+        user_text = " ".join(str(turn[0] or "").split())[:220]
+        assistant_text = " ".join(str(turn[1] or "").split())[:220]
+        if user_text or assistant_text:
+            history_rows.append(f"User: {user_text}\nAssistant: {assistant_text}")
+    history_text = "\n\n".join(history_rows) if history_rows else "(none)"
+
+    prompt = (
+        "Decide whether the next answer should route to live web retrieval.\n"
+        "Return one JSON object only with this shape:\n"
+        '{"route":"local|web","confidence":0.0,"reason":"short string"}\n'
+        "Rules:\n"
+        "- Choose route=web only when answering likely needs live/external web evidence beyond indexed project files and chat history.\n"
+        "- Choose route=local when indexed project files + chat history are likely sufficient.\n"
+        "- If uncertain, choose route=local.\n\n"
+        f"Latest user message:\n{message}\n\n"
+        f"Recent conversation:\n{history_text}"
+    )
+    response = call_json_response(
+        system_prompt=(
+            "You are Maia routing guard. "
+            "Return strict JSON only."
+        ),
+        user_prompt=prompt,
+        temperature=0.0,
+        timeout_seconds=8,
+        max_tokens=220,
+    )
+    if not isinstance(response, dict):
+        return False
+
+    route = " ".join(str(response.get("route") or "").split()).strip().lower()
+    confidence = _float_or_default(response.get("confidence"), 0.0)
+    min_confidence = _float_or_default(
+        getattr(flowsettings, "MAIA_CHAT_AUTO_WEB_FALLBACK_MIN_CONFIDENCE", 0.55),
+        0.55,
+    )
+    if route != "web":
+        return False
+    if confidence < max(0.0, min(1.0, min_confidence)):
+        return False
+    return True
+
+
+def _request_with_command(request: ChatRequest, command: str) -> ChatRequest:
+    try:
+        return request.model_copy(update={"command": command})
+    except Exception:
+        payload = request.model_dump()
+        payload["command"] = command
+        return ChatRequest(**payload)
+
+
+def _request_with_updates(request: ChatRequest, updates: dict[str, Any]) -> ChatRequest:
+    try:
+        return request.model_copy(update=updates)
+    except Exception:
+        payload = request.model_dump()
+        payload.update(updates)
+        return ChatRequest(**payload)
+
+
+def _extract_message_urls(message: str, *, max_urls: int = 8) -> list[str]:
+    seen: set[str] = set()
+    urls: list[str] = []
+    for match in _HTTP_URL_RE.finditer(str(message or "")):
+        normalized = _normalize_http_url(str(match.group(0) or "").rstrip(".,;:!?"))
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
+        if len(urls) >= max(1, int(max_urls)):
+            break
+    return urls
+
+
+def _first_available_index_id(context: ApiContext) -> int | None:
+    try:
+        indices = list(getattr(context.app.index_manager, "indices", []) or [])
+    except Exception:
+        return None
+    if not indices:
+        return None
+    try:
+        return int(getattr(indices[0], "id"))
+    except Exception:
+        return None
+
+
+def _pick_target_index_id(
+    request: ChatRequest,
+    context: ApiContext,
+) -> int | None:
+    selection = request.index_selection if isinstance(request.index_selection, dict) else {}
+    for raw_key, selected in selection.items():
+        mode = str(getattr(selected, "mode", "") or "").strip().lower()
+        if mode == "disabled":
+            continue
+        try:
+            return int(str(raw_key))
+        except Exception:
+            continue
+    return _first_available_index_id(context)
+
+
+def _merge_request_index_selection(
+    request: ChatRequest,
+    *,
+    index_id: int,
+    file_ids: list[str],
+) -> dict[str, IndexSelection]:
+    merged: dict[str, IndexSelection] = {}
+    existing_selection = request.index_selection if isinstance(request.index_selection, dict) else {}
+    for key, selected in existing_selection.items():
+        mode = str(getattr(selected, "mode", "all") or "all").strip().lower() or "all"
+        selected_ids_raw = getattr(selected, "file_ids", [])
+        selected_ids = [
+            str(item).strip()
+            for item in (selected_ids_raw if isinstance(selected_ids_raw, list) else [])
+            if str(item).strip()
+        ]
+        merged[str(key)] = IndexSelection(mode=mode, file_ids=selected_ids)
+
+    key = str(index_id)
+    existing = merged.get(key)
+    existing_mode = str(getattr(existing, "mode", "") or "").strip().lower() if existing else ""
+    existing_ids = (
+        [str(item).strip() for item in getattr(existing, "file_ids", []) if str(item).strip()]
+        if existing
+        else []
+    )
+    file_pool = existing_ids if existing_mode == "select" else []
+    seen_ids = {item for item in file_pool}
+    for file_id in file_ids:
+        normalized = str(file_id or "").strip()
+        if not normalized or normalized in seen_ids:
+            continue
+        seen_ids.add(normalized)
+        file_pool.append(normalized)
+    merged[key] = IndexSelection(mode="select", file_ids=file_pool)
+    return merged
+
+
+def _errors_indicate_already_indexed(errors: list[str]) -> bool:
+    for row in errors:
+        normalized = " ".join(str(row or "").split()).strip().lower()
+        if "already indexed" in normalized:
+            return True
+    return False
+
+
+def _resolve_existing_url_source_ids(
+    *,
+    context: ApiContext,
+    user_id: str,
+    index_id: int,
+    urls: list[str],
+) -> list[str]:
+    try:
+        index = context.get_index(index_id)
+    except Exception:
+        return []
+
+    Source = index._resources["Source"]
+    candidate_names: set[str] = set()
+    for raw_url in urls:
+        normalized = _normalize_http_url(raw_url)
+        if not normalized:
+            continue
+        candidate_names.add(normalized)
+        if normalized.endswith("/"):
+            candidate_names.add(normalized.rstrip("/"))
+        else:
+            candidate_names.add(f"{normalized}/")
+    if not candidate_names:
+        return []
+
+    with Session(engine) as session:
+        statement = select(Source.id, Source.name).where(Source.name.in_(list(candidate_names)))
+        if index.config.get("private", False):
+            statement = statement.where(Source.user == user_id)
+        rows = session.execute(statement).all()
+
+    source_ids = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
+    return list(dict.fromkeys(source_ids))
+
+
+def _source_ids_have_document_relations(
+    *,
+    context: ApiContext,
+    index_id: int,
+    source_ids: list[str],
+) -> bool:
+    cleaned_ids = [str(item).strip() for item in source_ids if str(item).strip()]
+    if not cleaned_ids:
+        return False
+    try:
+        index = context.get_index(index_id)
+    except Exception:
+        return False
+    IndexTable = index._resources["Index"]
+    with Session(engine) as session:
+        row = session.execute(
+            select(IndexTable.target_id)
+            .where(
+                IndexTable.source_id.in_(cleaned_ids),
+                IndexTable.relation_type == "document",
+            )
+            .limit(1)
+        ).first()
+    return bool(row)
+
+
+def _override_request_index_selection(
+    request: ChatRequest,
+    *,
+    index_id: int,
+    mode: str,
+    file_ids: list[str] | None = None,
+) -> dict[str, IndexSelection]:
+    merged: dict[str, IndexSelection] = {}
+    existing_selection = request.index_selection if isinstance(request.index_selection, dict) else {}
+    for key, selected in existing_selection.items():
+        selected_mode = str(getattr(selected, "mode", "all") or "all").strip().lower() or "all"
+        selected_ids_raw = getattr(selected, "file_ids", [])
+        selected_ids = [
+            str(item).strip()
+            for item in (selected_ids_raw if isinstance(selected_ids_raw, list) else [])
+            if str(item).strip()
+        ]
+        merged[str(key)] = IndexSelection(mode=selected_mode, file_ids=selected_ids)
+    normalized_mode = str(mode or "all").strip().lower()
+    if normalized_mode not in {"all", "select", "disabled"}:
+        normalized_mode = "all"
+    normalized_ids = [
+        str(item).strip()
+        for item in (file_ids if isinstance(file_ids, list) else [])
+        if str(item).strip()
+    ]
+    merged[str(index_id)] = IndexSelection(mode=normalized_mode, file_ids=normalized_ids)
+    return merged
+
+
+def _apply_url_grounded_index_selection(
+    request: ChatRequest,
+    *,
+    index_id: int,
+    file_ids: list[str],
+    strict_url_grounding: bool,
+) -> dict[str, IndexSelection]:
+    cleaned_ids = [
+        str(item).strip()
+        for item in (file_ids if isinstance(file_ids, list) else [])
+        if str(item).strip()
+    ]
+    if strict_url_grounding:
+        # Keep the URL-scoped source set authoritative for this index so follow-up
+        # questions stay grounded to the same website context.
+        return _override_request_index_selection(
+            request,
+            index_id=index_id,
+            mode="select",
+            file_ids=cleaned_ids,
+        )
+    return _merge_request_index_selection(
+        request,
+        index_id=index_id,
+        file_ids=cleaned_ids,
+    )
+
+
+def _auto_url_cache_key(
+    *,
+    user_id: str,
+    index_id: int,
+    urls: list[str],
+) -> str:
+    normalized_urls = [item for item in urls if item]
+    normalized_urls = sorted(dict.fromkeys(normalized_urls))
+    return f"{str(user_id or '').strip()}::{int(index_id)}::{'|'.join(normalized_urls)}"
+
+
+def _auto_url_cache_get(
+    *,
+    user_id: str,
+    index_id: int,
+    urls: list[str],
+    ttl_seconds: int,
+) -> list[str] | None:
+    if ttl_seconds <= 0:
+        return None
+    key = _auto_url_cache_key(user_id=user_id, index_id=index_id, urls=urls)
+    now_ts = monotonic()
+    with _AUTO_URL_CACHE_LOCK:
+        cached = _AUTO_URL_INDEX_CACHE.get(key)
+        if not cached:
+            return None
+        expires_at, file_ids = cached
+        if now_ts >= float(expires_at):
+            _AUTO_URL_INDEX_CACHE.pop(key, None)
+            return None
+        return [str(item).strip() for item in list(file_ids or []) if str(item).strip()]
+
+
+def _auto_url_cache_put(
+    *,
+    user_id: str,
+    index_id: int,
+    urls: list[str],
+    file_ids: list[str],
+    ttl_seconds: int,
+    max_entries: int,
+) -> None:
+    if ttl_seconds <= 0:
+        return
+    key = _auto_url_cache_key(user_id=user_id, index_id=index_id, urls=urls)
+    cleaned_ids = [str(item).strip() for item in file_ids if str(item).strip()]
+    if not cleaned_ids:
+        return
+    now_ts = monotonic()
+    expires_at = now_ts + float(ttl_seconds)
+    with _AUTO_URL_CACHE_LOCK:
+        _AUTO_URL_INDEX_CACHE[key] = (expires_at, cleaned_ids)
+        if len(_AUTO_URL_INDEX_CACHE) <= max_entries:
+            return
+        expired_keys = [
+            cache_key
+            for cache_key, (entry_expires_at, _entry_file_ids) in _AUTO_URL_INDEX_CACHE.items()
+            if now_ts >= float(entry_expires_at)
+        ]
+        for cache_key in expired_keys:
+            _AUTO_URL_INDEX_CACHE.pop(cache_key, None)
+        overflow = len(_AUTO_URL_INDEX_CACHE) - max_entries
+        if overflow <= 0:
+            return
+        for cache_key in list(_AUTO_URL_INDEX_CACHE.keys())[:overflow]:
+            _AUTO_URL_INDEX_CACHE.pop(cache_key, None)
+
+
+def _auto_index_urls_for_request(
+    *,
+    context: ApiContext,
+    user_id: str,
+    request: ChatRequest,
+    settings: dict[str, Any] | None = None,
+) -> ChatRequest:
+    if not env_bool("MAIA_CHAT_AUTO_INDEX_URLS_ENABLED", default=True):
+        return request
+    if str(request.command or "").strip().lower() == str(WEB_SEARCH_COMMAND).strip().lower():
+        return request
+    existing_overrides = (
+        dict(request.setting_overrides)
+        if isinstance(request.setting_overrides, dict)
+        else {}
+    )
+    if bool(existing_overrides.get(_AUTO_URL_INDEX_MARKER)):
+        return request
+    urls = _extract_message_urls(request.message, max_urls=8)
+    if not urls:
+        return request
+    strict_url_grounding = env_bool("MAIA_CHAT_STRICT_URL_GROUNDING", default=True)
+
+    target_index_id = _pick_target_index_id(request, context)
+    if target_index_id is None:
+        logger.warning("auto_url_indexing_skipped reason=no_target_index urls=%s", ",".join(urls[:3]))
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        return _request_with_updates(request, {"setting_overrides": existing_overrides})
+
+    cache_ttl_seconds = max(
+        0,
+        _int_or_default(
+            getattr(flowsettings, "MAIA_CHAT_AUTO_INDEX_URLS_CACHE_TTL_SECONDS", 1800),
+            1800,
+        ),
+    )
+    cache_max_entries = max(
+        1,
+        _int_or_default(
+            getattr(flowsettings, "MAIA_CHAT_AUTO_INDEX_URLS_CACHE_MAX_ENTRIES", 1024),
+            1024,
+        ),
+    )
+    cached_file_ids = _auto_url_cache_get(
+        user_id=user_id,
+        index_id=target_index_id,
+        urls=urls,
+        ttl_seconds=cache_ttl_seconds,
+    )
+    if cached_file_ids:
+        merged_selection = _apply_url_grounded_index_selection(
+            request,
+            index_id=target_index_id,
+            file_ids=cached_file_ids,
+            strict_url_grounding=strict_url_grounding,
+        )
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        logger.warning(
+            "auto_url_indexing_cache_hit index_id=%s urls=%s file_ids=%d",
+            target_index_id,
+            ",".join(urls[:3]),
+            len(cached_file_ids),
+        )
+        return _request_with_updates(
+            request,
+            {
+                "index_selection": merged_selection,
+                "setting_overrides": existing_overrides,
+            },
+        )
+
+    existing_source_ids = _resolve_existing_url_source_ids(
+        context=context,
+        user_id=user_id,
+        index_id=target_index_id,
+        urls=urls,
+    )
+    existing_sources_have_docs = (
+        _source_ids_have_document_relations(
+            context=context,
+            index_id=target_index_id,
+            source_ids=existing_source_ids,
+        )
+        if existing_source_ids
+        else False
+    )
+
+    resolved_settings = settings if isinstance(settings, dict) else load_user_settings(context, user_id)
+    auto_reindex = env_bool("MAIA_CHAT_AUTO_INDEX_URLS_REINDEX", default=False)
+    auto_include_pdfs = env_bool("MAIA_CHAT_AUTO_INDEX_URLS_INCLUDE_PDFS", default=False)
+    auto_include_images = env_bool("MAIA_CHAT_AUTO_INDEX_URLS_INCLUDE_IMAGES", default=False)
+    auto_crawl_depth = max(
+        0,
+        _int_or_default(
+            getattr(flowsettings, "MAIA_CHAT_AUTO_INDEX_URLS_CRAWL_DEPTH", 1),
+            1,
+        ),
+    )
+    auto_crawl_max_pages = max(
+        0,
+        _int_or_default(
+            getattr(flowsettings, "MAIA_CHAT_AUTO_INDEX_URLS_MAX_PAGES", 4),
+            4,
+        ),
+    )
+    auto_timeout_seconds = max(
+        6,
+        _int_or_default(
+            getattr(flowsettings, "MAIA_CHAT_AUTO_INDEX_URLS_TIMEOUT_SECONDS", 40),
+            40,
+        ),
+    )
+
+    if existing_source_ids and existing_sources_have_docs and not auto_reindex:
+        _auto_url_cache_put(
+            user_id=user_id,
+            index_id=target_index_id,
+            urls=urls,
+            file_ids=existing_source_ids,
+            ttl_seconds=cache_ttl_seconds,
+            max_entries=cache_max_entries,
+        )
+        merged_selection = _apply_url_grounded_index_selection(
+            request,
+            index_id=target_index_id,
+            file_ids=existing_source_ids,
+            strict_url_grounding=strict_url_grounding,
+        )
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        logger.warning(
+            "auto_url_indexing_reused_existing_sources index_id=%s urls=%s file_ids=%d",
+            target_index_id,
+            ",".join(urls[:3]),
+            len(existing_source_ids),
+        )
+        return _request_with_updates(
+            request,
+            {
+                "index_selection": merged_selection,
+                "setting_overrides": existing_overrides,
+            },
+        )
+
+    if existing_source_ids and not existing_sources_have_docs:
+        auto_reindex = True
+        logger.warning(
+            "auto_url_indexing_stale_sources_no_docs index_id=%s urls=%s source_ids=%d",
+            target_index_id,
+            ",".join(urls[:3]),
+            len(existing_source_ids),
+        )
+
+    logger.warning(
+        "auto_url_indexing_start index_id=%s urls=%s reindex=%s crawl_depth=%d max_pages=%d include_pdfs=%s include_images=%s timeout_seconds=%d",
+        target_index_id,
+        ",".join(urls[:3]),
+        str(bool(auto_reindex)).lower(),
+        auto_crawl_depth,
+        auto_crawl_max_pages,
+        str(bool(auto_include_pdfs)).lower(),
+        str(bool(auto_include_images)).lower(),
+        auto_timeout_seconds,
+    )
+    started_at = monotonic()
+
+    def _run_index_urls_call(*, reindex_flag: bool) -> dict[str, Any]:
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                index_urls,
+                context=context,
+                user_id=user_id,
+                urls=urls,
+                index_id=target_index_id,
+                reindex=reindex_flag,
+                settings=resolved_settings,
+                web_crawl_depth=auto_crawl_depth,
+                web_crawl_max_pages=auto_crawl_max_pages,
+                web_crawl_same_domain_only=True,
+                include_pdfs=auto_include_pdfs,
+                include_images=auto_include_images,
+                scope="chat_temp",
+            )
+            return future.result(timeout=auto_timeout_seconds)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    try:
+        result = _run_index_urls_call(reindex_flag=auto_reindex)
+    except FutureTimeoutError:
+        timeout_source_ids = _resolve_existing_url_source_ids(
+            context=context,
+            user_id=user_id,
+            index_id=target_index_id,
+            urls=urls,
+        )
+        timeout_sources_have_docs = (
+            _source_ids_have_document_relations(
+                context=context,
+                index_id=target_index_id,
+                source_ids=timeout_source_ids,
+            )
+            if timeout_source_ids
+            else False
+        )
+        if timeout_source_ids and timeout_sources_have_docs:
+            _auto_url_cache_put(
+                user_id=user_id,
+                index_id=target_index_id,
+                urls=urls,
+                file_ids=timeout_source_ids,
+                ttl_seconds=cache_ttl_seconds,
+                max_entries=cache_max_entries,
+            )
+            merged_selection = _apply_url_grounded_index_selection(
+                request,
+                index_id=target_index_id,
+                file_ids=timeout_source_ids,
+                strict_url_grounding=strict_url_grounding,
+            )
+            existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+            logger.warning(
+                "auto_url_indexing_timeout_reused_existing_sources index_id=%s urls=%s file_ids=%d timeout_seconds=%d",
+                target_index_id,
+                ",".join(urls[:3]),
+                len(timeout_source_ids),
+                auto_timeout_seconds,
+            )
+            return _request_with_updates(
+                request,
+                {
+                    "index_selection": merged_selection,
+                    "setting_overrides": existing_overrides,
+                },
+            )
+        logger.warning(
+            "auto_url_indexing_timeout index_id=%s urls=%s timeout_seconds=%d",
+            target_index_id,
+            ",".join(urls[:3]),
+            auto_timeout_seconds,
+        )
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        updates: dict[str, Any] = {"setting_overrides": existing_overrides}
+        if strict_url_grounding:
+            updates["index_selection"] = _override_request_index_selection(
+                request,
+                index_id=target_index_id,
+                mode="disabled",
+                file_ids=[],
+            )
+        return _request_with_updates(request, updates)
+    except Exception as exc:
+        error_source_ids = _resolve_existing_url_source_ids(
+            context=context,
+            user_id=user_id,
+            index_id=target_index_id,
+            urls=urls,
+        )
+        error_sources_have_docs = (
+            _source_ids_have_document_relations(
+                context=context,
+                index_id=target_index_id,
+                source_ids=error_source_ids,
+            )
+            if error_source_ids
+            else False
+        )
+        if error_source_ids and error_sources_have_docs:
+            _auto_url_cache_put(
+                user_id=user_id,
+                index_id=target_index_id,
+                urls=urls,
+                file_ids=error_source_ids,
+                ttl_seconds=cache_ttl_seconds,
+                max_entries=cache_max_entries,
+            )
+            merged_selection = _apply_url_grounded_index_selection(
+                request,
+                index_id=target_index_id,
+                file_ids=error_source_ids,
+                strict_url_grounding=strict_url_grounding,
+            )
+            existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+            logger.warning(
+                "auto_url_indexing_error_reused_existing_sources index_id=%s urls=%s file_ids=%d",
+                target_index_id,
+                ",".join(urls[:3]),
+                len(error_source_ids),
+            )
+            return _request_with_updates(
+                request,
+                {
+                    "index_selection": merged_selection,
+                    "setting_overrides": existing_overrides,
+                },
+            )
+        logger.warning(
+            "auto_url_indexing_failed urls=%s error=%s",
+            ",".join(urls[:3]),
+            " ".join(str(exc).split())[:240],
+        )
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        updates = {"setting_overrides": existing_overrides}
+        if strict_url_grounding:
+            updates["index_selection"] = _override_request_index_selection(
+                request,
+                index_id=target_index_id,
+                mode="disabled",
+                file_ids=[],
+            )
+        return _request_with_updates(request, updates)
+
+    file_ids = [
+        str(item).strip()
+        for item in (result.get("file_ids", []) if isinstance(result, dict) else [])
+        if str(item).strip()
+    ]
+    error_rows = [
+        " ".join(str(item or "").split()).strip()
+        for item in (result.get("errors", []) if isinstance(result, dict) else [])
+        if " ".join(str(item or "").split()).strip()
+    ]
+    if not file_ids and _errors_indicate_already_indexed(error_rows):
+        existing_source_ids = _resolve_existing_url_source_ids(
+            context=context,
+            user_id=user_id,
+            index_id=target_index_id,
+            urls=urls,
+        )
+        if existing_source_ids and _source_ids_have_document_relations(
+            context=context,
+            index_id=target_index_id,
+            source_ids=existing_source_ids,
+        ):
+            file_ids = existing_source_ids
+            logger.warning(
+                "auto_url_indexing_reused_existing_sources index_id=%s urls=%s file_ids=%d",
+                target_index_id,
+                ",".join(urls[:3]),
+                len(file_ids),
+            )
+    if not file_ids:
+        existing_source_ids = _resolve_existing_url_source_ids(
+            context=context,
+            user_id=user_id,
+            index_id=target_index_id,
+            urls=urls,
+        )
+        if existing_source_ids and _source_ids_have_document_relations(
+            context=context,
+            index_id=target_index_id,
+            source_ids=existing_source_ids,
+        ):
+            file_ids = existing_source_ids
+            logger.warning(
+                "auto_url_indexing_reused_existing_sources_post_index index_id=%s urls=%s file_ids=%d",
+                target_index_id,
+                ",".join(urls[:3]),
+                len(file_ids),
+            )
+    if not file_ids:
+        logger.warning("auto_url_indexing_no_file_ids urls=%s", ",".join(urls[:3]))
+        existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+        updates = {"setting_overrides": existing_overrides}
+        if strict_url_grounding:
+            updates["index_selection"] = _override_request_index_selection(
+                request,
+                index_id=target_index_id,
+                mode="disabled",
+                file_ids=[],
+            )
+        return _request_with_updates(request, updates)
+
+    _auto_url_cache_put(
+        user_id=user_id,
+        index_id=target_index_id,
+        urls=urls,
+        file_ids=file_ids,
+        ttl_seconds=cache_ttl_seconds,
+        max_entries=cache_max_entries,
+    )
+    merged_selection = _apply_url_grounded_index_selection(
+        request,
+        index_id=target_index_id,
+        file_ids=file_ids,
+        strict_url_grounding=strict_url_grounding,
+    )
+    existing_overrides[_AUTO_URL_INDEX_MARKER] = True
+    logger.warning(
+        "auto_url_indexing_completed index_id=%s urls=%s file_ids=%d",
+        target_index_id,
+        ",".join(urls[:3]),
+        len(file_ids),
+    )
+    elapsed_ms = int((monotonic() - started_at) * 1000)
+    logger.warning(
+        "auto_url_indexing_timing index_id=%s urls=%s elapsed_ms=%d",
+        target_index_id,
+        ",".join(urls[:3]),
+        elapsed_ms,
+    )
+    return _request_with_updates(
+        request,
+        {
+            "index_selection": merged_selection,
+            "setting_overrides": existing_overrides,
+        },
+    )
 
 
 def _read_persisted_workspace_ids(chat_state: dict[str, Any]) -> dict[str, str]:
@@ -118,6 +946,13 @@ def stream_chat_turn(
         raise HTTPException(status_code=400, detail="Message is empty.")
 
     settings = load_user_settings(context, user_id)
+    request = _auto_index_urls_for_request(
+        context=context,
+        user_id=user_id,
+        request=request,
+        settings=settings,
+    )
+    message = request.message.strip()
     conversation_id, conversation_name, data_source = get_or_create_conversation(
         user_id=user_id,
         conversation_id=request.conversation_id,
@@ -254,11 +1089,14 @@ def stream_chat_turn(
                     seq=last_activity_seq,
                 ),
             }
-        if agent_result.info_html:
-            yield {"type": "info_delta", "delta": agent_result.info_html}
+        normalized_agent_info_html = normalize_info_evidence_html(
+            str(getattr(agent_result, "info_html", "") or "")
+        )
+        if normalized_agent_info_html:
+            yield {"type": "info_delta", "delta": normalized_agent_info_html}
         answer_text = enforce_required_citations(
             answer=answer_text,
-            info_html=str(getattr(agent_result, "info_html", "") or ""),
+            info_html=normalized_agent_info_html,
             citation_mode=request.citation,
         )
         plot_data = _extract_plot_from_actions(agent_result.actions_taken)
@@ -273,7 +1111,7 @@ def stream_chat_turn(
         info_panel = build_info_panel_copy(
             request_message=message,
             answer_text=answer_text,
-            info_html=str(getattr(agent_result, "info_html", "") or ""),
+            info_html=normalized_agent_info_html,
             mode="company_agent",
             next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
             web_summary=agent_web_summary,
@@ -295,7 +1133,7 @@ def stream_chat_turn(
 
         messages = chat_history + [[message, answer_text]]
         retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
-        retrieval_history.append(agent_result.info_html)
+        retrieval_history.append(normalized_agent_info_html)
         plot_history = deepcopy(data_source.get("plot_history", []))
         plot_history.append(plot_data)
         message_meta = deepcopy(data_source.get("message_meta", []))
@@ -348,7 +1186,7 @@ def stream_chat_turn(
             "conversation_name": conversation_name,
             "message": message,
             "answer": answer_text,
-            "info": agent_result.info_html,
+            "info": normalized_agent_info_html,
             "plot": plot_data,
             "state": chat_state,
             "mode": "company_agent",
@@ -457,6 +1295,8 @@ def stream_chat_turn(
         )
         yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
 
+    info_text = normalize_info_evidence_html(info_text)
+
     answer_with_citation_suffix = append_required_citation_suffix(answer=answer_text, info_html=info_text)
     if answer_with_citation_suffix != answer_text:
         if answer_with_citation_suffix.startswith(answer_text):
@@ -538,12 +1378,30 @@ def stream_chat_turn(
 
 
 def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> dict[str, Any]:
+    request = _auto_index_urls_for_request(
+        context=context,
+        user_id=user_id,
+        request=request,
+        settings=None,
+    )
     if API_CHAT_FAST_PATH and request.agent_mode != "company_agent":
         try:
             fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
             if fast_result is not None:
                 logger.warning("chat_path_selected path=fast_qa")
                 return fast_result
+            if request.command in (None, "", DEFAULT_SETTING):
+                try:
+                    _conversation_id, _conversation_name, data_source = get_or_create_conversation(
+                        user_id=user_id,
+                        conversation_id=request.conversation_id,
+                    )
+                    chat_history = deepcopy(data_source.get("messages", []))
+                except Exception:
+                    chat_history = []
+                if _should_auto_web_fallback(message=request.message, chat_history=chat_history):
+                    request = _request_with_command(request, WEB_SEARCH_COMMAND)
+                    logger.warning("chat_path_selected path=web_fallback_llm")
             logger.warning("chat_path_fallback reason=fast_qa_returned_none")
         except Exception as exc:
             logger.exception("Fast ask path failed; falling back to streaming pipeline: %s", exc)
@@ -588,6 +1446,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             context=context,
             user_id=user_id,
         )
+        timeout_info = normalize_info_evidence_html(timeout_info)
         timeout_answer = enforce_required_citations(
             answer=timeout_answer,
             info_html=timeout_info,

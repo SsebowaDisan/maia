@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRightLeft,
   Check,
@@ -6,7 +6,10 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Globe,
   HelpCircle,
+  Link2,
+  Loader2,
   PencilLine,
   Plus,
   Settings,
@@ -15,7 +18,17 @@ import {
   FileText,
   Library,
 } from "lucide-react";
-import type { ConversationSummary } from "../../api/client";
+import {
+  deleteFiles,
+  deleteUrls,
+  getConversation,
+  uploadFiles,
+  uploadUrls,
+  type ConversationSummary,
+  type SourceUsageRecord,
+  type AgentSourceRecord,
+} from "../../api/client";
+import { buildConversationTurns } from "../appShell/eventHelpers";
 
 const LETTER_OR_NUMBER_RE = /^[\p{L}\p{N}]$/u;
 const EXTENDED_PICTOGRAPHIC_RE = /^\p{Extended_Pictographic}$/u;
@@ -50,6 +63,185 @@ function stripChatIcon(name: string) {
   return cleaned;
 }
 
+type ProjectEvidenceItem = {
+  key: string;
+  label: string;
+  type: "document" | "url";
+  href?: string;
+  fileIds: string[];
+  usageCount: number;
+  chatCount: number;
+};
+
+type ProjectEvidenceState = {
+  status: "idle" | "loading" | "ready" | "error";
+  documents: ProjectEvidenceItem[];
+  urls: ProjectEvidenceItem[];
+  projectChatCount: number;
+  errorMessage: string;
+};
+
+const EMPTY_PROJECT_EVIDENCE: ProjectEvidenceState = {
+  status: "idle",
+  documents: [],
+  urls: [],
+  projectChatCount: 0,
+  errorMessage: "",
+};
+
+type AggregateItem = {
+  key: string;
+  label: string;
+  href?: string;
+  fileIds: Set<string>;
+  usageCount: number;
+  conversationIds: Set<string>;
+};
+
+const HTTP_URL_RE = /^https?:\/\/\S+/i;
+const SOURCE_ALIAS_STORAGE_KEY = "maia.project-source-aliases";
+
+function normalizeSourceUrl(rawValue: string): string {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return value.replace(/\/$/, "");
+  }
+}
+
+function toProjectEvidenceItems(
+  map: Map<string, AggregateItem>,
+  type: "document" | "url",
+): ProjectEvidenceItem[] {
+  return [...map.values()]
+    .map((item) => ({
+      key: item.key,
+      label: item.label,
+      type,
+      href: item.href,
+      fileIds: [...item.fileIds],
+      usageCount: item.usageCount,
+      chatCount: item.conversationIds.size,
+    }))
+    .sort(
+      (left, right) =>
+        right.usageCount - left.usageCount ||
+        right.chatCount - left.chatCount ||
+        left.label.localeCompare(right.label),
+    );
+}
+
+function addAggregateItem(
+  map: Map<string, AggregateItem>,
+  item: {
+    key: string;
+    label: string;
+    href?: string;
+    fileId?: string;
+    conversationId: string;
+  },
+) {
+  const normalizedLabel = String(item.label || "").trim();
+  if (!item.key || !normalizedLabel) {
+    return;
+  }
+  const existing = map.get(item.key);
+  if (existing) {
+    existing.usageCount += 1;
+    existing.conversationIds.add(item.conversationId);
+    if (item.fileId) {
+      existing.fileIds.add(item.fileId);
+    }
+    if (!existing.href && item.href) {
+      existing.href = item.href;
+    }
+    return;
+  }
+  map.set(item.key, {
+    key: item.key,
+    label: normalizedLabel,
+    href: item.href,
+    fileIds: item.fileId ? new Set([item.fileId]) : new Set(),
+    usageCount: 1,
+    conversationIds: new Set([item.conversationId]),
+  });
+}
+
+function collectFromSourceUsage(
+  usageRows: SourceUsageRecord[],
+  conversationId: string,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  for (const row of usageRows || []) {
+    const sourceName = String(row?.source_name || "").trim();
+    const sourceId = String(row?.source_id || "").trim();
+    if (!sourceName && !sourceId) {
+      continue;
+    }
+    if (HTTP_URL_RE.test(sourceName)) {
+      const normalizedUrl = normalizeSourceUrl(sourceName);
+      addAggregateItem(urls, {
+        key: `url:${normalizedUrl.toLowerCase()}`,
+        label: normalizedUrl,
+        href: normalizedUrl,
+        fileId: sourceId || undefined,
+        conversationId,
+      });
+      continue;
+    }
+    const label = sourceName || sourceId;
+    const key = sourceId ? `file:${sourceId}` : `doc:${label.toLowerCase()}`;
+    addAggregateItem(documents, {
+      key,
+      label,
+      fileId: sourceId || undefined,
+      conversationId,
+    });
+  }
+}
+
+function collectFromSourcesUsed(
+  sourceRows: AgentSourceRecord[],
+  conversationId: string,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  for (const row of sourceRows || []) {
+    const label = String(row?.label || "").trim();
+    const url = String(row?.url || "").trim();
+    const fileId = String(row?.file_id || "").trim();
+    if (url && HTTP_URL_RE.test(url)) {
+      const normalizedUrl = normalizeSourceUrl(url);
+      addAggregateItem(urls, {
+        key: `url:${normalizedUrl.toLowerCase()}`,
+        label: normalizedUrl,
+        href: normalizedUrl,
+        fileId: fileId || undefined,
+        conversationId,
+      });
+      continue;
+    }
+    const docLabel = label || fileId;
+    if (!docLabel) {
+      continue;
+    }
+    const key = fileId ? `file:${fileId}` : `doc:${docLabel.toLowerCase()}`;
+    addAggregateItem(documents, {
+      key,
+      label: docLabel,
+      fileId: fileId || undefined,
+      conversationId,
+    });
+  }
+}
+
 interface SidebarProject {
   id: string;
   name: string;
@@ -75,14 +267,6 @@ interface ChatSidebarProps {
   onRenameConversation: (conversationId: string, name: string) => Promise<void>;
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onOpenWorkspaceTab: (tab: "Files" | "Resources" | "Settings" | "Help") => void;
-  mindmapEnabled: boolean;
-  onMindmapEnabledChange: (enabled: boolean) => void;
-  mindmapMaxDepth: number;
-  onMindmapMaxDepthChange: (depth: number) => void;
-  mindmapIncludeReasoning: boolean;
-  onMindmapIncludeReasoningChange: (enabled: boolean) => void;
-  mindmapMapType: "structure" | "evidence";
-  onMindmapMapTypeChange: (mapType: "structure" | "evidence") => void;
   width?: number;
 }
 
@@ -106,14 +290,6 @@ export function ChatSidebar({
   onRenameConversation,
   onDeleteConversation,
   onOpenWorkspaceTab,
-  mindmapEnabled,
-  onMindmapEnabledChange,
-  mindmapMaxDepth,
-  onMindmapMaxDepthChange,
-  mindmapIncludeReasoning,
-  onMindmapIncludeReasoningChange,
-  mindmapMapType,
-  onMindmapMapTypeChange,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -125,6 +301,37 @@ export function ChatSidebar({
   const [renamingConversationDraft, setRenamingConversationDraft] = useState("");
   const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [openProjectEvidenceId, setOpenProjectEvidenceId] = useState<string | null>(null);
+  const [projectEvidenceById, setProjectEvidenceById] = useState<
+    Record<string, ProjectEvidenceState>
+  >({});
+  const [projectUrlDraftById, setProjectUrlDraftById] = useState<Record<string, string>>({});
+  const [projectUploadStatusById, setProjectUploadStatusById] = useState<Record<string, string>>(
+    {},
+  );
+  const [projectUploadBusyById, setProjectUploadBusyById] = useState<Record<string, boolean>>({});
+  const [sourceAliases, setSourceAliases] = useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const raw = window.localStorage.getItem(SOURCE_ALIAS_STORAGE_KEY);
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+  const [editingEvidenceKey, setEditingEvidenceKey] = useState<string | null>(null);
+  const [editingEvidenceDraft, setEditingEvidenceDraft] = useState("");
+  const [evidenceActionBusyByKey, setEvidenceActionBusyByKey] = useState<
+    Record<string, boolean>
+  >({});
+  const projectEvidenceRequestRef = useRef(0);
+  const fileInputByProjectRef = useRef<Record<string, HTMLInputElement | null>>({});
 
   const fallbackProjectId = useMemo(() => projects[0]?.id || "", [projects]);
 
@@ -136,6 +343,368 @@ export function ChatSidebar({
       ),
     [conversations],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(SOURCE_ALIAS_STORAGE_KEY, JSON.stringify(sourceAliases));
+  }, [sourceAliases]);
+
+  const setProjectUploadStatus = useCallback((projectId: string, message: string) => {
+    setProjectUploadStatusById((prev) => ({
+      ...prev,
+      [projectId]: message,
+    }));
+  }, []);
+
+  const setProjectUploadBusy = useCallback((projectId: string, isBusy: boolean) => {
+    setProjectUploadBusyById((prev) => ({
+      ...prev,
+      [projectId]: isBusy,
+    }));
+  }, []);
+
+  const loadProjectEvidence = useCallback(
+    async (projectId: string) => {
+      const projectConversations = allConversations.filter(
+        (conversation) =>
+          (conversationProjects[conversation.id] || fallbackProjectId) === projectId,
+      );
+
+      const requestId = projectEvidenceRequestRef.current + 1;
+      projectEvidenceRequestRef.current = requestId;
+      setProjectEvidenceById((prev) => ({
+        ...prev,
+        [projectId]: {
+          ...(prev[projectId] || EMPTY_PROJECT_EVIDENCE),
+          status: "loading",
+          errorMessage: "",
+          projectChatCount: projectConversations.length,
+        },
+      }));
+
+      if (!projectConversations.length) {
+        setProjectEvidenceById((prev) => ({
+          ...prev,
+          [projectId]: {
+            ...EMPTY_PROJECT_EVIDENCE,
+            status: "ready",
+            projectChatCount: 0,
+          },
+        }));
+        return;
+      }
+
+      const documents = new Map<string, AggregateItem>();
+      const urls = new Map<string, AggregateItem>();
+
+      try {
+        await Promise.all(
+          projectConversations.map(async (conversation) => {
+            const detail = await getConversation(conversation.id);
+            const { turns } = buildConversationTurns(detail);
+            for (const turn of turns) {
+              collectFromSourceUsage(
+                turn.sourceUsage || [],
+                conversation.id,
+                documents,
+                urls,
+              );
+              collectFromSourcesUsed(
+                turn.sourcesUsed || [],
+                conversation.id,
+                documents,
+                urls,
+              );
+            }
+          }),
+        );
+        if (projectEvidenceRequestRef.current !== requestId) {
+          return;
+        }
+        setProjectEvidenceById((prev) => ({
+          ...prev,
+          [projectId]: {
+            status: "ready",
+            documents: toProjectEvidenceItems(documents, "document"),
+            urls: toProjectEvidenceItems(urls, "url"),
+            projectChatCount: projectConversations.length,
+            errorMessage: "",
+          },
+        }));
+      } catch (error) {
+        if (projectEvidenceRequestRef.current !== requestId) {
+          return;
+        }
+        setProjectEvidenceById((prev) => ({
+          ...prev,
+          [projectId]: {
+            ...(prev[projectId] || EMPTY_PROJECT_EVIDENCE),
+            status: "error",
+            errorMessage: `Unable to load sources: ${String(error)}`,
+            projectChatCount: projectConversations.length,
+          },
+        }));
+      }
+    },
+    [allConversations, conversationProjects, fallbackProjectId],
+  );
+
+  const toggleProjectEvidenceCard = useCallback(
+    (projectId: string) => {
+      const isClosingCurrent = openProjectEvidenceId === projectId;
+      setOpenProjectEvidenceId(isClosingCurrent ? null : projectId);
+      setEditingEvidenceKey(null);
+      setEditingEvidenceDraft("");
+      if (!isClosingCurrent) {
+        setProjectUploadStatus(projectId, "");
+        void loadProjectEvidence(projectId);
+      }
+    },
+    [loadProjectEvidence, openProjectEvidenceId, setProjectUploadStatus],
+  );
+
+  const handleProjectFileUpload = useCallback(
+    async (projectId: string, files: FileList | null) => {
+      if (!files || files.length <= 0) {
+        return;
+      }
+      setProjectUploadBusy(projectId, true);
+      setProjectUploadStatus(projectId, "Uploading files...");
+      try {
+        const response = await uploadFiles(files, {
+          scope: "persistent",
+          reindex: true,
+        });
+        const successCount = response.items.filter((item) => item.status === "success").length;
+        const failureCount = response.items.length - successCount;
+        setProjectUploadStatus(
+          projectId,
+          failureCount > 0
+            ? `Uploaded ${successCount} file(s), ${failureCount} failed.`
+            : `Uploaded ${successCount} file(s).`,
+        );
+      } catch (error) {
+        setProjectUploadStatus(projectId, `File upload failed: ${String(error)}`);
+      } finally {
+        setProjectUploadBusy(projectId, false);
+      }
+    },
+    [setProjectUploadBusy, setProjectUploadStatus],
+  );
+
+  const submitProjectUrls = useCallback(
+    async (projectId: string) => {
+      const draft = String(projectUrlDraftById[projectId] || "").trim();
+      if (!draft) {
+        return;
+      }
+      setProjectUploadBusy(projectId, true);
+      setProjectUploadStatus(projectId, "Indexing URLs...");
+      try {
+        const response = await uploadUrls(draft, {
+          reindex: false,
+          web_crawl_depth: 0,
+          web_crawl_max_pages: 0,
+          web_crawl_same_domain_only: true,
+          include_pdfs: true,
+          include_images: true,
+        });
+        const successCount = response.items.filter((item) => item.status === "success").length;
+        const failureCount = response.items.length - successCount;
+        setProjectUploadStatus(
+          projectId,
+          failureCount > 0
+            ? `Indexed ${successCount} URL source(s), ${failureCount} failed.`
+            : `Indexed ${successCount} URL source(s).`,
+        );
+        setProjectUrlDraftById((prev) => ({
+          ...prev,
+          [projectId]: "",
+        }));
+      } catch (error) {
+        setProjectUploadStatus(projectId, `URL indexing failed: ${String(error)}`);
+      } finally {
+        setProjectUploadBusy(projectId, false);
+      }
+    },
+    [projectUrlDraftById, setProjectUploadBusy, setProjectUploadStatus],
+  );
+
+  const closeEvidenceModal = useCallback(() => {
+    setOpenProjectEvidenceId(null);
+    setEditingEvidenceKey(null);
+    setEditingEvidenceDraft("");
+  }, []);
+
+  const getEvidenceDisplayLabel = useCallback(
+    (item: ProjectEvidenceItem) => {
+      const alias = String(sourceAliases[item.key] || "").trim();
+      return alias || item.label;
+    },
+    [sourceAliases],
+  );
+
+  const startRenameEvidenceItem = useCallback(
+    (item: ProjectEvidenceItem) => {
+      setEditingEvidenceKey(item.key);
+      setEditingEvidenceDraft(getEvidenceDisplayLabel(item));
+    },
+    [getEvidenceDisplayLabel],
+  );
+
+  const cancelRenameEvidenceItem = useCallback(() => {
+    setEditingEvidenceKey(null);
+    setEditingEvidenceDraft("");
+  }, []);
+
+  const commitRenameEvidenceItem = useCallback(
+    (item: ProjectEvidenceItem) => {
+      const nextLabel = editingEvidenceDraft.trim();
+      if (!nextLabel) {
+        return;
+      }
+      setSourceAliases((prev) => {
+        const currentAlias = String(prev[item.key] || "").trim();
+        if (nextLabel === item.label || nextLabel === currentAlias) {
+          if (!currentAlias) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[item.key];
+          return next;
+        }
+        return {
+          ...prev,
+          [item.key]: nextLabel,
+        };
+      });
+      setEditingEvidenceKey(null);
+      setEditingEvidenceDraft("");
+    },
+    [editingEvidenceDraft],
+  );
+
+  const evidenceProject = useMemo(
+    () => projects.find((project) => project.id === openProjectEvidenceId) || null,
+    [projects, openProjectEvidenceId],
+  );
+  const evidenceProjectId = evidenceProject?.id || "";
+  const evidenceProjectState = evidenceProjectId
+    ? projectEvidenceById[evidenceProjectId] || EMPTY_PROJECT_EVIDENCE
+    : EMPTY_PROJECT_EVIDENCE;
+  const evidenceProjectUploadBusy = evidenceProjectId
+    ? Boolean(projectUploadBusyById[evidenceProjectId])
+    : false;
+  const evidenceProjectUploadStatus = evidenceProjectId
+    ? String(projectUploadStatusById[evidenceProjectId] || "")
+    : "";
+  const evidenceProjectUrlDraft = evidenceProjectId
+    ? String(projectUrlDraftById[evidenceProjectId] || "")
+    : "";
+
+  const handleDeleteEvidenceItem = useCallback(
+    async (item: ProjectEvidenceItem) => {
+      if (!evidenceProjectId) {
+        return;
+      }
+      const fileIds = Array.from(new Set((item.fileIds || []).filter(Boolean)));
+      const fallbackUrl = String(item.href || item.label || "").trim();
+      const canDeleteViaUrl = item.type === "url" && Boolean(fallbackUrl);
+      if (!fileIds.length && !canDeleteViaUrl) {
+        setProjectUploadStatus(
+          evidenceProjectId,
+          `Delete unavailable for "${getEvidenceDisplayLabel(item)}".`,
+        );
+        return;
+      }
+
+      const confirmed = window.confirm(
+        `Delete "${getEvidenceDisplayLabel(item)}" from indexed sources? This removes it from retrieval.`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: true }));
+      try {
+        if (fileIds.length) {
+          const response = await deleteFiles(fileIds);
+          const deletedCount = response.deleted_ids.length;
+          const failedCount = response.failed.length;
+          setProjectUploadStatus(
+            evidenceProjectId,
+            failedCount > 0
+              ? `Deleted ${deletedCount} source(s), ${failedCount} failed.`
+              : `Deleted ${deletedCount} source(s).`,
+          );
+        } else {
+          const response = await deleteUrls([fallbackUrl]);
+          const deletedCount = response.deleted_ids.length;
+          const failedCount = response.failed.length;
+          if (deletedCount > 0) {
+            setProjectUploadStatus(
+              evidenceProjectId,
+              failedCount > 0
+                ? `Deleted ${deletedCount} source(s), ${failedCount} URL(s) failed.`
+                : `Deleted ${deletedCount} source(s) from URL.`,
+            );
+          } else {
+            const firstFailure = response.failed[0];
+            setProjectUploadStatus(
+              evidenceProjectId,
+              firstFailure?.message || "No indexed source matched this URL.",
+            );
+          }
+        }
+        setSourceAliases((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, item.key)) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[item.key];
+          return next;
+        });
+        await loadProjectEvidence(evidenceProjectId);
+      } catch (error) {
+        setProjectUploadStatus(
+          evidenceProjectId,
+          `Delete failed for "${getEvidenceDisplayLabel(item)}": ${String(error)}`,
+        );
+      } finally {
+        setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: false }));
+      }
+    },
+    [evidenceProjectId, getEvidenceDisplayLabel, loadProjectEvidence, setProjectUploadStatus],
+  );
+
+  useEffect(() => {
+    if (!editingEvidenceKey) {
+      return;
+    }
+    const existsInProject = [
+      ...(evidenceProjectState.documents || []),
+      ...(evidenceProjectState.urls || []),
+    ].some((item) => item.key === editingEvidenceKey);
+    if (!existsInProject) {
+      setEditingEvidenceKey(null);
+      setEditingEvidenceDraft("");
+    }
+  }, [editingEvidenceKey, evidenceProjectState.documents, evidenceProjectState.urls]);
+
+  useEffect(() => {
+    if (!openProjectEvidenceId) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeEvidenceModal();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeEvidenceModal, openProjectEvidenceId]);
 
   const submitProject = () => {
     const normalized = projectDraft.trim();
@@ -301,6 +870,7 @@ export function ChatSidebar({
           {projects.map((project) => {
             const isActive = project.id === selectedProjectId;
             const isEditing = editingProjectId === project.id;
+            const isEvidenceOpen = openProjectEvidenceId === project.id;
             return (
               <div key={project.id} className="rounded-xl">
                 {isEditing ? (
@@ -347,6 +917,17 @@ export function ChatSidebar({
                         <Folder className="w-4.5 h-4.5 text-[#1d1d1f] shrink-0" />
                       )}
                       <span className="text-[15px] text-[#1d1d1f] truncate">{project.name}</span>
+                    </button>
+                    <button
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void toggleProjectEvidenceCard(project.id);
+                      }}
+                      className={`p-1 rounded-md hover:bg-black/5 hover:text-[#1d1d1f] transition-opacity ${isEvidenceOpen ? "text-[#1d1d1f] opacity-100" : "text-[#6e6e73] opacity-0 group-hover:opacity-100"}`}
+                      title="Project sources and uploads"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => startRenameProject(project)}
@@ -506,55 +1087,6 @@ export function ChatSidebar({
       </div>
 
       <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7] space-y-2.5">
-        <div className="rounded-xl border border-black/[0.08] bg-white p-2.5 space-y-2">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">Mind-map</p>
-          <label className="flex items-center justify-between gap-2 text-[12px] text-[#1d1d1f]">
-            <span>Generate automatically</span>
-            <input
-              type="checkbox"
-              checked={mindmapEnabled}
-              onChange={(event) => onMindmapEnabledChange(event.target.checked)}
-              className="h-4 w-4 rounded border-black/[0.15]"
-            />
-          </label>
-          <label className="flex items-center justify-between gap-2 text-[12px] text-[#1d1d1f]">
-            <span>Include reasoning map</span>
-            <input
-              type="checkbox"
-              checked={mindmapIncludeReasoning}
-              onChange={(event) => onMindmapIncludeReasoningChange(event.target.checked)}
-              className="h-4 w-4 rounded border-black/[0.15]"
-            />
-          </label>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[12px] text-[#1d1d1f]">Max depth</span>
-            <select
-              value={String(mindmapMaxDepth)}
-              onChange={(event) => onMindmapMaxDepthChange(Number(event.target.value))}
-              className="h-7 rounded-md border border-black/[0.1] bg-white px-2 text-[11px] text-[#1d1d1f]"
-            >
-              {[2, 3, 4, 5, 6, 7, 8].map((depth) => (
-                <option key={depth} value={depth}>
-                  {depth}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[12px] text-[#1d1d1f]">Map type</span>
-            <select
-              value={mindmapMapType}
-              onChange={(event) =>
-                onMindmapMapTypeChange(event.target.value === "evidence" ? "evidence" : "structure")
-              }
-              className="h-7 rounded-md border border-black/[0.1] bg-white px-2 text-[11px] text-[#1d1d1f]"
-            >
-              <option value="structure">Structure</option>
-              <option value="evidence">Evidence</option>
-            </select>
-          </div>
-        </div>
-
         <div className="relative">
           <button
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
@@ -588,6 +1120,342 @@ export function ChatSidebar({
           ) : null}
         </div>
       </div>
+
+      {evidenceProject ? (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center p-5"
+          onClick={closeEvidenceModal}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Project sources for ${evidenceProject.name}`}
+        >
+          <div className="absolute inset-0 bg-black/35" />
+          <div
+            className="relative z-[121] w-full max-w-[980px] max-h-[86vh] rounded-2xl border border-black/[0.1] bg-white shadow-[0_24px_60px_rgba(0,0,0,0.28)] flex flex-col overflow-hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-black/[0.08] flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[16px] font-semibold text-[#1d1d1f] truncate">
+                  {evidenceProject.name} sources
+                </p>
+                <p className="text-[12px] text-[#6e6e73] mt-0.5">
+                  Chats in project: {evidenceProjectState.projectChatCount}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void loadProjectEvidence(evidenceProjectId)}
+                  className="h-8 px-3 rounded-lg border border-black/[0.08] text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors disabled:opacity-50"
+                  disabled={evidenceProjectState.status === "loading"}
+                  title="Refresh source list"
+                >
+                  {evidenceProjectState.status === "loading" ? "Refreshing..." : "Refresh"}
+                </button>
+                <button
+                  onClick={closeEvidenceModal}
+                  className="h-8 w-8 rounded-lg border border-black/[0.08] text-[#6e6e73] hover:text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors inline-flex items-center justify-center"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {evidenceProjectState.status === "loading" ? (
+                <div className="inline-flex items-center gap-2 text-[13px] text-[#6e6e73]">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Collecting sources used in this project's chats...</span>
+                </div>
+              ) : null}
+
+              {evidenceProjectState.status === "error" ? (
+                <p className="text-[13px] text-[#d44848]">{evidenceProjectState.errorMessage}</p>
+              ) : null}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <section className="rounded-xl border border-black/[0.08] bg-[#fbfbfc] p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="inline-flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-[#6e6e73]" />
+                      <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6e6e73]">
+                        Documents
+                      </p>
+                    </div>
+                    <span className="text-[12px] text-[#8d8d93]">
+                      {evidenceProjectState.documents.length}
+                    </span>
+                  </div>
+                  {evidenceProjectState.documents.length ? (
+                    <div className="mt-2 max-h-[240px] overflow-y-auto space-y-1.5 pr-1">
+                      {evidenceProjectState.documents.map((item) => (
+                        <div
+                          key={item.key}
+                          className="group rounded-lg border border-black/[0.05] bg-white px-2.5 py-2 hover:border-black/[0.14] transition-colors"
+                        >
+                          <div className="flex items-center gap-2 w-full">
+                            {editingEvidenceKey === item.key ? (
+                              <>
+                                <input
+                                  value={editingEvidenceDraft}
+                                  onChange={(event) => setEditingEvidenceDraft(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      commitRenameEvidenceItem(item);
+                                    }
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      cancelRenameEvidenceItem();
+                                    }
+                                  }}
+                                  className="flex-1 h-7 px-2 rounded-md border border-black/[0.1] bg-white text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-black/10"
+                                />
+                                <button
+                                  onClick={() => commitRenameEvidenceItem(item)}
+                                  className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/5"
+                                  title="Save name"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={cancelRenameEvidenceItem}
+                                  className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f]"
+                                  title="Cancel rename"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <div className="inline-flex items-center gap-1.5 min-w-0 flex-1">
+                                  <FileText className="w-3.5 h-3.5 shrink-0 text-[#6e6e73]" />
+                                  <p
+                                    className="text-[12px] text-[#1d1d1f] truncate"
+                                    title={getEvidenceDisplayLabel(item)}
+                                  >
+                                    {getEvidenceDisplayLabel(item)}
+                                  </p>
+                                </div>
+                                <div className="ml-1 inline-flex items-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+                                  <button
+                                    onClick={() => startRenameEvidenceItem(item)}
+                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f]"
+                                    title="Rename source"
+                                  >
+                                    <PencilLine className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => void handleDeleteEvidenceItem(item)}
+                                    disabled={
+                                      Boolean(evidenceActionBusyByKey[item.key]) ||
+                                      (item.fileIds.length === 0 &&
+                                        !(item.type === "url" && String(item.href || item.label || "").trim()))
+                                    }
+                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] disabled:opacity-45 disabled:cursor-not-allowed"
+                                    title={
+                                      item.fileIds.length === 0 &&
+                                      !(item.type === "url" && String(item.href || item.label || "").trim())
+                                        ? "Delete unavailable for this source"
+                                        : "Delete source"
+                                    }
+                                  >
+                                    {Boolean(evidenceActionBusyByKey[item.key]) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-[#8d8d93]">
+                            used {item.usageCount}x in {item.chatCount} chat
+                            {item.chatCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[12px] text-[#8d8d93]">No document sources used yet.</p>
+                  )}
+                </section>
+
+                <section className="rounded-xl border border-black/[0.08] bg-[#fbfbfc] p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="inline-flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-[#6e6e73]" />
+                      <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-[#6e6e73]">
+                        URLs
+                      </p>
+                    </div>
+                    <span className="text-[12px] text-[#8d8d93]">
+                      {evidenceProjectState.urls.length}
+                    </span>
+                  </div>
+                  {evidenceProjectState.urls.length ? (
+                    <div className="mt-2 max-h-[240px] overflow-y-auto space-y-1.5 pr-1">
+                      {evidenceProjectState.urls.map((item) => (
+                        <div
+                          key={item.key}
+                          className="group block rounded-lg border border-black/[0.05] bg-white px-2.5 py-2 hover:border-black/[0.14] transition-colors"
+                          title={item.href || item.label}
+                        >
+                          <div className="flex items-center gap-2 w-full">
+                            {editingEvidenceKey === item.key ? (
+                              <>
+                                <input
+                                  value={editingEvidenceDraft}
+                                  onChange={(event) => setEditingEvidenceDraft(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      commitRenameEvidenceItem(item);
+                                    }
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      cancelRenameEvidenceItem();
+                                    }
+                                  }}
+                                  className="flex-1 h-7 px-2 rounded-md border border-black/[0.1] bg-white text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-black/10"
+                                />
+                                <button
+                                  onClick={() => commitRenameEvidenceItem(item)}
+                                  className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/5"
+                                  title="Save name"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={cancelRenameEvidenceItem}
+                                  className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f]"
+                                  title="Cancel rename"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <a
+                                  href={item.href || "#"}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="inline-flex items-center gap-1.5 min-w-0 flex-1"
+                                >
+                                  <Link2 className="w-3.5 h-3.5 shrink-0 text-[#6e6e73]" />
+                                  <p
+                                    className="text-[12px] text-[#1d1d1f] truncate"
+                                    title={getEvidenceDisplayLabel(item)}
+                                  >
+                                    {getEvidenceDisplayLabel(item)}
+                                  </p>
+                                </a>
+                                <div className="ml-1 inline-flex items-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+                                  <button
+                                    onClick={() => startRenameEvidenceItem(item)}
+                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f]"
+                                    title="Rename source"
+                                  >
+                                    <PencilLine className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => void handleDeleteEvidenceItem(item)}
+                                    disabled={
+                                      Boolean(evidenceActionBusyByKey[item.key]) ||
+                                      (item.fileIds.length === 0 &&
+                                        !(item.type === "url" && String(item.href || item.label || "").trim()))
+                                    }
+                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] disabled:opacity-45 disabled:cursor-not-allowed"
+                                    title={
+                                      item.fileIds.length === 0 &&
+                                      !(item.type === "url" && String(item.href || item.label || "").trim())
+                                        ? "Delete unavailable for this source"
+                                        : "Delete source"
+                                    }
+                                  >
+                                    {Boolean(evidenceActionBusyByKey[item.key]) ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-[#8d8d93]">
+                            used {item.usageCount}x in {item.chatCount} chat
+                            {item.chatCount === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[12px] text-[#8d8d93]">No website sources used yet.</p>
+                  )}
+                </section>
+              </div>
+
+              <section className="rounded-xl border border-black/[0.08] bg-[#fbfbfc] p-3 space-y-2.5">
+                <p className="text-[12px] font-semibold text-[#1d1d1f]">Upload more sources</p>
+                <input
+                  ref={(node) => {
+                    fileInputByProjectRef.current[evidenceProjectId] = node;
+                  }}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleProjectFileUpload(evidenceProjectId, event.target.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => fileInputByProjectRef.current[evidenceProjectId]?.click()}
+                    disabled={evidenceProjectUploadBusy}
+                    className="h-8 px-3 rounded-lg border border-black/[0.08] text-[12px] text-[#1d1d1f] hover:bg-white transition-colors disabled:opacity-50"
+                  >
+                    Upload files
+                  </button>
+                </div>
+                <textarea
+                  value={evidenceProjectUrlDraft}
+                  onChange={(event) =>
+                    setProjectUrlDraftById((prev) => ({
+                      ...prev,
+                      [evidenceProjectId]: event.target.value,
+                    }))
+                  }
+                  rows={3}
+                  placeholder="Paste one or more URLs"
+                  className="w-full rounded-lg border border-black/[0.08] bg-white px-2.5 py-2 text-[12px] text-[#1d1d1f] placeholder:text-[#8d8d93] focus:outline-none focus:ring-2 focus:ring-black/10"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void submitProjectUrls(evidenceProjectId)}
+                    disabled={evidenceProjectUploadBusy || !evidenceProjectUrlDraft.trim()}
+                    className="h-8 px-3 rounded-lg bg-[#1d1d1f] text-white text-[12px] hover:bg-[#343438] transition-colors disabled:opacity-50"
+                  >
+                    Index URLs
+                  </button>
+                </div>
+                {evidenceProjectUploadStatus ? (
+                  <p className="text-[12px] text-[#6e6e73]">{evidenceProjectUploadStatus}</p>
+                ) : null}
+                <p className="text-[11px] text-[#8d8d93]">
+                  Rename updates the display label in your workspace.
+                </p>
+                <p className="text-[11px] text-[#8d8d93]">
+                  Uploaded sources become available for future chats in this project.
+                </p>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

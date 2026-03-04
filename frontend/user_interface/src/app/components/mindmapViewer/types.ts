@@ -61,6 +61,7 @@ export type MindMapViewerProps = {
   payload?: Record<string, unknown> | null;
   conversationId?: string | null;
   maxDepth?: number;
+  viewerHeight?: number;
   onAskNode?: (payload: FocusNodePayload) => void;
   onSaveMap?: (payload: MindmapPayload) => void;
   onShareMap?: (payload: MindmapPayload) => Promise<string | void> | string | void;

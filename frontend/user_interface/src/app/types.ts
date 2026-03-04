@@ -80,6 +80,8 @@ export type CitationHighlightBox = {
 
 export type CitationFocus = {
   fileId?: string;
+  sourceUrl?: string;
+  sourceType?: "file" | "website";
   sourceName: string;
   page?: string;
   extract: string;

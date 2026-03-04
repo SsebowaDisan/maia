@@ -128,6 +128,19 @@ type BulkDeleteFilesResponse = {
   failed: FileActionResult[];
 };
 
+type UrlActionResult = {
+  url: string;
+  status: string;
+  message?: string;
+};
+
+type BulkDeleteUrlsResponse = {
+  index_id: number;
+  deleted_ids: string[];
+  deleted_urls: string[];
+  failed: UrlActionResult[];
+};
+
 type FileGroupRecord = {
   id: string;
   name: string;
@@ -228,6 +241,7 @@ export type {
   AgentLiveEvent,
   AgentSourceRecord,
   BulkDeleteFilesResponse,
+  BulkDeleteUrlsResponse,
   ChatResponse,
   ChatStreamEvent,
   ConnectorCredentialRecord,
@@ -247,5 +261,6 @@ export type {
   MindmapShareResponse,
   SourceUsageRecord,
   UploadItem,
+  UrlActionResult,
   UploadResponse,
 };

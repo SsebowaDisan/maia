@@ -345,7 +345,8 @@ def finalize_run(
     info_blocks: list[str] = []
     for idx, source in enumerate(state.all_sources, start=1):
         label = html.escape(source.label)
-        url = html.escape(source.url or "")
+        raw_url = " ".join(str(source.url or "").split()).strip()
+        url = html.escape(raw_url)
         page_label = html.escape(_source_page_label(source))
         source_extract = html.escape(_source_extract(source))
         file_id = html.escape(_source_file_id(source), quote=True)
@@ -357,6 +358,11 @@ def finalize_run(
         )
         details_file_attr = f" data-file-id='{file_id}'" if file_id else ""
         details_page_attr = f" data-page='{page_label}'" if page_label else ""
+        details_source_url_attr = (
+            f" data-source-url='{html.escape(raw_url, quote=True)}'"
+            if raw_url.startswith(("http://", "https://"))
+            else ""
+        )
         details_boxes_attr = (
             f" data-boxes='{html.escape(json.dumps(source_boxes, separators=(',', ':'), ensure_ascii=True), quote=True)}'"
             if source_boxes
@@ -368,7 +374,7 @@ def finalize_run(
             else ""
         )
         info_block = (
-            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_page_attr}{details_boxes_attr} {'open' if idx == 1 else ''}>"
+            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_source_url_attr}{details_page_attr}{details_boxes_attr} {'open' if idx == 1 else ''}>"
             f"<summary><i>Evidence [{idx}]</i></summary>"
             f"<div><b>Source:</b> [{idx}] {label}</div>"
             f"{extract_block}"

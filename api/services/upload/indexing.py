@@ -387,6 +387,7 @@ def index_urls(
     web_crawl_same_domain_only: bool,
     include_pdfs: bool,
     include_images: bool,
+    scope: str = "persistent",
 ) -> dict[str, Any]:
     cleaned_urls = [url.strip() for url in urls if url and url.strip()]
     if not cleaned_urls:
@@ -412,6 +413,12 @@ def index_urls(
     indexing_pipeline = index.get_indexing_pipeline(request_settings, user_id)
     stream = indexing_pipeline.stream(cleaned_urls, reindex=reindex)
     file_ids, errors, items, debug = collect_index_stream(stream)
+    apply_upload_scope_to_sources(
+        index=index,
+        user_id=user_id,
+        file_ids=file_ids,
+        scope=scope,
+    )
     return {
         "index_id": index.id,
         "file_ids": file_ids,

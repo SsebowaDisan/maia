@@ -240,6 +240,33 @@
   color: #1d1d1f;
 }
 
+.chat-answer-html a:not(.citation) {
+  color: #0a66d9;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(10, 102, 217, 0.35);
+  overflow-wrap: anywhere;
+  transition: color 120ms ease, text-decoration-color 120ms ease;
+}
+
+.chat-answer-html a:not(.citation):hover {
+  color: #0750ab;
+  text-decoration-color: rgba(7, 80, 171, 0.55);
+}
+
+.chat-answer-html a:not(.citation):focus-visible {
+  outline: 2px solid rgba(10, 102, 217, 0.38);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.chat-answer-html a:not(.citation):visited {
+  color: #5d45a6;
+  text-decoration-color: rgba(93, 69, 166, 0.45);
+}
+
 .chat-answer-html mark {
   color: inherit;
   background: linear-gradient(180deg, transparent 56%, rgba(255, 210, 61, 0.34) 56%);
@@ -255,6 +282,11 @@
   border-radius: 8px;
   background: #f8f9fc;
   padding: 0.55rem 0.7rem;
+}
+
+.chat-answer-html td,
+.chat-answer-html th {
+  vertical-align: top;
 }
 
 .dark .chat-answer-html {
@@ -441,12 +473,14 @@
 
   .assistantComposerInputShell {
     display: flex;
-    align-items: center;
-    height: 56px;
-    padding: 0 12px;
+    align-items: stretch;
+    min-height: 56px;
+    padding: 8px 12px;
   }
 
   .assistantComposerInput {
+    display: block;
+    width: 100%;
     font-size: 15px;
     line-height: 1.4;
   }

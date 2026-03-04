@@ -141,8 +141,9 @@ export default function App() {
 
   useEffect(() => {
     const focus = chatState.citationFocus;
-    const nextKey = focus?.fileId
-      ? `${focus.fileId}:${focus.page || ""}:${String(focus.extract || "").slice(0, 96)}:${String(focus.evidenceId || "")}:${String(focus.sourceName || "").slice(0, 64)}`
+    const focusTarget = String(focus?.fileId || focus?.sourceUrl || "").trim();
+    const nextKey = focusTarget
+      ? `${focusTarget}:${focus?.page || ""}:${String(focus?.extract || "").slice(0, 96)}:${String(focus?.evidenceId || "")}:${String(focus?.sourceName || "").slice(0, 64)}`
       : "";
     if (!nextKey) {
       return;
@@ -176,6 +177,20 @@ export default function App() {
     chatState.selectedTurnIndex !== null
       ? chatState.chatTurns[chatState.selectedTurnIndex] || null
       : null;
+  const latestTurn = chatState.chatTurns.length
+    ? chatState.chatTurns[chatState.chatTurns.length - 1] || null
+    : null;
+  const activeTurn = selectedTurn || latestTurn;
+  const selectedTurnMindmap =
+    activeTurn?.mindmap && Object.keys(activeTurn.mindmap || {}).length > 0
+      ? activeTurn.mindmap
+      : {};
+  const effectiveMindmapPayload =
+    Object.keys(selectedTurnMindmap || {}).length > 0
+      ? selectedTurnMindmap
+      : activeTurn
+        ? {}
+        : sharedMindmap || {};
 
   return (
     <div className="size-full flex flex-col bg-[#f5f5f7] overflow-hidden">
@@ -204,14 +219,6 @@ export default function App() {
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={(tab) => layout.setActiveTab(tab)}
-              mindmapEnabled={chatState.mindmapEnabled}
-              onMindmapEnabledChange={chatState.setMindmapEnabled}
-              mindmapMaxDepth={chatState.mindmapMaxDepth}
-              onMindmapMaxDepthChange={chatState.setMindmapMaxDepth}
-              mindmapIncludeReasoning={chatState.mindmapIncludeReasoning}
-              onMindmapIncludeReasoningChange={chatState.setMindmapIncludeReasoning}
-              mindmapMapType={chatState.mindmapMapType}
-              onMindmapMapTypeChange={chatState.setMindmapMapType}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -275,15 +282,14 @@ export default function App() {
                 width={layout.infoPanelWidth}
                 citationFocus={chatState.citationFocus}
                 selectedConversationId={chatState.selectedConversationId}
-                assistantHtml={selectedTurn?.assistant || ""}
-                infoHtml={selectedTurn?.info || ""}
-                infoPanel={selectedTurn?.infoPanel || {}}
-                mindmap={
-                  selectedTurn?.mindmap && Object.keys(selectedTurn.mindmap || {}).length > 0
-                    ? selectedTurn.mindmap
-                    : sharedMindmap || {}
-                }
-                sourceUsage={selectedTurn?.sourceUsage || []}
+                userPrompt={activeTurn?.user || ""}
+                assistantHtml={activeTurn?.assistant || ""}
+                infoHtml={activeTurn?.info || ""}
+                infoPanel={activeTurn?.infoPanel || {}}
+                mindmap={effectiveMindmapPayload}
+                sourcesUsed={activeTurn?.sourcesUsed || []}
+                webSummary={activeTurn?.webSummary || {}}
+                sourceUsage={activeTurn?.sourceUsage || []}
                 indexId={fileLibrary.defaultIndexId}
                 onClearCitationFocus={() => chatState.setCitationFocus(null)}
                 onSelectCitationFocus={(citation) => chatState.setCitationFocus(citation)}

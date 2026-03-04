@@ -5,6 +5,7 @@ from .groups import (
     create_file_group,
     delete_file_group,
     delete_indexed_files,
+    delete_indexed_urls,
     list_file_groups,
     move_files_to_group,
     rename_file_group,
@@ -28,4 +29,5 @@ __all__ = [
     "rename_file_group",
     "delete_file_group",
     "delete_indexed_files",
+    "delete_indexed_urls",
 ]

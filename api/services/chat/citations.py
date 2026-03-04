@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import html
 import json
 import re
 from itertools import combinations
 from typing import Any
+from urllib.parse import urlparse
 
 from .constants import (
     MAIA_CITATION_ANCHOR_INDEX_ENABLED,
@@ -50,9 +51,119 @@ _DETAILS_UNIT_ID_RE = re.compile(r"data-unit-id=['\"]([^'\"]+)['\"]", flags=re.I
 _DETAILS_MATCH_QUALITY_RE = re.compile(r"data-match-quality=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _DETAILS_CHAR_START_RE = re.compile(r"data-char-start=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _DETAILS_CHAR_END_RE = re.compile(r"data-char-end=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
+_DETAILS_SOURCE_URL_RE = re.compile(r"data-source-url=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
+_ARTIFACT_URL_PATH_SEGMENTS = {
+    "extract",
+    "source",
+    "link",
+    "evidence",
+    "citation",
+    "title",
+    "markdown",
+    "content",
+    "published",
+    "time",
+    "url",
+}
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
-_INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})")
+_INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})")
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
+_URL_TOKEN_RE = re.compile(r"https?://", flags=re.IGNORECASE)
+
+
+def _upsert_html_attr(tag: str, attr_name: str, attr_value: str) -> str:
+    normalized_tag = str(tag or "")
+    if not normalized_tag or not normalized_tag.endswith(">"):
+        return normalized_tag
+    safe_value = html.escape(str(attr_value or ""), quote=True)
+    if not safe_value:
+        return normalized_tag
+    attr_pattern = re.compile(
+        rf"\b{re.escape(attr_name)}=['\"][^'\"]*['\"]",
+        flags=re.IGNORECASE,
+    )
+    if attr_pattern.search(normalized_tag):
+        return attr_pattern.sub(f"{attr_name}='{safe_value}'", normalized_tag, count=1)
+    return f"{normalized_tag[:-1]} {attr_name}='{safe_value}'>"
+
+
+def _normalize_info_evidence_html(info_html: str) -> str:
+    text = str(info_html or "")
+    if not text or "<details" not in text.lower():
+        return text
+
+    output: list[str] = []
+    cursor = 0
+    seen_ref_ids: set[int] = set()
+    next_ref_id = 1
+
+    for match in _DETAILS_BLOCK_RE.finditer(text):
+        tag = str(match.group(1) or "")
+        body_html = str(match.group(2) or "")
+        class_match = re.search(r"\bclass=['\"]([^'\"]*)['\"]", tag, flags=re.IGNORECASE)
+        class_value = class_match.group(1).strip().lower() if class_match else ""
+        if "evidence" not in class_value.split():
+            continue
+
+        output.append(text[cursor : match.start()])
+
+        id_match = re.search(r"id=['\"]evidence-(\d{1,4})['\"]", tag, flags=re.IGNORECASE)
+        summary_id_match = re.search(
+            r"<summary[^>]*>[\s\S]*?(?:evidence\s*\[?|\[)\s*(\d{1,4})\s*\]?",
+            body_html[:420],
+            flags=re.IGNORECASE,
+        )
+        preferred_ref_id = _to_int(id_match.group(1) if id_match else "")
+        if preferred_ref_id is None:
+            preferred_ref_id = _to_int(summary_id_match.group(1) if summary_id_match else "")
+        if preferred_ref_id is None or preferred_ref_id <= 0 or preferred_ref_id in seen_ref_ids:
+            while next_ref_id in seen_ref_ids:
+                next_ref_id += 1
+            ref_id = next_ref_id
+        else:
+            ref_id = preferred_ref_id
+        seen_ref_ids.add(ref_id)
+        if ref_id >= next_ref_id:
+            next_ref_id = ref_id + 1
+
+        normalized_tag = _upsert_html_attr(tag, "id", f"evidence-{ref_id}")
+
+        source_url_match = _DETAILS_SOURCE_URL_RE.search(normalized_tag)
+        source_url = _normalize_source_url(
+            html.unescape(source_url_match.group(1)) if source_url_match else ""
+        )
+        if not source_url:
+            source_url = _extract_source_url_from_details_body(body_html)
+        if source_url:
+            normalized_tag = _upsert_html_attr(normalized_tag, "data-source-url", source_url)
+
+        page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", normalized_tag, flags=re.IGNORECASE)
+        page_value = str(page_match.group(1) if page_match else "").strip()
+        if not page_value:
+            summary_page_match = re.search(
+                r"<summary[^>]*>[\s\S]*?page\s+(\d{1,4})[\s\S]*?</summary>",
+                body_html[:420],
+                flags=re.IGNORECASE,
+            )
+            if summary_page_match:
+                normalized_tag = _upsert_html_attr(
+                    normalized_tag,
+                    "data-page",
+                    summary_page_match.group(1).strip(),
+                )
+
+        output.append(f"{normalized_tag}{body_html}</details>")
+        cursor = match.end()
+
+    if cursor <= 0:
+        return text
+    output.append(text[cursor:])
+    return "".join(output)
+
+
+def normalize_info_evidence_html(info_html: str) -> str:
+    return _normalize_info_evidence_html(info_html)
 
 
 def _to_float(value: Any) -> float | None:
@@ -303,7 +414,7 @@ def _is_claim_like_fragment(fragment: str) -> bool:
     # Skip lines that are mostly separators.
     if re.fullmatch(r"[-=*#\s]+", normalized):
         return False
-    trimmed = re.sub(r"^[-*•\d\.\)\(\s]+", "", normalized)
+    trimmed = re.sub(r"^[-*â€¢\d\.\)\(\s]+", "", normalized)
     if len(trimmed) < 16:
         return False
     return True
@@ -322,6 +433,25 @@ def _inject_claim_citations_in_line(
     if not ref_by_id:
         return line
     fallback_ref_id = min(ref_by_id.keys())
+    line_already_cited = bool(
+        re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", line)
+        or "class='citation'" in line
+        or 'class="citation"' in line
+    )
+    if line_already_cited:
+        return line
+
+    # URL/link lines should receive citation markers only at the end so markdown
+    # links remain valid (no split at dots inside URLs).
+    if _URL_TOKEN_RE.search(line) or _MARKDOWN_LINK_RE.search(line):
+        cleaned_line = _clean_text(line)
+        if not _is_claim_like_fragment(line) or not cleaned_line:
+            return line
+        best_ref_id, _score = _best_ref_for_context(cleaned_line, refs)
+        ref_id = best_ref_id if best_ref_id in ref_by_id else fallback_ref_id
+        marker = f"[{ref_id}]"
+        line_stripped = line.rstrip()
+        return f"{line_stripped} {marker}{line[len(line_stripped):]}"
 
     rebuilt: list[str] = []
     cursor = 0
@@ -331,12 +461,12 @@ def _inject_claim_citations_in_line(
         segment = line[start:end]
         cleaned = _clean_text(segment)
         should_cite = _is_claim_like_fragment(segment)
-        already_cited = bool(
+        segment_already_cited = bool(
             re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", segment)
             or "class='citation'" in segment
             or 'class="citation"' in segment
         )
-        if should_cite and not already_cited and cleaned:
+        if should_cite and not segment_already_cited and cleaned:
             best_ref_id, _score = _best_ref_for_context(cleaned, refs)
             ref_id = best_ref_id if best_ref_id in ref_by_id else fallback_ref_id
             marker = f"[{ref_id}]"
@@ -434,6 +564,7 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     if ref_id <= 0:
         return ""
     file_id = str(ref.get("source_id", "") or "").strip()
+    source_url = _normalize_source_url(ref.get("source_url"))
     page_label = str(ref.get("page_label", "") or "").strip()
     unit_id = str(ref.get("unit_id", "") or "").strip()
     phrase = str(ref.get("phrase", "") or "").strip()
@@ -457,6 +588,8 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     ]
     if file_id:
         attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
+    if source_url:
+        attrs.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
     if page_label:
         attrs.append(f"data-page='{html.escape(page_label, quote=True)}'")
     if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id:
@@ -484,6 +617,70 @@ def _clean_text(fragment: str) -> str:
     without_tags = _HTML_TAG_RE.sub(" ", fragment)
     plain = html.unescape(without_tags)
     return _SPACE_RE.sub(" ", plain).strip()
+
+
+def _normalize_source_url(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip()
+    if not value:
+        return ""
+    if len(value) > 2048:
+        value = value[:2048]
+    value = value.strip(" <>\"'`")
+    value = value.rstrip(".,;:!?")
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"}:
+        return ""
+    if not parsed.netloc:
+        return ""
+    path_segments = [
+        segment.strip().lower()
+        for segment in str(parsed.path or "").split("/")
+        if segment.strip()
+    ]
+    if len(path_segments) == 1 and path_segments[0].rstrip(":") in _ARTIFACT_URL_PATH_SEGMENTS:
+        return ""
+    return parsed.geturl()
+
+
+def _extract_source_url_from_details_body(body_html: str) -> str:
+    if not body_html:
+        return ""
+
+    href_match = re.search(
+        r"<a\b[^>]*href=['\"]([^'\"]+)['\"]",
+        body_html,
+        flags=re.IGNORECASE,
+    )
+    if href_match:
+        normalized = _normalize_source_url(html.unescape(href_match.group(1)))
+        if normalized:
+            return normalized
+
+    link_block_match = re.search(
+        r"<div[^>]*class=['\"][^'\"]*evidence-content[^'\"]*['\"][^>]*>\s*"
+        r"<b>\s*Link:\s*</b>\s*([\s\S]*?)</div>",
+        body_html,
+        flags=re.IGNORECASE,
+    )
+    if not link_block_match:
+        link_block_match = re.search(
+            r"<div[^>]*>\s*<b>\s*Link:\s*</b>\s*([\s\S]*?)</div>",
+            body_html,
+            flags=re.IGNORECASE,
+        )
+    if not link_block_match:
+        return ""
+
+    link_text = _clean_text(link_block_match.group(1))
+    if not link_text:
+        return ""
+    inline_url_match = re.search(r"https?://[^\s<>'\"]+", link_text, flags=re.IGNORECASE)
+    if not inline_url_match:
+        return ""
+    return _normalize_source_url(inline_url_match.group(0).rstrip(".,;:!?"))
 
 
 def _extract_phrase_from_details_body(body_html: str) -> str:
@@ -663,6 +860,7 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
 
         additions: list[str] = []
         file_id = str(ref.get("source_id", "") or "").strip()
+        source_url = _normalize_source_url(ref.get("source_url"))
         page_label = str(ref.get("page_label", "") or "").strip()
         unit_id = str(ref.get("unit_id", "") or "").strip()
         phrase = str(ref.get("phrase", "") or "").strip()
@@ -681,6 +879,8 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
 
         if file_id and not re.search(r"\bdata-file-id=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
+        if source_url and not re.search(r"\bdata-source-url=['\"]", normalized_open, flags=re.IGNORECASE):
+            additions.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
         if page_label and not re.search(r"\bdata-page=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-page='{html.escape(page_label, quote=True)}'")
         if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id and not re.search(
@@ -747,11 +947,13 @@ def _normalize_visible_inline_citations(answer: str) -> str:
         return text
 
     ref_to_display: dict[int, int] = {}
-    seen_ref_ids: set[int] = set()
     next_display_id = 1
+    last_emitted_ref_id: int | None = None
+    last_anchor_end = -1
+    duplicate_gap_re = re.compile(r"^[\s,;:.!?()\[\]\-_/]*$")
 
     def replace_anchor(match: re.Match[str]) -> str:
-        nonlocal next_display_id
+        nonlocal next_display_id, last_emitted_ref_id, last_anchor_end
         anchor_open, _anchor_label, anchor_close = match.groups()
         ref_id = _ref_id_from_anchor_open(anchor_open)
         if ref_id <= 0:
@@ -763,9 +965,10 @@ def _normalize_visible_inline_citations(answer: str) -> str:
             ref_to_display[ref_id] = display_id
             next_display_id = display_id + 1
 
-        if ref_id in seen_ref_ids:
+        between = text[last_anchor_end : match.start()] if last_anchor_end >= 0 else ""
+        if last_emitted_ref_id == ref_id and duplicate_gap_re.fullmatch(between or ""):
+            last_anchor_end = match.end()
             return ""
-        seen_ref_ids.add(ref_id)
 
         if re.search(r"\bdata-citation-number=['\"]\d{1,4}['\"]", anchor_open, flags=re.IGNORECASE):
             anchor_open = re.sub(
@@ -787,6 +990,8 @@ def _normalize_visible_inline_citations(answer: str) -> str:
             )
         else:
             anchor_open = f"{anchor_open[:-1]} data-evidence-id='evidence-{ref_id}'>"
+        last_emitted_ref_id = ref_id
+        last_anchor_end = match.end()
         return f"{anchor_open}[{display_id}]{anchor_close}"
 
     normalized = _CITATION_ANCHOR_RE.sub(replace_anchor, text)
@@ -798,12 +1003,12 @@ def _normalize_visible_inline_citations(answer: str) -> str:
     cursor = 0
     for match in _CITATION_ANCHOR_RE.finditer(normalized):
         outside = normalized[cursor : match.start()]
-        outside = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", outside)
+        outside = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", outside)
         rebuilt.append(outside)
         rebuilt.append(match.group(0))
         cursor = match.end()
     tail = normalized[cursor:]
-    tail = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", tail)
+    tail = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", tail)
     rebuilt.append(tail)
     normalized = "".join(rebuilt)
 
@@ -848,7 +1053,7 @@ def _remove_inline_marker_tokens_with_index_map(
     cursor = 0
     while cursor < len(plain_text):
         marker_match = re.match(
-            r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})",
+            r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})",
             plain_text[cursor:],
         )
         if marker_match:
@@ -989,6 +1194,14 @@ def assign_fast_source_refs(
     for snippet in snippets:
         source_id = str(snippet.get("source_id", "") or "").strip()
         source_name = str(snippet.get("source_name", "Indexed file"))
+        is_primary_source = bool(snippet.get("is_primary_source"))
+        source_name_url = source_name if source_name.strip().lower().startswith(("http://", "https://")) else ""
+        source_url = _normalize_source_url(
+            snippet.get("source_url")
+            or snippet.get("page_url")
+            or snippet.get("url")
+            or source_name_url
+        )
         page_label = str(snippet.get("page_label", "") or "").strip()
         unit_id = str(snippet.get("unit_id", "") or "").strip()
         match_quality = str(snippet.get("match_quality", "") or "").strip() or "estimated"
@@ -1021,12 +1234,14 @@ def assign_fast_source_refs(
                     "page_label": page_label,
                     "label": label,
                     "phrase": phrase,
+                    "source_url": source_url,
                     "unit_id": unit_id,
                     "char_start": char_start,
                     "char_end": char_end,
                     "match_quality": match_quality,
                     "highlight_boxes": snippet_boxes,
                     "strength_score": snippet_strength,
+                    "is_primary_source": is_primary_source,
                     "source_type": _source_type_from_name(source_name),
                 }
             )
@@ -1039,6 +1254,10 @@ def assign_fast_source_refs(
                         _normalize_highlight_boxes(existing_ref.get("highlight_boxes")),
                         snippet_boxes,
                     )
+                if source_url and not _normalize_source_url(existing_ref.get("source_url")):
+                    existing_ref["source_url"] = source_url
+                if is_primary_source:
+                    existing_ref["is_primary_source"] = True
                 existing_ref["strength_score"] = max(
                     _score_value(existing_ref.get("strength_score")),
                     snippet_strength,
@@ -1061,14 +1280,18 @@ def assign_fast_source_refs(
         if char_end > char_start:
             enriched_item["char_end"] = char_end
         enriched_item["match_quality"] = match_quality
+        enriched_item["is_primary_source"] = is_primary_source
         if snippet_boxes:
             enriched_item["highlight_boxes"] = snippet_boxes
+        if source_url:
+            enriched_item["source_url"] = source_url
         enriched.append(enriched_item)
 
     if ordering_enabled and refs:
         ranked_refs = sorted(
             refs,
             key=lambda ref: (
+                0 if bool(ref.get("is_primary_source")) else 1,
                 -_score_value(ref.get("strength_score")),
                 -_score_value(ref.get("llm_trulens_score")),
                 str(ref.get("source_id", "") or ""),
@@ -1272,7 +1495,7 @@ def build_claim_signal_summary(
         if not ref_ids:
             ref_ids = {
                 int(match)
-                for match in re.findall(r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})", segment)
+                for match in re.findall(r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})", segment)
                 if int(match) in ref_by_id
             }
         if not ref_ids:
@@ -1280,7 +1503,7 @@ def build_claim_signal_summary(
 
         cleaned_claim = _clean_text(
             re.sub(
-                r"(?:\[|【|\{)\s*(\d{1,4})\s*(?:\]|】|\})",
+                r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})",
                 "",
                 _CITATION_ANCHOR_RE.sub("", segment),
             )
@@ -1485,7 +1708,7 @@ def render_fast_citation_links(
 
 
 def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
-    text = str(info_html or "")
+    text = _normalize_info_evidence_html(str(info_html or ""))
     if not text:
         return []
 
@@ -1503,6 +1726,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         seen_ids.add(ref_id)
         source_id_match = re.search(r"data-file-id=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
         page_match = re.search(r"data-page=['\"]([^'\"]+)['\"]", tag, flags=re.IGNORECASE)
+        source_url_match = _DETAILS_SOURCE_URL_RE.search(tag)
         boxes_match = _DETAILS_BOXES_RE.search(tag)
         if not boxes_match:
             boxes_match = _DETAILS_BBOXES_RE.search(tag)
@@ -1524,11 +1748,17 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         else:
             page_label = page_match.group(1).strip()
         phrase = _extract_phrase_from_details_body(body_html)
+        source_url = _normalize_source_url(
+            html.unescape(source_url_match.group(1)) if source_url_match else ""
+        )
+        if not source_url:
+            source_url = _extract_source_url_from_details_body(body_html)
         highlight_boxes = _load_highlight_boxes_attr(boxes_match.group(1) if boxes_match else "")
         refs.append(
             {
                 "id": ref_id,
                 "source_id": source_id_match.group(1).strip() if source_id_match else "",
+                "source_url": source_url,
                 "page_label": page_label,
                 "label": f"Evidence {ref_id}",
                 "phrase": phrase,
@@ -1629,7 +1859,7 @@ def normalize_fast_answer(answer: str) -> str:
     for block in blocks:
         if not block:
             continue
-        signature = re.sub(r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})", "", block)
+        signature = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", block)
         signature = re.sub(r"\s+", " ", signature).strip().lower()
         if len(signature) >= 120 and signature in seen_signatures:
             continue
@@ -1655,7 +1885,14 @@ def build_fast_info_html(
         if ref_id > 0:
             rendered_refs.add(ref_id)
 
-        source_name = html.escape(str(snippet.get("source_name", "Indexed file")))
+        raw_source_name = str(snippet.get("source_name", "Indexed file") or "Indexed file")
+        source_name = html.escape(raw_source_name)
+        source_url = _normalize_source_url(
+            snippet.get("source_url")
+            or snippet.get("page_url")
+            or snippet.get("url")
+            or (raw_source_name if raw_source_name.lower().startswith(("http://", "https://")) else "")
+        )
         page_label = html.escape(str(snippet.get("page_label", "") or ""))
         excerpt = html.escape(str(snippet.get("text", "") or "")[:1400])
         image_origin = snippet.get("image_origin")
@@ -1678,6 +1915,9 @@ def build_fast_info_html(
         details_page_attr = f" data-page='{page_label}'" if page_label else ""
         details_file_attr = (
             f" data-file-id='{html.escape(source_id, quote=True)}'" if source_id else ""
+        )
+        details_source_url_attr = (
+            f" data-source-url='{html.escape(source_url, quote=True)}'" if source_url else ""
         )
         details_unit_attr = (
             f" data-unit-id='{html.escape(unit_id[:160], quote=True)}'" if unit_id else ""
@@ -1708,8 +1948,17 @@ def build_fast_info_html(
         source_label = source_name
         if ref_id > 0:
             source_label = f"[{ref_id}] {source_name}"
+        link_block = ""
+        if source_url:
+            safe_source_url = html.escape(source_url, quote=True)
+            link_block = (
+                "<div class='evidence-content'><b>Link:</b> "
+                f"<a href='{safe_source_url}' target='_blank' rel='noopener noreferrer'>{safe_source_url}</a>"
+                "</div>"
+            )
         block = (
             f"<details class='evidence'{details_id}{details_file_attr}{details_page_attr}"
+            f"{details_source_url_attr}"
             f"{details_unit_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
             f"{details_match_quality_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
             f"{details_char_start_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
@@ -1718,6 +1967,7 @@ def build_fast_info_html(
             f"<summary><i>{summary_label}</i></summary>"
             f"<div><b>Source:</b> {source_label}</div>"
             f"<div class='evidence-content'><b>Extract:</b> {excerpt}</div>"
+            f"{link_block}"
         )
         if isinstance(image_origin, str) and image_origin.startswith("data:image/"):
             safe_src = html.escape(image_origin, quote=True)
@@ -1727,3 +1977,4 @@ def build_fast_info_html(
         if len(info_blocks) >= max_blocks:
             break
     return "".join(info_blocks)
+

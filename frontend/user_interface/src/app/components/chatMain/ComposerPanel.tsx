@@ -1,9 +1,20 @@
 import { AlertCircle, ArrowUp, ExternalLink, FileText, Loader2, X } from "lucide-react";
-import { useEffect, useMemo, useState, type ChangeEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from "react";
 import { buildRawFileUrl } from "../../../api/client";
 import { AccessModeDropdown } from "../AccessModeDropdown";
 import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import type { ComposerAttachment } from "./types";
+
+const MAX_TEXTAREA_HEIGHT_PX = 168;
 
 type ComposerPanelProps = {
   accessMode: "restricted" | "full_access";
@@ -69,6 +80,32 @@ function ComposerPanel({
   };
 
   const [previewAttachment, setPreviewAttachment] = useState<ComposerAttachment | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const resizeComposerTextarea = useCallback(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = "0px";
+    const nextHeight = Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT_PX);
+    element.style.height = `${nextHeight}px`;
+    element.style.overflowY = element.scrollHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
+  }, []);
+
+  const submitIfPossible = () => {
+    if (!canSubmit) return;
+    void submit();
+  };
+
+  const handleMessageChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setMessage(event.target.value);
+  };
+
+  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.shiftKey) return;
+    event.preventDefault();
+    submitIfPossible();
+  };
 
   useEffect(() => {
     if (!previewAttachment) return;
@@ -87,6 +124,10 @@ function ComposerPanel({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewAttachment]);
+
+  useEffect(() => {
+    resizeComposerTextarea();
+  }, [message, resizeComposerTextarea]);
 
   const previewUrl = useMemo(() => {
     if (!previewAttachment) return "";
@@ -112,18 +153,19 @@ function ComposerPanel({
       <div className="mx-auto w-full max-w-[1800px] px-6 py-4">
         <div className="assistantComposer rounded-[22px] border border-black/[0.08] bg-[#f3f3f5]">
           <div className="assistantComposerInputShell rounded-[14px] border border-black/[0.08] bg-white">
-            <input
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              placeholder="What would you like to do next?"
-              className="assistantComposerInput min-w-0 flex-1 border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#86868b] focus:outline-none"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void submit();
-                }
-              }}
-            />
+            <div className="flex min-w-0 flex-1">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={message}
+                onChange={handleMessageChange}
+                onInput={resizeComposerTextarea}
+                placeholder="What would you like to do next?"
+                aria-label="Message"
+                className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#86868b] focus:outline-none"
+                onKeyDown={handleComposerKeyDown}
+              />
+            </div>
           </div>
 
           <div className="assistantComposerToolbar">
@@ -238,7 +280,7 @@ function ComposerPanel({
                     : "bg-white text-black hover:bg-[#f5f5f7]"
                 } ${sendDisabled && !isSending ? "cursor-not-allowed opacity-45" : ""}`}
                 disabled={sendDisabled}
-                onClick={() => void submit()}
+                onClick={submitIfPossible}
                 aria-label={isSending ? "Maia is working" : "Send message"}
                 title={isSending ? "Maia is working" : "Send"}
               >

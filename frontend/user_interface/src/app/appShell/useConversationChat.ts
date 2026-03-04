@@ -293,24 +293,8 @@ export function useConversationChat({
       const attachedFileIds = (attachments || [])
         .map((item) => item.fileId)
         .filter((item): item is string => Boolean(item));
-      const indexSelection =
-        attachedFileIds.length > 0 && defaultIndexId !== null
-          ? {
-              [String(defaultIndexId)]: {
-                mode: "select" as const,
-                file_ids: attachedFileIds,
-              },
-            }
-          : undefined;
 
       const pendingTurnIndex = chatTurns.length;
-      let delayedPendingTimer: number | null = null;
-      const clearDelayedPendingTimer = () => {
-        if (delayedPendingTimer !== null) {
-          window.clearTimeout(delayedPendingTimer);
-          delayedPendingTimer = null;
-        }
-      };
 
       setIsSending(true);
       setIsActivityStreaming(effectiveMode === "company_agent");
@@ -321,7 +305,7 @@ export function useConversationChat({
         ...prev,
         {
           user: message,
-          assistant: "",
+          assistant: delayedPendingAssistantMessage,
           plot: null,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           info: "",
@@ -333,28 +317,35 @@ export function useConversationChat({
         },
       ]);
 
-      delayedPendingTimer = window.setTimeout(() => {
-        setChatTurns((prev) => {
-          if (pendingTurnIndex < 0 || pendingTurnIndex >= prev.length) {
-            return prev;
-          }
-          const next = [...prev];
-          const turn = next[pendingTurnIndex];
-          if (!turn) {
-            return prev;
-          }
-          const hasActivity = Array.isArray(turn.activityEvents) && turn.activityEvents.length > 0;
-          const hasAssistantText = Boolean(String(turn.assistant || "").trim());
-          if (hasActivity || hasAssistantText) {
-            return prev;
-          }
-          next[pendingTurnIndex] = { ...turn, assistant: delayedPendingAssistantMessage };
-          return next;
-        });
-      }, 5000);
-
       let streamedEventsLocal: AgentActivityEvent[] = [];
       try {
+        const selectionByIndex: Record<string, { mode: "select"; file_ids: string[] }> = {};
+        const appendSelection = (indexId: number | null, fileIds: string[]) => {
+          if (indexId === null || !fileIds.length) {
+            return;
+          }
+          const key = String(indexId);
+          const existing = new Set(selectionByIndex[key]?.file_ids || []);
+          for (const fileId of fileIds) {
+            const normalized = String(fileId || "").trim();
+            if (normalized) {
+              existing.add(normalized);
+            }
+          }
+          if (!existing.size) {
+            return;
+          }
+          selectionByIndex[key] = {
+            mode: "select",
+            file_ids: Array.from(existing),
+          };
+        };
+        appendSelection(defaultIndexId, attachedFileIds);
+        const indexSelection =
+          Object.keys(selectionByIndex).length > 0
+            ? selectionByIndex
+            : undefined;
+
         const sharedPayload = {
           indexSelection,
           citation: options?.citationMode ?? citationMode,
@@ -383,7 +374,6 @@ export function useConversationChat({
                   return;
                 }
                 if (event.type === "chat_delta") {
-                  clearDelayedPendingTimer();
                   setChatTurns((prev) => {
                     const next = [...prev];
                     const last = next[next.length - 1];
@@ -418,7 +408,6 @@ export function useConversationChat({
                   return;
                 }
                 if (event.type === "activity" && event.event) {
-                  clearDelayedPendingTimer();
                   const payload = event.event as AgentActivityEvent;
                   streamedEvents.push(payload);
                   streamedEventsLocal = [...streamedEvents];
@@ -440,7 +429,6 @@ export function useConversationChat({
               },
             });
           } catch (streamError) {
-            clearDelayedPendingTimer();
             response = await sendChat(message, selectedConversationId, {
               ...sharedPayload,
               agentGoal: message,
@@ -458,7 +446,6 @@ export function useConversationChat({
           response = await sendChat(message, selectedConversationId, sharedPayload);
         }
 
-        clearDelayedPendingTimer();
         setConversationProjects((prev) =>
           prev[response.conversation_id]
             ? prev
@@ -538,7 +525,6 @@ export function useConversationChat({
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error || "Unknown request failure");
-        clearDelayedPendingTimer();
         setChatTurns((prev) => {
           const next = [...prev];
           const last = next[next.length - 1];
@@ -556,7 +542,6 @@ export function useConversationChat({
           return next;
         });
       } finally {
-        clearDelayedPendingTimer();
         setIsSending(false);
         setIsActivityStreaming(false);
       }

@@ -6,6 +6,22 @@ import { FilesSection } from "./FilesSection";
 import { NeutralSelect } from "./NeutralSelect";
 import type { FileKind, GridMode, GroupRow, SortField } from "./types";
 
+function normalizeHttpUrl(rawValue: unknown): string {
+  const value = String(rawValue || "").split(/\s+/).join(" ").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 interface MainPanelProps {
   filterText: string;
   setFilterText: (value: string) => void;
@@ -103,6 +119,10 @@ function MainPanel({
   citationFocus,
   citationRawUrl,
 }: MainPanelProps) {
+  const citationWebsiteUrl = normalizeHttpUrl(citationFocus?.sourceUrl) || normalizeHttpUrl(citationFocus?.sourceName);
+  const citationUsesWebsite = citationFocus?.sourceType === "website" || (Boolean(citationWebsiteUrl) && !citationRawUrl);
+  const citationOpenUrl = citationUsesWebsite ? citationWebsiteUrl : citationRawUrl;
+
   return (
     <div className="min-w-0">
       <div className="rounded-[24px] border border-black/[0.06] bg-white px-6 py-6">
@@ -215,10 +235,10 @@ function MainPanel({
         />
       </div>
 
-      {citationFocus && citationRawUrl ? (
+      {citationFocus && citationOpenUrl ? (
         <div className="mt-6 rounded-2xl border border-black/[0.08] bg-white p-4">
           <p className="mb-2 text-[12px] text-[#6e6e73]">Citation source</p>
-          <a href={citationRawUrl} target="_blank" rel="noopener noreferrer" className="text-[13px] text-[#2f2f34] hover:underline">
+          <a href={citationOpenUrl || undefined} target="_blank" rel="noopener noreferrer" className="text-[13px] text-[#2f2f34] hover:underline">
             Open {citationFocus.sourceName}
           </a>
         </div>

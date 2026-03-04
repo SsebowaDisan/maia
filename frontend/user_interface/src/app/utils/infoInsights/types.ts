@@ -9,6 +9,7 @@ type EvidenceCard = {
   id: string;
   title: string;
   source: string;
+  sourceUrl?: string;
   page?: string;
   fileId?: string;
   extract: string;
