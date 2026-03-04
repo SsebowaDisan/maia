@@ -19,24 +19,7 @@ from .extractors import (
     truncate,
     utc_now_iso,
 )
-
-
-def _map_kind_from_sources(
-    *,
-    source_type_hint: str,
-    website_source_count: int,
-    pdf_source_count: int,
-) -> str:
-    map_kind = "tree"
-    if website_source_count > 0 and pdf_source_count > 0:
-        map_kind = "hybrid"
-    elif website_source_count > 0 and pdf_source_count == 0:
-        map_kind = "graph"
-    if source_type_hint.lower() in {"web", "website", "graph"}:
-        return "graph"
-    if source_type_hint.lower() in {"pdf", "tree"}:
-        return "tree"
-    return map_kind
+from .structure_helpers import derive_page_title, inject_topic_nodes, map_kind_from_sources
 
 
 def build_structure_map(
@@ -95,6 +78,7 @@ def build_structure_map(
 
     website_source_count = 0
     pdf_source_count = 0
+    topic_cluster_count = 0
 
     for source_id, rows in source_groups.items():
         source_name = rows[0].get("source_name", "Indexed source")
@@ -133,14 +117,21 @@ def build_structure_map(
         )
 
         page_groups: dict[str, list[dict[str, Any]]] = {}
+        source_page_node_ids: list[str] = []
         for row in rows:
             page_groups.setdefault(row.get("page_label", ""), []).append(row)
         sorted_pages = sorted(page_groups.keys(), key=sort_page_key) or [""]
         for page_label in sorted_pages:
             page_rows = page_groups.get(page_label, rows)
             page_node_id = stable_id(f"{source_node_id}|page|{page_label or 'na'}", prefix="page")
-            page_title = f"Page {page_label}" if page_label else "Section"
             page_text = " ".join(row.get("text", "") for row in page_rows[:4])
+            outline = extract_page_outline(page_text, max_depth=max_depth)
+            page_title = derive_page_title(
+                page_rows=page_rows,
+                page_text=page_text,
+                page_label=page_label,
+                outline_rows=outline,
+            )
             page_node = {
                 "id": page_node_id,
                 "title": truncate(page_title, 80),
@@ -159,6 +150,7 @@ def build_structure_map(
             nodes.append(page_node)
             page_node_lookup[(source_id, coerce_page_label(page_label))] = page_node_id
             source_node["children"].append(page_node_id)
+            source_page_node_ids.append(page_node_id)
             edges.append(
                 {
                     "id": stable_id(f"{source_node_id}->{page_node_id}", prefix="edge"),
@@ -168,7 +160,6 @@ def build_structure_map(
                 }
             )
 
-            outline = extract_page_outline(page_text, max_depth=max_depth)
             if not outline:
                 for idx, sentence in enumerate(first_sentences(page_text, limit=3), start=1):
                     leaf_id = stable_id(f"{page_node_id}|s|{idx}|{sentence}", prefix="leaf")
@@ -237,6 +228,17 @@ def build_structure_map(
                         node.setdefault("children", []).append(child_id)
                         break
                 level_parent[level] = child_id
+
+        topic_cluster_count += inject_topic_nodes(
+            source_node=source_node,
+            source_node_id=source_node_id,
+            source_id=source_id,
+            source_name=source_name,
+            source_url=source_url,
+            page_node_ids=source_page_node_ids,
+            nodes=nodes,
+            edges=edges,
+        )
 
     multimodal_nodes = extract_multimodal_nodes(records, max_nodes=24)
     id_to_node = {node["id"]: node for node in nodes}
@@ -363,7 +365,7 @@ def build_structure_map(
             if edge.get("source") in allowed_ids and edge.get("target") in allowed_ids
         ]
 
-    map_kind = _map_kind_from_sources(
+    map_kind = map_kind_from_sources(
         source_type_hint=source_type_hint,
         website_source_count=website_source_count,
         pdf_source_count=pdf_source_count,
@@ -385,6 +387,7 @@ def build_structure_map(
             "source_count": len(source_groups),
             "pdf_sources": pdf_source_count,
             "website_sources": website_source_count,
+            "topic_clusters": topic_cluster_count,
             "node_count": len(nodes),
             "edge_count": len(edges),
         },

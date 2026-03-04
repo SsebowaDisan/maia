@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import logging
 import re
 from typing import Any
 from urllib.error import HTTPError
@@ -10,6 +11,7 @@ from urllib.request import Request, urlopen
 from decouple import config
 from fastapi import HTTPException
 
+from ktem.llms.manager import llms
 from ktem.pages.chat.common import STATE
 from maia.mindmap.indexer import build_knowledge_map
 
@@ -47,6 +49,8 @@ from .conversation_store import (
 from .fast_qa_retrieval import load_recent_chunks_for_fast_qa
 from .info_panel_copy import build_info_panel_copy
 from .pipeline import is_placeholder_api_key
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_text_content(raw_content: Any) -> str:
@@ -116,6 +120,45 @@ def _parse_json_object(raw_text: str) -> dict[str, Any] | None:
         return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
+
+
+def _truncate_for_log(value: Any, limit: int = 1600) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(+{len(text) - limit} chars)"
+
+
+def _resolve_fast_qa_llm_config() -> tuple[str, str, str, str]:
+    default_base = str(config("OPENAI_API_BASE", default="https://api.openai.com/v1")) or "https://api.openai.com/v1"
+    default_model = str(config("OPENAI_CHAT_MODEL", default="gpt-4o-mini")) or "gpt-4o-mini"
+    env_api_key = str(config("OPENAI_API_KEY", default="") or "").strip()
+    if not is_placeholder_api_key(env_api_key):
+        return env_api_key, default_base, default_model, "env"
+
+    try:
+        default_name = str(llms.get_default_name() or "").strip()
+    except Exception:
+        default_name = ""
+    try:
+        model_info = llms.info().get(default_name, {}) if default_name else {}
+    except Exception:
+        model_info = {}
+    spec = model_info.get("spec", {}) if isinstance(model_info, dict) else {}
+    if not isinstance(spec, dict):
+        spec = {}
+
+    spec_api_key = str(spec.get("api_key") or "").strip()
+    spec_base_url = (
+        str(spec.get("base_url") or spec.get("openai_api_base") or spec.get("api_base") or "").strip()
+    )
+    spec_model = str(spec.get("model") or spec.get("model_name") or "").strip()
+    if not is_placeholder_api_key(spec_api_key):
+        resolved_model = spec_model or default_model
+        resolved_base_url = spec_base_url or default_base
+        return spec_api_key, resolved_base_url, resolved_model, f"llm:{default_name or 'default'}"
+
+    return "", default_base, default_model, "missing"
 
 
 def _normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
@@ -237,6 +280,17 @@ def _plan_adaptive_outline(
     refs_text: str,
     context_text: str,
 ) -> dict[str, Any]:
+    planner_temperature = max(0.0, min(1.0, float(temperature) * 0.5))
+    refs_count = len(re.findall(r"^\[\d+\]\s", refs_text or "", flags=re.MULTILINE))
+    logger.warning(
+        "fast_qa_planner_request model=%s temp=%.3f refs=%d history_chars=%d context_chars=%d question=%s",
+        model,
+        planner_temperature,
+        refs_count,
+        len(history_text or ""),
+        len(context_text or ""),
+        _truncate_for_log(question, 280),
+    )
     planner_prompt = (
         "Create an answer blueprint for a retrieval-grounded assistant reply.\n"
         "Return one JSON object only with keys:\n"
@@ -256,7 +310,7 @@ def _plan_adaptive_outline(
     )
     planner_payload = {
         "model": model,
-        "temperature": max(0.0, min(1.0, float(temperature) * 0.5)),
+        "temperature": planner_temperature,
         "messages": [
             {
                 "role": "system",
@@ -275,9 +329,37 @@ def _plan_adaptive_outline(
             request_payload=planner_payload,
             timeout_seconds=16,
         )
-        return _normalize_outline(_parse_json_object(str(planned_raw or "")))
+        parsed_outline = _parse_json_object(str(planned_raw or ""))
+        normalized_outline = _normalize_outline(parsed_outline)
+        logger.warning(
+            "fast_qa_planner_output parse_ok=%s sections=%d style=%s raw=%s parsed=%s normalized=%s",
+            bool(parsed_outline),
+            len(normalized_outline.get("sections", []) or []),
+            str(normalized_outline.get("style", "")),
+            _truncate_for_log(planned_raw, 900),
+            _truncate_for_log(
+                json.dumps(parsed_outline, ensure_ascii=True, separators=(",", ":"))
+                if parsed_outline
+                else "(parse-failed)",
+                900,
+            ),
+            _truncate_for_log(
+                json.dumps(normalized_outline, ensure_ascii=True, separators=(",", ":")),
+                900,
+            ),
+        )
+        return normalized_outline
     except Exception:
-        return _normalize_outline(None)
+        logger.exception("fast_qa_planner_output error; using fallback outline")
+        fallback_outline = _normalize_outline(None)
+        logger.warning(
+            "fast_qa_planner_fallback normalized=%s",
+            _truncate_for_log(
+                json.dumps(fallback_outline, ensure_ascii=True, separators=(",", ":")),
+                900,
+            ),
+        )
+        return fallback_outline
 
 
 def call_openai_fast_qa(
@@ -287,12 +369,21 @@ def call_openai_fast_qa(
     refs: list[dict[str, Any]],
     citation_mode: str | None,
 ) -> str | None:
-    api_key = str(config("OPENAI_API_KEY", default="") or "").strip()
+    api_key, base_url, model, config_source = _resolve_fast_qa_llm_config()
+    logger.warning(
+        "fast_qa_llm_config source=%s model=%s base=%s key_present=%s",
+        config_source,
+        model,
+        base_url,
+        bool(api_key),
+    )
     if is_placeholder_api_key(api_key):
+        logger.warning(
+            "fast_qa_disabled reason=missing_openai_key source=%s question=%s",
+            config_source,
+            _truncate_for_log(question, 220),
+        )
         return None
-
-    base_url = str(config("OPENAI_API_BASE", default="https://api.openai.com/v1")) or "https://api.openai.com/v1"
-    model = str(config("OPENAI_CHAT_MODEL", default="gpt-4o-mini")) or "gpt-4o-mini"
 
     context_blocks = []
     for snippet in snippets[:API_FAST_QA_MAX_SNIPPETS]:
@@ -359,8 +450,13 @@ def call_openai_fast_qa(
     output_instruction = (
         "Output format rules:\n"
         "- Follow the provided response blueprint while adapting when evidence is missing.\n"
+        "- Render blueprint sections as markdown headings when there are multiple sections.\n"
         "- Keep the answer detailed, specific, and professional.\n"
+        "- For broad or research-oriented questions, provide a richer multi-section answer with meaningful headings and evidence-backed depth.\n"
+        "- Choose structure per query (narrative paragraphs, headed sections, bullets, or tables); do not reuse a single fixed layout across responses.\n"
         "- Use natural prose by default; use headings, bullets, or tables only when they improve clarity.\n"
+        "- Do not lead with isolated quoted fragments or decorative callouts unless the user explicitly asks for direct quotes.\n"
+        "- Prefer complete sentences and coherent paragraphs over stylized snippets.\n"
         "- Keep section titles specific to the request domain; avoid generic reusable labels and reusable report skeletons.\n"
         "- If intent is unclear, ask one focused clarifying question and avoid speculative summaries.\n"
         "- Distinguish confirmed facts from inference when confidence is limited.\n"
@@ -398,7 +494,8 @@ def call_openai_fast_qa(
                     "content": (
                         "You are Maia. Provide faithful, high-detail answers from indexed evidence. "
                         "Adapt structure to the user's question and evidence; do not force fixed section templates. "
-                        "Use concise sections and bullet points only when useful."
+                        "Use concise sections and bullet points only when useful. "
+                        "Keep output professional and avoid isolated stylized quote snippets."
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -413,10 +510,27 @@ def call_openai_fast_qa(
             )
             or ""
         ).strip()
+        if not answer:
+            logger.warning(
+                "fast_qa_empty_answer model=%s question=%s",
+                model,
+                _truncate_for_log(question, 220),
+            )
         return answer or None
-    except HTTPError:
+    except HTTPError as exc:
+        logger.warning(
+            "fast_qa_http_error model=%s question=%s error=%s",
+            model,
+            _truncate_for_log(question, 220),
+            _truncate_for_log(exc, 280),
+        )
         return None
     except Exception:
+        logger.exception(
+            "fast_qa_call_failed model=%s question=%s",
+            model,
+            _truncate_for_log(question, 220),
+        )
         return None
 
 
@@ -429,6 +543,10 @@ def run_fast_chat_turn(
     if not message:
         raise HTTPException(status_code=400, detail="Message is empty.")
     if request.command not in (None, "", DEFAULT_SETTING):
+        logger.warning(
+            "fast_qa_skipped reason=command_override command=%s",
+            str(request.command or "").strip()[:80],
+        )
         return None
 
     conversation_id, conversation_name, data_source = get_or_create_conversation(
@@ -461,6 +579,10 @@ def run_fast_chat_turn(
         max_chunks=max(10, API_FAST_QA_MAX_SNIPPETS),
     )
     if not snippets:
+        logger.warning(
+            "fast_qa_skipped reason=no_snippets question=%s",
+            _truncate_for_log(message, 220),
+        )
         return None
     snippets = _apply_mindmap_focus(
         snippets,
@@ -476,6 +598,12 @@ def run_fast_chat_turn(
         citation_mode=request.citation,
     )
     if not answer:
+        logger.warning(
+            "fast_qa_skipped reason=no_model_answer snippets=%d refs=%d question=%s",
+            len(snippets_with_refs),
+            len(refs),
+            _truncate_for_log(message, 220),
+        )
         return None
     answer = normalize_fast_answer(answer)
     resolved_citation_mode = resolve_required_citation_mode(request.citation)
@@ -489,6 +617,12 @@ def run_fast_chat_turn(
         answer=answer,
         info_html=info_text,
         citation_mode=resolved_citation_mode,
+    )
+    logger.warning(
+        "fast_qa_completed snippets=%d refs=%d answer_chars=%d",
+        len(snippets_with_refs),
+        len(refs),
+        len(answer),
     )
     source_usage = build_source_usage(
         snippets_with_refs=snippets_with_refs,

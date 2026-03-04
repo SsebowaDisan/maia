@@ -399,17 +399,25 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
     if not _INLINE_REF_TOKEN_RE.search(body):
         return text
 
-    max_ref = max(int(ref.get("id", 0) or 0) for ref in refs) if refs else 0
-    if max_ref <= 0:
+    valid_ref_ids = sorted({int(ref.get("id", 0) or 0) for ref in refs if int(ref.get("id", 0) or 0) > 0})
+    if not valid_ref_ids:
         return text
+    max_ref = valid_ref_ids[-1]
+    min_ref = valid_ref_ids[0]
+
+    def nearest_valid_ref_id(value: int) -> int:
+        return min(valid_ref_ids, key=lambda ref_id: (abs(ref_id - value), ref_id))
 
     def replace_ref(match: re.Match[str]) -> str:
         original_ref = int(match.group(1))
-        # Keep unknown markers untouched.
-        if original_ref < 1 or original_ref > max_ref:
-            return match.group(0)
         context = _context_window(body, match.start())
         best_ref_id, score = _best_ref_for_context(context, refs)
+        if original_ref < 1 or original_ref > max_ref:
+            if best_ref_id is not None and score >= 0.08:
+                return f"[{best_ref_id}]"
+            if original_ref >= 1:
+                return f"[{nearest_valid_ref_id(original_ref)}]"
+            return f"[{min_ref}]"
         # Require a minimum confidence before overriding the model's numeric ref.
         if best_ref_id is None or score < 0.16:
             return match.group(0)
@@ -441,7 +449,12 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     strength_score = _score_value(ref.get("strength_score"))
     strength_tier = _strength_tier(strength_score)
     boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
-    attrs = [f"href='#evidence-{ref_id}'", f"id='citation-{ref_id}'", "class='citation'"]
+    attrs = [
+        f"href='#evidence-{ref_id}'",
+        f"id='citation-{ref_id}'",
+        "class='citation'",
+        f"data-evidence-id='evidence-{ref_id}'",
+    ]
     if file_id:
         attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
     if page_label:
@@ -567,6 +580,13 @@ def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
 
 
 def _ref_id_from_anchor_open(anchor_open: str) -> int:
+    evidence_attr_match = re.search(
+        r"data-evidence-id=['\"]evidence-(\d{1,4})['\"]",
+        anchor_open,
+        flags=re.IGNORECASE,
+    )
+    if evidence_attr_match:
+        return int(evidence_attr_match.group(1))
     href_match = re.search(
         r"href=['\"]#evidence-(\d{1,4})['\"]",
         anchor_open,
@@ -575,12 +595,19 @@ def _ref_id_from_anchor_open(anchor_open: str) -> int:
     if href_match:
         return int(href_match.group(1))
     id_match = re.search(
-        r"id=['\"]citation-(\d{1,4})['\"]",
+        r"id=['\"](?:citation|mark)-(\d{1,4})['\"]",
         anchor_open,
         flags=re.IGNORECASE,
     )
     if id_match:
         return int(id_match.group(1))
+    number_match = re.search(
+        r"data-citation-number=['\"](\d{1,4})['\"]",
+        anchor_open,
+        flags=re.IGNORECASE,
+    )
+    if number_match:
+        return int(number_match.group(1))
     return 0
 
 
@@ -601,6 +628,38 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         ref = ref_by_id.get(ref_id)
         if not ref:
             return anchor_open
+        normalized_open = anchor_open
+        normalized_href = f"href='#evidence-{ref_id}'"
+        if re.search(r"\bhref=['\"]", normalized_open, flags=re.IGNORECASE):
+            normalized_open = re.sub(
+                r"href=['\"][^'\"]*['\"]",
+                normalized_href,
+                normalized_open,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            normalized_open = f"{normalized_open[:-1]} {normalized_href}>"
+        if re.search(r"\bid=['\"]mark-\d{1,4}['\"]", normalized_open, flags=re.IGNORECASE):
+            normalized_open = re.sub(
+                r"id=['\"]mark-\d{1,4}['\"]",
+                f"id='citation-{ref_id}'",
+                normalized_open,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        elif not re.search(r"\bid=['\"]citation-\d{1,4}['\"]", normalized_open, flags=re.IGNORECASE):
+            normalized_open = f"{normalized_open[:-1]} id='citation-{ref_id}'>"
+        if re.search(r"\bdata-evidence-id=['\"]evidence-\d{1,4}['\"]", normalized_open, flags=re.IGNORECASE):
+            normalized_open = re.sub(
+                r"data-evidence-id=['\"]evidence-\d{1,4}['\"]",
+                f"data-evidence-id='evidence-{ref_id}'",
+                normalized_open,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            normalized_open = f"{normalized_open[:-1]} data-evidence-id='evidence-{ref_id}'>"
 
         additions: list[str] = []
         file_id = str(ref.get("source_id", "") or "").strip()
@@ -620,44 +679,66 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         strength_tier = _strength_tier(strength_score)
         boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
 
-        if file_id and not re.search(r"\bdata-file-id=['\"]", anchor_open, flags=re.IGNORECASE):
+        if file_id and not re.search(r"\bdata-file-id=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
-        if page_label and not re.search(r"\bdata-page=['\"]", anchor_open, flags=re.IGNORECASE):
+        if page_label and not re.search(r"\bdata-page=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-page='{html.escape(page_label, quote=True)}'")
         if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id and not re.search(
-            r"\bdata-unit-id=['\"]", anchor_open, flags=re.IGNORECASE
+            r"\bdata-unit-id=['\"]", normalized_open, flags=re.IGNORECASE
         ):
             additions.append(f"data-unit-id='{html.escape(unit_id[:160], quote=True)}'")
-        if phrase and not re.search(r"\bdata-phrase=['\"]", anchor_open, flags=re.IGNORECASE):
+        if phrase and not re.search(r"\bdata-phrase=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(
                 f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'"
             )
         if MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality and not re.search(
-            r"\bdata-match-quality=['\"]", anchor_open, flags=re.IGNORECASE
+            r"\bdata-match-quality=['\"]", normalized_open, flags=re.IGNORECASE
         ):
             additions.append(f"data-match-quality='{html.escape(match_quality[:32], quote=True)}'")
         if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0 and not re.search(
-            r"\bdata-char-start=['\"]", anchor_open, flags=re.IGNORECASE
+            r"\bdata-char-start=['\"]", normalized_open, flags=re.IGNORECASE
         ):
             additions.append(f"data-char-start='{char_start}'")
         if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start and not re.search(
-            r"\bdata-char-end=['\"]", anchor_open, flags=re.IGNORECASE
+            r"\bdata-char-end=['\"]", normalized_open, flags=re.IGNORECASE
         ):
             additions.append(f"data-char-end='{char_end}'")
-        if strength_score > 0 and not re.search(r"\bdata-strength=['\"]", anchor_open, flags=re.IGNORECASE):
+        if strength_score > 0 and not re.search(r"\bdata-strength=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
             if MAIA_CITATION_STRENGTH_BADGES_ENABLED and not re.search(
-                r"\bdata-strength-tier=['\"]", anchor_open, flags=re.IGNORECASE
+                r"\bdata-strength-tier=['\"]", normalized_open, flags=re.IGNORECASE
             ):
                 additions.append(f"data-strength-tier='{strength_tier}'")
-        if boxes_payload and not re.search(r"\bdata-boxes=['\"]", anchor_open, flags=re.IGNORECASE):
+        if boxes_payload and not re.search(r"\bdata-boxes=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
 
         if not additions:
-            return anchor_open
-        return f"{anchor_open[:-1]} {' '.join(additions)}>"
+            return normalized_open
+        return f"{normalized_open[:-1]} {' '.join(additions)}>"
 
     return _CITATION_ANCHOR_OPEN_RE.sub(replace_open, text)
+
+
+def _anchors_to_bracket_markers(answer: str) -> str:
+    text = str(answer or "")
+    if not text:
+        return text
+
+    def replace_anchor(match: re.Match[str]) -> str:
+        anchor_open, anchor_label, _anchor_close = match.groups()
+        ref_id = _ref_id_from_anchor_open(anchor_open)
+        if ref_id <= 0:
+            label_match = _INLINE_REF_TOKEN_RE.search(anchor_label or "")
+            if label_match:
+                try:
+                    ref_id = int(label_match.group(1))
+                except Exception:
+                    ref_id = 0
+        if ref_id <= 0:
+            return ""
+        return f"[{ref_id}]"
+
+    return _CITATION_ANCHOR_RE.sub(replace_anchor, text)
 
 
 def _normalize_visible_inline_citations(answer: str) -> str:
@@ -680,13 +761,32 @@ def _normalize_visible_inline_citations(answer: str) -> str:
         if display_id is None:
             display_id = next_display_id
             ref_to_display[ref_id] = display_id
-            next_display_id += 1
+            next_display_id = display_id + 1
 
         if ref_id in seen_ref_ids:
             return ""
         seen_ref_ids.add(ref_id)
-        if not re.search(r"\bdata-citation-number=['\"]", anchor_open, flags=re.IGNORECASE):
+
+        if re.search(r"\bdata-citation-number=['\"]\d{1,4}['\"]", anchor_open, flags=re.IGNORECASE):
+            anchor_open = re.sub(
+                r"data-citation-number=['\"]\d{1,4}['\"]",
+                f"data-citation-number='{display_id}'",
+                anchor_open,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
             anchor_open = f"{anchor_open[:-1]} data-citation-number='{display_id}'>"
+        if re.search(r"\bdata-evidence-id=['\"]evidence-\d{1,4}['\"]", anchor_open, flags=re.IGNORECASE):
+            anchor_open = re.sub(
+                r"data-evidence-id=['\"]evidence-\d{1,4}['\"]",
+                f"data-evidence-id='evidence-{ref_id}'",
+                anchor_open,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        else:
+            anchor_open = f"{anchor_open[:-1]} data-evidence-id='evidence-{ref_id}'>"
         return f"{anchor_open}[{display_id}]{anchor_close}"
 
     normalized = _CITATION_ANCHOR_RE.sub(replace_anchor, text)
@@ -707,12 +807,168 @@ def _normalize_visible_inline_citations(answer: str) -> str:
     rebuilt.append(tail)
     normalized = "".join(rebuilt)
 
-    normalized = re.sub(r"\s{2,}", " ", normalized)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
     normalized = re.sub(r"[ \t]+\n", "\n", normalized)
     normalized = re.sub(r"\n[ \t]+", "\n", normalized)
     normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
     normalized = re.sub(r"\(\s*\)", "", normalized)
     return normalized
+
+
+def _count_citation_anchors(text: str) -> int:
+    return len(_CITATION_ANCHOR_OPEN_RE.findall(str(text or "")))
+
+
+def _strip_html_with_index_map(text: str) -> tuple[str, list[int]]:
+    raw = str(text or "")
+    plain_chars: list[str] = []
+    index_map: list[int] = []
+    in_tag = False
+    for idx, char in enumerate(raw):
+        if char == "<":
+            in_tag = True
+            continue
+        if not in_tag:
+            plain_chars.append(char)
+            index_map.append(idx)
+            continue
+        if char == ">":
+            in_tag = False
+    return "".join(plain_chars), index_map
+
+
+def _remove_inline_marker_tokens_with_index_map(
+    plain_text: str,
+    index_map: list[int],
+) -> tuple[str, list[int]]:
+    if not plain_text or not index_map or len(plain_text) != len(index_map):
+        return plain_text, index_map
+    stripped_chars: list[str] = []
+    stripped_map: list[int] = []
+    cursor = 0
+    while cursor < len(plain_text):
+        marker_match = re.match(
+            r"(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})",
+            plain_text[cursor:],
+        )
+        if marker_match:
+            cursor += marker_match.end()
+            continue
+        stripped_chars.append(plain_text[cursor])
+        stripped_map.append(index_map[cursor])
+        cursor += 1
+    return "".join(stripped_chars), stripped_map
+
+
+def _dedupe_duplicate_answer_passes(answer: str) -> str:
+    text = str(answer or "")
+    if not text:
+        return text
+    if _count_citation_anchors(text) <= 0:
+        return text
+
+    plain, index_map = _strip_html_with_index_map(text)
+    plain, index_map = _remove_inline_marker_tokens_with_index_map(plain, index_map)
+    if not plain or not index_map:
+        return text
+    plain_start = next((idx for idx, char in enumerate(plain) if not char.isspace()), -1)
+    if plain_start < 0:
+        return text
+
+    window = plain[plain_start : plain_start + 320]
+    if len(window) < 120:
+        return text
+    sentence_match = re.search(r".{48,260}?[.!?]", window)
+    if sentence_match:
+        leading_signature = sentence_match.group(0).strip()
+    else:
+        leading_signature = window[:180].strip()
+    leading_signature = re.sub(r"[\s\.,;:!?]+$", "", leading_signature).strip()
+    if len(leading_signature) < 48:
+        return text
+
+    second_plain_idx = plain.find(leading_signature, plain_start + len(leading_signature))
+    if second_plain_idx <= plain_start or second_plain_idx >= len(index_map):
+        return text
+
+    second_html_idx = index_map[second_plain_idx]
+    if second_html_idx <= 0 or second_html_idx >= len(text):
+        return text
+
+    prefix_html = text[:second_html_idx]
+    suffix_html = text[second_html_idx:]
+    prefix_anchor_count = _count_citation_anchors(prefix_html)
+    suffix_anchor_count = _count_citation_anchors(suffix_html)
+    if prefix_anchor_count == suffix_anchor_count:
+        return text
+    if suffix_anchor_count > prefix_anchor_count:
+        trimmed = suffix_html.lstrip()
+        return trimmed if trimmed else text
+
+    trimmed = prefix_html.rstrip()
+    return trimmed if trimmed else text
+
+
+def _looks_like_structured_response(body: str) -> bool:
+    text = str(body or "")
+    if not text.strip():
+        return True
+    if re.search(r"(^|\n)\s*#{1,6}\s+\S", text):
+        return True
+    if re.search(r"(^|\n)\s*(?:[-*]\s+\S|\d+\.\s+\S)", text):
+        return True
+    if re.search(r"<(?:h[1-6]|ul|ol|table|blockquote|p|pre)\b", text, flags=re.IGNORECASE):
+        return True
+    paragraph_blocks = [row for row in text.split("\n\n") if row.strip()]
+    if len(paragraph_blocks) >= 2:
+        return True
+    return False
+
+
+def _format_notebook_style_layout(answer: str) -> str:
+    text = str(answer or "")
+    if not text.strip():
+        return text
+
+    body, tail = _split_answer_for_inline_injection(text)
+    if _looks_like_structured_response(body):
+        return text
+
+    cleaned_body = _clean_text(body)
+    if not cleaned_body:
+        return text
+
+    sentence_segments = [segment.strip() for segment in _SENTENCE_SEGMENT_RE.findall(body) if segment.strip()]
+    if len(sentence_segments) < 3:
+        return text
+
+    # Keep short answers intact so the model can choose its own layout.
+    if len(cleaned_body) < 260:
+        return text
+
+    # Paragraphize dense one-block output without imposing fixed headings.
+    paragraphs: list[str] = []
+    chunk: list[str] = []
+    chunk_chars = 0
+    for sentence in sentence_segments:
+        sentence_chars = len(_clean_text(sentence))
+        if chunk and (len(chunk) >= 3 or (chunk_chars + sentence_chars) > 420):
+            paragraphs.append(" ".join(chunk).strip())
+            chunk = [sentence]
+            chunk_chars = sentence_chars
+            continue
+        chunk.append(sentence)
+        chunk_chars += sentence_chars
+    if chunk:
+        paragraphs.append(" ".join(chunk).strip())
+
+    if len(paragraphs) < 2:
+        return text
+
+    rebuilt_body = "\n\n".join(paragraphs)
+    if tail:
+        return f"{rebuilt_body.rstrip()}\n\n{tail.lstrip()}"
+    return rebuilt_body
 
 
 def assign_fast_source_refs(
@@ -1161,20 +1417,55 @@ def render_fast_citation_links(
     answer = _inject_claim_level_bracket_citations(answer, refs)
 
     if "class='citation'" in answer or 'class="citation"' in answer:
-        # Already linked: avoid a second replacement pass that can nest anchors.
-        enriched = _augment_existing_citation_anchors(answer, refs)
+        # Reposition legacy/model-linked anchors at claim level by converting them
+        # back to bracket refs, then running the same claim-level citation flow.
+        marker_text = _anchors_to_bracket_markers(_augment_existing_citation_anchors(answer, refs))
+        marker_text = _realign_bracket_ref_numbers(marker_text, refs)
+        marker_text = _inject_claim_level_bracket_citations(marker_text, refs)
+        ref_by_id: dict[int, dict[str, Any]] = {
+            int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
+        }
+        sorted_ref_ids = sorted(ref_by_id.keys())
+
+        def resolve_ref(ref_num: int) -> dict[str, Any] | None:
+            if not sorted_ref_ids:
+                return None
+            if ref_num >= 1 and ref_num in ref_by_id:
+                return ref_by_id[ref_num]
+            if ref_num >= 1:
+                nearest_ref_id = min(sorted_ref_ids, key=lambda item: (abs(item - ref_num), item))
+                return ref_by_id.get(nearest_ref_id)
+            return ref_by_id.get(sorted_ref_ids[0])
+
+        def replace_ref(match: re.Match[str]) -> str:
+            ref_num = int(match.group(1))
+            ref = resolve_ref(ref_num)
+            if not ref:
+                return match.group(0)
+            return _citation_anchor(ref) or match.group(0)
+
+        enriched = _INLINE_REF_TOKEN_RE.sub(replace_ref, marker_text)
         enriched = _inject_inline_citations(enriched, refs)
         return _normalize_visible_inline_citations(enriched)
 
     ref_by_id: dict[int, dict[str, Any]] = {
         int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
     }
+    sorted_ref_ids = sorted(ref_by_id.keys())
+
+    def resolve_ref(ref_num: int) -> dict[str, Any] | None:
+        if not sorted_ref_ids:
+            return None
+        if ref_num >= 1 and ref_num in ref_by_id:
+            return ref_by_id[ref_num]
+        if ref_num >= 1:
+            nearest_ref_id = min(sorted_ref_ids, key=lambda item: (abs(item - ref_num), item))
+            return ref_by_id.get(nearest_ref_id)
+        return ref_by_id.get(sorted_ref_ids[0])
 
     def replace_ref(match: re.Match[str]) -> str:
         ref_num = int(match.group(1))
-        if ref_num < 1:
-            return match.group(0)
-        ref = ref_by_id.get(ref_num)
+        ref = resolve_ref(ref_num)
         if not ref:
             return match.group(0)
         return _citation_anchor(ref) or match.group(0)
@@ -1269,12 +1560,16 @@ def enforce_required_citations(
 
     mode = resolve_required_citation_mode(citation_mode)
     refs = _extract_info_refs(info_html)
-    enriched = render_fast_citation_links(answer=text, refs=refs, citation_mode=mode)
+    layout_seed = text
+    if "class='citation'" in layout_seed or 'class="citation"' in layout_seed:
+        layout_seed = _anchors_to_bracket_markers(layout_seed)
+    layout_seed = _format_notebook_style_layout(layout_seed)
+    enriched = render_fast_citation_links(answer=layout_seed, refs=refs, citation_mode=mode)
     enriched = _inject_inline_citations(enriched, refs)
     if "class='citation'" in enriched or 'class="citation"' in enriched:
-        return enriched
+        return _dedupe_duplicate_answer_passes(enriched)
     if refs:
-        return enriched
+        return _dedupe_duplicate_answer_passes(enriched)
     return (
         f"{enriched}\n\n"
         "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
@@ -1285,21 +1580,27 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     raw_text = str(answer or "")
     if not raw_text.strip():
         return ""
-    if "class='citation'" in raw_text or 'class="citation"' in raw_text:
-        return raw_text
 
     refs = _extract_info_refs(info_html)
     if refs:
+        layout_seed = raw_text
+        if "class='citation'" in layout_seed or 'class="citation"' in layout_seed:
+            layout_seed = _anchors_to_bracket_markers(layout_seed)
+        layout_seed = _format_notebook_style_layout(layout_seed)
         enriched = render_fast_citation_links(
-            answer=raw_text,
+            answer=layout_seed,
             refs=refs,
             citation_mode=CITATION_MODE_INLINE,
         )
         enriched = _inject_inline_citations(enriched, refs)
+        enriched = _normalize_visible_inline_citations(enriched)
+        enriched = _dedupe_duplicate_answer_passes(enriched)
         if "class='citation'" in enriched or 'class="citation"' in enriched:
             return enriched
         fallback_refs = " ".join([_citation_anchor(ref) for ref in refs[: min(3, len(refs))] if _citation_anchor(ref)])
         return f"{enriched}\n\nEvidence: {fallback_refs}"
+    if "class='citation'" in raw_text or 'class="citation"' in raw_text:
+        return _dedupe_duplicate_answer_passes(_normalize_visible_inline_citations(raw_text))
     return (
         f"{raw_text}\n\n"
         "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."

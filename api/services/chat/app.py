@@ -401,7 +401,13 @@ def stream_chat_turn(
                 continue
 
             if response.channel == "chat":
-                delta = response.content if response.content else ""
+                if response.content is None:
+                    # Some reasoning pipelines emit a reset signal before sending
+                    # a canonical final answer (for example replacing streamed raw text
+                    # with citation-linked text). Keep only the canonical answer.
+                    answer_text = ""
+                    continue
+                delta = str(response.content or "")
                 if delta:
                     answer_text += delta
                     yield {
@@ -536,9 +542,15 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         try:
             fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
             if fast_result is not None:
+                logger.warning("chat_path_selected path=fast_qa")
                 return fast_result
+            logger.warning("chat_path_fallback reason=fast_qa_returned_none")
         except Exception as exc:
             logger.exception("Fast ask path failed; falling back to streaming pipeline: %s", exc)
+    elif request.agent_mode == "company_agent":
+        logger.warning("chat_path_selected path=company_agent")
+    elif not API_CHAT_FAST_PATH:
+        logger.warning("chat_path_fallback reason=fast_path_disabled")
 
     timeout_seconds = int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45)
     if _default_model_looks_local_ollama():

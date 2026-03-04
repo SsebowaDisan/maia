@@ -1,59 +1,77 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Background,
-  Controls,
-  MiniMap,
+  BaseEdge,
+  Position,
   ReactFlow,
+  getBezierPath,
   type Edge,
+  type EdgeProps,
   type Node,
+  type NodeMouseHandler,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Maximize2, Minimize2 } from "lucide-react";
 
-import { MindMapToolbar } from "./MindMapToolbar";
 import { MindNodeCard } from "./MindNodeCard";
 import type { MindMapViewerProps, MindmapPayload } from "./types";
 import {
-  computeBalancedLayout,
   computeDepths,
-  drawPngFromLayout,
-  focusedBranchIds,
   isDescendant,
-  mapPayloadToMarkdown,
   parseCanvasState,
   storageKey,
   type CanvasState,
   type MindNodeData,
 } from "./utils";
+import {
+  computeInitialCollapsedFromPayload,
+  computeNotebookLayout,
+  DEPTH_GAP,
+  LEAF_GAP,
+  looksLikePromptTitle,
+  looksNoisyTitle,
+  ROOT_X,
+  toMindmapPayload,
+  TOP_PADDING,
+} from "./viewerHelpers";
 
 const nodeTypes = { mind: MindNodeCard };
 
-function toMindmapPayload(raw: Record<string, unknown> | null | undefined): MindmapPayload | null {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  return raw as MindmapPayload;
+function CurvedMindEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style,
+}: EdgeProps) {
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    curvature: 0.42,
+  });
+  return <BaseEdge id={id} path={path} style={style} />;
 }
+
+const edgeTypes = { mindCurve: CurvedMindEdge };
 
 export function MindMapViewer({
   payload: rawPayload,
   conversationId = null,
   maxDepth = 4,
   onAskNode,
-  onSaveMap,
-  onShareMap,
-  onMapTypeChange,
 }: MindMapViewerProps) {
   const basePayload = useMemo(() => toMindmapPayload(rawPayload), [rawPayload]);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<string[]>([]);
-  const [showReasoningMap, setShowReasoningMap] = useState(false);
-  const [layoutMode, setLayoutMode] = useState<"balanced" | "horizontal">("balanced");
-  const [nodePositions, setNodePositions] = useState<Record<string, { x: number; y: number }>>({});
   const [activeMapType, setActiveMapType] = useState<"structure" | "evidence">("structure");
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [lastFitKey, setLastFitKey] = useState("");
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
-  const reasoningFlowRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
     const detected = basePayload?.map_type === "evidence" ? "evidence" : "structure";
@@ -83,246 +101,266 @@ export function MindMapViewer({
     const key = storageKey(payload, conversationId);
     const saved = parseCanvasState(window.localStorage.getItem(key));
     if (!saved) {
-      setCollapsedNodeIds([]);
-      setShowReasoningMap(false);
-      setLayoutMode("balanced");
-      setNodePositions({});
-      setFocusedNodeId(null);
+      setCollapsedNodeIds(computeInitialCollapsedFromPayload(payload, maxDepth));
+      setSelectedNodeId(null);
       return;
     }
     setCollapsedNodeIds(saved.collapsedNodeIds);
-    setShowReasoningMap(saved.showReasoningMap);
-    setLayoutMode(saved.layoutMode);
-    setNodePositions(saved.nodePositions);
     setActiveMapType(saved.activeMapType);
-    setFocusedNodeId(saved.focusedNodeId);
-  }, [conversationId, payload]);
+    setSelectedNodeId(saved.focusedNodeId);
+  }, [conversationId, maxDepth, payload]);
 
   useEffect(() => {
     const key = storageKey(payload, conversationId);
     const state: CanvasState = {
       collapsedNodeIds,
-      showReasoningMap,
-      layoutMode,
-      nodePositions,
+      showReasoningMap: false,
+      layoutMode: "balanced",
+      nodePositions: {},
       activeMapType,
-      focusedNodeId,
+      focusedNodeId: selectedNodeId,
     };
     window.localStorage.setItem(key, JSON.stringify(state));
-  }, [
-    activeMapType,
-    collapsedNodeIds,
-    conversationId,
-    focusedNodeId,
-    layoutMode,
-    nodePositions,
-    payload,
-    showReasoningMap,
-  ]);
+  }, [activeMapType, collapsedNodeIds, conversationId, payload, selectedNodeId]);
 
   const parsedNodes = useMemo(() => payload?.nodes || [], [payload]);
   const parsedEdges = useMemo(() => payload?.edges || [], [payload]);
-  const rootId = useMemo(
-    () => String(payload?.root_id || parsedNodes[0]?.id || ""),
-    [payload, parsedNodes],
+  const hierarchyEdges = useMemo(
+    () => parsedEdges.filter((edge) => !edge.type || edge.type === "hierarchy"),
+    [parsedEdges],
   );
+  const nodeById = useMemo(() => new Map(parsedNodes.map((node) => [node.id, node])), [parsedNodes]);
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string, string[]>();
-    for (const edge of parsedEdges) {
-      if (edge.type && edge.type !== "hierarchy") {
-        continue;
-      }
+    for (const edge of hierarchyEdges) {
       const rows = map.get(edge.source) || [];
       rows.push(edge.target);
       map.set(edge.source, rows);
     }
     return map;
-  }, [parsedEdges]);
-  const depthMap = useMemo(() => computeDepths(rootId, parsedEdges), [parsedEdges, rootId]);
-  const focusSet = useMemo(
-    () => (focusedNodeId ? focusedBranchIds(focusedNodeId, parsedEdges) : null),
-    [focusedNodeId, parsedEdges],
-  );
+  }, [hierarchyEdges]);
 
-  const flowNodes = useMemo(() => {
-    const hiddenIds = new Set<string>();
+  const parentCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const edge of hierarchyEdges) {
+      map.set(edge.target, (map.get(edge.target) || 0) + 1);
+    }
+    return map;
+  }, [hierarchyEdges]);
+
+  const rootId = useMemo(() => {
+    let candidate = String(payload?.root_id || "");
+    if (!candidate || !nodeById.has(candidate)) {
+      const topLevel = parsedNodes
+        .filter((node) => (parentCount.get(node.id) || 0) === 0)
+        .sort(
+          (left, right) =>
+            (childrenByParent.get(right.id)?.length || 0) - (childrenByParent.get(left.id)?.length || 0),
+        );
+      candidate = topLevel[0]?.id || parsedNodes[0]?.id || "";
+    }
+    if (!candidate || !nodeById.has(candidate)) {
+      return "";
+    }
+    const candidateNode = nodeById.get(candidate);
+    const childRows = (childrenByParent.get(candidate) || []).filter((nodeId) => nodeById.has(nodeId));
+    if (candidateNode && childRows.length === 1 && looksLikePromptTitle(String(candidateNode.title || ""))) {
+      const childId = childRows[0];
+      const childNode = nodeById.get(childId);
+      const childType = String(childNode?.node_type || childNode?.type || "").toLowerCase();
+      const childVisibleChildren = (childrenByParent.get(childId) || []).length;
+      if ((childType === "source" || childType === "web_source") && childVisibleChildren > 8) {
+        return candidate;
+      }
+      return childId;
+    }
+    return candidate;
+  }, [childrenByParent, nodeById, parentCount, parsedNodes, payload]);
+
+  const depthMap = useMemo(() => computeDepths(rootId, hierarchyEdges), [hierarchyEdges, rootId]);
+
+  const nodeOrder = useMemo(() => {
+    const order = new Map<string, number>();
+    parsedNodes.forEach((node, index) => {
+      const pageRaw = String(node.page_ref || node.page || "");
+      const pageMatch = pageRaw.match(/\d+/)?.[0];
+      const pageNumber = pageMatch ? Number.parseInt(pageMatch, 10) : Number.NaN;
+      const rank = Number.isFinite(pageNumber) ? pageNumber * 1000 : (depthMap[node.id] ?? 99) * 1000 + index;
+      order.set(node.id, rank + index / 1000);
+    });
+    return order;
+  }, [depthMap, parsedNodes]);
+
+  const hiddenIds = useMemo(() => {
+    const result = new Set<string>();
     for (const collapsedId of collapsedNodeIds) {
       for (const node of parsedNodes) {
         if (isDescendant(node.id, collapsedId, childrenByParent)) {
-          hiddenIds.add(node.id);
+          result.add(node.id);
         }
       }
     }
+    return result;
+  }, [childrenByParent, collapsedNodeIds, parsedNodes]);
 
-    const layout = computeBalancedLayout({
-      rootId,
-      nodes: parsedNodes.map((node) => ({ id: node.id })),
-      edges: parsedEdges,
-      collapsedNodeIds,
-      maxDepth,
-      centerX: 0,
-      centerY: 0,
-      depthGap: 240,
-      leafGap: 120,
-    });
+  const visibleBaseNodes = useMemo(
+    () =>
+      parsedNodes
+        .filter((node) => !hiddenIds.has(node.id))
+        .filter((node) => typeof depthMap[node.id] === "number")
+        .filter((node) => (depthMap[node.id] ?? 0) <= maxDepth),
+    [depthMap, hiddenIds, maxDepth, parsedNodes],
+  );
 
-    return parsedNodes
-      .filter((node) => !hiddenIds.has(node.id))
-      .filter((node) => (depthMap[node.id] ?? 0) <= maxDepth)
-      .map((node, index) => {
-        const depth = depthMap[node.id] ?? 1;
-        const fallback = layout[node.id] || { x: depth * 220, y: index * 92 };
-        const opacity = focusSet ? (focusSet.has(node.id) ? 1 : 0.22) : 1;
+  const allNodeIds = useMemo(() => new Set(parsedNodes.map((node) => node.id)), [parsedNodes]);
+
+  const visibleIds = useMemo(() => new Set(visibleBaseNodes.map((node) => node.id)), [visibleBaseNodes]);
+
+  const layout = useMemo(
+    () =>
+      computeNotebookLayout({
+        rootId,
+        nodeIds: visibleIds,
+        childrenByParent,
+        depthMap,
+        collapsedSet: new Set(collapsedNodeIds),
+        maxDepth,
+        nodeOrder,
+      }),
+    [childrenByParent, collapsedNodeIds, depthMap, maxDepth, nodeOrder, rootId, visibleIds],
+  );
+
+  const handleAsk = useCallback(
+    (nodeId: string) => {
+      setSelectedNodeId(nodeId);
+      if (!onAskNode) {
+        return;
+      }
+      const selected = parsedNodes.find((row) => row.id === nodeId);
+      if (!selected) {
+        return;
+      }
+      onAskNode({
+        nodeId: selected.id,
+        title: selected.title || "",
+        text: selected.text || "",
+        pageRef: selected.page_ref || selected.page || undefined,
+        sourceId: selected.source_id,
+        sourceName: selected.source_name,
+      });
+    },
+    [onAskNode, parsedNodes],
+  );
+
+  const flowNodes = useMemo(
+    () =>
+      visibleBaseNodes.map((node, index): Node<MindNodeData> => {
+        const depth = depthMap[node.id] ?? 0;
+        const hasChildren = (childrenByParent.get(node.id) || []).some(
+          (child) => allNodeIds.has(child) && (depthMap[child] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
+        );
+        const nodeTitle = String(node.title || node.id || "").trim();
+        let displayTitle = nodeTitle || node.id;
+        if (looksNoisyTitle(nodeTitle)) {
+          const promotedTitle = (childrenByParent.get(node.id) || [])
+            .map((childId) => String(nodeById.get(childId)?.title || "").trim())
+            .find((candidate) => candidate && !looksNoisyTitle(candidate));
+          if (promotedTitle) {
+            displayTitle = promotedTitle;
+          }
+        }
+        if (looksNoisyTitle(displayTitle)) {
+          const pageValue = String(node.page_ref || node.page || "").trim();
+          displayTitle = pageValue || String(node.id || "");
+        }
+
         return {
           id: node.id,
           type: "mind",
-          draggable: true,
-          position: nodePositions[node.id] || fallback,
-          style: {
-            opacity,
-            transition: "opacity 200ms ease-in-out",
-          },
+          draggable: false,
+          sourcePosition: Position.Right,
+          targetPosition: Position.Left,
+          position:
+            layout[node.id] || {
+              x: ROOT_X + depth * DEPTH_GAP,
+              y: TOP_PADDING + index * LEAF_GAP,
+            },
           data: {
-            title: node.title || node.id,
-            subtitle: node.page_ref
-              ? `page ${node.page_ref}`
-              : node.page
-                ? `page ${node.page}`
-                : node.node_type || node.type || "",
-            hasChildren: (node.children || childrenByParent.get(node.id) || []).length > 0,
+            title: displayTitle,
+            subtitle: undefined,
+            hasChildren,
             collapsed: collapsedNodeIds.includes(node.id),
             nodeType: String(node.type || node.node_type || ""),
-            onToggle: (nodeId: string) =>
+            isRoot: node.id === rootId,
+            depth,
+            isSelected: selectedNodeId === node.id,
+            onToggle: (targetNodeId: string) =>
               setCollapsedNodeIds((prev) =>
-                prev.includes(nodeId) ? prev.filter((row) => row !== nodeId) : [...prev, nodeId],
+                prev.includes(targetNodeId)
+                  ? prev.filter((entry) => entry !== targetNodeId)
+                  : [...prev, targetNodeId],
               ),
-            onAsk: onAskNode
-              ? (nodeId: string) => {
-                  const selected = parsedNodes.find((row) => row.id === nodeId);
-                  if (!selected) {
-                    return;
-                  }
-                  onAskNode({
-                    nodeId: selected.id,
-                    title: selected.title || "",
-                    text: selected.text || "",
-                    pageRef: selected.page_ref || selected.page || undefined,
-                    sourceId: selected.source_id,
-                    sourceName: selected.source_name,
-                  });
-                }
-              : undefined,
-            onFocus: (nodeId: string) =>
-              setFocusedNodeId((prev) => (prev === nodeId ? null : nodeId)),
-          } satisfies MindNodeData,
-        } satisfies Node<MindNodeData>;
-      });
-  }, [
-    childrenByParent,
-    collapsedNodeIds,
-    depthMap,
-    focusSet,
-    maxDepth,
-    nodePositions,
-    onAskNode,
-    parsedEdges,
-    parsedNodes,
-    rootId,
-  ]);
+            onAsk: onAskNode ? handleAsk : undefined,
+          },
+        };
+      }),
+    [
+      childrenByParent,
+      collapsedNodeIds,
+      depthMap,
+      allNodeIds,
+      handleAsk,
+      layout,
+      nodeById,
+      onAskNode,
+      rootId,
+      selectedNodeId,
+      visibleBaseNodes,
+      visibleIds,
+    ],
+  );
 
-  const visibleIds = useMemo(() => new Set(flowNodes.map((node) => node.id)), [flowNodes]);
   const flowEdges = useMemo(
     () =>
-      (parsedEdges || [])
+      hierarchyEdges
         .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
-        .map(
-          (edge): Edge => ({
+        .map((edge): Edge => {
+          const sourceDepth = depthMap[edge.source] ?? 0;
+          return {
             id: edge.id || `${edge.source}->${edge.target}`,
             source: edge.source,
             target: edge.target,
-            animated: edge.type === "support",
+            type: "mindCurve",
             style: {
-              stroke:
-                edge.type === "reference" || edge.type === "hyperlink"
-                  ? "#9aa0a6"
-                  : edge.type === "support"
-                    ? "#4f46e5"
-                    : "#d2d2d7",
-              strokeDasharray: edge.type === "reference" || edge.type === "hyperlink" ? "4 3" : undefined,
-              opacity: focusSet ? (focusSet.has(edge.source) ? 1 : 0.14) : 1,
-              transition: "opacity 200ms ease-in-out",
+              stroke: sourceDepth <= 1 ? "#7ea6ff" : "#72a5f6",
+              strokeWidth: sourceDepth === 0 ? 3.1 : sourceDepth === 1 ? 2.3 : 1.8,
+              opacity: selectedNodeId && edge.source !== selectedNodeId && edge.target !== selectedNodeId ? 0.72 : 0.98,
+              strokeLinecap: "round",
             },
-          }),
-        ),
-    [focusSet, parsedEdges, visibleIds],
-  );
-
-  const reasoningNodes = useMemo(() => {
-    const rows = payload?.reasoning_map?.nodes || [];
-    return rows.map(
-      (row, idx): Node => ({
-        id: row.id || `r-${idx}`,
-        position: { x: idx * 240, y: 42 },
-        data: { label: row.label || row.id, kind: row.kind || "step" },
-        type: "default",
-      }),
-    );
-  }, [payload]);
-  const reasoningEdges = useMemo(
-    () =>
-      (payload?.reasoning_map?.edges || []).map(
-        (row): Edge => ({
-          id: row.id || `${row.source}->${row.target}`,
-          source: row.source,
-          target: row.target,
+          };
         }),
-      ),
-    [payload],
+    [depthMap, hierarchyEdges, selectedNodeId, visibleIds],
   );
 
-  const handleDownloadJson = useCallback(() => {
-    if (!payload) {
-      return;
-    }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${String(payload.title || "mindmap").replace(/\s+/g, "_").toLowerCase()}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }, [payload]);
-  const handleDownloadMarkdown = useCallback(() => {
-    if (!payload) {
-      return;
-    }
-    const markdown = mapPayloadToMarkdown(payload as unknown as Record<string, unknown>);
-    const blob = new Blob([markdown], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${String(payload.title || "mindmap").replace(/\s+/g, "_").toLowerCase()}.md`;
-    link.click();
-    URL.revokeObjectURL(url);
-  }, [payload]);
+  const fitView = useCallback(() => {
+    flowRef.current?.fitView({ padding: 0.24, maxZoom: 1.05, minZoom: 0.2, duration: 220 });
+  }, []);
 
   useEffect(() => {
-    if (!focusedNodeId || !flowRef.current) {
+    if (!flowRef.current || !flowNodes.length) {
       return;
     }
-    const focusedNodes = flowNodes.filter((node) => focusSet?.has(node.id));
-    if (!focusedNodes.length) {
+    const key = `${activeMapType}:${collapsedNodeIds.join(",")}:${flowNodes.length}:${maxDepth}`;
+    if (key === lastFitKey) {
       return;
     }
-    const xs = focusedNodes.map((node) => node.position.x);
-    const ys = focusedNodes.map((node) => node.position.y);
-    const x = Math.min(...xs) - 80;
-    const y = Math.min(...ys) - 80;
-    const width = Math.max(200, Math.max(...xs) - Math.min(...xs) + 280);
-    const height = Math.max(160, Math.max(...ys) - Math.min(...ys) + 220);
-    flowRef.current.fitBounds({ x, y, width, height }, { duration: 200, padding: 0.18 });
-  }, [focusSet, focusedNodeId, flowNodes]);
+    const timer = window.setTimeout(() => {
+      fitView();
+      setLastFitKey(key);
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [activeMapType, collapsedNodeIds, fitView, flowNodes, lastFitKey, maxDepth]);
 
   if (!payload || !parsedNodes.length) {
     return (
@@ -332,99 +370,42 @@ export function MindMapViewer({
     );
   }
 
+  const handleNodeClick: NodeMouseHandler<Node<MindNodeData>> = (_event, node) => {
+    if (!node.data.onAsk) {
+      setSelectedNodeId(node.id);
+      return;
+    }
+    handleAsk(node.id);
+  };
+
   return (
-    <div className="rounded-2xl border border-black/[0.08] bg-[#f2f2f7] p-3 space-y-3 shadow-[0_16px_40px_-34px_rgba(0,0,0,0.35)]">
-      <MindMapToolbar
-        title={payload.title || "Mind-map"}
-        mapType={String(payload.map_type || "structure")}
-        kind={String(payload.kind || "tree")}
-        activeMapType={activeMapType}
-        hasVariants={Boolean(basePayload?.variants && typeof basePayload.variants === "object")}
-        onSwitchMapType={(mapType) => {
-          setActiveMapType(mapType);
-          onMapTypeChange?.(mapType);
-        }}
-        onExpand={() => setCollapsedNodeIds([])}
-        onCollapse={() => setCollapsedNodeIds(flowNodes.map((node) => node.id))}
-        onToggleLayout={() => setLayoutMode((prev) => (prev === "balanced" ? "horizontal" : "balanced"))}
-        layoutMode={layoutMode}
-        onResetFocus={() => {
-          setFocusedNodeId(null);
-          flowRef.current?.fitView({ duration: 200, padding: 0.12 });
-        }}
-        onAutoTidy={() => setNodePositions({})}
-        onFitView={() => flowRef.current?.fitView({ duration: 200, padding: 0.12 })}
-        onExportPng={() => drawPngFromLayout(flowNodes, flowEdges, String(payload.title || "mindmap"))}
-        onExportJson={handleDownloadJson}
-        onExportMarkdown={handleDownloadMarkdown}
-        onSave={() => onSaveMap?.(payload)}
-        onShare={async () => {
-          const shared = await onShareMap?.(payload);
-          if (typeof shared === "string" && shared.trim()) {
-            await navigator.clipboard.writeText(shared);
-          } else {
-            await navigator.clipboard.writeText(JSON.stringify(payload));
-          }
-        }}
-      />
-      <div className="h-[420px] w-full rounded-2xl border border-black/[0.06] overflow-hidden bg-[#fafafc]">
+    <div className="overflow-hidden rounded-2xl border border-[#1f2a41] bg-[#01040a] shadow-[0_18px_54px_-30px_rgba(0,0,0,0.8)]">
+      <div className="h-[520px] w-full">
         <ReactFlow
           nodeTypes={nodeTypes}
-          nodes={
-            layoutMode === "horizontal"
-              ? flowNodes.map((node, index) => {
-                  const depth = depthMap[node.id] ?? 0;
-                  return {
-                    ...node,
-                    position: nodePositions[node.id] || { x: depth * 260, y: index * 96 },
-                  };
-                })
-              : flowNodes
-          }
+          edgeTypes={edgeTypes}
+          nodes={flowNodes}
           edges={flowEdges}
           onInit={(instance) => {
             flowRef.current = instance;
-            window.setTimeout(() => instance.fitView({ duration: 200, padding: 0.12 }), 60);
+            window.setTimeout(() => fitView(), 50);
           }}
-          onNodeDragStop={(_, node) =>
-            setNodePositions((prev) => ({ ...prev, [node.id]: { x: node.position.x, y: node.position.y } }))
-          }
+          onNodeClick={handleNodeClick}
           fitView
-          attributionPosition="bottom-right"
-        >
-          <Background color="#e3e4e8" gap={22} />
-          <MiniMap pannable zoomable />
-          <Controls showInteractive={false} />
-        </ReactFlow>
+          fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }}
+          minZoom={0.2}
+          maxZoom={1.7}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          zoomOnDoubleClick={false}
+          panOnDrag
+          zoomOnPinch
+          zoomOnScroll
+          proOptions={{ hideAttribution: true }}
+          className="bg-[#01040a]"
+        />
       </div>
-      {payload.reasoning_map?.nodes?.length ? (
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={() => setShowReasoningMap((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          >
-            {showReasoningMap ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            {showReasoningMap ? "Hide reasoning map" : "Show reasoning map"}
-          </button>
-          {showReasoningMap ? (
-            <div className="h-[240px] w-full rounded-2xl border border-black/[0.06] overflow-hidden bg-[#fafafc]">
-              <ReactFlow
-                nodes={reasoningNodes}
-                edges={reasoningEdges}
-                onInit={(instance) => {
-                  reasoningFlowRef.current = instance;
-                  window.setTimeout(() => instance.fitView({ duration: 180, padding: 0.12 }), 60);
-                }}
-                fitView
-              >
-                <Background color="#e3e4e8" gap={20} />
-                <Controls showInteractive={false} />
-              </ReactFlow>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }

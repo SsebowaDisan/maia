@@ -1,9 +1,16 @@
 import { Copy, ExternalLink, FileText, PenLine, RotateCcw, X } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { buildRawFileUrl } from "../../../api/client";
 import type { AgentActivityEvent, ChatTurn } from "../../types";
+import { parseEvidence } from "../../utils/infoInsights";
+import type { EvidenceCard } from "../../utils/infoInsights";
 import { renderRichText } from "../../utils/richText";
 import { AgentActivityPanel } from "../AgentActivityPanel";
+import {
+  CITATION_ANCHOR_SELECTOR,
+  resolveCitationFocusFromAnchor,
+  resolveStrengthTier,
+} from "./citationFocus";
 import { ChatTurnPlot } from "./ChatTurnPlot";
 import type { FilePreviewAttachment } from "./types";
 
@@ -30,6 +37,46 @@ function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
   event.stopPropagation();
 }
 
+type CitationPreview = {
+  left: number;
+  top: number;
+  width: number;
+  placeAbove: boolean;
+  sourceName: string;
+  page?: string;
+  extract: string;
+  strengthLabel?: string;
+  citationRef?: string;
+};
+
+function strengthTierLabel(tier: number): string {
+  if (tier >= 3) {
+    return "Strong evidence";
+  }
+  if (tier >= 2) {
+    return "Moderate evidence";
+  }
+  if (tier >= 1) {
+    return "Supporting evidence";
+  }
+  return "";
+}
+
+function formatPreviewExtract(raw: string): string {
+  const compact = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "No extract available for this citation.";
+  }
+  const unquoted = compact.replace(/^[“"'`]+/, "").replace(/[”"'`]+$/, "").trim();
+  const text = unquoted || compact;
+  if (text.length <= 260) {
+    return text;
+  }
+  const clipped = text.slice(0, 260);
+  const wordCut = clipped.lastIndexOf(" ");
+  return `${(wordCut >= 140 ? clipped.slice(0, wordCut) : clipped).trim()}…`;
+}
+
 function TurnsPanel({
   activityEvents,
   beginInlineEdit,
@@ -47,7 +94,10 @@ function TurnsPanel({
   selectedTurnIndex,
   setEditingText,
 }: TurnsPanelProps) {
+  const turnsRootRef = useRef<HTMLDivElement | null>(null);
+  const evidenceCacheRef = useRef<Map<number, { info: string; cards: EvidenceCard[] }>>(new Map());
   const [previewAttachment, setPreviewAttachment] = useState<FilePreviewAttachment | null>(null);
+  const [citationPreview, setCitationPreview] = useState<CitationPreview | null>(null);
   const previewUrl = useMemo(() => {
     if (!previewAttachment?.fileId) return "";
     return buildRawFileUrl(previewAttachment.fileId);
@@ -67,8 +117,219 @@ function TurnsPanel({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewAttachment]);
 
+  useEffect(() => {
+    const cache = evidenceCacheRef.current;
+    for (const key of Array.from(cache.keys())) {
+      if (key < 0 || key >= chatTurns.length) {
+        cache.delete(key);
+      }
+    }
+  }, [chatTurns.length]);
+
+  useEffect(() => {
+    const container = turnsRootRef.current;
+    if (!container) {
+      return;
+    }
+
+    const citationAnchors = Array.from(
+      container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"),
+    );
+    for (const anchor of citationAnchors) {
+      const tier = resolveStrengthTier(
+        Number(anchor.getAttribute("data-strength-tier") || ""),
+        Number(anchor.getAttribute("data-strength") || ""),
+      );
+      if (tier > 0) {
+        anchor.setAttribute("data-strength-tier-resolved", String(tier));
+      } else {
+        anchor.removeAttribute("data-strength-tier-resolved");
+      }
+      if (!anchor.hasAttribute("href")) {
+        anchor.setAttribute("tabindex", "0");
+        anchor.setAttribute("role", "button");
+      }
+      const refLabel = String(anchor.textContent || "").replace(/\s+/g, " ").trim();
+      let displayNumber = String(anchor.getAttribute("data-citation-number") || "").trim();
+      if (!/^\d{1,4}$/.test(displayNumber)) {
+        const fallbackMatch = refLabel.match(/(\d{1,4})/);
+        displayNumber = fallbackMatch?.[1] || "";
+        if (displayNumber) {
+          anchor.setAttribute("data-citation-number", displayNumber);
+        }
+      }
+      const pageLabel = String(anchor.getAttribute("data-page") || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const labelParts = [displayNumber ? `Citation ${displayNumber}` : (refLabel || "Citation")];
+      const tierLabel = strengthTierLabel(tier);
+      if (tierLabel) {
+        labelParts.push(tierLabel.toLowerCase());
+      }
+      if (pageLabel) {
+        labelParts.push(`page ${pageLabel}`);
+      }
+      anchor.setAttribute("aria-label", labelParts.join(", "));
+    }
+  }, [chatTurns]);
+
+  useEffect(() => {
+    const container = turnsRootRef.current;
+    if (!container) {
+      return;
+    }
+
+    let hoverTimer: number | null = null;
+    const findCitationAnchor = (target: EventTarget | null): HTMLAnchorElement | null => {
+      if (!(target instanceof Element)) {
+        if (target instanceof Node && target.parentElement) {
+          return target.parentElement.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+        }
+        return null;
+      }
+      return target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+    };
+
+    const clearHoverTimer = () => {
+      if (hoverTimer !== null) {
+        window.clearTimeout(hoverTimer);
+        hoverTimer = null;
+      }
+    };
+
+    const hidePreview = () => {
+      clearHoverTimer();
+      setCitationPreview(null);
+    };
+
+    const getEvidenceCards = (turnIndex: number, turn: ChatTurn): EvidenceCard[] => {
+      const infoHtml = String(turn.info || "");
+      const cached = evidenceCacheRef.current.get(turnIndex);
+      if (cached && cached.info === infoHtml) {
+        return cached.cards;
+      }
+      const cards = parseEvidence(infoHtml);
+      evidenceCacheRef.current.set(turnIndex, { info: infoHtml, cards });
+      return cards;
+    };
+
+    const showPreviewFromAnchor = (anchor: HTMLAnchorElement) => {
+      const turnNode = anchor.closest<HTMLElement>("[data-turn-index]");
+      const turnIndex = Number(turnNode?.getAttribute("data-turn-index") || "");
+      if (!Number.isFinite(turnIndex) || turnIndex < 0 || turnIndex >= chatTurns.length) {
+        hidePreview();
+        return;
+      }
+
+      const turn = chatTurns[turnIndex];
+      const evidenceCards = getEvidenceCards(turnIndex, turn);
+      const resolved = resolveCitationFocusFromAnchor({
+        turn,
+        citationAnchor: anchor,
+        evidenceCards,
+      });
+      const rect = anchor.getBoundingClientRect();
+      const width = Math.max(180, Math.min(360, window.innerWidth - 24));
+      const minCenter = 12 + width / 2;
+      const maxCenter = window.innerWidth - 12 - width / 2;
+      const center = rect.left + rect.width / 2;
+      const left = minCenter > maxCenter
+        ? window.innerWidth / 2
+        : Math.max(minCenter, Math.min(maxCenter, center));
+      const placeAbove = rect.top > 172;
+      const top = placeAbove ? rect.top - 8 : rect.bottom + 8;
+      const tierLabel = strengthTierLabel(resolved.strengthTierResolved);
+      if (resolved.strengthTierResolved > 0) {
+        anchor.setAttribute("data-strength-tier-resolved", String(resolved.strengthTierResolved));
+      }
+      setCitationPreview({
+        left,
+        top,
+        width,
+        placeAbove,
+        sourceName: resolved.focus.sourceName || "Indexed source",
+        page: resolved.focus.page,
+        extract: formatPreviewExtract(resolved.focus.extract),
+        strengthLabel: tierLabel || undefined,
+        citationRef: String(anchor.textContent || "").replace(/\s+/g, " ").trim(),
+      });
+    };
+
+    const handleMouseOver = (event: MouseEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !container.contains(anchor)) {
+        return;
+      }
+      clearHoverTimer();
+      hoverTimer = window.setTimeout(() => {
+        showPreviewFromAnchor(anchor);
+      }, 180);
+    };
+
+    const handleMouseOut = (event: MouseEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !container.contains(anchor)) {
+        return;
+      }
+      clearHoverTimer();
+      setCitationPreview(null);
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !container.contains(anchor)) {
+        return;
+      }
+      clearHoverTimer();
+      showPreviewFromAnchor(anchor);
+    };
+
+    const handleFocusOut = (event: FocusEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !container.contains(anchor)) {
+        return;
+      }
+      if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
+        return;
+      }
+      setCitationPreview(null);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        hidePreview();
+      }
+    };
+    const handleClick = () => {
+      setCitationPreview(null);
+    };
+
+    container.addEventListener("mouseover", handleMouseOver);
+    container.addEventListener("mouseout", handleMouseOut);
+    container.addEventListener("focusin", handleFocusIn);
+    container.addEventListener("focusout", handleFocusOut);
+    container.addEventListener("keydown", handleKeyDown);
+    container.addEventListener("click", handleClick, true);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", hidePreview);
+    document.addEventListener("scroll", hidePreview, true);
+
+    return () => {
+      clearHoverTimer();
+      container.removeEventListener("mouseover", handleMouseOver);
+      container.removeEventListener("mouseout", handleMouseOut);
+      container.removeEventListener("focusin", handleFocusIn);
+      container.removeEventListener("focusout", handleFocusOut);
+      container.removeEventListener("keydown", handleKeyDown);
+      container.removeEventListener("click", handleClick, true);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", hidePreview);
+      document.removeEventListener("scroll", hidePreview, true);
+    };
+  }, [chatTurns]);
+
   return (
-    <div className="mx-auto w-full max-w-[1800px] space-y-4">
+    <div ref={turnsRootRef} className="mx-auto w-full max-w-[1800px] space-y-4">
       {chatTurns.map((turn, index) => {
         const isLatestTurn = index === chatTurns.length - 1;
         const turnActivityEvents =
@@ -86,6 +347,7 @@ function TurnsPanel({
         return (
           <div
             key={`${turn.user}-${index}`}
+            data-turn-index={index}
             className={`space-y-2 rounded-2xl px-2 py-1 transition-colors ${
               selectedTurnIndex === index ? "bg-[#f5f5f7]" : ""
             }`}
@@ -225,9 +487,9 @@ function TurnsPanel({
               <div className="flex justify-start">
                 <div className="max-w-[90%] space-y-1.5 group">
                   {hasAssistantText ? (
-                    <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[14px] leading-relaxed text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
+                    <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[15px] leading-[1.72] text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
                       <div
-                        className="chat-answer-html [&_p]:mb-3 [&_p]:leading-[1.7] [&_p:last-child]:mb-0 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:text-[17px] [&_h3]:font-semibold [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#0a66d9] hover:[&_a]:underline [&_a.citation]:ml-1.5 [&_a.citation]:inline-flex [&_a.citation]:h-[18px] [&_a.citation]:min-w-[18px] [&_a.citation]:items-center [&_a.citation]:justify-center [&_a.citation]:rounded-md [&_a.citation]:border [&_a.citation]:border-[#cbd4e1] [&_a.citation]:bg-[#eef2f8] [&_a.citation]:px-1.5 [&_a.citation]:text-[10px] [&_a.citation]:font-semibold [&_a.citation]:tracking-[-0.01em] [&_a.citation]:leading-none [&_a.citation]:text-[#223047] [&_a.citation]:no-underline [&_a.citation]:align-super [&_a.citation]:shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] hover:[&_a.citation]:border-[#b8c4d8] hover:[&_a.citation]:bg-[#e7edf7] hover:[&_a.citation]:no-underline [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg [&_mark]:bg-[#fff5b5]"
+                        className="chat-answer-html [&_p]:mb-3.5 [&_p]:leading-[1.78] [&_p:last-child]:mb-0 [&_ul]:mb-3.5 [&_ul]:list-disc [&_ul]:pl-6 [&_ul>li]:mb-1.5 [&_ol]:mb-3.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol>li]:mb-1.5 [&_h1]:mb-3 [&_h1]:text-[22px] [&_h1]:font-semibold [&_h1]:tracking-[-0.01em] [&_h2]:mt-5 [&_h2]:mb-2.5 [&_h2]:text-[18px] [&_h2]:font-semibold [&_h2]:tracking-[-0.01em] [&_h2]:text-[#141518] [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-[16px] [&_h3]:font-semibold [&_h3]:text-[#1a2430] [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_a]:text-[#0a66d9] hover:[&_a]:underline [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg"
                         dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
                       />
                     </div>
@@ -281,6 +543,44 @@ function TurnsPanel({
           </div>
         );
       })}
+
+      {citationPreview ? (
+        <div
+          role="tooltip"
+          aria-live="polite"
+          className="citation-peek-tooltip pointer-events-none fixed z-[130] rounded-xl border border-[#d4d9e4] bg-white/98 p-3 text-left shadow-[0_22px_46px_-26px_rgba(18,28,45,0.55)] backdrop-blur-[1px]"
+          style={{
+            left: citationPreview.left,
+            top: citationPreview.top,
+            width: citationPreview.width,
+            transform: citationPreview.placeAbove ? "translate(-50%, -100%)" : "translate(-50%, 0)",
+          }}
+        >
+          <div className="mb-1.5 flex items-center gap-2 text-[10px] text-[#5f6472]">
+            {citationPreview.citationRef ? (
+              <span className="rounded-full border border-[#ccd3e2] bg-[#f5f7fb] px-2 py-0.5 font-semibold text-[#2f3a51]">
+                {citationPreview.citationRef}
+              </span>
+            ) : null}
+            <span className="truncate" title={citationPreview.sourceName}>
+              {citationPreview.sourceName}
+            </span>
+            {citationPreview.page ? (
+              <span className="shrink-0 rounded-full border border-black/[0.08] bg-white px-1.5 py-0.5 text-[#6e6e73]">
+                p. {citationPreview.page}
+              </span>
+            ) : null}
+            {citationPreview.strengthLabel ? (
+              <span className="shrink-0 rounded-full border border-black/[0.08] bg-white px-1.5 py-0.5 text-[#6e6e73]">
+                {citationPreview.strengthLabel}
+              </span>
+            ) : null}
+          </div>
+          <p className="citation-peek-tooltip-text citation-peek-snippet text-[12px] leading-[1.45] text-[#1e2532]">
+            {citationPreview.extract}
+          </p>
+        </div>
+      ) : null}
 
       {previewAttachment ? (
         <div className="fixed inset-0 z-[140] bg-black/45 backdrop-blur-[2px] px-4 py-6" onClick={() => setPreviewAttachment(null)}>

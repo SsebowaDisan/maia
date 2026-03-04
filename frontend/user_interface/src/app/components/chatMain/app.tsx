@@ -1,116 +1,11 @@
 import { type MouseEvent as ReactMouseEvent } from "react";
 import type { ChatTurn } from "../../types";
-import type { CitationHighlightBox } from "../../types";
-import { parseEvidence } from "../../utils/infoInsights";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
+import { CITATION_ANCHOR_SELECTOR, resolveCitationFocusFromAnchor } from "./citationFocus";
 import type { ChatMainProps } from "./types";
 import { TurnsPanel } from "./TurnsPanel";
 import { useChatMainInteractions } from "./useChatMainInteractions";
-
-function normalizePageLabel(...candidates: Array<string | undefined | null>): string | undefined {
-  for (const candidate of candidates) {
-    const raw = String(candidate || "").trim();
-    if (!raw) {
-      continue;
-    }
-    const match = raw.match(/(\d{1,4})/);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return undefined;
-}
-
-function normalizeCitationExtract(...candidates: Array<string | undefined | null>): string {
-  const MAX_EXTRACT_CHARS = 260;
-  for (const candidate of candidates) {
-    const raw = String(candidate || "").replace(/\s+/g, " ").trim();
-    if (!raw) {
-      continue;
-    }
-    if (/^(?:\[\d{1,4}\]|【\d{1,4}】)$/.test(raw)) {
-      continue;
-    }
-    if (raw.length <= MAX_EXTRACT_CHARS) {
-      return raw;
-    }
-    const clipped = raw.slice(0, MAX_EXTRACT_CHARS);
-    const sentenceCut = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-    if (sentenceCut >= 120) {
-      return clipped.slice(0, sentenceCut + 1).trim();
-    }
-    const wordCut = clipped.lastIndexOf(" ");
-    if (wordCut >= 120) {
-      return clipped.slice(0, wordCut).trim();
-    }
-    return clipped.trim();
-  }
-  return "No extract available for this citation.";
-}
-
-function parseHighlightBoxes(...candidates: Array<string | undefined | null>): CitationHighlightBox[] {
-  const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
-  for (const candidate of candidates) {
-    const raw = String(candidate || "").trim();
-    if (!raw) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        continue;
-      }
-      const boxes: CitationHighlightBox[] = [];
-      for (const row of parsed) {
-        if (!row || typeof row !== "object") {
-          continue;
-        }
-        const x = Number((row as Record<string, unknown>).x);
-        const y = Number((row as Record<string, unknown>).y);
-        const width = Number((row as Record<string, unknown>).width);
-        const height = Number((row as Record<string, unknown>).height);
-        if (![x, y, width, height].every((value) => Number.isFinite(value))) {
-          continue;
-        }
-        const nx = clamp01(x);
-        const ny = clamp01(y);
-        const nw = Math.max(0, Math.min(1 - nx, width));
-        const nh = Math.max(0, Math.min(1 - ny, height));
-        if (nw < 0.002 || nh < 0.002) {
-          continue;
-        }
-        boxes.push({
-          x: Number(nx.toFixed(6)),
-          y: Number(ny.toFixed(6)),
-          width: Number(nw.toFixed(6)),
-          height: Number(nh.toFixed(6)),
-        });
-        if (boxes.length >= 24) {
-          break;
-        }
-      }
-      if (boxes.length) {
-        return boxes;
-      }
-    } catch {
-      // Ignore malformed payloads and continue with other candidates.
-    }
-  }
-  return [];
-}
-
-function extractCitationClaimText(citationAnchor: HTMLAnchorElement): string {
-  const claimHost =
-    citationAnchor.closest("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6") ||
-    citationAnchor.parentElement;
-  const raw = normalizeCitationExtract(
-    claimHost?.textContent || "",
-    citationAnchor.textContent?.trim(),
-  );
-  const cleaned = raw.replace(/(?:\[\d{1,4}\]|【\d{1,4}】)/g, "").replace(/\s+/g, " ").trim();
-  return cleaned.length >= 16 ? cleaned : "";
-}
 
 function ChatMain({
   chatTurns,
@@ -159,74 +54,13 @@ function ChatMain({
     index: number,
   ) => {
     const target = event.target as HTMLElement;
-    const citationAnchor = target.closest(
-      "a.citation, a[href^='#evidence-'], a[data-file-id]",
-    ) as HTMLAnchorElement | null;
+    const citationAnchor = target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
     if (citationAnchor) {
       event.preventDefault();
       event.stopPropagation();
       onSelectTurn(index);
-
-      const href = citationAnchor.getAttribute("href") || "";
-      const evidenceId = href.startsWith("#") ? href.slice(1) : "";
-      const evidenceCards = parseEvidence(turn.info || "");
-      const matchedEvidence = evidenceCards.find((card) => card.id === evidenceId) || null;
-      const fallbackEvidence =
-        matchedEvidence ||
-        evidenceCards.find((card) => Boolean(card.fileId)) ||
-        evidenceCards[0] ||
-        null;
-      const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
-      const pageAttr = citationAnchor.getAttribute("data-page") || "";
-      const phraseAttr =
-        citationAnchor.getAttribute("data-phrase") ||
-        citationAnchor.getAttribute("data-search") ||
-        "";
-      const boxesAttr =
-        citationAnchor.getAttribute("data-boxes") ||
-        citationAnchor.getAttribute("data-bboxes") ||
-        "";
-      const strengthAttr = Number(citationAnchor.getAttribute("data-strength") || "");
-      const strengthTierAttr = Number(citationAnchor.getAttribute("data-strength-tier") || "");
-      const matchQualityAttr = (citationAnchor.getAttribute("data-match-quality") || "").trim();
-      const unitIdAttr = (citationAnchor.getAttribute("data-unit-id") || "").trim();
-      const charStartAttr = Number(citationAnchor.getAttribute("data-char-start") || "");
-      const charEndAttr = Number(citationAnchor.getAttribute("data-char-end") || "");
-      const attachmentFileId =
-        (turn.attachments || []).find((attachment) => Boolean(attachment.fileId))?.fileId || "";
-      const sourceName = (matchedEvidence?.source || fallbackEvidence?.source || "Indexed source").replace(
-        /^\[\d+\]\s*/,
-        "",
-      );
-      const highlightBoxes = parseHighlightBoxes(
-        boxesAttr,
-        JSON.stringify(matchedEvidence?.highlightBoxes || []),
-      );
-
-      onCitationClick({
-        fileId: fileIdAttr || matchedEvidence?.fileId || fallbackEvidence?.fileId || attachmentFileId,
-        sourceName,
-        page: normalizePageLabel(pageAttr, matchedEvidence?.page, fallbackEvidence?.page),
-        extract: normalizeCitationExtract(
-          phraseAttr,
-          matchedEvidence?.extract,
-          fallbackEvidence?.extract,
-          citationAnchor.textContent?.trim(),
-        ),
-        claimText: extractCitationClaimText(citationAnchor) || undefined,
-        evidenceId: evidenceId || undefined,
-        highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
-        strengthScore: Number.isFinite(strengthAttr)
-          ? strengthAttr
-          : matchedEvidence?.strengthScore,
-        strengthTier: Number.isFinite(strengthTierAttr)
-          ? strengthTierAttr
-          : matchedEvidence?.strengthTier,
-        matchQuality: matchQualityAttr || matchedEvidence?.matchQuality,
-        unitId: unitIdAttr || matchedEvidence?.unitId,
-        charStart: Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
-        charEnd: Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
-      });
+      const resolved = resolveCitationFocusFromAnchor({ turn, citationAnchor });
+      onCitationClick(resolved.focus);
       return;
     }
     onSelectTurn(index);

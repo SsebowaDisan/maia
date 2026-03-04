@@ -80,6 +80,51 @@ def test_build_knowledge_map_structure_has_tree_and_cross_links() -> None:
     assert reference_edges, "Expected semantic cross-source links in structure map."
 
 
+def test_build_knowledge_map_clusters_many_pages_into_topics() -> None:
+    documents = []
+    for page in range(1, 13):
+        documents.append(
+            {
+                "text": (
+                    f"Section {page} covers deterministic chat navigation, "
+                    f"composer actions, and sidebar flow transitions for page {page}."
+                ),
+                "metadata": {
+                    "source_id": "src_big_pdf",
+                    "source_name": "Large Product Spec.pdf",
+                    "page_label": str(page),
+                },
+            }
+        )
+
+    payload = build_knowledge_map(
+        question="What does this PDF cover?",
+        context="",
+        documents=documents,
+        include_reasoning_map=False,
+        map_type="structure",
+    )
+
+    nodes = payload.get("nodes", [])
+    edges = payload.get("edges", [])
+    topic_nodes = [node for node in nodes if node.get("node_type") == "topic"]
+    page_nodes = [node for node in nodes if node.get("node_type") == "page"]
+    source_nodes = [node for node in nodes if node.get("node_type") in {"source", "web_source"}]
+
+    assert source_nodes, "Expected at least one source node."
+    assert len(page_nodes) >= 10, "Expected page nodes to still exist under topic branches."
+    assert topic_nodes, "Expected topic nodes to be created for many-page documents."
+
+    source_id = source_nodes[0]["id"]
+    direct_targets = {
+        str(edge.get("target", ""))
+        for edge in edges
+        if edge.get("type") == "hierarchy" and edge.get("source") == source_id
+    }
+    topic_ids = {str(node.get("id", "")) for node in topic_nodes}
+    assert direct_targets & topic_ids, "Source should connect to topic branches."
+
+
 def test_build_knowledge_map_evidence_has_claim_and_support_edges() -> None:
     documents = [
         {

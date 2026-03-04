@@ -15,6 +15,9 @@ export type MindNodeData = {
   hasChildren: boolean;
   collapsed: boolean;
   nodeType: string;
+  isRoot?: boolean;
+  depth?: number;
+  isSelected?: boolean;
   onToggle: (nodeId: string) => void;
   onAsk?: (nodeId: string) => void;
   onFocus?: (nodeId: string) => void;
@@ -32,7 +35,7 @@ export type BalancedLayoutParams = {
   leafGap?: number;
 };
 
-export const STORAGE_PREFIX = "maia.mindmap.viewer.v2";
+export const STORAGE_PREFIX = "maia.mindmap.viewer.v4";
 
 export function hashText(value: string): string {
   let hash = 2166136261;
@@ -44,12 +47,16 @@ export function hashText(value: string): string {
 }
 
 export function storageKey(
-  payload: { title?: string; root_id?: string } | null,
+  payload: { title?: string; root_id?: string; nodes?: unknown[]; edges?: unknown[] } | null,
   conversationId?: string | null,
 ): string {
-  const title = String(payload?.title || payload?.root_id || "mindmap");
+  const title = String(payload?.title || "mindmap");
+  const root = String(payload?.root_id || "");
+  const nodeCount = Array.isArray(payload?.nodes) ? payload.nodes.length : 0;
+  const edgeCount = Array.isArray(payload?.edges) ? payload.edges.length : 0;
   const conv = String(conversationId || "global");
-  return `${STORAGE_PREFIX}:${conv}:${hashText(title)}`;
+  const signature = `${title}|${root}|${nodeCount}|${edgeCount}`;
+  return `${STORAGE_PREFIX}:${conv}:${hashText(signature)}`;
 }
 
 export function parseCanvasState(value: string | null): CanvasState | null {

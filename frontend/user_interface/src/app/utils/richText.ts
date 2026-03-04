@@ -58,6 +58,8 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "data-bboxes",
     "data-search",
     "data-src",
+    "data-evidence-id",
+    "data-citation-number",
   ]),
   B: new Set(["class", "id"]),
   BLOCKQUOTE: new Set(["class", "id"]),
@@ -189,6 +191,108 @@ function normalizeMarkdownBlocks(input: string): string {
   return normalized;
 }
 
+function countCitationAnchors(text: string): number {
+  return (String(text || "").match(/<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>/gi) || []).length;
+}
+
+function stripHtmlWithIndexMap(input: string): { plain: string; indexMap: number[] } {
+  const raw = String(input || "");
+  const plainChars: string[] = [];
+  const indexMap: number[] = [];
+  let inTag = false;
+  for (let idx = 0; idx < raw.length; idx += 1) {
+    const char = raw[idx];
+    if (char === "<") {
+      inTag = true;
+      continue;
+    }
+    if (!inTag) {
+      plainChars.push(char);
+      indexMap.push(idx);
+      continue;
+    }
+    if (char === ">") {
+      inTag = false;
+    }
+  }
+  return { plain: plainChars.join(""), indexMap };
+}
+
+function removeInlineMarkerTokensWithMap(
+  plain: string,
+  indexMap: number[],
+): { plain: string; indexMap: number[] } {
+  if (!plain || !indexMap.length || plain.length !== indexMap.length) {
+    return { plain, indexMap };
+  }
+  const strippedChars: string[] = [];
+  const strippedMap: number[] = [];
+  let cursor = 0;
+  while (cursor < plain.length) {
+    const markerMatch = plain.slice(cursor).match(/^(?:\[|【|\{)\s*\d{1,4}\s*(?:\]|】|\})/);
+    if (markerMatch?.[0]) {
+      cursor += markerMatch[0].length;
+      continue;
+    }
+    strippedChars.push(plain[cursor]);
+    strippedMap.push(indexMap[cursor]);
+    cursor += 1;
+  }
+  return { plain: strippedChars.join(""), indexMap: strippedMap };
+}
+
+function dedupeDuplicateCitationPasses(input: string): string {
+  const raw = String(input || "");
+  if (!raw.trim()) {
+    return raw;
+  }
+  if (countCitationAnchors(raw) <= 0) {
+    return raw;
+  }
+
+  const stripped = stripHtmlWithIndexMap(raw);
+  const withoutMarkers = removeInlineMarkerTokensWithMap(stripped.plain, stripped.indexMap);
+  const plain = withoutMarkers.plain;
+  const indexMap = withoutMarkers.indexMap;
+  if (!plain || !indexMap.length) {
+    return raw;
+  }
+
+  const plainStart = plain.search(/\S/);
+  if (plainStart < 0) {
+    return raw;
+  }
+  const window = plain.slice(plainStart, plainStart + 320);
+  if (window.length < 120) {
+    return raw;
+  }
+  const sentenceMatch = window.match(/.{48,260}?[.!?]/);
+  const signature = (sentenceMatch?.[0] || window.slice(0, 180))
+    .trim()
+    .replace(/[\s.,;:!?]+$/, "");
+  if (signature.length < 48) {
+    return raw;
+  }
+
+  const secondPlainIdx = plain.indexOf(signature, plainStart + signature.length);
+  if (secondPlainIdx <= plainStart || secondPlainIdx >= indexMap.length) {
+    return raw;
+  }
+  const secondRawIdx = indexMap[secondPlainIdx];
+  if (!Number.isFinite(secondRawIdx) || secondRawIdx <= 0 || secondRawIdx >= raw.length) {
+    return raw;
+  }
+
+  const prefix = raw.slice(0, secondRawIdx);
+  const suffix = raw.slice(secondRawIdx);
+  if (countCitationAnchors(suffix) <= countCitationAnchors(prefix)) {
+    return raw;
+  }
+
+  const trimmed = suffix.trimStart();
+  return trimmed || raw;
+}
+
 function toHtml(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -209,5 +313,6 @@ export function renderRichText(input: string): string {
   if (!input.trim()) {
     return "";
   }
-  return sanitizeHtml(toHtml(input));
+  const deduped = dedupeDuplicateCitationPasses(input);
+  return sanitizeHtml(toHtml(deduped));
 }
