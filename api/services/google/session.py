@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from api.services.google.errors import GoogleApiError, GoogleServiceError, GoogleTokenError
+from api.services.google.oauth_scopes import missing_scopes
 from api.services.google.service_account import (
     DEFAULT_SERVICE_ACCOUNT_SCOPES,
     issue_service_account_access_token,
@@ -101,6 +102,31 @@ class GoogleAuthSession:
                 ),
                 status_code=401,
             )
+
+    def current_scopes(self) -> list[str]:
+        auth_mode = resolve_google_auth_mode(settings=self.settings)
+        if auth_mode == "service_account":
+            return self._service_account_scopes()
+        record = self.get_tokens()
+        if record is None:
+            return []
+        return [str(item).strip() for item in (record.scopes or []) if str(item).strip()]
+
+    def require_scopes(self, required_scopes: list[str], *, reason: str = "Google tool access") -> None:
+        normalized_required = [str(item).strip() for item in required_scopes if str(item).strip()]
+        if not normalized_required:
+            return
+        missing = missing_scopes(required_scopes=normalized_required, granted_scopes=self.current_scopes())
+        if not missing:
+            return
+        raise GoogleTokenError(
+            code="google_scopes_missing",
+            message=(
+                f"{reason} is missing required OAuth scopes: {', '.join(missing)}. "
+                "Reconnect Google and grant the requested tool permissions."
+            ),
+            status_code=403,
+        )
 
     def _build_headers(self, headers: dict[str, str] | None = None) -> dict[str, str]:
         final_headers = dict(headers or {})

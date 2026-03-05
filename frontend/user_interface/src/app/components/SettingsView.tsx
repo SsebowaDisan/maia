@@ -83,10 +83,19 @@ export function SettingsView() {
           googleServiceAccountStatus={controller.googleServiceAccountStatus}
           googleWorkspaceAliases={controller.googleWorkspaceAliases}
           oauthStatus={controller.oauthStatus}
+          oauthClientIdInput={controller.oauthClientIdInput}
+          oauthClientSecretInput={controller.oauthClientSecretInput}
+          oauthRedirectUriInput={controller.oauthRedirectUriInput}
+          oauthConfigSaving={controller.oauthConfigSaving}
           googleToolHealth={controller.googleToolHealth}
           liveEvents={controller.liveEvents}
-          onConnectGoogle={() => controller.handleGoogleOAuthConnect()}
+          onConnectGoogle={(options) => controller.handleGoogleOAuthConnect(options)}
           onDisconnectGoogle={() => void controller.handleGoogleOAuthDisconnect()}
+          onOAuthClientIdInputChange={controller.setOauthClientIdInput}
+          onOAuthClientSecretInputChange={controller.setOauthClientSecretInput}
+          onOAuthRedirectUriInputChange={controller.setOauthRedirectUriInput}
+          onSaveGoogleOAuthConfig={() => void controller.handleSaveGoogleOAuthConfig()}
+          onRequestGoogleOAuthSetup={() => controller.handleRequestGoogleOAuthSetup()}
           onGoogleAuthModeChange={(mode) => void controller.handleGoogleWorkspaceAuthModeChange(mode)}
           onAnalyzeGoogleLink={(link) => controller.handleAnalyzeGoogleWorkspaceLink(link)}
           onCheckGoogleLinkAccess={(payload) => controller.handleCheckGoogleWorkspaceLinkAccess(payload)}

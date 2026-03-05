@@ -7,6 +7,7 @@ from api.services.google.auth import GoogleAuthSession
 from api.services.google.docs import GoogleDocsService
 from api.services.google.drive import GoogleDriveService
 from api.services.google.errors import GoogleServiceError
+from api.services.google.oauth_scopes import connector_required_scopes
 from api.services.google.sheets import GoogleSheetsService
 
 
@@ -34,15 +35,23 @@ class GoogleWorkspaceConnector(BaseConnector):
             raise ConnectorError("GOOGLE_WORKSPACE_ACCESS_TOKEN is not configured.")
         return token
 
+    def _authorized_session(self) -> GoogleAuthSession:
+        session = self._session()
+        session.require_scopes(
+            connector_required_scopes(self.connector_id),
+            reason="Google Workspace access",
+        )
+        return session
+
     def health_check(self) -> ConnectorHealth:
         try:
-            self._token()
+            self._authorized_session().require_access_token()
         except (ConnectorError, GoogleServiceError) as exc:
             return ConnectorHealth(self.connector_id, False, str(exc))
         return ConnectorHealth(self.connector_id, True, "configured")
 
     def list_drive_files(self, query: str = "") -> dict[str, Any]:
-        service = GoogleDriveService(session=self._session())
+        service = GoogleDriveService(session=self._authorized_session())
         try:
             return service.list_files(query=query, page_size=20)
         except GoogleServiceError as exc:
@@ -55,7 +64,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         sheet_range: str,
         values: list[list[Any]],
     ) -> dict[str, Any]:
-        service = GoogleSheetsService(session=self._session())
+        service = GoogleSheetsService(session=self._authorized_session())
         try:
             result = service.append_rows(
                 spreadsheet_id=spreadsheet_id,
@@ -67,7 +76,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         return {"updates": result.get("update_info") or {}}
 
     def create_docs_document(self, title: str) -> dict[str, Any]:
-        service = GoogleDocsService(session=self._session())
+        service = GoogleDocsService(session=self._authorized_session())
         try:
             result = service.create_document(title=title)
         except GoogleServiceError as exc:
@@ -80,7 +89,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         document_id: str,
         replacements: dict[str, str],
     ) -> dict[str, Any]:
-        service = GoogleDocsService(session=self._session())
+        service = GoogleDocsService(session=self._authorized_session())
         try:
             return service.replace_placeholders(doc_id=document_id, mapping=replacements)
         except GoogleServiceError as exc:
@@ -92,7 +101,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         document_id: str,
         text: str,
     ) -> dict[str, Any]:
-        service = GoogleDocsService(session=self._session())
+        service = GoogleDocsService(session=self._authorized_session())
         try:
             return service.insert_text(doc_id=document_id, text=text)
         except GoogleServiceError as exc:
@@ -104,7 +113,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         document_id: str,
         markdown_text: str,
     ) -> dict[str, Any]:
-        service = GoogleDocsService(session=self._session())
+        service = GoogleDocsService(session=self._authorized_session())
         try:
             return service.insert_markdown(doc_id=document_id, markdown_text=markdown_text)
         except GoogleServiceError as exc:
@@ -116,14 +125,14 @@ class GoogleWorkspaceConnector(BaseConnector):
         title: str,
         sheet_title: str = "Tracker",
     ) -> dict[str, Any]:
-        service = GoogleSheetsService(session=self._session())
+        service = GoogleSheetsService(session=self._authorized_session())
         try:
             return service.create_spreadsheet(title=title, sheet_title=sheet_title)
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc
 
     def create_drive_folder(self, *, name: str, parent_id: str | None = None) -> dict[str, Any]:
-        service = GoogleDriveService(session=self._session())
+        service = GoogleDriveService(session=self._authorized_session())
         try:
             result = service.create_folder(name=name, parent_id=parent_id)
         except GoogleServiceError as exc:
@@ -138,7 +147,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         parent_id: str | None = None,
     ) -> dict[str, Any]:
         try:
-            service = GoogleDriveService(session=self._session())
+            service = GoogleDriveService(session=self._authorized_session())
             result = service.upload_bytes(
                 name=name,
                 content_bytes=content.encode("utf-8"),
@@ -156,7 +165,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         email: str,
         role: str = "reader",
     ) -> dict[str, Any]:
-        service = GoogleDriveService(session=self._session())
+        service = GoogleDriveService(session=self._authorized_session())
         try:
             return service.share_file(file_id=file_id, email=email, role=role)
         except GoogleServiceError as exc:
@@ -169,7 +178,7 @@ class GoogleWorkspaceConnector(BaseConnector):
         role: str = "reader",
         discoverable: bool = False,
     ) -> dict[str, Any]:
-        service = GoogleDriveService(session=self._session())
+        service = GoogleDriveService(session=self._authorized_session())
         try:
             return service.share_file_public(
                 file_id=file_id,
@@ -181,7 +190,7 @@ class GoogleWorkspaceConnector(BaseConnector):
 
     def export_drive_file_pdf(self, *, file_id: str) -> bytes:
         try:
-            service = GoogleDriveService(session=self._session())
+            service = GoogleDriveService(session=self._authorized_session())
             return service.export_pdf_bytes(file_id=file_id)
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc

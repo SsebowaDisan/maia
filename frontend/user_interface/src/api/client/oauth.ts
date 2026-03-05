@@ -1,9 +1,14 @@
 import { request } from "./core";
-import type { GoogleOAuthStatus } from "./types";
+import type {
+  GoogleOAuthConfigStatus,
+  GoogleOAuthStatus,
+  GoogleOAuthToolCatalogEntry,
+} from "./types";
 
 function startGoogleOAuth(options?: {
   redirectUri?: string;
   scopes?: string[];
+  toolIds?: string[];
   state?: string;
 }) {
   const query = new URLSearchParams();
@@ -12,6 +17,9 @@ function startGoogleOAuth(options?: {
   }
   if (options?.scopes && options.scopes.length > 0) {
     query.set("scopes", options.scopes.join(","));
+  }
+  if (options?.toolIds && options.toolIds.length > 0) {
+    query.set("tool_ids", options.toolIds.join(","));
   }
   if (options?.state) {
     query.set("state", options.state);
@@ -55,6 +63,53 @@ function getGoogleOAuthStatus() {
   return request<GoogleOAuthStatus>("/api/agent/oauth/google/status");
 }
 
+function getGoogleOAuthConfig() {
+  return request<GoogleOAuthConfigStatus>("/api/agent/oauth/google/config");
+}
+
+function getGoogleOAuthToolCatalog() {
+  return request<{ tools: GoogleOAuthToolCatalogEntry[] }>("/api/agent/oauth/google/tools");
+}
+
+function saveGoogleOAuthConfig(payload: {
+  clientId: string;
+  clientSecret: string;
+  redirectUri?: string;
+}) {
+  return request<GoogleOAuthConfigStatus>("/api/agent/oauth/google/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: payload.clientId,
+      client_secret: payload.clientSecret,
+      redirect_uri: payload.redirectUri,
+    }),
+  });
+}
+
+function requestGoogleOAuthSetup(payload?: { note?: string }) {
+  return request<{
+    status: string;
+    request?: {
+      id: string;
+      requester_user_id: string;
+      note: string;
+      status: string;
+      requested_at: string;
+      resolved_at: string;
+      resolved_by: string;
+    };
+    pending_count: number;
+    workspace_owner_user_id?: string | null;
+  }>("/api/agent/oauth/google/config/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      note: payload?.note,
+    }),
+  });
+}
+
 function disconnectGoogleOAuth() {
   return request<{
     status: string;
@@ -68,6 +123,10 @@ function disconnectGoogleOAuth() {
 export {
   disconnectGoogleOAuth,
   exchangeGoogleOAuthCode,
+  getGoogleOAuthConfig,
+  getGoogleOAuthToolCatalog,
   getGoogleOAuthStatus,
+  requestGoogleOAuthSetup,
+  saveGoogleOAuthConfig,
   startGoogleOAuth,
 };

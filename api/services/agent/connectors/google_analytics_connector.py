@@ -6,6 +6,7 @@ from .base import BaseConnector, ConnectorError, ConnectorHealth
 from api.services.google.analytics import GoogleAnalyticsService
 from api.services.google.auth import GoogleAuthSession
 from api.services.google.errors import GoogleServiceError
+from api.services.google.oauth_scopes import connector_required_scopes
 
 
 class GoogleAnalyticsConnector(BaseConnector):
@@ -46,9 +47,17 @@ class GoogleAnalyticsConnector(BaseConnector):
             settings=self.settings,
         )
 
+    def _authorized_session(self) -> GoogleAuthSession:
+        session = self._session()
+        session.require_scopes(
+            connector_required_scopes(self.connector_id),
+            reason="Google Analytics access",
+        )
+        return session
+
     def health_check(self) -> ConnectorHealth:
         try:
-            self._access_token()
+            self._authorized_session().require_access_token()
             self._property_id()
         except (ConnectorError, GoogleServiceError) as exc:
             return ConnectorHealth(self.connector_id, False, str(exc))
@@ -64,7 +73,7 @@ class GoogleAnalyticsConnector(BaseConnector):
         limit: int = 100,
     ) -> dict[str, Any]:
         resolved_property_id = self._property_id(property_id)
-        service = GoogleAnalyticsService(session=self._session())
+        service = GoogleAnalyticsService(session=self._authorized_session())
         try:
             response = service.run_report(
                 property_id=resolved_property_id,

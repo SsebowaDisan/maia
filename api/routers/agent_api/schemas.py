@@ -55,6 +55,16 @@ class GoogleOAuthExchangeRequest(BaseModel):
     )
 
 
+class GoogleOAuthConfigSaveRequest(BaseModel):
+    client_id: str
+    client_secret: str
+    redirect_uri: str | None = None
+
+
+class GoogleOAuthSetupRequestCreateRequest(BaseModel):
+    note: str | None = None
+
+
 GOOGLE_OAUTH_CONNECTOR_IDS = [
     "google_workspace",
     "gmail",

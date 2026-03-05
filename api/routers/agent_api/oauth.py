@@ -15,9 +15,17 @@ from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.live_events import get_live_event_broker
 from api.services.google.auth import (
     get_google_oauth_manager,
+    oauth_configuration_status,
+    queue_google_oauth_setup_request,
     resolve_google_redirect_uri,
+    save_google_oauth_configuration,
 )
 from api.services.google.errors import GoogleServiceError
+from api.services.google.oauth_scopes import (
+    DEFAULT_TOOL_IDS,
+    TOOL_SCOPE_MAP,
+    expand_scopes_for_tool_ids,
+)
 
 from .common import (
     build_frontend_redirect,
@@ -26,7 +34,12 @@ from .common import (
     store_google_connector_tokens,
     tenant_id_for_user,
 )
-from .schemas import GOOGLE_OAUTH_CONNECTOR_IDS, GoogleOAuthExchangeRequest
+from .schemas import (
+    GOOGLE_OAUTH_CONNECTOR_IDS,
+    GoogleOAuthConfigSaveRequest,
+    GoogleOAuthSetupRequestCreateRequest,
+    GoogleOAuthExchangeRequest,
+)
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -36,15 +49,22 @@ logger = logging.getLogger(__name__)
 def start_google_oauth(
     redirect_uri: str | None = None,
     scopes: str | None = None,
+    tool_ids: str | None = None,
     state: str | None = None,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, object]:
     scope_list = [item.strip() for item in str(scopes or "").split(",") if item.strip()]
+    tool_id_rows = [item.strip() for item in str(tool_ids or "").split(",") if item.strip()]
+    resolved_scopes = scope_list or (
+        expand_scopes_for_tool_ids(tool_id_rows, include_base=True)
+        if tool_id_rows
+        else None
+    )
     try:
         payload = build_google_authorize_url(
             user_id=user_id,
             redirect_uri=redirect_uri,
-            scopes=scope_list or None,
+            scopes=resolved_scopes,
             state=state,
         )
     except GoogleServiceError as exc:
@@ -71,6 +91,19 @@ def start_google_oauth(
     except Exception:  # pragma: no cover - event stream should not block OAuth
         logger.exception("OAuth start event publish failed for user %s", user_id)
     return payload
+
+
+@router.get("/oauth/google/tools")
+def google_oauth_tool_catalog() -> dict[str, object]:
+    tools = []
+    for tool_id in DEFAULT_TOOL_IDS:
+        tools.append(
+            {
+                "id": tool_id,
+                "scopes": list(TOOL_SCOPE_MAP.get(tool_id, ())),
+            }
+        )
+    return {"tools": tools}
 
 
 @router.get("/oauth/google/callback")
@@ -174,7 +207,7 @@ def exchange_google_oauth(
 ) -> dict[str, object]:
     oauth = get_google_oauth_manager()
     effective_user_id = user_id
-    resolved_redirect_uri = resolve_google_redirect_uri(payload.redirect_uri)
+    resolved_redirect_uri = resolve_google_redirect_uri(payload.redirect_uri, user_id=effective_user_id)
     scopes_hint: list[str] | None = None
     if payload.state:
         try:
@@ -243,6 +276,74 @@ def google_oauth_status(
         return oauth.connection_status(user_id=user_id)
     except GoogleServiceError as exc:
         raise http_error_from_google(exc) from exc
+
+
+@router.get("/oauth/google/config")
+def google_oauth_config(
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    return oauth_configuration_status(user_id=user_id)
+
+
+@router.post("/oauth/google/config")
+def save_google_oauth_config(
+    payload: GoogleOAuthConfigSaveRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    try:
+        return save_google_oauth_configuration(
+            user_id=user_id,
+            client_id=payload.client_id,
+            client_secret=payload.client_secret,
+            redirect_uri=payload.redirect_uri,
+        )
+    except GoogleServiceError as exc:
+        raise http_error_from_google(exc) from exc
+
+
+@router.post("/oauth/google/config/request")
+def request_google_oauth_setup(
+    payload: GoogleOAuthSetupRequestCreateRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    try:
+        result = queue_google_oauth_setup_request(user_id=user_id, note=payload.note)
+    except GoogleServiceError as exc:
+        raise http_error_from_google(exc) from exc
+
+    owner_user_id = str(result.get("workspace_owner_user_id") or "").strip()
+    if owner_user_id:
+        try:
+            get_live_event_broker().publish(
+                user_id=owner_user_id,
+                run_id=None,
+                event={
+                    "type": "oauth.config.requested",
+                    "message": "A teammate requested Google OAuth setup.",
+                    "data": {
+                        "requester_user_id": user_id,
+                        "pending_count": int(result.get("pending_count") or 0),
+                    },
+                },
+            )
+        except Exception:  # pragma: no cover - events should not block request flow
+            logger.exception("OAuth setup request event publish failed for owner %s", owner_user_id)
+    try:
+        get_live_event_broker().publish(
+            user_id=user_id,
+            run_id=None,
+            event={
+                "type": "oauth.config.request_submitted",
+                "message": "Google OAuth setup request submitted.",
+                "data": {
+                    "workspace_owner_user_id": owner_user_id,
+                    "pending_count": int(result.get("pending_count") or 0),
+                },
+            },
+        )
+    except Exception:  # pragma: no cover
+        logger.exception("OAuth setup request confirmation event failed for user %s", user_id)
+    return result
 
 
 @router.post("/oauth/google/disconnect")

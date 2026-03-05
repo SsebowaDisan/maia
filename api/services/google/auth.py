@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import os
 import secrets
@@ -14,24 +15,32 @@ from api.services.google.errors import (
     GoogleServiceError,
     GoogleTokenError,
 )
+from api.services.google.oauth_scopes import (
+    default_oauth_scopes,
+    enabled_tool_ids_from_scopes,
+)
 from api.services.google.session import GoogleAuthSession  # noqa: F401
 from api.services.google.store import GoogleTokenRecord, OAuthStateRecord, get_google_token_store, get_oauth_state_store
 
 DEFAULT_REDIRECT_URI = "http://localhost:8000/api/agent/oauth/google/callback"
 DEFAULT_FRONTEND_SUCCESS_URL = "http://localhost:5173/settings?oauth=success"
 DEFAULT_FRONTEND_ERROR_URL = "http://localhost:5173/settings?oauth=error"
-DEFAULT_SCOPES = [
-    "openid",
-    "email",
-    "profile",
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/analytics.readonly",
-]
+DEFAULT_SCOPES = default_oauth_scopes()
+GOOGLE_OAUTH_CONFIG_CONNECTOR_ID = "google_oauth"
+GOOGLE_OAUTH_KEYS = (
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+)
+OAUTH_OWNER_USER_ID_KEY = "MAIA_OAUTH_OWNER_USER_ID"
+OAUTH_OWNER_SET_AT_KEY = "MAIA_OAUTH_OWNER_SET_AT"
+OAUTH_SETUP_REQUESTS_KEY = "MAIA_OAUTH_SETUP_REQUESTS"
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _oauth_env(name: str) -> str:
     return str(os.getenv(name, "")).strip()
 
@@ -44,8 +53,241 @@ def _load_default_scopes() -> list[str]:
     return [item for item in parts if item]
 
 
-def resolve_google_redirect_uri(override: str | None = None) -> str:
-    return (override or _oauth_env("GOOGLE_OAUTH_REDIRECT_URI") or DEFAULT_REDIRECT_URI).strip()
+def _tenant_id_for_user(user_id: str) -> str:
+    try:
+        from api.context import get_context
+        from api.services.settings_service import load_user_settings
+
+        settings = load_user_settings(get_context(), user_id)
+        tenant_id = str(settings.get("agent.tenant_id") or "").strip()
+        return tenant_id or user_id
+    except Exception:
+        return user_id
+
+
+def _oauth_store_values(
+    user_id: str | None = None,
+    *,
+    include_metadata: bool = False,
+) -> dict[str, Any]:
+    if not user_id:
+        return {}
+    try:
+        from api.services.agent.auth.credentials import get_credential_store
+
+        record = get_credential_store().get(
+            tenant_id=_tenant_id_for_user(user_id),
+            connector_id=GOOGLE_OAUTH_CONFIG_CONNECTOR_ID,
+        )
+    except Exception:
+        return {}
+    if record is None:
+        return {}
+    values: dict[str, Any] = {}
+    for key in GOOGLE_OAUTH_KEYS:
+        values[key] = str(record.values.get(key) or "").strip()
+    if include_metadata:
+        values[OAUTH_OWNER_USER_ID_KEY] = str(record.values.get(OAUTH_OWNER_USER_ID_KEY) or "").strip()
+        values[OAUTH_OWNER_SET_AT_KEY] = str(record.values.get(OAUTH_OWNER_SET_AT_KEY) or "").strip()
+        values[OAUTH_SETUP_REQUESTS_KEY] = record.values.get(OAUTH_SETUP_REQUESTS_KEY)
+    return values
+
+
+def resolve_google_oauth_config(user_id: str | None = None) -> dict[str, str]:
+    merged = {key: _oauth_env(key) for key in GOOGLE_OAUTH_KEYS}
+    stored = _oauth_store_values(user_id=user_id)
+    for key, value in stored.items():
+        if value:
+            merged[key] = value
+    merged["GOOGLE_OAUTH_REDIRECT_URI"] = merged.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip() or DEFAULT_REDIRECT_URI
+    return merged
+
+
+def resolve_google_redirect_uri(override: str | None = None, *, user_id: str | None = None) -> str:
+    explicit = str(override or "").strip()
+    if explicit:
+        return explicit
+    return resolve_google_oauth_config(user_id=user_id)["GOOGLE_OAUTH_REDIRECT_URI"]
+
+
+def _normalize_oauth_setup_requests(raw: Any) -> list[dict[str, str]]:
+    rows = raw
+    if isinstance(raw, str):
+        try:
+            rows = json.loads(raw)
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        request_id = str(item.get("id") or "").strip()
+        requester_user_id = str(item.get("requester_user_id") or "").strip()
+        if not request_id or not requester_user_id:
+            continue
+        status = str(item.get("status") or "pending").strip().lower() or "pending"
+        if status not in {"pending", "resolved", "dismissed"}:
+            status = "pending"
+        normalized.append(
+            {
+                "id": request_id,
+                "requester_user_id": requester_user_id,
+                "note": str(item.get("note") or "").strip()[:300],
+                "status": status,
+                "requested_at": str(item.get("requested_at") or "").strip() or _iso_now(),
+                "resolved_at": str(item.get("resolved_at") or "").strip(),
+                "resolved_by": str(item.get("resolved_by") or "").strip(),
+            }
+        )
+    normalized.sort(key=lambda row: row.get("requested_at") or "", reverse=True)
+    return normalized[:60]
+
+
+def _save_oauth_store_values(user_id: str, values: dict[str, Any]) -> None:
+    from api.services.agent.auth.credentials import get_credential_store
+
+    cleaned: dict[str, Any] = {}
+    for key in GOOGLE_OAUTH_KEYS:
+        cleaned[key] = str(values.get(key) or "").strip()
+    cleaned[OAUTH_OWNER_USER_ID_KEY] = str(values.get(OAUTH_OWNER_USER_ID_KEY) or "").strip()
+    cleaned[OAUTH_OWNER_SET_AT_KEY] = str(values.get(OAUTH_OWNER_SET_AT_KEY) or "").strip()
+    cleaned[OAUTH_SETUP_REQUESTS_KEY] = _normalize_oauth_setup_requests(values.get(OAUTH_SETUP_REQUESTS_KEY))
+    get_credential_store().set(
+        tenant_id=_tenant_id_for_user(user_id),
+        connector_id=GOOGLE_OAUTH_CONFIG_CONNECTOR_ID,
+        values=cleaned,
+    )
+
+
+def oauth_configuration_status(user_id: str | None = None) -> dict[str, Any]:
+    config = resolve_google_oauth_config(user_id=user_id)
+    missing_env = [
+        name
+        for name in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET")
+        if not str(config.get(name) or "").strip()
+    ]
+    stored = _oauth_store_values(user_id=user_id, include_metadata=True)
+    stored_client_id = str(stored.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+    stored_client_secret = str(stored.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
+    uses_stored_credentials = bool(stored_client_id or stored_client_secret)
+    owner_user_id = str(stored.get(OAUTH_OWNER_USER_ID_KEY) or "").strip()
+    normalized_owner_user_id = owner_user_id or None
+    setup_requests = _normalize_oauth_setup_requests(stored.get(OAUTH_SETUP_REQUESTS_KEY))
+    pending_requests = [row for row in setup_requests if row.get("status") == "pending"]
+    pending_for_current_user = bool(
+        user_id and any(str(row.get("requester_user_id") or "").strip() == str(user_id).strip() for row in pending_requests)
+    )
+    oauth_ready = len(missing_env) == 0
+    managed_by_env = oauth_ready and not uses_stored_credentials
+    oauth_can_manage_config = bool(user_id)
+    if normalized_owner_user_id:
+        oauth_can_manage_config = str(normalized_owner_user_id) == str(user_id or "")
+    elif managed_by_env:
+        oauth_can_manage_config = False
+    return {
+        "oauth_ready": oauth_ready,
+        "oauth_missing_env": missing_env,
+        "oauth_redirect_uri": str(config.get("GOOGLE_OAUTH_REDIRECT_URI") or DEFAULT_REDIRECT_URI),
+        "oauth_client_id_configured": bool(str(config.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()),
+        "oauth_client_secret_configured": bool(str(config.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()),
+        "oauth_uses_stored_credentials": uses_stored_credentials,
+        "oauth_workspace_owner_user_id": normalized_owner_user_id,
+        "oauth_current_user_is_owner": bool(
+            normalized_owner_user_id and str(normalized_owner_user_id) == str(user_id or "")
+        ),
+        "oauth_can_manage_config": oauth_can_manage_config,
+        "oauth_setup_request_pending": pending_for_current_user,
+        "oauth_setup_request_count": len(pending_requests),
+        "oauth_managed_by_env": managed_by_env,
+        "oauth_default_scopes": list(DEFAULT_SCOPES),
+    }
+
+
+def save_google_oauth_configuration(
+    *,
+    user_id: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str | None = None,
+) -> dict[str, Any]:
+    if not str(client_id or "").strip() or not str(client_secret or "").strip():
+        raise GoogleOAuthError(
+            code="oauth_config_incomplete",
+            message="Google OAuth client ID and client secret are required.",
+            status_code=400,
+        )
+
+    status = oauth_configuration_status(user_id=user_id)
+    if not bool(status.get("oauth_can_manage_config")):
+        owner_user_id = str(status.get("oauth_workspace_owner_user_id") or "").strip()
+        raise GoogleOAuthError(
+            code="oauth_config_workspace_owner_required",
+            message="Only the workspace OAuth owner can update Google OAuth app credentials.",
+            status_code=403,
+            details={"workspace_owner_user_id": owner_user_id} if owner_user_id else {},
+        )
+
+    values = _oauth_store_values(user_id=user_id, include_metadata=True)
+    values["GOOGLE_OAUTH_CLIENT_ID"] = str(client_id or "").strip()
+    values["GOOGLE_OAUTH_CLIENT_SECRET"] = str(client_secret or "").strip()
+    values["GOOGLE_OAUTH_REDIRECT_URI"] = (
+        str(redirect_uri or "").strip() or resolve_google_redirect_uri(user_id=user_id)
+    )
+    if not str(values.get(OAUTH_OWNER_USER_ID_KEY) or "").strip():
+        values[OAUTH_OWNER_USER_ID_KEY] = user_id
+        values[OAUTH_OWNER_SET_AT_KEY] = _iso_now()
+    values[OAUTH_SETUP_REQUESTS_KEY] = []
+    _save_oauth_store_values(user_id, values)
+    return oauth_configuration_status(user_id=user_id)
+
+
+def queue_google_oauth_setup_request(
+    *,
+    user_id: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    status = oauth_configuration_status(user_id=user_id)
+    if bool(status.get("oauth_can_manage_config")):
+        raise GoogleOAuthError(
+            code="oauth_setup_request_not_needed",
+            message="This user can configure Google OAuth app credentials directly.",
+            status_code=400,
+        )
+
+    values = _oauth_store_values(user_id=user_id, include_metadata=True)
+    requests = _normalize_oauth_setup_requests(values.get(OAUTH_SETUP_REQUESTS_KEY))
+    existing = next(
+        (
+            row
+            for row in requests
+            if row.get("status") == "pending"
+            and str(row.get("requester_user_id") or "").strip() == str(user_id).strip()
+        ),
+        None,
+    )
+    if existing is None:
+        existing = {
+            "id": secrets.token_urlsafe(10),
+            "requester_user_id": user_id,
+            "note": str(note or "").strip()[:300],
+            "status": "pending",
+            "requested_at": _iso_now(),
+            "resolved_at": "",
+            "resolved_by": "",
+        }
+        requests.insert(0, existing)
+        values[OAUTH_SETUP_REQUESTS_KEY] = requests
+        _save_oauth_store_values(user_id, values)
+
+    pending_count = len([row for row in requests if row.get("status") == "pending"])
+    return {
+        "status": "queued",
+        "request": existing,
+        "pending_count": pending_count,
+        "workspace_owner_user_id": status.get("oauth_workspace_owner_user_id"),
+    }
 
 
 def _parse_token_scopes(payload: dict[str, Any], fallback_scopes: list[str] | None = None) -> list[str]:
@@ -92,14 +334,15 @@ class GoogleOAuthManager:
         scopes: list[str] | None = None,
         state: str | None = None,
     ) -> OAuthStartResult:
-        client_id = _oauth_env("GOOGLE_OAUTH_CLIENT_ID")
+        config = resolve_google_oauth_config(user_id=user_id)
+        client_id = str(config.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
         if not client_id:
             raise GoogleOAuthError(
                 code="oauth_client_id_missing",
-                message="GOOGLE_OAUTH_CLIENT_ID is not configured.",
+                message="Google OAuth client ID is missing. Save OAuth app credentials in Settings.",
                 status_code=400,
             )
-        resolved_redirect_uri = resolve_google_redirect_uri(redirect_uri)
+        resolved_redirect_uri = resolve_google_redirect_uri(redirect_uri, user_id=user_id)
         resolved_scopes = scopes or _load_default_scopes()
         resolved_state = (state or secrets.token_urlsafe(24)).strip()
         if not resolved_state:
@@ -154,12 +397,13 @@ class GoogleOAuthManager:
         redirect_uri: str,
         scopes_hint: list[str] | None = None,
     ) -> GoogleTokenRecord:
-        client_id = _oauth_env("GOOGLE_OAUTH_CLIENT_ID")
-        client_secret = _oauth_env("GOOGLE_OAUTH_CLIENT_SECRET")
+        config = resolve_google_oauth_config(user_id=user_id)
+        client_id = str(config.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+        client_secret = str(config.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
         if not client_id or not client_secret:
             raise GoogleOAuthError(
                 code="oauth_client_secret_missing",
-                message="GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required.",
+                message="Google OAuth client credentials are required. Save OAuth app credentials in Settings.",
                 status_code=400,
             )
         body = urlencode(
@@ -220,12 +464,13 @@ class GoogleOAuthManager:
         return saved
 
     def refresh_tokens(self, *, user_id: str) -> GoogleTokenRecord:
-        client_id = _oauth_env("GOOGLE_OAUTH_CLIENT_ID")
-        client_secret = _oauth_env("GOOGLE_OAUTH_CLIENT_SECRET")
+        config = resolve_google_oauth_config(user_id=user_id)
+        client_id = str(config.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+        client_secret = str(config.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
         if not client_id or not client_secret:
             raise GoogleTokenError(
                 code="oauth_client_secret_missing",
-                message="GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required.",
+                message="Google OAuth client credentials are required. Save OAuth app credentials in Settings.",
                 status_code=400,
             )
 
@@ -338,13 +583,26 @@ class GoogleOAuthManager:
         return payload
 
     def connection_status(self, *, user_id: str) -> dict[str, Any]:
+        config = oauth_configuration_status(user_id=user_id)
         record = self.tokens.get_tokens(user_id=user_id)
         if record is None:
-            return {"connected": False, "scopes": [], "email": None}
+            return {
+                "connected": False,
+                "scopes": [],
+                "email": None,
+                "enabled_tools": [],
+                **config,
+            }
         try:
             valid = self.ensure_valid_tokens(user_id=user_id)
         except GoogleServiceError:
-            return {"connected": False, "scopes": record.scopes, "email": record.email}
+            return {
+                "connected": False,
+                "scopes": record.scopes,
+                "email": record.email,
+                "enabled_tools": enabled_tool_ids_from_scopes(record.scopes),
+                **config,
+            }
         profile = self.fetch_user_profile(user_id=user_id)
         email = str(profile.get("email") or valid.email or "") or None
         return {
@@ -353,6 +611,8 @@ class GoogleOAuthManager:
             "email": email,
             "expires_at": valid.expires_at,
             "token_type": valid.token_type,
+            "enabled_tools": enabled_tool_ids_from_scopes(valid.scopes),
+            **config,
         }
 
     def disconnect(self, *, user_id: str) -> dict[str, Any]:

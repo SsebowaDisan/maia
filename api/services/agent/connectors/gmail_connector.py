@@ -6,6 +6,7 @@ from .base import BaseConnector, ConnectorError, ConnectorHealth
 from api.services.google.auth import GoogleAuthSession
 from api.services.google.errors import GoogleServiceError
 from api.services.google.gmail import GmailService
+from api.services.google.oauth_scopes import connector_required_scopes
 
 
 class GmailConnector(BaseConnector):
@@ -36,9 +37,18 @@ class GmailConnector(BaseConnector):
             )
         return token
 
+    def _authorized_session(self) -> GoogleAuthSession:
+        session = self._session()
+        session.require_scopes(
+            connector_required_scopes(self.connector_id),
+            reason="Gmail access",
+        )
+        return session
+
     def health_check(self) -> ConnectorHealth:
         try:
-            token = self._access_token()
+            session = self._authorized_session()
+            token = session.require_access_token()
         except (ConnectorError, GoogleServiceError) as exc:
             return ConnectorHealth(self.connector_id, False, str(exc))
         if not token:
@@ -53,7 +63,7 @@ class GmailConnector(BaseConnector):
         body: str,
         sender: str = "",
     ) -> dict[str, Any]:
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             result = service.create_draft(
                 to=to,
@@ -78,14 +88,14 @@ class GmailConnector(BaseConnector):
         file_id: str | None = None,
         local_path: str | None = None,
     ) -> dict[str, Any]:
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             return service.add_attachment(draft_id=draft_id, file_id=file_id, local_path=local_path)
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc
 
     def send_draft(self, *, draft_id: str) -> dict[str, Any]:
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             result = service.send_draft(draft_id=draft_id)
         except GoogleServiceError as exc:
@@ -100,7 +110,7 @@ class GmailConnector(BaseConnector):
         body: str,
         sender: str = "",
     ) -> dict[str, Any]:
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             result = service.send_message(
                 to=to,
@@ -124,7 +134,7 @@ class GmailConnector(BaseConnector):
         sender: str = "",
     ) -> dict[str, Any]:
         _ = sender
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             result = service.send_message_with_attachments(
                 to=to,
@@ -141,7 +151,7 @@ class GmailConnector(BaseConnector):
         }
 
     def list_messages(self, *, query: str = "", max_results: int = 20) -> dict[str, Any]:
-        service = GmailService(session=self._session())
+        service = GmailService(session=self._authorized_session())
         try:
             result = service.search_messages(query=query, max_results=max_results)
         except GoogleServiceError as exc:

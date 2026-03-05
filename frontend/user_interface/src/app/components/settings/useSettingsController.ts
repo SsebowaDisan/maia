@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   deleteConnectorCredentials,
   disconnectGoogleOAuth,
+  requestGoogleOAuthSetup,
+  saveGoogleOAuthConfig,
   getGoogleOAuthStatus,
   listConnectorCredentials,
   listConnectorHealth,
@@ -62,6 +64,10 @@ export function useSettingsController(activeTab: string) {
   const [braveStatus, setBraveStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [mapsKeyInput, setMapsKeyInput] = useState("");
   const [braveKeyInput, setBraveKeyInput] = useState("");
+  const [oauthClientIdInput, setOauthClientIdInput] = useState("");
+  const [oauthClientSecretInput, setOauthClientSecretInput] = useState("");
+  const [oauthRedirectUriInput, setOauthRedirectUriInput] = useState("");
+  const [oauthConfigSaving, setOauthConfigSaving] = useState(false);
   const [liveEvents, setLiveEvents] = useState<AgentLiveEvent[]>([]);
   const ollama = useOllamaSettings();
 
@@ -111,6 +117,11 @@ export function useSettingsController(activeTab: string) {
       setHealthMap(nextHealthMap);
       setCredentialMap(nextCredentialMap);
       setGoogleOAuthStatus(oauthRow);
+      setOauthRedirectUriInput((previous) =>
+        previous.trim()
+          ? previous
+          : String(oauthRow.oauth_redirect_uri || "http://localhost:8000/api/agent/oauth/google/callback"),
+      );
       setGoogleServiceAccountStatus(serviceAccountRow);
       setGoogleWorkspaceAliases(Array.isArray(aliasRows.aliases) ? aliasRows.aliases : []);
       setMapsStatus(mapsRow);
@@ -235,13 +246,19 @@ export function useSettingsController(activeTab: string) {
     }
   };
 
-  const handleGoogleOAuthConnect = async (): Promise<{
+  const handleGoogleOAuthConnect = async (options?: {
+    scopes?: string[];
+    toolIds?: string[];
+  }): Promise<{
     ok: boolean;
     authorize_url?: string;
     message: string;
   }> => {
     try {
-      const payload = await startGoogleOAuth();
+      const payload = await startGoogleOAuth({
+        scopes: options?.scopes,
+        toolIds: options?.toolIds,
+      });
       const authorizeUrl = String(payload.authorize_url || "").trim();
       if (!authorizeUrl) {
         const message = "OAuth setup failed: missing Google authorize URL.";
@@ -278,6 +295,50 @@ export function useSettingsController(activeTab: string) {
       await refreshIntegrations();
     } catch (error) {
       setOauthStatus(`OAuth disconnect error: ${String(error)}`);
+    }
+  };
+
+  const handleSaveGoogleOAuthConfig = async () => {
+    const clientId = oauthClientIdInput.trim();
+    const clientSecret = oauthClientSecretInput.trim();
+    const redirectUri = oauthRedirectUriInput.trim();
+    if (!clientId || !clientSecret) {
+      setOauthStatus("Google OAuth client ID and client secret are required.");
+      return;
+    }
+    setOauthConfigSaving(true);
+    try {
+      await saveGoogleOAuthConfig({
+        clientId,
+        clientSecret,
+        redirectUri: redirectUri || undefined,
+      });
+      setOauthClientSecretInput("");
+      await refreshIntegrations();
+      setOauthStatus("OAuth app credentials saved. Next step: connect Google account.");
+    } catch (error) {
+      setOauthStatus(`Failed to save OAuth app credentials: ${String(error)}`);
+    } finally {
+      setOauthConfigSaving(false);
+    }
+  };
+
+  const handleRequestGoogleOAuthSetup = async (): Promise<{
+    ok: boolean;
+    message: string;
+  }> => {
+    try {
+      const result = await requestGoogleOAuthSetup();
+      const ownerHint = String(result.workspace_owner_user_id || "").trim();
+      await refreshIntegrations();
+      const ownerText = ownerHint ? ` Workspace owner: ${ownerHint}.` : "";
+      const message = `Setup request submitted.${ownerText}`;
+      setOauthStatus(message);
+      return { ok: true, message };
+    } catch (error) {
+      const message = `Could not submit setup request: ${String(error)}`;
+      setOauthStatus(message);
+      return { ok: false, message };
     }
   };
 
@@ -393,16 +454,25 @@ export function useSettingsController(activeTab: string) {
     braveStatus,
     mapsKeyInput,
     braveKeyInput,
+    oauthClientIdInput,
+    oauthClientSecretInput,
+    oauthRedirectUriInput,
+    oauthConfigSaving,
     liveEvents,
     googleToolHealth,
     setMapsKeyInput,
     setBraveKeyInput,
+    setOauthClientIdInput,
+    setOauthClientSecretInput,
+    setOauthRedirectUriInput,
     refreshIntegrations,
     handleDraftChange,
     handleSaveConnector,
     handleClearConnector,
     handleGoogleOAuthConnect,
     handleGoogleOAuthDisconnect,
+    handleSaveGoogleOAuthConfig,
+    handleRequestGoogleOAuthSetup,
     handleGoogleWorkspaceAuthModeChange,
     handleAnalyzeGoogleWorkspaceLink,
     handleCheckGoogleWorkspaceLinkAccess,

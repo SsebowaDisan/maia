@@ -221,9 +221,48 @@ type ConnectorCredentialRecord = {
 type GoogleOAuthStatus = {
   connected: boolean;
   scopes: string[];
+  enabled_tools?: string[];
   email?: string | null;
   expires_at?: string | null;
   token_type?: string | null;
+  oauth_ready?: boolean;
+  oauth_missing_env?: string[];
+  oauth_redirect_uri?: string | null;
+  oauth_client_id_configured?: boolean;
+  oauth_client_secret_configured?: boolean;
+  oauth_uses_stored_credentials?: boolean;
+  oauth_default_scopes?: string[];
+  oauth_workspace_owner_user_id?: string | null;
+  oauth_current_user_is_owner?: boolean;
+  oauth_can_manage_config?: boolean;
+  oauth_setup_request_pending?: boolean;
+  oauth_setup_request_count?: number;
+  oauth_managed_by_env?: boolean;
+};
+
+type GoogleOAuthConfigStatus = {
+  oauth_ready: boolean;
+  oauth_missing_env: string[];
+  oauth_redirect_uri: string;
+  oauth_client_id_configured: boolean;
+  oauth_client_secret_configured: boolean;
+  oauth_uses_stored_credentials: boolean;
+  oauth_default_scopes?: string[];
+  oauth_workspace_owner_user_id?: string | null;
+  oauth_current_user_is_owner?: boolean;
+  oauth_can_manage_config?: boolean;
+  oauth_setup_request_pending?: boolean;
+  oauth_setup_request_count?: number;
+  oauth_managed_by_env?: boolean;
+};
+
+type GoogleOAuthToolCatalogEntry = {
+  id: string;
+  scopes: string[];
+};
+
+type SettingsResponse = {
+  values: Record<string, unknown>;
 };
 
 type AgentLiveEvent = {
@@ -253,6 +292,8 @@ export type {
   FileGroupRecord,
   FileGroupResponse,
   FileRecord,
+  GoogleOAuthConfigStatus,
+  GoogleOAuthToolCatalogEntry,
   GoogleOAuthStatus,
   IndexSelection,
   IngestionJob,
@@ -260,6 +301,7 @@ export type {
   MindmapPayloadResponse,
   MindmapShareResponse,
   SourceUsageRecord,
+  SettingsResponse,
   UploadItem,
   UrlActionResult,
   UploadResponse,

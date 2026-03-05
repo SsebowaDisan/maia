@@ -18,7 +18,7 @@ def build_google_authorize_url(
 ) -> dict[str, Any]:
     return build_google_authorize_url_v2(
         user_id=user_id,
-        redirect_uri=redirect_uri or resolve_google_redirect_uri(),
+        redirect_uri=redirect_uri or resolve_google_redirect_uri(user_id=user_id),
         scopes=scopes,
         state=state,
     )
@@ -34,7 +34,7 @@ def exchange_google_oauth_code(
     record = exchange_google_oauth_code_v2(
         user_id=user_id,
         code=code,
-        redirect_uri=(redirect_uri or resolve_google_redirect_uri()),
+        redirect_uri=(redirect_uri or resolve_google_redirect_uri(user_id=user_id)),
         scopes_hint=scopes_hint,
     )
     return {
@@ -45,4 +45,3 @@ def exchange_google_oauth_code(
         "expires_at": record.expires_at,
         "id_token": record.id_token,
     }
-
