@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
 from api.auth import get_current_user_id
+from api.context import get_context
 from api.services.agent.auth.google_oauth import (
     build_google_authorize_url,
     exchange_google_oauth_code,
@@ -22,10 +23,14 @@ from api.services.google.auth import (
 )
 from api.services.google.errors import GoogleServiceError
 from api.services.google.oauth_scopes import (
+    BASE_PROFILE_SCOPES,
     DEFAULT_TOOL_IDS,
     TOOL_SCOPE_MAP,
     expand_scopes_for_tool_ids,
+    normalize_google_oauth_service_ids,
+    scopes_from_service_ids,
 )
+from api.services.settings_service import load_user_settings
 
 from .common import (
     build_frontend_redirect,
@@ -55,11 +60,23 @@ def start_google_oauth(
 ) -> dict[str, object]:
     scope_list = [item.strip() for item in str(scopes or "").split(",") if item.strip()]
     tool_id_rows = [item.strip() for item in str(tool_ids or "").split(",") if item.strip()]
-    resolved_scopes = scope_list or (
-        expand_scopes_for_tool_ids(tool_id_rows, include_base=True)
-        if tool_id_rows
-        else None
-    )
+    saved_service_ids: list[str] = []
+    if not scope_list and not tool_id_rows:
+        try:
+            settings = load_user_settings(get_context(), user_id)
+            saved_service_ids = normalize_google_oauth_service_ids(settings.get("agent.google_oauth_services"))
+        except Exception:  # pragma: no cover - settings load should not block OAuth
+            logger.exception("Could not load Google OAuth service selections for user %s", user_id)
+            saved_service_ids = []
+
+    if scope_list:
+        resolved_scopes = scope_list
+    elif tool_id_rows:
+        resolved_scopes = expand_scopes_for_tool_ids(tool_id_rows, include_base=True)
+    elif saved_service_ids:
+        resolved_scopes = scopes_from_service_ids(saved_service_ids, include_base=True)
+    else:
+        resolved_scopes = list(BASE_PROFILE_SCOPES)
     try:
         payload = build_google_authorize_url(
             user_id=user_id,
@@ -67,6 +84,7 @@ def start_google_oauth(
             scopes=resolved_scopes,
             state=state,
         )
+        payload["selected_services"] = saved_service_ids
     except GoogleServiceError as exc:
         raise http_error_from_google(exc) from exc
     except Exception as exc:  # pragma: no cover - defensive fallback

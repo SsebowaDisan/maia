@@ -17,7 +17,9 @@ from api.services.google.errors import (
 )
 from api.services.google.oauth_scopes import (
     default_oauth_scopes,
+    enabled_service_ids_from_scopes,
     enabled_tool_ids_from_scopes,
+    normalize_google_oauth_service_ids,
 )
 from api.services.google.session import GoogleAuthSession  # noqa: F401
 from api.services.google.store import GoogleTokenRecord, OAuthStateRecord, get_google_token_store, get_oauth_state_store
@@ -63,6 +65,19 @@ def _tenant_id_for_user(user_id: str) -> str:
         return tenant_id or user_id
     except Exception:
         return user_id
+
+
+def _saved_oauth_services_for_user(user_id: str | None) -> list[str]:
+    if not user_id:
+        return []
+    try:
+        from api.context import get_context
+        from api.services.settings_service import load_user_settings
+
+        settings = load_user_settings(get_context(), user_id)
+    except Exception:
+        return []
+    return normalize_google_oauth_service_ids(settings.get("agent.google_oauth_services"))
 
 
 def _oauth_store_values(
@@ -584,6 +599,7 @@ class GoogleOAuthManager:
 
     def connection_status(self, *, user_id: str) -> dict[str, Any]:
         config = oauth_configuration_status(user_id=user_id)
+        selected_services = _saved_oauth_services_for_user(user_id)
         record = self.tokens.get_tokens(user_id=user_id)
         if record is None:
             return {
@@ -591,6 +607,8 @@ class GoogleOAuthManager:
                 "scopes": [],
                 "email": None,
                 "enabled_tools": [],
+                "enabled_services": [],
+                "oauth_selected_services": selected_services,
                 **config,
             }
         try:
@@ -601,6 +619,8 @@ class GoogleOAuthManager:
                 "scopes": record.scopes,
                 "email": record.email,
                 "enabled_tools": enabled_tool_ids_from_scopes(record.scopes),
+                "enabled_services": enabled_service_ids_from_scopes(record.scopes),
+                "oauth_selected_services": selected_services,
                 **config,
             }
         profile = self.fetch_user_profile(user_id=user_id)
@@ -612,6 +632,8 @@ class GoogleOAuthManager:
             "expires_at": valid.expires_at,
             "token_type": valid.token_type,
             "enabled_tools": enabled_tool_ids_from_scopes(valid.scopes),
+            "enabled_services": enabled_service_ids_from_scopes(valid.scopes),
+            "oauth_selected_services": selected_services,
             **config,
         }
 

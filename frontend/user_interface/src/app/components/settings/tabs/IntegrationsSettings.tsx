@@ -33,6 +33,11 @@ type IntegrationsSettingsProps = {
   onOAuthRedirectUriInputChange: (value: string) => void;
   onSaveGoogleOAuthConfig: () => void;
   onRequestGoogleOAuthSetup: () => Promise<{ ok: boolean; message: string }>;
+  onSaveGoogleOAuthServices: (services: string[]) => Promise<{
+    ok: boolean;
+    services: string[];
+    message: string;
+  }>;
   onGoogleAuthModeChange: (mode: "oauth" | "service_account") => void;
   onAnalyzeGoogleLink: (link: string) => Promise<GoogleWorkspaceLinkAnalyzeResult>;
   onCheckGoogleLinkAccess: (payload: {
@@ -67,8 +72,8 @@ type NextSetupResolution = {
   tone: "success" | "neutral" | "warning";
 };
 
-type GoogleToolScopeDefinition = {
-  id: "gmail" | "google_calendar" | "google_workspace" | "google_analytics";
+type GoogleOAuthServiceDefinition = {
+  id: "gmail" | "drive" | "docs" | "sheets" | "analytics";
   label: string;
   description: string;
   scopes: string[];
@@ -76,11 +81,11 @@ type GoogleToolScopeDefinition = {
 
 const GOOGLE_BASE_SCOPES = ["openid", "email", "profile"] as const;
 
-const GOOGLE_TOOL_SCOPE_DEFS: GoogleToolScopeDefinition[] = [
+const GOOGLE_OAUTH_SERVICE_DEFS: GoogleOAuthServiceDefinition[] = [
   {
     id: "gmail",
     label: "Gmail",
-    description: "Draft, send, and read mailbox messages for agent actions.",
+    description: "Send, draft, and read mailbox messages for agent actions.",
     scopes: [
       "https://www.googleapis.com/auth/gmail.compose",
       "https://www.googleapis.com/auth/gmail.send",
@@ -88,30 +93,32 @@ const GOOGLE_TOOL_SCOPE_DEFS: GoogleToolScopeDefinition[] = [
     ],
   },
   {
-    id: "google_calendar",
-    label: "Calendar",
-    description: "Create and manage calendar events.",
-    scopes: ["https://www.googleapis.com/auth/calendar.events"],
+    id: "drive",
+    label: "Drive",
+    description: "Read and manage files in Google Drive.",
+    scopes: ["https://www.googleapis.com/auth/drive"],
   },
   {
-    id: "google_workspace",
-    label: "Drive, Docs, and Sheets",
-    description: "Create and update shared files, docs, and spreadsheets.",
-    scopes: [
-      "https://www.googleapis.com/auth/drive",
-      "https://www.googleapis.com/auth/documents",
-      "https://www.googleapis.com/auth/spreadsheets",
-    ],
+    id: "docs",
+    label: "Docs",
+    description: "Create and edit Google Docs.",
+    scopes: ["https://www.googleapis.com/auth/documents"],
   },
   {
-    id: "google_analytics",
-    label: "Google Analytics",
+    id: "sheets",
+    label: "Sheets",
+    description: "Create and edit Google Sheets.",
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  },
+  {
+    id: "analytics",
+    label: "Analytics",
     description: "Read GA4 reporting data.",
     scopes: ["https://www.googleapis.com/auth/analytics.readonly"],
   },
 ];
 
-const DEFAULT_SELECTED_GOOGLE_TOOLS = GOOGLE_TOOL_SCOPE_DEFS.map((item) => item.id);
+const DEFAULT_SELECTED_GOOGLE_SERVICES: string[] = ["gmail", "drive", "docs", "sheets"];
 
 function dedupeScopes(scopes: string[]): string[] {
   const seen = new Set<string>();
@@ -127,16 +134,16 @@ function dedupeScopes(scopes: string[]): string[] {
   return rows;
 }
 
-function toolIdsFromGrantedScopes(scopes: string[]): string[] {
+function serviceIdsFromGrantedScopes(scopes: string[]): string[] {
   const granted = new Set(scopes.map((item) => String(item || "").trim()).filter(Boolean));
-  return GOOGLE_TOOL_SCOPE_DEFS.filter((tool) => tool.scopes.every((scope) => granted.has(scope))).map(
+  return GOOGLE_OAUTH_SERVICE_DEFS.filter((tool) => tool.scopes.every((scope) => granted.has(scope))).map(
     (tool) => tool.id,
   );
 }
 
-function expandScopesFromToolIds(toolIds: string[]): string[] {
-  const selectedSet = new Set(toolIds.map((item) => String(item || "").trim()).filter(Boolean));
-  const scoped = GOOGLE_TOOL_SCOPE_DEFS.filter((tool) => selectedSet.has(tool.id)).flatMap(
+function expandScopesFromServiceIds(serviceIds: string[]): string[] {
+  const selectedSet = new Set(serviceIds.map((item) => String(item || "").trim()).filter(Boolean));
+  const scoped = GOOGLE_OAUTH_SERVICE_DEFS.filter((tool) => selectedSet.has(tool.id)).flatMap(
     (tool) => tool.scopes,
   );
   return dedupeScopes([...GOOGLE_BASE_SCOPES, ...scoped]);
@@ -145,6 +152,24 @@ function expandScopesFromToolIds(toolIds: string[]): string[] {
 function hasAllScopes(requiredScopes: string[], grantedScopes: string[]): boolean {
   const granted = new Set(grantedScopes.map((item) => String(item || "").trim()).filter(Boolean));
   return requiredScopes.every((scope) => granted.has(scope));
+}
+
+function normalizeSelectedServices(serviceIds: string[]): string[] {
+  const allowed = new Set(GOOGLE_OAUTH_SERVICE_DEFS.map((item) => item.id));
+  const ordered: string[] = [];
+  for (const serviceId of serviceIds) {
+    const value = String(serviceId || "").trim();
+    if (!value || !allowed.has(value) || ordered.includes(value)) {
+      continue;
+    }
+    ordered.push(value);
+  }
+  return ordered;
+}
+
+function serviceLabel(serviceId: string): string {
+  const match = GOOGLE_OAUTH_SERVICE_DEFS.find((item) => item.id === serviceId);
+  return match ? match.label : serviceId;
 }
 
 function healthTone(item: GoogleToolHealthItem): { tone: "success" | "neutral" | "warning"; label: string } {
@@ -243,6 +268,7 @@ export function IntegrationsSettings({
   onOAuthRedirectUriInputChange,
   onSaveGoogleOAuthConfig,
   onRequestGoogleOAuthSetup,
+  onSaveGoogleOAuthServices,
   onGoogleAuthModeChange,
   onAnalyzeGoogleLink,
   onCheckGoogleLinkAccess,
@@ -259,12 +285,15 @@ export function IntegrationsSettings({
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupStatus, setSetupStatus] = useState("");
   const [setupStepsState, setSetupStepsState] = useState<SetupStep[]>([]);
+  const [showGoogleServicesModal, setShowGoogleServicesModal] = useState(false);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [oauthManualUrl, setOauthManualUrl] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
   const [linkAction, setLinkAction] = useState<"read" | "edit">("read");
-  const [selectedOauthToolIds, setSelectedOauthToolIds] = useState<string[]>(DEFAULT_SELECTED_GOOGLE_TOOLS);
+  const [selectedGoogleServices, setSelectedGoogleServices] = useState<string[]>(
+    DEFAULT_SELECTED_GOOGLE_SERVICES,
+  );
   const [analysisResult, setAnalysisResult] = useState<GoogleWorkspaceLinkAnalyzeResult | null>(null);
   const [accessResult, setAccessResult] = useState<GoogleWorkspaceLinkAccessResult | null>(null);
   const serviceChip = toneFromBoolean(googleServiceAccountStatus.usable, {
@@ -272,35 +301,54 @@ export function IntegrationsSettings({
     falseLabel: googleServiceAccountStatus.configured ? "Share-only" : "Not configured",
   });
   const inServiceAccountMode = googleServiceAccountStatus.auth_mode === "service_account";
-  const trackedGoogleToolHealth =
-    inServiceAccountMode || selectedOauthToolIds.length === 0
-      ? googleToolHealth
-      : googleToolHealth.filter((item) => selectedOauthToolIds.includes(item.id));
+  const trackedGoogleToolHealth = googleToolHealth;
   const connectedTools = trackedGoogleToolHealth.filter((item) => item.ok).length;
-  const grantedToolIds = useMemo(() => {
-    const explicit = Array.isArray(googleOAuthStatus.enabled_tools)
-      ? googleOAuthStatus.enabled_tools
+  const grantedServiceIds = useMemo(() => {
+    const explicit = Array.isArray(googleOAuthStatus.enabled_services)
+      ? googleOAuthStatus.enabled_services
       : [];
     if (explicit.length > 0) {
       return explicit;
     }
-    return toolIdsFromGrantedScopes(googleOAuthStatus.scopes || []);
-  }, [googleOAuthStatus.enabled_tools, googleOAuthStatus.scopes]);
+    return serviceIdsFromGrantedScopes(googleOAuthStatus.scopes || []);
+  }, [googleOAuthStatus.enabled_services, googleOAuthStatus.scopes]);
+  const enabledServiceSummary = useMemo(() => {
+    if (grantedServiceIds.length === 0) {
+      return "No services enabled yet.";
+    }
+    return grantedServiceIds.map((serviceId) => serviceLabel(serviceId)).join(", ");
+  }, [grantedServiceIds]);
 
   useEffect(() => {
-    if (!googleOAuthStatus.connected) {
+    const selectedFromStatus = Array.isArray(googleOAuthStatus.oauth_selected_services)
+      ? normalizeSelectedServices(
+          googleOAuthStatus.oauth_selected_services
+            .map((item) => String(item || "").trim())
+            .filter(Boolean),
+        )
+      : [];
+    if (selectedFromStatus.length > 0) {
+      setSelectedGoogleServices(selectedFromStatus);
       return;
     }
-    setSelectedOauthToolIds(grantedToolIds.length > 0 ? grantedToolIds : DEFAULT_SELECTED_GOOGLE_TOOLS);
-  }, [googleOAuthStatus.connected, grantedToolIds]);
+    if (googleOAuthStatus.connected && grantedServiceIds.length > 0) {
+      setSelectedGoogleServices(grantedServiceIds);
+      return;
+    }
+    setSelectedGoogleServices(DEFAULT_SELECTED_GOOGLE_SERVICES);
+  }, [googleOAuthStatus.connected, googleOAuthStatus.oauth_selected_services, grantedServiceIds]);
 
   const selectedOauthScopes = useMemo(
-    () => expandScopesFromToolIds(selectedOauthToolIds),
-    [selectedOauthToolIds],
+    () => expandScopesFromServiceIds(selectedGoogleServices),
+    [selectedGoogleServices],
   );
   const workspaceToolScopes =
-    GOOGLE_TOOL_SCOPE_DEFS.find((item) => item.id === "google_workspace")?.scopes || [];
-  const workspaceToolSelected = selectedOauthToolIds.includes("google_workspace");
+    GOOGLE_OAUTH_SERVICE_DEFS.filter((item) => ["drive", "docs", "sheets"].includes(item.id)).flatMap(
+      (item) => item.scopes,
+    );
+  const workspaceToolSelected = selectedGoogleServices.some((item) =>
+    ["drive", "docs", "sheets"].includes(item),
+  );
   const workspaceScopesGranted = hasAllScopes(workspaceToolScopes, googleOAuthStatus.scopes || []);
   const oauthScopeReady = hasAllScopes(selectedOauthScopes, googleOAuthStatus.scopes || []);
   const canManageOAuthApp = Boolean(googleOAuthStatus.oauth_can_manage_config);
@@ -319,7 +367,7 @@ export function IntegrationsSettings({
       label: inServiceAccountMode ? "Share resources with service email" : "Grant required scopes",
       done: inServiceAccountMode
         ? Boolean(googleServiceAccountStatus.email)
-        : selectedOauthToolIds.length > 0 && oauthScopeReady,
+        : selectedGoogleServices.length > 0 && oauthScopeReady,
     },
     {
       id: "alias",
@@ -349,8 +397,8 @@ export function IntegrationsSettings({
   const aliasPrereqHint = inServiceAccountMode
     ? "Copy and share the service-account email first, then add a link alias."
     : !workspaceToolSelected
-      ? "Enable Drive, Docs, and Sheets in tool access first, then reconnect Google."
-      : "Connect Google and grant selected tool scopes first, then add a link alias.";
+      ? "Enable Drive, Docs, or Sheets in service access first, then reconnect Google."
+      : "Connect Google and grant selected service scopes first, then add a link alias.";
   const quickCompletionPercent = Math.round((quickDoneCount / quickSteps.length) * 100);
   const oauthMissingEnv = Array.isArray(googleOAuthStatus.oauth_missing_env)
     ? googleOAuthStatus.oauth_missing_env.filter((item) => String(item || "").trim().length > 0)
@@ -380,9 +428,9 @@ export function IntegrationsSettings({
   const smartSetupBlocked = oauthBlocked && !googleServiceAccountStatus.usable;
   const selectedToolsNeedReconnect =
     googleOAuthStatus.connected &&
-    (selectedOauthToolIds.length !== grantedToolIds.length ||
-      selectedOauthToolIds.some((toolId) => !grantedToolIds.includes(toolId)) ||
-      grantedToolIds.some((toolId) => !selectedOauthToolIds.includes(toolId)));
+    (selectedGoogleServices.length !== grantedServiceIds.length ||
+      selectedGoogleServices.some((toolId) => !grantedServiceIds.includes(toolId)) ||
+      grantedServiceIds.some((toolId) => !selectedGoogleServices.includes(toolId)));
 
   const nextSetupAction: NextSetupResolution = (() => {
     if (inServiceAccountMode) {
@@ -443,17 +491,17 @@ export function IntegrationsSettings({
       return {
         action: "connect_google",
         label: "Connect Google account",
-        description: "Sign in once to unlock Gmail, Calendar, Drive, Docs, and Sheets tools.",
+        description: "Sign in once to unlock Gmail, Drive, Docs, Sheets, and Analytics services.",
         tone: "warning",
       };
     }
     if (!oauthScopeReady) {
       return {
         action: "connect_google",
-        label: "Grant selected tool scopes",
+        label: "Grant selected service scopes",
         description: selectedToolsNeedReconnect
-          ? "Reconnect Google to grant updated tool permissions."
-          : "Finish consent to grant the scopes needed by selected tools.",
+          ? "Reconnect Google to grant updated service permissions."
+          : "Finish consent to grant the scopes needed by selected services.",
         tone: "warning",
       };
     }
@@ -509,17 +557,33 @@ export function IntegrationsSettings({
     }
   };
 
-  const handleConnectGoogleAction = async (): Promise<boolean> => {
+  const handleConnectGoogleAction = async (serviceIds?: string[]): Promise<boolean> => {
     if (oauthBlocked) {
       const message = `Google OAuth is blocked. ${oauthSetupHint}`;
       setOauthManualUrl("");
       setSetupStatus(message);
       return false;
     }
+    const servicesToUse = normalizeSelectedServices(serviceIds || selectedGoogleServices);
+    if (!servicesToUse.length) {
+      const message = "Select at least one Google service before connecting.";
+      setSetupStatus(message);
+      setAssistantStatus(message);
+      return false;
+    }
     try {
-      const connectOptions = canManageOAuthApp
-        ? { scopes: selectedOauthScopes, toolIds: selectedOauthToolIds }
-        : undefined;
+      const saveResult = await onSaveGoogleOAuthServices(servicesToUse);
+      if (!saveResult.ok) {
+        setSetupStatus(saveResult.message || "Could not save selected Google services.");
+        return false;
+      }
+      const savedServices = normalizeSelectedServices(
+        Array.isArray(saveResult.services) && saveResult.services.length > 0
+          ? saveResult.services
+          : servicesToUse,
+      );
+      setSelectedGoogleServices(savedServices);
+      const connectOptions = { scopes: expandScopesFromServiceIds(savedServices) };
       const result = await onConnectGoogle(connectOptions);
       const authorizeUrl = String(result.authorize_url || "").trim();
       if (authorizeUrl) {
@@ -536,6 +600,17 @@ export function IntegrationsSettings({
     } catch (error) {
       setSetupStatus(`Could not start Google OAuth: ${String(error)}`);
       return false;
+    }
+  };
+
+  const openGoogleServicesModal = () => {
+    setShowGoogleServicesModal(true);
+  };
+
+  const handleContinueGoogleConnect = async () => {
+    const ok = await handleConnectGoogleAction(selectedGoogleServices);
+    if (ok) {
+      setShowGoogleServicesModal(false);
     }
   };
 
@@ -688,8 +763,8 @@ export function IntegrationsSettings({
     const preferredMode: "oauth" | "service_account" = googleServiceAccountStatus.usable
       ? "service_account"
       : "oauth";
-    if (preferredMode === "oauth" && selectedOauthToolIds.length === 0) {
-      setSetupStatus("Select at least one Google tool before starting setup.");
+    if (preferredMode === "oauth" && selectedGoogleServices.length === 0) {
+      setSetupStatus("Select at least one Google service before starting setup.");
       return;
     }
     if (preferredMode === "oauth" && !oauthReady) {
@@ -721,7 +796,7 @@ export function IntegrationsSettings({
           setSetupStep("connect", "needs_user");
           setSetupStatus(
             googleOAuthStatus.connected
-              ? "Step 2 needs you: reconnect Google to grant selected tool permissions, then click Start setup again."
+              ? "Step 2 needs you: reconnect Google to grant selected service permissions, then click Start setup again."
               : "Step 2 needs you: complete Google login, then click Start setup again.",
           );
           await handleConnectGoogleAction();
@@ -776,7 +851,7 @@ export function IntegrationsSettings({
       return;
     }
     if (nextSetupAction.action === "connect_google") {
-      await handleConnectGoogleAction();
+      openGoogleServicesModal();
       return;
     }
     if (nextSetupAction.action === "configure_oauth_env") {
@@ -891,64 +966,82 @@ export function IntegrationsSettings({
             </p>
           ) : null}
         </SettingsRow>
-        {canManageOAuthApp ? (
-          <SettingsRow
-            title="Tool access permissions"
-            description={
-              inServiceAccountMode
-                ? "OAuth tool scope selection is disabled in service account mode."
-                : "Choose what this user allows Maia to access before Google sign-in."
-            }
-            right={
-              <StatusChip
-                label={`${selectedOauthToolIds.length}/${GOOGLE_TOOL_SCOPE_DEFS.length} selected`}
-                tone={selectedOauthToolIds.length > 0 ? "success" : "warning"}
-              />
-            }
-          >
-            <div className="grid gap-2 sm:grid-cols-2">
-              {GOOGLE_TOOL_SCOPE_DEFS.map((tool) => {
-                const checked = selectedOauthToolIds.includes(tool.id);
-                return (
-                  <label
-                    key={tool.id}
-                    className="flex cursor-pointer items-start gap-2 rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={assistantBusy || setupBusy || inServiceAccountMode}
-                      onChange={(event) => {
-                        const nextChecked = event.target.checked;
-                        setSelectedOauthToolIds((previous) => {
-                          if (nextChecked) {
-                            return Array.from(new Set([...previous, tool.id]));
-                          }
-                          return previous.filter((item) => item !== tool.id);
-                        });
-                      }}
-                      className="mt-0.5 h-4 w-4 rounded border-[#d2d2d7]"
-                    />
-                    <span>
-                      <span className="block text-[12px] font-semibold text-[#1d1d1f]">{tool.label}</span>
-                      <span className="block text-[11px] text-[#6e6e73]">{tool.description}</span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-            {selectedToolsNeedReconnect ? (
-              <p className="mt-2 text-[11px] text-[#6e6e73]">
-                Tool selection changed. Reconnect Google to grant updated permissions.
-              </p>
+        <SettingsRow
+          title="Google service access"
+          description={
+            inServiceAccountMode
+              ? "OAuth service selection is disabled in service account mode."
+              : "Choose what Maia can access before Google sign-in."
+          }
+          right={
+            <StatusChip
+              label={`${selectedGoogleServices.length}/${GOOGLE_OAUTH_SERVICE_DEFS.length} selected`}
+              tone={selectedGoogleServices.length > 0 ? "success" : "warning"}
+            />
+          }
+        >
+          <div className="grid gap-2 sm:grid-cols-2">
+            {GOOGLE_OAUTH_SERVICE_DEFS.map((service) => {
+              const checked = selectedGoogleServices.includes(service.id);
+              return (
+                <label
+                  key={service.id}
+                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={assistantBusy || setupBusy || inServiceAccountMode}
+                    onChange={(event) => {
+                      const nextChecked = event.target.checked;
+                      setSelectedGoogleServices((previous) => {
+                        if (nextChecked) {
+                          return normalizeSelectedServices([...previous, service.id]);
+                        }
+                        return previous.filter((item) => item !== service.id);
+                      });
+                    }}
+                    className="mt-0.5 h-4 w-4 rounded border-[#d2d2d7]"
+                  />
+                  <span>
+                    <span className="block text-[12px] font-semibold text-[#1d1d1f]">{service.label}</span>
+                    <span className="block text-[11px] text-[#6e6e73]">{service.description}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={assistantBusy || setupBusy || inServiceAccountMode}
+              onClick={openGoogleServicesModal}
+              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Choose services
+            </button>
+            {googleOAuthStatus.connected ? (
+              <button
+                type="button"
+                disabled={assistantBusy || setupBusy || inServiceAccountMode}
+                onClick={openGoogleServicesModal}
+                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Add more services
+              </button>
             ) : null}
-            {!inServiceAccountMode ? (
-              <p className="mt-1 text-[11px] text-[#6e6e73]">
-                OAuth scopes requested: {selectedOauthScopes.length}
-              </p>
-            ) : null}
-          </SettingsRow>
-        ) : null}
+          </div>
+          {selectedToolsNeedReconnect ? (
+            <p className="mt-2 text-[11px] text-[#6e6e73]">
+              Service selection changed. Reconnect Google to grant updated permissions.
+            </p>
+          ) : null}
+          {!inServiceAccountMode ? (
+            <p className="mt-1 text-[11px] text-[#6e6e73]">
+              OAuth scopes requested: {selectedOauthScopes.length}
+            </p>
+          ) : null}
+        </SettingsRow>
         {canManageOAuthApp ? (
           <SettingsRow
             title="OAuth app setup"
@@ -1044,7 +1137,7 @@ export function IntegrationsSettings({
                 <button
                   type="button"
                   disabled={assistantBusy || setupBusy || oauthBlocked}
-                  onClick={() => void handleConnectGoogleAction()}
+                  onClick={openGoogleServicesModal}
                   className="rounded-lg bg-[#2f2f34] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#434349] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Connect now
@@ -1168,14 +1261,14 @@ export function IntegrationsSettings({
         <>
       <SettingsSection
         title="Google"
-        subtitle="Connect Google services for Gmail, Calendar, Drive, and Analytics."
+        subtitle="Connect Google services for Gmail, Drive, Docs, Sheets, and Analytics."
         actions={
           <>
             <StatusChip label={oauthChip.label} tone={oauthChip.tone} />
             <button
               type="button"
               disabled={oauthBlocked}
-              onClick={() => void handleConnectGoogleAction()}
+              onClick={openGoogleServicesModal}
               className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
             >
               Connect Google
@@ -1194,6 +1287,16 @@ export function IntegrationsSettings({
           title="Account"
           description={googleOAuthStatus.email || "No Google account connected yet."}
           right={<StatusChip label={oauthChip.label} tone={oauthChip.tone} />}
+        />
+        <SettingsRow
+          title="Enabled services"
+          description={enabledServiceSummary}
+          right={
+            <StatusChip
+              label={grantedServiceIds.length > 0 ? `${grantedServiceIds.length} enabled` : "None"}
+              tone={grantedServiceIds.length > 0 ? "success" : "neutral"}
+            />
+          }
         />
         <SettingsRow
           title="Granted scopes"
@@ -1453,6 +1556,79 @@ export function IntegrationsSettings({
           />
         </SettingsSection>
       )}
+
+      {showGoogleServicesModal ? (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Choose Google services"
+          onClick={() => setShowGoogleServicesModal(false)}
+        >
+          <div
+            className="w-full max-w-[560px] rounded-2xl border border-[#d2d2d7] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3">
+              <p className="text-[16px] font-semibold text-[#1d1d1f]">Choose services</p>
+              <p className="text-[12px] text-[#6e6e73]">
+                Select what Maia can access for this Google connection.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {GOOGLE_OAUTH_SERVICE_DEFS.map((service) => {
+                const checked = selectedGoogleServices.includes(service.id);
+                return (
+                  <label
+                    key={`modal-${service.id}`}
+                    className="flex cursor-pointer items-start gap-2 rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={assistantBusy || setupBusy || inServiceAccountMode}
+                      onChange={(event) => {
+                        const nextChecked = event.target.checked;
+                        setSelectedGoogleServices((previous) => {
+                          if (nextChecked) {
+                            return normalizeSelectedServices([...previous, service.id]);
+                          }
+                          return previous.filter((item) => item !== service.id);
+                        });
+                      }}
+                      className="mt-0.5 h-4 w-4 rounded border-[#d2d2d7]"
+                    />
+                    <span>
+                      <span className="block text-[12px] font-semibold text-[#1d1d1f]">{service.label}</span>
+                      <span className="block text-[11px] text-[#6e6e73]">{service.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[11px] text-[#6e6e73]">
+              Google will request {selectedOauthScopes.length} scope(s), including identity scopes.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowGoogleServicesModal(false)}
+                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={assistantBusy || setupBusy || inServiceAccountMode || selectedGoogleServices.length === 0}
+                onClick={() => void handleContinueGoogleConnect()}
+                className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Continue to Google
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {oauthStatus ? (
         <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">

@@ -60,6 +60,10 @@ class GoogleWorkspaceAuthModeRequest(BaseModel):
     mode: Literal["oauth", "service_account"] = "oauth"
 
 
+class GoogleOAuthServicesRequest(BaseModel):
+    services: list[str] = Field(default_factory=list, max_length=20)
+
+
 class GoogleWorkspaceLinkAnalyzeRequest(BaseModel):
     link: str = Field(min_length=4, max_length=2048)
 

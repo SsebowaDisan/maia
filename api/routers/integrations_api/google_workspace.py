@@ -9,6 +9,11 @@ from api.auth import get_current_user_id
 from api.context import get_context
 from api.services.google.analytics import GoogleAnalyticsService
 from api.services.google.errors import GoogleServiceError
+from api.services.google.oauth_scopes import (
+    invalid_google_oauth_service_ids,
+    normalize_google_oauth_service_ids,
+    scopes_from_service_ids,
+)
 from api.services.google.resource_links import (
     GoogleResourceReference,
     analyze_google_resource_reference,
@@ -20,6 +25,7 @@ from api.services.settings_service import save_user_settings
 
 from .common import publish_event, tenant_settings
 from .schemas import (
+    GoogleOAuthServicesRequest,
     GoogleWorkspaceAuthModeRequest,
     GoogleWorkspaceLinkAliasSaveRequest,
     GoogleWorkspaceLinkAnalyzeRequest,
@@ -207,6 +213,52 @@ def update_google_workspace_auth_mode(
         data={"mode": payload.mode},
     )
     return {"status": "saved", "mode": payload.mode}
+
+
+@router.get("/integrations/google/oauth/services")
+def list_google_oauth_services(
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    _, settings = tenant_settings(user_id)
+    services = normalize_google_oauth_service_ids(settings.get("agent.google_oauth_services"))
+    return {
+        "services": services,
+        "scopes": scopes_from_service_ids(services, include_base=True),
+    }
+
+
+@router.post("/integrations/google/oauth/services")
+def save_google_oauth_services(
+    payload: GoogleOAuthServicesRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    invalid = invalid_google_oauth_service_ids(payload.services)
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported Google OAuth service IDs: {', '.join(invalid)}",
+        )
+    _, settings = tenant_settings(user_id)
+    services = normalize_google_oauth_service_ids(payload.services)
+    next_settings = deepcopy(settings)
+    next_settings["agent.google_oauth_services"] = services
+    save_user_settings(
+        context=get_context(),
+        user_id=user_id,
+        values=next_settings,
+    )
+    publish_event(
+        user_id=user_id,
+        run_id=None,
+        event_type="google.oauth.services_saved",
+        message="Google OAuth service selections updated",
+        data={"services": services},
+    )
+    return {
+        "status": "saved",
+        "services": services,
+        "scopes": scopes_from_service_ids(services, include_base=True),
+    }
 
 
 @router.get("/integrations/google-workspace/link-assistant/aliases")

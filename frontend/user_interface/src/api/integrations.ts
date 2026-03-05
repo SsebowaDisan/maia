@@ -25,6 +25,11 @@ export type GoogleWorkspaceAliasRecord = {
   canonical_url: string;
 };
 
+export type GoogleOAuthServicesResponse = {
+  services: string[];
+  scopes: string[];
+};
+
 export type GoogleWorkspaceLinkAnalyzeResult = {
   detected: boolean;
   source: "link" | "alias" | "unknown";
@@ -186,6 +191,21 @@ export function saveGoogleWorkspaceAuthMode(mode: "oauth" | "service_account") {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
+    },
+  );
+}
+
+export function getGoogleOAuthServices() {
+  return request<GoogleOAuthServicesResponse>("/api/agent/integrations/google/oauth/services");
+}
+
+export function saveGoogleOAuthServices(services: string[]) {
+  return request<{ status: string; services: string[]; scopes: string[] }>(
+    "/api/agent/integrations/google/oauth/services",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ services }),
     },
   );
 }

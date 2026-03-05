@@ -26,6 +26,7 @@ import {
   getOllamaIntegrationStatus,
   getOllamaQuickstart,
   saveGoogleWorkspaceLinkAlias,
+  saveGoogleOAuthServices,
   saveGoogleWorkspaceAuthMode,
   type GoogleWorkspaceAliasRecord,
   type GoogleWorkspaceLinkAccessResult,
@@ -356,6 +357,27 @@ export function useSettingsController(activeTab: string) {
     }
   };
 
+  const handleSaveGoogleOAuthServices = async (
+    services: string[],
+  ): Promise<{ ok: boolean; services: string[]; message: string }> => {
+    try {
+      const result = await saveGoogleOAuthServices(services);
+      await refreshIntegrations();
+      const saved = Array.isArray(result.services) ? result.services : [];
+      return {
+        ok: true,
+        services: saved,
+        message: saved.length > 0 ? "Google services saved." : "Google services cleared.",
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        services: [],
+        message: `Could not save Google services: ${String(error)}`,
+      };
+    }
+  };
+
   const handleAnalyzeGoogleWorkspaceLink = async (
     link: string,
   ): Promise<GoogleWorkspaceLinkAnalyzeResult> => {
@@ -473,6 +495,7 @@ export function useSettingsController(activeTab: string) {
     handleGoogleOAuthDisconnect,
     handleSaveGoogleOAuthConfig,
     handleRequestGoogleOAuthSetup,
+    handleSaveGoogleOAuthServices,
     handleGoogleWorkspaceAuthModeChange,
     handleAnalyzeGoogleWorkspaceLink,
     handleCheckGoogleWorkspaceLinkAccess,

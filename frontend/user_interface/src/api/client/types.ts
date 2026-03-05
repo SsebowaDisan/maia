@@ -222,6 +222,7 @@ type GoogleOAuthStatus = {
   connected: boolean;
   scopes: string[];
   enabled_tools?: string[];
+  enabled_services?: string[];
   email?: string | null;
   expires_at?: string | null;
   token_type?: string | null;
@@ -238,6 +239,7 @@ type GoogleOAuthStatus = {
   oauth_setup_request_pending?: boolean;
   oauth_setup_request_count?: number;
   oauth_managed_by_env?: boolean;
+  oauth_selected_services?: string[];
 };
 
 type GoogleOAuthConfigStatus = {

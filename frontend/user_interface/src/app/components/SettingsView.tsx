@@ -96,6 +96,7 @@ export function SettingsView() {
           onOAuthRedirectUriInputChange={controller.setOauthRedirectUriInput}
           onSaveGoogleOAuthConfig={() => void controller.handleSaveGoogleOAuthConfig()}
           onRequestGoogleOAuthSetup={() => controller.handleRequestGoogleOAuthSetup()}
+          onSaveGoogleOAuthServices={(services) => controller.handleSaveGoogleOAuthServices(services)}
           onGoogleAuthModeChange={(mode) => void controller.handleGoogleWorkspaceAuthModeChange(mode)}
           onAnalyzeGoogleLink={(link) => controller.handleAnalyzeGoogleWorkspaceLink(link)}
           onCheckGoogleLinkAccess={(payload) => controller.handleCheckGoogleWorkspaceLinkAccess(payload)}
