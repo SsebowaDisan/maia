@@ -23,6 +23,7 @@ class ConversationUpdateRequest(BaseModel):
 class ConversationSummary(BaseModel):
     id: str
     name: str
+    icon_key: str | None = None
     user: str
     is_public: bool
     date_created: datetime

@@ -16,26 +16,61 @@ function getRawFileUrl(fileId: string): string {
 }
 
 type UploadProgressCallback = (loadedBytes: number, totalBytes: number) => void;
+type UploadRequestOptions = {
+  onUploadProgress?: UploadProgressCallback;
+  signal?: AbortSignal;
+};
 
 function requestMultipartWithProgress<T>(
   path: string,
   formData: FormData,
-  onUploadProgress?: UploadProgressCallback,
+  options?: UploadRequestOptions,
 ) {
+  const onUploadProgress = options?.onUploadProgress;
+  const signal = options?.signal;
   if (!onUploadProgress) {
     return request<T>(path, {
       method: "POST",
       body: formData,
+      signal,
     });
   }
 
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let settled = false;
     const relativePath = withUserIdQuery(path);
     const url = `${API_BASE}${relativePath}`;
+    const buildAbortError = () => {
+      try {
+        return new DOMException("Upload canceled.", "AbortError");
+      } catch {
+        const error = new Error("Upload canceled.");
+        error.name = "AbortError";
+        return error;
+      }
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (signal && abortListener) {
+        signal.removeEventListener("abort", abortListener);
+      }
+      callback();
+    };
+    const abortListener = () => {
+      xhr.abort();
+    };
     xhr.open("POST", url, true);
     if (ACTIVE_USER_ID) {
       xhr.setRequestHeader("X-User-Id", ACTIVE_USER_ID);
+    }
+    if (signal?.aborted) {
+      reject(buildAbortError());
+      return;
+    }
+    if (signal) {
+      signal.addEventListener("abort", abortListener, { once: true });
     }
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) {
@@ -43,18 +78,21 @@ function requestMultipartWithProgress<T>(
       }
       onUploadProgress(event.loaded, event.total);
     };
+    xhr.onabort = () => {
+      finish(() => reject(buildAbortError()));
+    };
     xhr.onerror = () => {
-      reject(new Error("Network error while uploading files."));
+      finish(() => reject(new Error("Network error while uploading files.")));
     };
     xhr.onload = () => {
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(xhr.responseText || `Request failed: ${xhr.status}`));
+        finish(() => reject(new Error(xhr.responseText || `Request failed: ${xhr.status}`)));
         return;
       }
       try {
-        resolve(JSON.parse(xhr.responseText || "{}") as T);
+        finish(() => resolve(JSON.parse(xhr.responseText || "{}") as T));
       } catch (error) {
-        reject(new Error(`Invalid JSON response: ${String(error)}`));
+        finish(() => reject(new Error(`Invalid JSON response: ${String(error)}`)));
       }
     };
     xhr.send(formData);
@@ -67,6 +105,7 @@ async function uploadFiles(
     reindex?: boolean;
     scope?: "persistent" | "chat_temp";
     onUploadProgress?: UploadProgressCallback;
+    signal?: AbortSignal;
   },
 ) {
   const formData = new FormData();
@@ -79,7 +118,10 @@ async function uploadFiles(
   return requestMultipartWithProgress<UploadResponse>(
     "/api/uploads/files",
     formData,
-    options?.onUploadProgress,
+    {
+      onUploadProgress: options?.onUploadProgress,
+      signal: options?.signal,
+    },
   );
 }
 
@@ -317,6 +359,7 @@ async function createFileIngestionJob(
     groupId?: string;
     scope?: "persistent" | "chat_temp";
     onUploadProgress?: UploadProgressCallback;
+    signal?: AbortSignal;
   },
 ) {
   const formData = new FormData();
@@ -337,7 +380,10 @@ async function createFileIngestionJob(
   return requestMultipartWithProgress<IngestionJob>(
     "/api/uploads/files/jobs",
     formData,
-    options?.onUploadProgress,
+    {
+      onUploadProgress: options?.onUploadProgress,
+      signal: options?.signal,
+    },
   );
 }
 
@@ -382,6 +428,12 @@ function getIngestionJob(jobId: string) {
   return request<IngestionJob>(`/api/uploads/jobs/${encodeURIComponent(jobId)}`);
 }
 
+function cancelIngestionJob(jobId: string) {
+  return request<IngestionJob>(`/api/uploads/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+  });
+}
+
 function buildRawFileUrl(fileId: string, options?: { indexId?: number; download?: boolean }) {
   const query = new URLSearchParams();
   if (typeof options?.indexId === "number") {
@@ -399,6 +451,7 @@ export {
   createFileGroup,
   createFileIngestionJob,
   createUrlIngestionJob,
+  cancelIngestionJob,
   deleteFileGroup,
   deleteFiles,
   deleteUrls,

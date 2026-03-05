@@ -40,3 +40,36 @@ def test_polish_final_response_adaptive_blueprint_and_citation_preserve(monkeypa
     assert "industrial airflow treatment" in polished.lower()
     assert "## Evidence Citations" in polished
     assert "[1]" in polished
+
+
+def test_polish_final_response_includes_language_rule_from_user_message(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    observed: dict[str, str] = {}
+
+    def _fake_json_response(**kwargs):
+        observed["blueprint_prompt"] = str(kwargs.get("user_prompt") or "")
+        observed["blueprint_system"] = str(kwargs.get("system_prompt") or "")
+        return {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Respuesta", "purpose": "Responder", "format": "paragraphs"}],
+        }
+
+    def _fake_text_response(**kwargs):
+        observed["polish_prompt"] = str(kwargs.get("user_prompt") or "")
+        observed["polish_system"] = str(kwargs.get("system_prompt") or "")
+        return "Respuesta final."
+
+    monkeypatch.setattr(llm_response_formatter, "call_json_response", _fake_json_response)
+    monkeypatch.setattr(llm_response_formatter, "call_text_response", _fake_text_response)
+
+    polish_final_response(
+        request_message="Que hace esta empresa y como funciona?",
+        answer_text="## Findings\n- Item",
+    )
+
+    assert "Language rule: respond in Spanish" in observed["blueprint_prompt"]
+    assert "Language rule: respond in Spanish" in observed["blueprint_system"]
+    assert "Language rule: respond in Spanish" in observed["polish_prompt"]
+    assert "Language rule: respond in Spanish" in observed["polish_system"]

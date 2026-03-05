@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowUp, ExternalLink, FileText, Loader2, X } from "lucide-react";
+import { AlertCircle, ArrowUp, ExternalLink, FileText, Folder, Loader2, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -10,11 +10,58 @@ import {
   type RefObject,
 } from "react";
 import { buildRawFileUrl } from "../../../api/client";
+import type { FileGroupRecord, FileRecord } from "../../../api/client";
+import type { SidebarProject } from "../../appShell/types";
 import { AccessModeDropdown } from "../AccessModeDropdown";
 import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import type { ComposerAttachment } from "./types";
 
 const MAX_TEXTAREA_HEIGHT_PX = 168;
+const MAX_COMMAND_OPTIONS = 8;
+
+type CommandTrigger = "document" | "group" | "project";
+type CommandOption = {
+  id: string;
+  label: string;
+  subtitle?: string;
+};
+type CommandQueryState = {
+  trigger: CommandTrigger;
+  query: string;
+  tokenStart: number;
+  caret: number;
+};
+
+const TRIGGER_MAP: Record<string, CommandTrigger> = {
+  "@": "document",
+  "#": "group",
+  "/": "project",
+};
+
+function resolveCommandQuery(text: string, caret: number): CommandQueryState | null {
+  const safeCaret = Math.max(0, Math.min(caret, text.length));
+  const beforeCaret = text.slice(0, safeCaret);
+  const match = /(^|\s)([@#/])([^\s@#/]*)$/.exec(beforeCaret);
+  if (!match) {
+    return null;
+  }
+  const triggerChar = String(match[2] || "");
+  const trigger = TRIGGER_MAP[triggerChar];
+  if (!trigger) {
+    return null;
+  }
+  const query = String(match[3] || "");
+  const tokenStart = safeCaret - query.length - 1;
+  if (tokenStart < 0) {
+    return null;
+  }
+  return {
+    trigger,
+    query,
+    tokenStart,
+    caret: safeCaret,
+  };
+}
 
 type ComposerPanelProps = {
   accessMode: "restricted" | "full_access";
@@ -31,8 +78,14 @@ type ComposerPanelProps = {
   latestHighlightSnippets: string[];
   message: string;
   messageActionStatus: string;
+  documentOptions: FileRecord[];
+  groupOptions: FileGroupRecord[];
+  projectOptions: SidebarProject[];
   onAccessModeChange: (mode: "restricted" | "full_access") => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
+  onAttachDocument: (documentId: string) => void;
+  onAttachGroup: (groupId: string) => void;
+  onAttachProject: (projectId: string) => void;
   pasteHighlightsToComposer: () => void;
   setMessage: (value: string) => void;
   submit: () => Promise<void>;
@@ -53,8 +106,14 @@ function ComposerPanel({
   latestHighlightSnippets,
   message,
   messageActionStatus,
+  documentOptions,
+  groupOptions,
+  projectOptions,
   onAccessModeChange,
   onFileChange,
+  onAttachDocument,
+  onAttachGroup,
+  onAttachProject,
   pasteHighlightsToComposer,
   setMessage,
   submit,
@@ -81,6 +140,8 @@ function ComposerPanel({
 
   const [previewAttachment, setPreviewAttachment] = useState<ComposerAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [commandQuery, setCommandQuery] = useState<CommandQueryState | null>(null);
+  const [commandActiveIndex, setCommandActiveIndex] = useState(0);
 
   const resizeComposerTextarea = useCallback(() => {
     const element = textareaRef.current;
@@ -96,11 +157,138 @@ function ComposerPanel({
     void submit();
   };
 
+  const commandOptions = useMemo<CommandOption[]>(() => {
+    if (!commandQuery) {
+      return [];
+    }
+    const normalizedQuery = commandQuery.query.trim().toLowerCase();
+    const includeOption = (value: string) =>
+      !normalizedQuery || value.toLowerCase().includes(normalizedQuery);
+
+    if (commandQuery.trigger === "document") {
+      return documentOptions
+        .filter((item) => includeOption(item.name))
+        .slice(0, MAX_COMMAND_OPTIONS)
+        .map((item) => ({
+          id: item.id,
+          label: item.name,
+          subtitle: "Document",
+        }));
+    }
+    if (commandQuery.trigger === "group") {
+      return groupOptions
+        .filter((item) => includeOption(item.name))
+        .slice(0, MAX_COMMAND_OPTIONS)
+        .map((item) => ({
+          id: item.id,
+          label: item.name,
+          subtitle: `${(item.file_ids || []).length} docs`,
+        }));
+    }
+    return projectOptions
+      .filter((item) => includeOption(item.name))
+      .slice(0, MAX_COMMAND_OPTIONS)
+      .map((item) => ({
+        id: item.id,
+        label: item.name,
+        subtitle: "Project",
+      }));
+  }, [commandQuery, documentOptions, groupOptions, projectOptions]);
+
+  const updateCommandQuery = useCallback(
+    (nextText: string, caret: number) => {
+      const next = resolveCommandQuery(nextText, caret);
+      setCommandQuery(next);
+      setCommandActiveIndex(0);
+    },
+    [setCommandQuery],
+  );
+
+  const removeCommandToken = useCallback(
+    (query: CommandQueryState) => {
+      const before = message.slice(0, query.tokenStart).replace(/\s+$/, " ");
+      const after = message.slice(query.caret).replace(/^\s+/, "");
+      const nextMessage = `${before}${after}`.replace(/\s{3,}/g, " ").trimStart();
+      setMessage(nextMessage);
+      window.requestAnimationFrame(() => {
+        const element = textareaRef.current;
+        if (!element) return;
+        const caretPosition = Math.max(0, Math.min(before.length, nextMessage.length));
+        element.focus();
+        element.setSelectionRange(caretPosition, caretPosition);
+      });
+      setCommandQuery(null);
+      setCommandActiveIndex(0);
+    },
+    [message, setMessage],
+  );
+
+  const attachFromCommand = useCallback(
+    (option: CommandOption) => {
+      if (!commandQuery) {
+        return;
+      }
+      if (commandQuery.trigger === "document") {
+        onAttachDocument(option.id);
+      } else if (commandQuery.trigger === "group") {
+        onAttachGroup(option.id);
+      } else {
+        onAttachProject(option.id);
+      }
+      removeCommandToken(commandQuery);
+    },
+    [commandQuery, onAttachDocument, onAttachGroup, onAttachProject, removeCommandToken],
+  );
+
   const handleMessageChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    setMessage(event.target.value);
+    const nextMessage = event.target.value;
+    setMessage(nextMessage);
+    updateCommandQuery(nextMessage, event.target.selectionStart ?? nextMessage.length);
+  };
+
+  const syncCommandQueryFromTextarea = () => {
+    const element = textareaRef.current;
+    if (!element) {
+      return;
+    }
+    const nextValue = element.value;
+    updateCommandQuery(nextValue, element.selectionStart ?? nextValue.length);
   };
 
   const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (commandQuery && commandOptions.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCommandActiveIndex((previous) =>
+          commandOptions.length <= 0 ? 0 : (previous + 1) % commandOptions.length,
+        );
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCommandActiveIndex((previous) =>
+          commandOptions.length <= 0
+            ? 0
+            : (previous - 1 + commandOptions.length) % commandOptions.length,
+        );
+        return;
+      }
+      if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        const option = commandOptions[Math.max(0, Math.min(commandActiveIndex, commandOptions.length - 1))];
+        if (option) {
+          attachFromCommand(option);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandQuery(null);
+        setCommandActiveIndex(0);
+        return;
+      }
+    }
+
     if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
     if (event.shiftKey) return;
     event.preventDefault();
@@ -113,6 +301,16 @@ function ComposerPanel({
       setPreviewAttachment(null);
     }
   }, [attachments, previewAttachment]);
+
+  useEffect(() => {
+    if (!commandOptions.length) {
+      setCommandActiveIndex(0);
+      return;
+    }
+    setCommandActiveIndex((previous) =>
+      Math.max(0, Math.min(previous, commandOptions.length - 1)),
+    );
+  }, [commandOptions.length]);
 
   useEffect(() => {
     if (!previewAttachment) return;
@@ -128,6 +326,13 @@ function ComposerPanel({
   useEffect(() => {
     resizeComposerTextarea();
   }, [message, resizeComposerTextarea]);
+
+  useEffect(() => {
+    if (message.length === 0 && commandQuery) {
+      setCommandQuery(null);
+      setCommandActiveIndex(0);
+    }
+  }, [commandQuery, message]);
 
   const previewUrl = useMemo(() => {
     if (!previewAttachment) return "";
@@ -152,7 +357,7 @@ function ComposerPanel({
     <div className="border-t border-black/[0.06] bg-white">
       <div className="mx-auto w-full max-w-[1460px] px-6 py-4">
         <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
-          <div className="assistantComposerInputShell rounded-[16px] border border-black/[0.07] bg-white/96">
+          <div className="assistantComposerInputShell relative rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">
               <textarea
                 ref={textareaRef}
@@ -164,8 +369,44 @@ function ComposerPanel({
                 aria-label="Message"
                 className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#8b8b92] focus:outline-none"
                 onKeyDown={handleComposerKeyDown}
+                onKeyUp={syncCommandQueryFromTextarea}
+                onClick={syncCommandQueryFromTextarea}
               />
             </div>
+            {commandQuery && commandOptions.length > 0 ? (
+              <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-2xl border border-black/[0.1] bg-white shadow-[0_18px_38px_-24px_rgba(0,0,0,0.5)]">
+                <div className="border-b border-black/[0.06] px-3 py-2 text-[11px] text-[#6e6e73]">
+                  {commandQuery.trigger === "document"
+                    ? "Attach document"
+                    : commandQuery.trigger === "group"
+                      ? "Attach group"
+                      : "Attach project"}
+                </div>
+                <ul className="max-h-56 overflow-y-auto py-1.5">
+                  {commandOptions.map((option, index) => (
+                    <li key={`${commandQuery.trigger}-${option.id}`}>
+                      <button
+                        type="button"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          attachFromCommand(option);
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[13px] transition-colors ${
+                          index === commandActiveIndex
+                            ? "bg-[#f3f3f6] text-[#1d1d1f]"
+                            : "text-[#2a2a2d] hover:bg-[#f8f8fa]"
+                        }`}
+                      >
+                        <span className="truncate">{option.label}</span>
+                        {option.subtitle ? (
+                          <span className="shrink-0 text-[11px] text-[#8d8d93]">{option.subtitle}</span>
+                        ) : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
 
           <div className="assistantComposerToolbar">
@@ -202,25 +443,47 @@ function ComposerPanel({
                             : attachment.name
                         }
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleOpenPreview(attachment)}
-                          className="inline-flex min-w-0 items-center gap-1.5 px-2.5 py-1 transition-colors duration-150 hover:bg-[#f7f7f8] rounded-l-full"
-                        >
-                          {attachment.status === "uploading" ? (
-                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[#6e6e73]" />
-                          ) : attachment.status === "error" ? (
-                            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#d44848]" />
-                          ) : (
-                            <FileText className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
-                          )}
-                          <span className="truncate">{attachment.name}</span>
-                          {attachmentStatusLabel(attachment) ? (
-                            <span className="shrink-0 text-[10px] text-[#8d8d93]">
-                              {attachmentStatusLabel(attachment)}
-                            </span>
-                          ) : null}
-                        </button>
+                        {attachment.localUrl || attachment.fileId ? (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPreview(attachment)}
+                            className="inline-flex min-w-0 items-center gap-1.5 rounded-l-full px-2.5 py-1 transition-colors duration-150 hover:bg-[#f7f7f8]"
+                          >
+                            {attachment.status === "uploading" ? (
+                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[#6e6e73]" />
+                            ) : attachment.status === "error" ? (
+                              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#d44848]" />
+                            ) : attachment.kind === "project" ? (
+                              <Folder className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
+                            ) : (
+                              <FileText className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
+                            )}
+                            <span className="truncate">{attachment.name}</span>
+                            {attachmentStatusLabel(attachment) ? (
+                              <span className="shrink-0 text-[10px] text-[#8d8d93]">
+                                {attachmentStatusLabel(attachment)}
+                              </span>
+                            ) : null}
+                          </button>
+                        ) : (
+                          <div className="inline-flex min-w-0 items-center gap-1.5 rounded-l-full px-2.5 py-1">
+                            {attachment.status === "uploading" ? (
+                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[#6e6e73]" />
+                            ) : attachment.status === "error" ? (
+                              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#d44848]" />
+                            ) : attachment.kind === "project" ? (
+                              <Folder className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
+                            ) : (
+                              <FileText className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
+                            )}
+                            <span className="truncate">{attachment.name}</span>
+                            {attachmentStatusLabel(attachment) ? (
+                              <span className="shrink-0 text-[10px] text-[#8d8d93]">
+                                {attachmentStatusLabel(attachment)}
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => removeAttachment(attachment.id)}
@@ -245,7 +508,7 @@ function ComposerPanel({
                       type="button"
                       onClick={clearAttachments}
                       className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-black/[0.08] bg-white px-2.5 text-[11px] text-[#6e6e73] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f]"
-                      title="Clear all attached files"
+                      title="Clear all attachments"
                     >
                       <X className="h-3 w-3" />
                       <span>Clear</span>

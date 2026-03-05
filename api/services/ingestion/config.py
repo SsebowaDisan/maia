@@ -72,7 +72,8 @@ _raw_upload_reader_mode = str(
 ).strip()
 UPLOAD_INDEX_READER_MODE = (
     _raw_upload_reader_mode
-    if _raw_upload_reader_mode in {"default", "ocr", "adobe", "azure-di", "docling"}
+    if _raw_upload_reader_mode
+    in {"default", "ocr", "adobe", "azure-di", "docling", "paddleocr"}
     else "default"
 )
 UPLOAD_INDEX_QUICK_MODE = bool(

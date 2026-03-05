@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -21,8 +22,10 @@ from api.routers.web_preview import router as web_preview_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.ingestion_service import get_ingestion_manager
+from api.services.upload.indexing import run_upload_startup_checks
 
 _ENV_FILE_LOADED = False
+logger = logging.getLogger(__name__)
 
 
 def _strip_wrapped_quotes(value: str) -> str:
@@ -95,6 +98,9 @@ app.include_router(web_preview_router)
 @app.on_event("startup")
 def warm_backend_context() -> None:
     load_local_env_if_present()
+    startup_notices = run_upload_startup_checks()
+    for message in startup_notices:
+        logger.info(message)
     # Ensure indices/reasonings/settings are initialized once at server startup.
     get_context()
     get_ingestion_manager().start()

@@ -20,6 +20,7 @@ from api.schemas import ChatRequest
 
 from .citations import resolve_required_citation_mode
 from .constants import DEFAULT_SETTING, PLACEHOLDER_KEYS, logger
+from .language import build_response_language_rule, resolve_response_language
 
 NON_TEMPLATED_RESPONSE_GUARD = (
     "Respond in a natural assistant style adapted to the user request and evidence. "
@@ -140,15 +141,28 @@ def create_pipeline(
         str(citation_mode_input or "")
     )
 
-    if request.language not in (None, DEFAULT_SETTING, ""):
+    resolved_response_language = resolve_response_language(
+        request.language if request.language not in (None, DEFAULT_SETTING, "") else None,
+        request.message,
+    )
+    if resolved_response_language:
+        effective_settings["reasoning.lang"] = resolved_response_language
+    elif request.language not in (None, DEFAULT_SETTING, ""):
         effective_settings["reasoning.lang"] = request.language
 
     system_prompt_key = f"reasoning.options.{reasoning_id}.system_prompt"
     existing_system_prompt = str(effective_settings.get(system_prompt_key, "") or "").strip()
-    if NON_TEMPLATED_RESPONSE_GUARD.lower() not in existing_system_prompt.lower():
-        effective_settings[system_prompt_key] = (
-            f"{existing_system_prompt}\n{NON_TEMPLATED_RESPONSE_GUARD}".strip()
-        )
+    language_guard = build_response_language_rule(
+        requested_language=request.language if request.language not in (None, DEFAULT_SETTING, "") else None,
+        latest_message=request.message,
+    )
+    guard_fragments = [existing_system_prompt]
+    lowered_prompt = existing_system_prompt.lower()
+    if NON_TEMPLATED_RESPONSE_GUARD.lower() not in lowered_prompt:
+        guard_fragments.append(NON_TEMPLATED_RESPONSE_GUARD)
+    if "language rule:" not in lowered_prompt:
+        guard_fragments.append(language_guard)
+    effective_settings[system_prompt_key] = "\n".join([row for row in guard_fragments if row]).strip()
 
     # Prevent background reranking threads from failing when configured
     # LLM uses placeholder API keys.

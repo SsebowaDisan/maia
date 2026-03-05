@@ -1,6 +1,7 @@
 ﻿@custom-variant dark (&:is(.dark *));
 
 :root {
+  --font-system-apple: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-size: 16px;
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
@@ -156,6 +157,30 @@
     @apply bg-background text-foreground;
     margin: 0;
     overflow: hidden;
+    font-family: var(--font-system-apple);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea,
+  select,
+  option {
+    font-family: var(--font-system-apple);
+  }
+
+  /* Keep third-party component text on the same family. */
+  [class^="Mui"],
+  [class*=" Mui"] {
+    font-family: var(--font-system-apple) !important;
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   }
 
   html,

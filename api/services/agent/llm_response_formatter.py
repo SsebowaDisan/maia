@@ -10,6 +10,7 @@ from api.services.agent.llm_runtime import (
     env_bool,
     sanitize_json_value,
 )
+from api.services.chat.language import build_response_language_rule
 
 
 def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -74,6 +75,10 @@ def _plan_response_blueprint(
     verification_report: dict[str, Any],
     preferences: dict[str, Any],
 ) -> dict[str, Any]:
+    language_rule = build_response_language_rule(
+        requested_language=None,
+        latest_message=request_message,
+    )
     plan_prompt = (
         "Design a response blueprint for a final agent answer.\n"
         "Return one JSON object only with keys:\n"
@@ -85,6 +90,7 @@ def _plan_response_blueprint(
         "- Do not default to reusable report skeletons unless explicitly requested by the user.\n"
         "- If intent is unclear/noisy, produce a clarifying-question structure instead of assumptions.\n"
         "- Preserve evidence and compliance visibility.\n"
+        f"- {language_rule}\n"
         "- Do not invent facts.\n\n"
         f"User request:\n{request_message}\n\n"
         f"Current answer draft:\n{answer_text[:6000]}\n\n"
@@ -94,6 +100,7 @@ def _plan_response_blueprint(
     blueprint = call_json_response(
         system_prompt=(
             "You are an expert technical editor for enterprise AI agents. "
+            f"{language_rule} "
             "You design adaptive markdown structures and return JSON only."
         ),
         user_prompt=plan_prompt,
@@ -137,6 +144,10 @@ def polish_final_response(
     raw_answer = str(answer_text or "").strip()
     if not raw_answer:
         return answer_text
+    language_rule = build_response_language_rule(
+        requested_language=None,
+        latest_message=request_message,
+    )
 
     verification_payload = sanitize_json_value(verification_report or {})
     preferences_payload = sanitize_json_value(preferences or {})
@@ -164,12 +175,14 @@ def polish_final_response(
         "- If intent is unclear, ask a focused clarifying question instead of speculative summaries.\n"
         "- Do not add new claims.\n"
         "- Keep evidence citations intact; include citation markers and citation section when available.\n"
+        f"- {language_rule}\n"
         "- Return markdown text only.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     polished = call_text_response(
         system_prompt=(
             "You are Maia's response writer. Produce adaptive, detailed, professional answers "
+            f"{language_rule} "
             "without changing factual content."
         ),
         user_prompt=prompt,

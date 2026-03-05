@@ -15,6 +15,9 @@ function ChatMain({
   onSendMessage,
   onUploadFiles,
   onCreateFileIngestionJob,
+  availableDocuments = [],
+  availableGroups = [],
+  availableProjects = [],
   isSending,
   citationMode,
   mindmapEnabled,
@@ -46,6 +49,9 @@ function ChatMain({
     onUpdateUserTurn,
     onUploadFiles,
     onCreateFileIngestionJob,
+    availableDocuments,
+    availableGroups,
+    availableProjects,
   });
 
   const handleTurnClick = (
@@ -109,6 +115,12 @@ function ChatMain({
         messageActionStatus={interactions.messageActionStatus}
         onAccessModeChange={onAccessModeChange}
         onFileChange={interactions.onFileChange}
+        documentOptions={availableDocuments}
+        groupOptions={availableGroups}
+        projectOptions={availableProjects}
+        onAttachDocument={interactions.attachDocumentById}
+        onAttachGroup={interactions.attachGroupById}
+        onAttachProject={interactions.attachProjectById}
         pasteHighlightsToComposer={interactions.pasteHighlightsToComposer}
         setMessage={interactions.setMessage}
         submit={interactions.submit}

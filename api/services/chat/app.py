@@ -974,17 +974,19 @@ def stream_chat_turn(
         settings=settings,
     )
     message = request.message.strip()
-    conversation_id, conversation_name, data_source = get_or_create_conversation(
+    conversation_id, conversation_name, data_source, conversation_icon_key = get_or_create_conversation(
         user_id=user_id,
         conversation_id=request.conversation_id,
     )
-    conversation_name = maybe_autoname_conversation(
+    conversation_name, conversation_icon_key = maybe_autoname_conversation(
         user_id=user_id,
         conversation_id=conversation_id,
         current_name=conversation_name,
         message=message,
         agent_mode=request.agent_mode,
     )
+    data_source = deepcopy(data_source or {})
+    data_source["conversation_icon_key"] = conversation_icon_key
 
     chat_history = deepcopy(data_source.get("messages", []))
     chat_state = deepcopy(data_source.get("state", STATE))
@@ -1416,7 +1418,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 return fast_result
             if request.command in (None, "", DEFAULT_SETTING):
                 try:
-                    _conversation_id, _conversation_name, data_source = get_or_create_conversation(
+                    _conversation_id, _conversation_name, data_source, _conversation_icon_key = get_or_create_conversation(
                         user_id=user_id,
                         conversation_id=request.conversation_id,
                     )
@@ -1456,17 +1458,19 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
     except FutureTimeoutError:
         message = request.message.strip()
         turn_attachments = _normalize_request_attachments(request)
-        conversation_id, conversation_name, data_source = get_or_create_conversation(
+        conversation_id, conversation_name, data_source, conversation_icon_key = get_or_create_conversation(
             user_id=user_id,
             conversation_id=request.conversation_id,
         )
-        conversation_name = maybe_autoname_conversation(
+        conversation_name, conversation_icon_key = maybe_autoname_conversation(
             user_id=user_id,
             conversation_id=conversation_id,
             current_name=conversation_name,
             message=message,
             agent_mode=request.agent_mode,
         )
+        data_source = deepcopy(data_source or {})
+        data_source["conversation_icon_key"] = conversation_icon_key
         timeout_answer, timeout_info = build_extractive_timeout_answer(
             context=context,
             user_id=user_id,

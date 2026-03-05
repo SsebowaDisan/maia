@@ -10,16 +10,23 @@ from tzlocal import get_localzone
 
 from ktem.db.models import Conversation, MindmapShare, engine
 from api.services.chat.conversation_naming import (
-    extract_conversation_icon,
-    generate_conversation_name,
-    is_legacy_fallback_icon,
+    CONVERSATION_ICON_KEY_FIELD,
+    DEFAULT_CONVERSATION_ICON_KEY,
+    generate_conversation_identity,
+    infer_conversation_icon_key,
     is_placeholder_conversation_name,
     normalize_conversation_name,
-    strip_icon_prefix,
+    normalize_conversation_icon_key,
 )
 
 AUTONAME_BACKFILL_LIMIT = 8
-ICON_REFRESH_BACKFILL_LIMIT = 8
+ICON_BACKFILL_LIMIT = 8
+
+
+def _conversation_icon_key_from_data_source(data_source: dict | None) -> str | None:
+    if not isinstance(data_source, dict):
+        return None
+    return normalize_conversation_icon_key(data_source.get(CONVERSATION_ICON_KEY_FIELD))
 
 
 def _normalize_mindmap_payload(raw_payload: dict | None) -> dict:
@@ -70,9 +77,11 @@ def _to_summary(conv: Conversation) -> dict:
     data_source = conv.data_source if isinstance(conv.data_source, dict) else {}
     messages_raw = data_source.get("messages", [])
     message_count = len(messages_raw) if isinstance(messages_raw, list) else 0
+    icon_key = _conversation_icon_key_from_data_source(data_source) or DEFAULT_CONVERSATION_ICON_KEY
     return {
         "id": conv.id,
         "name": normalize_conversation_name(conv.name),
+        "icon_key": icon_key,
         "user": conv.user,
         "is_public": conv.is_public,
         "date_created": conv.date_created,
@@ -93,54 +102,89 @@ def list_conversations(user_id: str) -> list[dict]:
         rows = _load_rows()
 
         backfilled = 0
-        icon_refreshed = 0
+        icon_backfilled = 0
+        updated_any = False
         for row in rows:
-            if backfilled >= AUTONAME_BACKFILL_LIMIT and icon_refreshed >= ICON_REFRESH_BACKFILL_LIMIT:
+            if backfilled >= AUTONAME_BACKFILL_LIMIT and icon_backfilled >= ICON_BACKFILL_LIMIT:
                 break
             data_source = row.data_source if isinstance(row.data_source, dict) else {}
             first_message = _first_user_message(data_source)
             agent_mode = _agent_mode_from_state(data_source)
             updated = False
 
-            if backfilled < AUTONAME_BACKFILL_LIMIT and is_placeholder_conversation_name(row.name) and first_message:
+            existing_icon_key = _conversation_icon_key_from_data_source(data_source)
+            needs_name = (
+                backfilled < AUTONAME_BACKFILL_LIMIT
+                and is_placeholder_conversation_name(row.name)
+                and bool(first_message)
+            )
+            needs_icon = (
+                icon_backfilled < ICON_BACKFILL_LIMIT
+                and not existing_icon_key
+                and bool(first_message)
+            )
+
+            if needs_name or needs_icon:
                 try:
-                    row.name = generate_conversation_name(
+                    generated_name, generated_icon_key = generate_conversation_identity(
                         first_message,
                         agent_mode=agent_mode,
                     )
+                    if needs_name:
+                        row.name = generated_name
+                        backfilled += 1
+                        updated = True
+                    if needs_icon:
+                        next_data_source = deepcopy(data_source)
+                        next_data_source[CONVERSATION_ICON_KEY_FIELD] = generated_icon_key
+                        row.data_source = next_data_source
+                        data_source = next_data_source
+                        icon_backfilled += 1
+                        updated = True
                 except Exception:
                     # Conversation listing must stay reliable even if LLM naming fails.
-                    row.name = normalize_conversation_name(first_message)
-                backfilled += 1
+                    if needs_name:
+                        row.name = normalize_conversation_name(first_message)
+                        backfilled += 1
+                        updated = True
+                    if needs_icon:
+                        fallback_icon = infer_conversation_icon_key(
+                            f"{row.name} {first_message}",
+                            agent_mode=agent_mode,
+                        )
+                        next_data_source = deepcopy(data_source)
+                        next_data_source[CONVERSATION_ICON_KEY_FIELD] = fallback_icon
+                        row.data_source = next_data_source
+                        data_source = next_data_source
+                        icon_backfilled += 1
+                        updated = True
+
+            if (
+                icon_backfilled < ICON_BACKFILL_LIMIT
+                and not _conversation_icon_key_from_data_source(data_source)
+            ):
+                fallback_icon = infer_conversation_icon_key(
+                    row.name,
+                    agent_mode=agent_mode,
+                )
+                next_data_source = deepcopy(data_source)
+                next_data_source[CONVERSATION_ICON_KEY_FIELD] = fallback_icon
+                row.data_source = next_data_source
+                data_source = next_data_source
+                icon_backfilled += 1
                 updated = True
 
-            current_icon = extract_conversation_icon(row.name)
-            if (
-                icon_refreshed < ICON_REFRESH_BACKFILL_LIMIT
-                and is_legacy_fallback_icon(current_icon)
-                and first_message
-            ):
-                suggested_icon = None
-                try:
-                    regenerated = generate_conversation_name(first_message, agent_mode=agent_mode)
-                    suggested_icon = extract_conversation_icon(regenerated)
-                except Exception:
-                    suggested_icon = None
-
-                refreshed_name = normalize_conversation_name(
-                    strip_icon_prefix(row.name),
-                    icon=suggested_icon,
-                )
-                if refreshed_name != row.name:
-                    row.name = refreshed_name
-                    icon_refreshed += 1
-                    updated = True
+            normalized_name = normalize_conversation_name(row.name)
+            if normalized_name != row.name:
+                row.name = normalized_name
+                updated = True
 
             if updated:
                 row.date_updated = datetime.now(get_localzone())
                 session.add(row)
+                updated_any = True
 
-        if backfilled or icon_refreshed:
+        if updated_any:
             session.commit()
             # Commit expires ORM state; reload rows before converting to summaries.
             rows = _load_rows()
@@ -153,8 +197,12 @@ def list_conversations(user_id: str) -> list[dict]:
 def create_conversation(user_id: str, name: str | None, is_public: bool) -> dict:
     with Session(engine) as session:
         conv = Conversation(user=user_id)
-        conv.name = normalize_conversation_name(str(name or ""), icon=extract_conversation_icon(conv.name))
+        conv.name = normalize_conversation_name(str(name or ""))
         conv.is_public = is_public
+        conv.data_source = {
+            CONVERSATION_ICON_KEY_FIELD: _conversation_icon_key_from_data_source(conv.data_source)
+            or DEFAULT_CONVERSATION_ICON_KEY
+        }
         session.add(conv)
         session.commit()
         session.refresh(conv)
@@ -195,10 +243,7 @@ def update_conversation(
             raise HTTPException(status_code=403, detail="Only owner can update.")
 
         if name is not None:
-            conv.name = normalize_conversation_name(
-                name,
-                icon=extract_conversation_icon(conv.name),
-            )
+            conv.name = normalize_conversation_name(name)
         if is_public is not None:
             conv.is_public = is_public
         conv.date_updated = datetime.now(get_localzone())

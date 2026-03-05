@@ -16,6 +16,7 @@ export function FilesView({
   onRefreshFiles,
   onUploadFiles,
   onCreateFileIngestionJob,
+  onCancelFileUpload,
   onUploadUrls,
   onDeleteFiles,
   onMoveFilesToGroup,
@@ -27,6 +28,7 @@ export function FilesView({
   uploadStatus = "",
   uploadProgressPercent = null,
   uploadProgressLabel = "",
+  isCancelingUpload = false,
 }: FilesViewProps) {
   const [uploadTab, setUploadTab] = useState<UploadTab>("upload");
   const [filterText, setFilterText] = useState("");
@@ -155,7 +157,11 @@ export function FilesView({
   }, [citationFocus, indexId]);
 
   const recentJobs = useMemo(
-    () => [...ingestionJobs].sort((a, b) => (a.date_created || "").localeCompare(b.date_created || "")).reverse().slice(0, 6),
+    () =>
+      [...ingestionJobs]
+        .sort((a, b) => (a.date_created || "").localeCompare(b.date_created || ""))
+        .reverse()
+        .slice(0, 30),
     [ingestionJobs],
   );
 
@@ -362,8 +368,9 @@ export function FilesView({
         uploadStatus={uploadStatus}
         uploadProgressPercent={uploadProgressPercent}
         uploadProgressLabel={uploadProgressLabel}
+        onCancelUpload={onCancelFileUpload}
+        isCancelingUpload={isCancelingUpload}
         recentJobs={recentJobs}
-        onRefreshIngestionJobs={onRefreshIngestionJobs}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">

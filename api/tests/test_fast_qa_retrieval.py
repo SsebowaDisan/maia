@@ -63,6 +63,16 @@ def test_no_relevant_evidence_answer_uses_target_url_override() -> None:
     assert "https://axongroup.com/about-axon" in answer
 
 
+def test_no_relevant_evidence_answer_respects_response_language() -> None:
+    answer = _build_no_relevant_evidence_answer(
+        "Que hace esta empresa?",
+        target_url="https://axongroup.com/about-axon",
+        response_language="es",
+    )
+    assert "https://axongroup.com/about-axon" in answer
+    assert "No pude encontrar evidencia" in answer
+
+
 def test_resolve_contextual_url_targets_uses_recent_history_when_llm_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
         "api.services.chat.fast_qa._resolve_fast_qa_llm_config",

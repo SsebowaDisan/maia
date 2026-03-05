@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, FileText, PenLine, RotateCcw, X } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, PenLine, RotateCcw, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { buildRawFileUrl } from "../../../api/client";
 import type { AgentActivityEvent, ChatTurn } from "../../types";
@@ -19,7 +19,7 @@ type TurnsPanelProps = {
   beginInlineEdit: (turn: ChatTurn, turnIndex: number) => void;
   cancelInlineEdit: () => void;
   chatTurns: ChatTurn[];
-  copyPlainText: (text: string, label: string) => Promise<void>;
+  copyPlainText: (text: string, label: string) => Promise<boolean>;
   editingText: string;
   editingTurnIndex: number | null;
   isActivityStreaming: boolean;
@@ -96,8 +96,15 @@ function TurnsPanel({
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
   const evidenceCacheRef = useRef<Map<number, { info: string; cards: EvidenceCard[] }>>(new Map());
+  const copyFeedbackTimerRef = useRef<number | null>(null);
+  const editFeedbackTimerRef = useRef<number | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<FilePreviewAttachment | null>(null);
   const [citationPreview, setCitationPreview] = useState<CitationPreview | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<{
+    key: string;
+    status: "success" | "error";
+  } | null>(null);
+  const [editingFeedbackTurnIndex, setEditingFeedbackTurnIndex] = useState<number | null>(null);
   const previewUrl = useMemo(() => {
     if (!previewAttachment?.fileId) return "";
     return buildRawFileUrl(previewAttachment.fileId);
@@ -116,6 +123,40 @@ function TurnsPanel({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewAttachment]);
+
+  useEffect(
+    () => () => {
+      if (copyFeedbackTimerRef.current) {
+        window.clearTimeout(copyFeedbackTimerRef.current);
+      }
+      if (editFeedbackTimerRef.current) {
+        window.clearTimeout(editFeedbackTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const showCopyFeedback = (key: string, status: "success" | "error") => {
+    setCopyFeedback({ key, status });
+    if (copyFeedbackTimerRef.current) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyFeedback((current) => (current?.key === key ? null : current));
+      copyFeedbackTimerRef.current = null;
+    }, 1400);
+  };
+
+  const showEditingFeedback = (turnIndex: number) => {
+    setEditingFeedbackTurnIndex(turnIndex);
+    if (editFeedbackTimerRef.current) {
+      window.clearTimeout(editFeedbackTimerRef.current);
+    }
+    editFeedbackTimerRef.current = window.setTimeout(() => {
+      setEditingFeedbackTurnIndex((current) => (current === turnIndex ? null : current));
+      editFeedbackTimerRef.current = null;
+    }, 1200);
+  };
 
   useEffect(() => {
     const cache = evidenceCacheRef.current;
@@ -343,6 +384,11 @@ function TurnsPanel({
           (turn.attachments || [])[0];
         const hasAssistantText = Boolean(String(turn.assistant || "").trim());
         const hasAssistantOutput = hasAssistantText || Boolean(turn.plot);
+        const userCopyFeedbackKey = `user-${index}`;
+        const assistantCopyFeedbackKey = `assistant-${index}`;
+        const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
+        const assistantCopyFeedback =
+          copyFeedback?.key === assistantCopyFeedbackKey ? copyFeedback.status : null;
 
         return (
           <div
@@ -417,6 +463,12 @@ function TurnsPanel({
                 <div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   {editingTurnIndex === index ? (
                     <>
+                      {editingFeedbackTurnIndex === index ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-[#f5f5f7] px-2 py-1 text-[10px] font-medium text-[#1d1d1f]">
+                          <Check className="h-3 w-3" />
+                          <span>Editing</span>
+                        </span>
+                      ) : null}
                       <button
                         type="button"
                         onClick={(event) => {
@@ -424,7 +476,7 @@ function TurnsPanel({
                           void saveInlineEdit();
                         }}
                         disabled={isSending}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-white bg-[#1d1d1f] border border-[#1d1d1f] hover:bg-[#2e2e30] transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+                        className="inline-flex items-center gap-1 rounded-md border border-[#1d1d1f] bg-[#1d1d1f] px-2 py-1 text-[11px] text-white transition-colors active:scale-[0.98] hover:bg-[#2e2e30] disabled:cursor-not-allowed disabled:opacity-45"
                         title="Save edited message"
                       >
                         <span>Save</span>
@@ -435,7 +487,7 @@ function TurnsPanel({
                           stopBubbleAction(event);
                           cancelInlineEdit();
                         }}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                        className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white px-2 py-1 text-[11px] text-[#6e6e73] transition-colors active:scale-[0.98] hover:border-black/[0.18] hover:text-[#1d1d1f]"
                         title="Cancel edit"
                       >
                         <span>Cancel</span>
@@ -446,9 +498,10 @@ function TurnsPanel({
                       type="button"
                       onClick={(event) => {
                         stopBubbleAction(event);
+                        showEditingFeedback(index);
                         beginInlineEdit(turn, index);
                       }}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                      className="inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-white px-2 py-1 text-[11px] text-[#6e6e73] transition-colors active:scale-[0.98] hover:border-black/[0.18] hover:text-[#1d1d1f]"
                       title="Edit message"
                     >
                       <PenLine className="w-3 h-3" />
@@ -457,15 +510,32 @@ function TurnsPanel({
                   )}
                   <button
                     type="button"
-                    onClick={(event) => {
+                    onClick={async (event) => {
                       stopBubbleAction(event);
-                      void copyPlainText(turn.user, "User message");
+                      const success = await copyPlainText(turn.user, "User message");
+                      showCopyFeedback(userCopyFeedbackKey, success ? "success" : "error");
                     }}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors active:scale-[0.98] ${
+                      userCopyFeedback === "success"
+                        ? "border-[#cde7d0] bg-[#eef7ef] text-[#1f6b2b]"
+                        : userCopyFeedback === "error"
+                          ? "border-[#efcdcd] bg-[#fff4f4] text-[#b42323]"
+                          : "border-black/[0.08] bg-white text-[#6e6e73] hover:border-black/[0.18] hover:text-[#1d1d1f]"
+                    }`}
                     title="Copy message"
                   >
-                    <Copy className="w-3 h-3" />
-                    <span>Copy</span>
+                    {userCopyFeedback === "success" ? (
+                      <Check className="w-3 h-3" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    <span>
+                      {userCopyFeedback === "success"
+                        ? "Copied"
+                        : userCopyFeedback === "error"
+                          ? "Try again"
+                          : "Copy"}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -499,15 +569,32 @@ function TurnsPanel({
                     {hasAssistantText ? (
                       <button
                         type="button"
-                        onClick={(event) => {
+                        onClick={async (event) => {
                           stopBubbleAction(event);
-                          void copyPlainText(turn.assistant, "Assistant answer");
+                          const success = await copyPlainText(turn.assistant, "Assistant answer");
+                          showCopyFeedback(assistantCopyFeedbackKey, success ? "success" : "error");
                         }}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[#6e6e73] bg-white border border-black/[0.08] hover:text-[#1d1d1f] hover:border-black/[0.18] transition-colors"
+                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors active:scale-[0.98] ${
+                          assistantCopyFeedback === "success"
+                            ? "border-[#cde7d0] bg-[#eef7ef] text-[#1f6b2b]"
+                            : assistantCopyFeedback === "error"
+                              ? "border-[#efcdcd] bg-[#fff4f4] text-[#b42323]"
+                              : "border-black/[0.08] bg-white text-[#6e6e73] hover:border-black/[0.18] hover:text-[#1d1d1f]"
+                        }`}
                         title="Copy answer"
                       >
-                        <Copy className="w-3 h-3" />
-                        <span>Copy</span>
+                        {assistantCopyFeedback === "success" ? (
+                          <Check className="w-3 h-3" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        <span>
+                          {assistantCopyFeedback === "success"
+                            ? "Copied"
+                            : assistantCopyFeedback === "error"
+                              ? "Try again"
+                              : "Copy"}
+                        </span>
                       </button>
                     ) : null}
                     <button

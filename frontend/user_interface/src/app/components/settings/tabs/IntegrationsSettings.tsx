@@ -211,6 +211,7 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
 
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [modalConnectPending, setModalConnectPending] = useState(false);
   const [showServicesModal, setShowServicesModal] = useState(false);
   const [showAliases, setShowAliases] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -345,6 +346,21 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
       return false;
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleModalContinueToGoogle = async () => {
+    if (busy || modalConnectPending || draftServices.length === 0) {
+      return;
+    }
+    setModalConnectPending(true);
+    try {
+      const ok = await startGoogleConnect(draftServices);
+      if (ok) {
+        setShowServicesModal(false);
+      }
+    } finally {
+      setModalConnectPending(false);
     }
   };
 
@@ -909,7 +925,11 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
           role="dialog"
           aria-modal="true"
           aria-label="Choose Google services"
-          onClick={() => setShowServicesModal(false)}
+          onClick={() => {
+            if (!modalConnectPending) {
+              setShowServicesModal(false);
+            }
+          }}
         >
           <div
             className="w-full max-w-[560px] rounded-2xl border border-[#d2d2d7] bg-white p-5 shadow-xl"
@@ -948,29 +968,38 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
               })}
             </div>
             <p className="mt-3 text-[11px] text-[#6e6e73]">Scopes requested: {draftScopes.length}</p>
+            {modalConnectPending ? (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#d2d2d7] bg-[#f5f5f7] px-3 py-1 text-[11px] text-[#4a4a4f]">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#b9b9bf] border-t-[#1d1d1f]" />
+                Opening Google sign-in...
+              </div>
+            ) : null}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
+                disabled={modalConnectPending}
                 onClick={() => {
                   setDraftServices(selectedServices);
                   setShowServicesModal(false);
                 }}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={busy || draftServices.length === 0}
-                onClick={async () => {
-                  const ok = await startGoogleConnect(draftServices);
-                  if (ok) {
-                    setShowServicesModal(false);
-                  }
-                }}
-                className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy || modalConnectPending || draftServices.length === 0}
+                onClick={() => void handleModalContinueToGoogle()}
+                className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white transition-all duration-150 hover:bg-[#2f2f34] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Continue to Google
+                {modalConnectPending ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/45 border-t-white" />
+                    Opening...
+                  </span>
+                ) : (
+                  "Continue to Google"
+                )}
               </button>
             </div>
           </div>

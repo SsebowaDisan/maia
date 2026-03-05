@@ -49,6 +49,10 @@ from .conversation_store import (
 )
 from .fast_qa_retrieval import load_recent_chunks_for_fast_qa
 from .info_panel_copy import build_info_panel_copy
+from .language import (
+    build_response_language_rule,
+    resolve_response_language,
+)
 from .pipeline import is_placeholder_api_key
 
 logger = logging.getLogger(__name__)
@@ -696,13 +700,58 @@ def _build_no_relevant_evidence_answer(
     question: str,
     *,
     target_url: str = "",
+    response_language: str | None = None,
 ) -> str:
+    normalized_language = " ".join(str(response_language or "").split()).strip().lower()
+    localized: dict[str, tuple[str, str]] = {
+        "es": (
+            "No pude encontrar evidencia indexada para {url} en este contexto del proyecto. "
+            "No es visible en el contenido indexado. Si lo necesitas, ejecuta el indexado del sitio web o una busqueda en linea para esa URL y vuelve a preguntar.",
+            "No pude encontrar evidencia relevante en los archivos indexados del proyecto ni en el contexto reciente de la conversacion para esta pregunta. "
+            "No es visible en el contenido indexado.",
+        ),
+        "fr": (
+            "Je n'ai pas trouve de preuves indexees pour {url} dans ce contexte de projet. "
+            "Ce n'est pas visible dans le contenu indexe. Si besoin, lancez l'indexation du site web ou une recherche en ligne pour cette URL, puis reposez la question.",
+            "Je n'ai pas trouve de preuves pertinentes dans les fichiers de projet indexes ni dans le contexte recent de la conversation pour cette question. "
+            "Ce n'est pas visible dans le contenu indexe.",
+        ),
+        "de": (
+            "Ich konnte in diesem Projektkontext keine indexierten Belege fuer {url} finden. "
+            "Im indexierten Inhalt nicht sichtbar. Falls noetig, starten Sie die Website-Indexierung oder eine Online-Suche fuer diese URL und fragen Sie dann erneut.",
+            "Ich konnte in den indexierten Projektdateien und im aktuellen Gespraechskontext keine relevanten Belege fuer diese Frage finden. "
+            "Im indexierten Inhalt nicht sichtbar.",
+        ),
+        "it": (
+            "Non ho trovato evidenze indicizzate per {url} in questo contesto di progetto. "
+            "Non visibile nei contenuti indicizzati. Se necessario, esegui l'indicizzazione del sito web o una ricerca online per quell'URL e chiedi di nuovo.",
+            "Non ho trovato evidenze rilevanti nei file di progetto indicizzati e nel contesto recente della conversazione per questa domanda. "
+            "Non visibile nei contenuti indicizzati.",
+        ),
+        "pt": (
+            "Nao encontrei evidencia indexada para {url} neste contexto do projeto. "
+            "Nao esta visivel no conteudo indexado. Se necessario, execute a indexacao do site ou uma pesquisa online para essa URL e pergunte novamente.",
+            "Nao encontrei evidencia relevante nos arquivos indexados do projeto nem no contexto recente da conversa para esta pergunta. "
+            "Nao esta visivel no conteudo indexado.",
+        ),
+        "nl": (
+            "Ik kon geen geindexeerd bewijs voor {url} vinden in deze projectcontext. "
+            "Niet zichtbaar in geindexeerde inhoud. Start zo nodig website-indexering of online zoeken voor die URL en vraag het daarna opnieuw.",
+            "Ik kon geen relevant bewijs vinden in geindexeerde projectbestanden en recente gesprekscontext voor deze vraag. "
+            "Niet zichtbaar in geindexeerde inhoud.",
+        ),
+    }
     resolved_target_url = _normalize_http_url(target_url) or _extract_first_url(question)
+    localized_pair = localized.get(normalized_language)
     if resolved_target_url:
+        if localized_pair:
+            return localized_pair[0].format(url=resolved_target_url)
         return (
             f"I could not find indexed evidence for {resolved_target_url} in this project context. "
             "Not visible in indexed content. If needed, run website indexing or online search for that URL, then ask again."
         )
+    if localized_pair:
+        return localized_pair[1]
     return (
         "I could not find relevant evidence in indexed project files and recent conversation context for this question. "
         "Not visible in indexed content."
@@ -1241,6 +1290,7 @@ def call_openai_fast_qa(
     refs: list[dict[str, Any]],
     citation_mode: str | None,
     primary_source_note: str = "",
+    requested_language: str | None = None,
 ) -> str | None:
     api_key, base_url, model, config_source = _resolve_fast_qa_llm_config()
     logger.warning(
@@ -1343,6 +1393,7 @@ def call_openai_fast_qa(
         "- If intent is unclear, ask one focused clarifying question and avoid speculative summaries.\n"
         "- Distinguish confirmed facts from inference when confidence is limited.\n"
         "- If information is missing, say: Not visible in indexed content.\n"
+        f"- {build_response_language_rule(requested_language=requested_language, latest_message=question)}\n"
         "- Use clean markdown and avoid malformed formatting."
     )
     prompt = (
@@ -1380,6 +1431,7 @@ def call_openai_fast_qa(
                         "Adapt structure to the user's question and evidence; do not force fixed section templates. "
                         "Use concise sections and bullet points only when useful. "
                         "Keep output professional and specific. "
+                        f"{build_response_language_rule(requested_language=requested_language, latest_message=question)} "
                         "Do not infer details that are not explicitly supported by evidence."
                     ),
                 },
@@ -1434,19 +1486,22 @@ def run_fast_chat_turn(
         )
         return None
 
-    conversation_id, conversation_name, data_source = get_or_create_conversation(
+    conversation_id, conversation_name, data_source, conversation_icon_key = get_or_create_conversation(
         user_id=user_id,
         conversation_id=request.conversation_id,
     )
-    conversation_name = maybe_autoname_conversation(
+    conversation_name, conversation_icon_key = maybe_autoname_conversation(
         user_id=user_id,
         conversation_id=conversation_id,
         current_name=conversation_name,
         message=message,
         agent_mode=request.agent_mode,
     )
+    data_source = deepcopy(data_source or {})
+    data_source["conversation_icon_key"] = conversation_icon_key
     chat_history = deepcopy(data_source.get("messages", []))
     chat_state = deepcopy(data_source.get("state", STATE))
+    requested_language = resolve_response_language(request.language, message)
 
     selected_payload = build_selected_payload(
         context=context,
@@ -1661,6 +1716,7 @@ def run_fast_chat_turn(
             refs=refs,
             citation_mode=request.citation,
             primary_source_note=primary_source_note,
+            requested_language=requested_language,
         )
         if not answer:
             logger.warning(
@@ -1677,7 +1733,10 @@ def run_fast_chat_turn(
             _truncate_for_log(message, 220),
         )
         snippets_with_refs, refs = [], []
-        answer = _build_no_relevant_evidence_answer(message)
+        answer = _build_no_relevant_evidence_answer(
+            message,
+            response_language=requested_language,
+        )
 
     resolved_citation_mode = resolve_required_citation_mode(request.citation)
     answer = render_fast_citation_links(

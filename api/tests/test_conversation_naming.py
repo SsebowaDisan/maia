@@ -24,12 +24,12 @@ def test_strip_icon_prefix_for_rename_editor() -> None:
 
 def test_normalize_conversation_name_preserves_custom_icon() -> None:
     result = naming.normalize_conversation_name("\U0001F525 Product launch plan")
-    assert result == "\U0001F525 Product launch plan"
+    assert result == "Product launch plan"
 
 
 def test_normalize_conversation_name_uses_preferred_icon() -> None:
     result = naming.normalize_conversation_name("Monthly planning", icon="\U0001F4C5")
-    assert result == "\U0001F4C5 Monthly planning"
+    assert result == "Monthly planning"
 
 
 def test_extract_conversation_icon_returns_prefix_icon() -> None:
@@ -42,34 +42,54 @@ def test_generate_conversation_name_uses_llm_title_and_icon(monkeypatch) -> None
         "call_json_response",
         lambda **kwargs: {"title": "Quarterly Revenue Forecast", "icon": "\U0001F4C8"},
     )
-    monkeypatch.setattr(naming, "call_text_response", lambda **kwargs: "")
     result = naming.generate_conversation_name(
         "Please analyze our quarterly revenue trends",
         agent_mode="ask",
     )
-    assert result == "\U0001F4C8 Quarterly Revenue Forecast"
+    assert result == "Quarterly Revenue"
 
 
-def test_generate_conversation_name_falls_back_to_llm_text_icon(monkeypatch) -> None:
+def test_generate_conversation_name_falls_back_to_message_when_llm_missing(monkeypatch) -> None:
     monkeypatch.setattr(naming, "call_json_response", lambda **kwargs: None)
-    monkeypatch.setattr(naming, "call_text_response", lambda **kwargs: "\U0001F4C9")
     result = naming.generate_conversation_name(
         "https://example.com summarize customer churn report for Q1 and Q2",
         agent_mode="company_agent",
     )
-    assert result.startswith("\U0001F4C9 ")
+    assert len(result) <= naming.MAX_CONVERSATION_NAME_LEN
     assert "Untitled" not in result
 
 
-def test_generate_conversation_name_no_hardcoded_icon_when_llm_icon_missing(monkeypatch) -> None:
+def test_generate_conversation_name_no_hardcoded_icon(monkeypatch) -> None:
     monkeypatch.setattr(naming, "call_json_response", lambda **kwargs: None)
-    monkeypatch.setattr(naming, "call_text_response", lambda **kwargs: "")
     result = naming.generate_conversation_name(
         "Summarize customer churn report for Q1 and Q2",
         agent_mode="ask",
     )
-    assert result == "Summarize customer churn report for Q1 and"
+    assert result == "Summarize customer churn"
     assert not result.startswith("\U0001F4AC ")
+
+
+def test_generate_conversation_name_keeps_short_llm_title(monkeypatch) -> None:
+    monkeypatch.setattr(naming, "call_json_response", lambda **kwargs: {"title": "Q2 report"})
+    result = naming.generate_conversation_name(
+        "Please prepare Q2 report and next quarter planning milestones",
+        agent_mode="ask",
+    )
+    assert result == "Q2 report"
+
+
+def test_generate_conversation_name_enforces_max_25_chars(monkeypatch) -> None:
+    monkeypatch.setattr(naming, "call_json_response", lambda **kwargs: {"title": "A very long conversation title that exceeds twenty five chars"})
+    result = naming.generate_conversation_name(
+        "Please prepare a long report",
+        agent_mode="ask",
+    )
+    assert len(result) <= 25
+
+
+def test_normalize_conversation_name_keeps_word_on_boundary_cut() -> None:
+    result = naming.normalize_conversation_name("Summarize customer churn report for Q1 and Q2")
+    assert result == "Summarize customer churn"
 
 
 def test_is_legacy_fallback_icon() -> None:

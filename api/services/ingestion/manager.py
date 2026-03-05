@@ -16,7 +16,12 @@ from sqlmodel import SQLModel, Session, select
 
 from api.context import get_context
 from api.services.settings_service import load_user_settings
-from api.services.upload_service import index_files, index_urls, move_files_to_group
+from api.services.upload_service import (
+    delete_indexed_files,
+    index_files,
+    index_urls,
+    move_files_to_group,
+)
 from ktem.db.engine import engine
 
 from .config import (
@@ -24,6 +29,7 @@ from .config import (
     INGEST_KEEP_WORKDIR,
     INGEST_URL_BATCH_SIZE,
     INGEST_WORKDIR,
+    JOB_STATUS_CANCELED,
     INGEST_WORKERS,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_FAILED,
@@ -33,8 +39,13 @@ from .config import (
 )
 from .models import IngestionJob
 from .serialization import as_json_safe, job_to_payload
+from api.services.upload.indexing import IndexingCanceledError
 
 logger = logging.getLogger(__name__)
+
+
+class IngestionJobCanceledError(RuntimeError):
+    pass
 
 
 class IngestionJobManager:
@@ -262,6 +273,113 @@ class IngestionJobManager:
                 raise HTTPException(status_code=403, detail="Access denied.")
             return job_to_payload(job)
 
+    def cancel_job(self, user_id: str, job_id: str) -> dict[str, Any]:
+        file_ids: list[str] = []
+        index_id: int | None = None
+        kind = ""
+        should_cleanup = False
+
+        with Session(engine) as session:
+            job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
+            if job is None:
+                raise HTTPException(status_code=404, detail="Ingestion job not found.")
+            if job.user_id != user_id:
+                raise HTTPException(status_code=403, detail="Access denied.")
+
+            kind = str(job.kind or "")
+            index_id = job.index_id
+            file_ids = list(dict.fromkeys([str(fid) for fid in list(job.file_ids or []) if fid]))
+            if job.status not in TERMINAL_JOB_STATUSES:
+                should_cleanup = True
+                job.status = JOB_STATUS_CANCELED
+                job.message = "Ingestion canceled."
+                if "Canceled by user." not in list(job.errors or []):
+                    job.errors = [*list(job.errors or []), "Canceled by user."]
+                now = datetime.utcnow()
+                job.date_finished = now
+                job.date_updated = now
+                session.add(job)
+                session.commit()
+                session.refresh(job)
+            elif str(job.status or "").strip().lower() == JOB_STATUS_CANCELED:
+                should_cleanup = True
+
+            payload = job_to_payload(job)
+
+        if should_cleanup:
+            self._delete_indexed_files_best_effort(
+                user_id=user_id,
+                index_id=index_id,
+                file_ids=file_ids,
+                job_id=job_id,
+            )
+            if kind == "files":
+                self._cleanup_file_payload(job_id)
+        return payload
+
+    def _is_job_canceled(self, job_id: str) -> bool:
+        with Session(engine) as session:
+            job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
+            if job is None:
+                return True
+            return str(job.status or "").strip().lower() == JOB_STATUS_CANCELED
+
+    def _assert_job_not_canceled(self, job_id: str) -> None:
+        if self._is_job_canceled(job_id):
+            raise IngestionJobCanceledError("Ingestion canceled by user.")
+
+    def _build_cancel_checker(
+        self,
+        job_id: str,
+        *,
+        min_interval_seconds: float = 0.4,
+    ):
+        last_check_at = 0.0
+        is_canceled = False
+
+        def _check() -> bool:
+            nonlocal last_check_at, is_canceled
+            if is_canceled:
+                return True
+            now = perf_counter()
+            if (now - last_check_at) < max(0.05, float(min_interval_seconds)):
+                return False
+            last_check_at = now
+            is_canceled = self._is_job_canceled(job_id)
+            return is_canceled
+
+        return _check
+
+    def _delete_indexed_files_best_effort(
+        self,
+        *,
+        user_id: str,
+        index_id: int | None,
+        file_ids: list[str],
+        job_id: str,
+    ) -> None:
+        dedup_ids = list(dict.fromkeys([str(fid) for fid in file_ids if fid]))
+        if not dedup_ids:
+            return
+        try:
+            delete_indexed_files(
+                context=get_context(),
+                user_id=user_id,
+                index_id=index_id,
+                file_ids=dedup_ids,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to cleanup indexed files for canceled ingestion job",
+                extra={
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "index_id": index_id,
+                    "file_count": len(dedup_ids),
+                    "error": str(exc),
+                },
+            )
+
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -300,6 +418,8 @@ class IngestionJobManager:
                 self._run_url_job(job_id)
             else:
                 raise RuntimeError(f"Unsupported ingestion job kind: {job_kind}")
+        except IngestionJobCanceledError as exc:
+            self._mark_canceled(job_id, str(exc))
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
 
@@ -336,36 +456,99 @@ class IngestionJobManager:
         success_count = 0
         failure_count = 0
         indexed_bytes = 0
+        cancel_checker = self._build_cancel_checker(job_id)
 
-        for batch in self._iterate_batches(files_payload, INGEST_FILE_BATCH_SIZE):
-            batch_paths: list[Path] = []
-            batch_meta: dict[str, dict[str, Any]] = {}
-            batch_bytes = 0
-            for entry in batch:
-                raw_path = str((entry or {}).get("path", "")).strip()
-                if not raw_path:
-                    continue
-                candidate = Path(raw_path)
-                if candidate.exists() and candidate.is_file():
-                    batch_paths.append(candidate)
-                    try:
-                        resolved = str(candidate.resolve())
-                    except Exception:
-                        resolved = raw_path
-                    batch_meta[resolved] = dict(entry or {})
-                    file_size = int((entry or {}).get("size") or 0)
-                    if file_size <= 0:
+        try:
+            for batch in self._iterate_batches(files_payload, INGEST_FILE_BATCH_SIZE):
+                self._assert_job_not_canceled(job_id)
+
+                batch_paths: list[Path] = []
+                batch_meta: dict[str, dict[str, Any]] = {}
+                batch_bytes = 0
+                for entry in batch:
+                    raw_path = str((entry or {}).get("path", "")).strip()
+                    if not raw_path:
+                        continue
+                    candidate = Path(raw_path)
+                    if candidate.exists() and candidate.is_file():
+                        batch_paths.append(candidate)
                         try:
-                            file_size = int(candidate.stat().st_size)
+                            resolved = str(candidate.resolve())
                         except Exception:
-                            file_size = 0
-                    batch_bytes += max(0, file_size)
+                            resolved = raw_path
+                        batch_meta[resolved] = dict(entry or {})
+                        file_size = int((entry or {}).get("size") or 0)
+                        if file_size <= 0:
+                            try:
+                                file_size = int(candidate.stat().st_size)
+                            except Exception:
+                                file_size = 0
+                        batch_bytes += max(0, file_size)
 
-            if not batch_paths:
+                if not batch_paths:
+                    processed += len(batch)
+                    failure_count += len(batch)
+                    all_errors.append("File batch had no readable files on disk.")
+                    indexed_bytes = min(bytes_total, indexed_bytes + batch_bytes)
+                    self._update_progress(
+                        job_id=job_id,
+                        processed_items=processed,
+                        success_count=success_count,
+                        failure_count=failure_count,
+                        bytes_total=bytes_total,
+                        bytes_persisted=bytes_persisted,
+                        bytes_indexed=indexed_bytes,
+                        items=all_items,
+                        errors=all_errors,
+                        file_ids=all_file_ids,
+                        debug=all_debug,
+                    )
+                    continue
+
+                try:
+                    response = index_files(
+                        context=context,
+                        user_id=user_id,
+                        file_paths=batch_paths,
+                        index_id=index_id,
+                        reindex=reindex,
+                        settings=settings,
+                        scope=scope,
+                        uploaded_file_meta=batch_meta,
+                        should_cancel=cancel_checker,
+                    )
+                except IndexingCanceledError as canceled:
+                    if canceled.items:
+                        all_items.extend([dict(item) for item in canceled.items])
+                    if canceled.errors:
+                        all_errors.extend([str(err) for err in canceled.errors])
+                    if canceled.file_ids:
+                        all_file_ids.extend([str(fid) for fid in canceled.file_ids if fid])
+                    if canceled.debug:
+                        all_debug.extend([str(msg) for msg in canceled.debug])
+                    raise IngestionJobCanceledError(str(canceled)) from canceled
+
+                batch_items = list(response.get("items") or [])
+                batch_errors = [str(err) for err in list(response.get("errors") or [])]
+                batch_file_ids = [str(fid) for fid in list(response.get("file_ids") or []) if fid]
+                batch_debug = [str(msg) for msg in list(response.get("debug") or [])]
+
+                all_items.extend(batch_items)
+                all_errors.extend(batch_errors)
+                all_file_ids.extend(batch_file_ids)
+                all_debug.extend(batch_debug)
+
                 processed += len(batch)
-                failure_count += len(batch)
-                all_errors.append("File batch had no readable files on disk.")
+                batch_successes = sum(
+                    1 for item in batch_items if str(item.get("status", "")).lower() == "success"
+                )
+                # Include implicit failures for files that do not emit item status.
+                unmatched = max(0, len(batch) - len(batch_items))
+                batch_failures = max(0, len(batch_items) - batch_successes) + unmatched
+                success_count += batch_successes
+                failure_count += batch_failures
                 indexed_bytes = min(bytes_total, indexed_bytes + batch_bytes)
+
                 self._update_progress(
                     job_id=job_id,
                     processed_items=processed,
@@ -379,99 +562,64 @@ class IngestionJobManager:
                     file_ids=all_file_ids,
                     debug=all_debug,
                 )
-                continue
 
-            response = index_files(
-                context=context,
-                user_id=user_id,
-                file_paths=batch_paths,
-                index_id=index_id,
-                reindex=reindex,
-                settings=settings,
-                scope=scope,
-                uploaded_file_meta=batch_meta,
-            )
-            batch_items = list(response.get("items") or [])
-            batch_errors = [str(err) for err in list(response.get("errors") or [])]
-            batch_file_ids = [str(fid) for fid in list(response.get("file_ids") or []) if fid]
-            batch_debug = [str(msg) for msg in list(response.get("debug") or [])]
+            self._assert_job_not_canceled(job_id)
+            if target_group_id and all_file_ids:
+                try:
+                    move_result = move_files_to_group(
+                        context=context,
+                        user_id=user_id,
+                        index_id=index_id,
+                        file_ids=all_file_ids,
+                        group_id=target_group_id,
+                        group_name=None,
+                        mode="append",
+                    )
+                    moved_ids = list(move_result.get("moved_ids") or [])
+                    self._inc_metric("files_moved_to_group", amount=len(moved_ids))
+                    all_debug.append(
+                        f"Moved {len(moved_ids)} indexed file(s) to group {target_group_id}."
+                    )
+                except Exception as exc:
+                    all_errors.append(f"Indexed files could not be moved to group: {exc}")
 
-            all_items.extend(batch_items)
-            all_errors.extend(batch_errors)
-            all_file_ids.extend(batch_file_ids)
-            all_debug.extend(batch_debug)
-
-            processed += len(batch)
-            batch_successes = sum(
-                1 for item in batch_items if str(item.get("status", "")).lower() == "success"
-            )
-            # Include implicit failures for files that do not emit item status.
-            unmatched = max(0, len(batch) - len(batch_items))
-            batch_failures = max(0, len(batch_items) - batch_successes) + unmatched
-            success_count += batch_successes
-            failure_count += batch_failures
-            indexed_bytes = min(bytes_total, indexed_bytes + batch_bytes)
-
-            self._update_progress(
+            self._assert_job_not_canceled(job_id)
+            self._mark_completed(
                 job_id=job_id,
                 processed_items=processed,
                 success_count=success_count,
                 failure_count=failure_count,
                 bytes_total=bytes_total,
                 bytes_persisted=bytes_persisted,
-                bytes_indexed=indexed_bytes,
+                bytes_indexed=min(bytes_total, max(0, indexed_bytes)),
                 items=all_items,
                 errors=all_errors,
                 file_ids=all_file_ids,
                 debug=all_debug,
             )
-
-        if target_group_id and all_file_ids:
-            try:
-                move_result = move_files_to_group(
-                    context=context,
-                    user_id=user_id,
-                    index_id=index_id,
-                    file_ids=all_file_ids,
-                    group_id=target_group_id,
-                    group_name=None,
-                    mode="append",
-                )
-                moved_ids = list(move_result.get("moved_ids") or [])
-                self._inc_metric("files_moved_to_group", amount=len(moved_ids))
-                all_debug.append(
-                    f"Moved {len(moved_ids)} indexed file(s) to group {target_group_id}."
-                )
-            except Exception as exc:
-                all_errors.append(f"Indexed files could not be moved to group: {exc}")
-
-        self._mark_completed(
-            job_id=job_id,
-            processed_items=processed,
-            success_count=success_count,
-            failure_count=failure_count,
-            bytes_total=bytes_total,
-            bytes_persisted=bytes_persisted,
-            bytes_indexed=min(bytes_total, max(0, indexed_bytes)),
-            items=all_items,
-            errors=all_errors,
-            file_ids=all_file_ids,
-            debug=all_debug,
-        )
-        self._cleanup_file_payload(job_id)
-        logger.info(
-            "Ingestion file job completed",
-            extra={
-                "job_id": job_id,
-                "user_id": user_id,
-                "index_id": index_id,
-                "processed_items": processed,
-                "success_count": success_count,
-                "failure_count": failure_count,
-                "bytes_total": bytes_total,
-                "elapsed_ms": int((perf_counter() - started_at) * 1000),
-            },
-        )
+            self._cleanup_file_payload(job_id)
+            logger.info(
+                "Ingestion file job completed",
+                extra={
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "index_id": index_id,
+                    "processed_items": processed,
+                    "success_count": success_count,
+                    "failure_count": failure_count,
+                    "bytes_total": bytes_total,
+                    "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                },
+            )
+        except IngestionJobCanceledError:
+            self._delete_indexed_files_best_effort(
+                user_id=user_id,
+                index_id=index_id,
+                file_ids=all_file_ids,
+                job_id=job_id,
+            )
+            self._cleanup_file_payload(job_id)
+            raise
 
     def _run_url_job(self, job_id: str) -> None:
         with Session(engine) as session:
@@ -500,41 +648,72 @@ class IngestionJobManager:
         processed = 0
         success_count = 0
         failure_count = 0
+        cancel_checker = self._build_cancel_checker(job_id)
 
-        for batch in self._iterate_batches(urls, INGEST_URL_BATCH_SIZE):
-            response = index_urls(
-                context=context,
-                user_id=user_id,
-                urls=batch,
-                index_id=index_id,
-                reindex=reindex,
-                settings=settings,
-                web_crawl_depth=web_crawl_depth,
-                web_crawl_max_pages=web_crawl_max_pages,
-                web_crawl_same_domain_only=web_crawl_same_domain_only,
-                include_pdfs=include_pdfs,
-                include_images=include_images,
-            )
-            batch_items = list(response.get("items") or [])
-            batch_errors = [str(err) for err in list(response.get("errors") or [])]
-            batch_file_ids = [str(fid) for fid in list(response.get("file_ids") or []) if fid]
-            batch_debug = [str(msg) for msg in list(response.get("debug") or [])]
+        try:
+            for batch in self._iterate_batches(urls, INGEST_URL_BATCH_SIZE):
+                self._assert_job_not_canceled(job_id)
+                try:
+                    response = index_urls(
+                        context=context,
+                        user_id=user_id,
+                        urls=batch,
+                        index_id=index_id,
+                        reindex=reindex,
+                        settings=settings,
+                        web_crawl_depth=web_crawl_depth,
+                        web_crawl_max_pages=web_crawl_max_pages,
+                        web_crawl_same_domain_only=web_crawl_same_domain_only,
+                        include_pdfs=include_pdfs,
+                        include_images=include_images,
+                        should_cancel=cancel_checker,
+                    )
+                except IndexingCanceledError as canceled:
+                    if canceled.items:
+                        all_items.extend([dict(item) for item in canceled.items])
+                    if canceled.errors:
+                        all_errors.extend([str(err) for err in canceled.errors])
+                    if canceled.file_ids:
+                        all_file_ids.extend([str(fid) for fid in canceled.file_ids if fid])
+                    if canceled.debug:
+                        all_debug.extend([str(msg) for msg in canceled.debug])
+                    raise IngestionJobCanceledError(str(canceled)) from canceled
 
-            all_items.extend(batch_items)
-            all_errors.extend(batch_errors)
-            all_file_ids.extend(batch_file_ids)
-            all_debug.extend(batch_debug)
+                batch_items = list(response.get("items") or [])
+                batch_errors = [str(err) for err in list(response.get("errors") or [])]
+                batch_file_ids = [str(fid) for fid in list(response.get("file_ids") or []) if fid]
+                batch_debug = [str(msg) for msg in list(response.get("debug") or [])]
 
-            processed += len(batch)
-            batch_successes = sum(
-                1 for item in batch_items if str(item.get("status", "")).lower() == "success"
-            )
-            unmatched = max(0, len(batch) - len(batch_items))
-            batch_failures = max(0, len(batch_items) - batch_successes) + unmatched
-            success_count += batch_successes
-            failure_count += batch_failures
+                all_items.extend(batch_items)
+                all_errors.extend(batch_errors)
+                all_file_ids.extend(batch_file_ids)
+                all_debug.extend(batch_debug)
 
-            self._update_progress(
+                processed += len(batch)
+                batch_successes = sum(
+                    1 for item in batch_items if str(item.get("status", "")).lower() == "success"
+                )
+                unmatched = max(0, len(batch) - len(batch_items))
+                batch_failures = max(0, len(batch_items) - batch_successes) + unmatched
+                success_count += batch_successes
+                failure_count += batch_failures
+
+                self._update_progress(
+                    job_id=job_id,
+                    processed_items=processed,
+                    success_count=success_count,
+                    failure_count=failure_count,
+                    bytes_total=0,
+                    bytes_persisted=0,
+                    bytes_indexed=0,
+                    items=all_items,
+                    errors=all_errors,
+                    file_ids=all_file_ids,
+                    debug=all_debug,
+                )
+
+            self._assert_job_not_canceled(job_id)
+            self._mark_completed(
                 job_id=job_id,
                 processed_items=processed,
                 success_count=success_count,
@@ -547,20 +726,14 @@ class IngestionJobManager:
                 file_ids=all_file_ids,
                 debug=all_debug,
             )
-
-        self._mark_completed(
-            job_id=job_id,
-            processed_items=processed,
-            success_count=success_count,
-            failure_count=failure_count,
-            bytes_total=0,
-            bytes_persisted=0,
-            bytes_indexed=0,
-            items=all_items,
-            errors=all_errors,
-            file_ids=all_file_ids,
-            debug=all_debug,
-        )
+        except IngestionJobCanceledError:
+            self._delete_indexed_files_best_effort(
+                user_id=user_id,
+                index_id=index_id,
+                file_ids=all_file_ids,
+                job_id=job_id,
+            )
+            raise
 
     def _update_progress(
         self,
@@ -618,6 +791,10 @@ class IngestionJobManager:
             job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
             if job is None:
                 return
+            if str(job.status or "").strip().lower() == JOB_STATUS_CANCELED:
+                return
+            if job.status in TERMINAL_JOB_STATUSES and job.status != JOB_STATUS_RUNNING:
+                return
             job.status = JOB_STATUS_COMPLETED
             job.processed_items = int(processed_items)
             job.success_count = int(success_count)
@@ -641,6 +818,10 @@ class IngestionJobManager:
             job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
             if job is None:
                 return
+            if str(job.status or "").strip().lower() == JOB_STATUS_CANCELED:
+                return
+            if job.status in TERMINAL_JOB_STATUSES and job.status != JOB_STATUS_RUNNING:
+                return
             job.status = JOB_STATUS_FAILED
             job.errors = [*(job.errors or []), str(reason)]
             job.message = "Ingestion failed."
@@ -649,6 +830,24 @@ class IngestionJobManager:
             session.add(job)
             session.commit()
         self._inc_metric("jobs_failed")
+        self._cleanup_file_payload(job_id)
+
+    def _mark_canceled(self, job_id: str, reason: str) -> None:
+        with Session(engine) as session:
+            job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
+            if job is None:
+                return
+            if job.status in TERMINAL_JOB_STATUSES and job.status != JOB_STATUS_RUNNING:
+                return
+            job.status = JOB_STATUS_CANCELED
+            clean_reason = str(reason or "").strip() or "Canceled by user."
+            if clean_reason not in list(job.errors or []):
+                job.errors = [*list(job.errors or []), clean_reason]
+            job.message = "Ingestion canceled."
+            job.date_finished = datetime.utcnow()
+            job.date_updated = datetime.utcnow()
+            session.add(job)
+            session.commit()
         self._cleanup_file_payload(job_id)
 
     def _cleanup_file_payload(self, job_id: str) -> None:

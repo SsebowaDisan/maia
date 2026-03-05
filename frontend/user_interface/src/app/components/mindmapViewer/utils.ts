@@ -407,12 +407,12 @@ export function drawPngFromLayout(
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "#1d1d1f";
-    ctx.font = "600 12px system-ui, -apple-system, sans-serif";
+    ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif';
     ctx.fillText(String(node.data.title || "").slice(0, 24), x + 10, y + 18);
     const subtitle = String(node.data.subtitle || "");
     if (subtitle) {
       ctx.fillStyle = "#6e6e73";
-      ctx.font = "10px system-ui, -apple-system, sans-serif";
+      ctx.font = '10px -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif';
       ctx.fillText(subtitle.slice(0, 28), x + 10, y + 34);
     }
   }

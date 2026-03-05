@@ -24,6 +24,9 @@ type UseChatMainInteractionsParams = Pick<
   | "onUpdateUserTurn"
   | "onUploadFiles"
   | "onCreateFileIngestionJob"
+  | "availableDocuments"
+  | "availableGroups"
+  | "availableProjects"
 >;
 
 function useChatMainInteractions({
@@ -43,6 +46,9 @@ function useChatMainInteractions({
   onUpdateUserTurn,
   onUploadFiles,
   onCreateFileIngestionJob,
+  availableDocuments = [],
+  availableGroups = [],
+  availableProjects = [],
 }: UseChatMainInteractionsParams) {
   const [message, setMessage] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -126,6 +132,8 @@ function useChatMainInteractions({
       name: attachment.name,
       status: "indexed" as const,
       fileId: attachment.fileId,
+      kind: attachment.fileId ? ("file" as const) : undefined,
+      entityId: attachment.fileId || undefined,
     }));
 
   const removeAttachment = (attachmentId: string) => {
@@ -140,6 +148,123 @@ function useChatMainInteractions({
       });
       return next;
     });
+  };
+
+  const createDocumentAttachment = (
+    file: { id: string; name: string },
+    fallbackIdPrefix = "doc",
+  ): ComposerAttachment => ({
+    id: `${fallbackIdPrefix}-${file.id}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`,
+    name: file.name,
+    status: "indexed",
+    fileId: file.id,
+    kind: "file",
+    entityId: file.id,
+  });
+
+  const attachDocumentById = (fileId: string) => {
+    const target = availableDocuments.find((item) => item.id === fileId);
+    if (!target) {
+      showActionStatus("Document not found.");
+      return;
+    }
+    let added = false;
+    setAttachments((previous) => {
+      if (previous.some((item) => item.fileId && item.fileId === target.id)) {
+        return previous;
+      }
+      added = true;
+      return [...previous, createDocumentAttachment(target)];
+    });
+    if (!added) {
+      showActionStatus(`"${target.name}" is already attached.`);
+      return;
+    }
+    showActionStatus(`Attached "${target.name}".`);
+  };
+
+  const attachGroupById = (groupId: string) => {
+    const group = availableGroups.find((item) => item.id === groupId);
+    if (!group) {
+      showActionStatus("Group not found.");
+      return;
+    }
+
+    const docsById = new Map(availableDocuments.map((item) => [item.id, item]));
+    const groupDocs = Array.from(new Set(group.file_ids || []))
+      .map((fileId) => docsById.get(fileId))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (!groupDocs.length) {
+      showActionStatus(`"${group.name}" has no available documents.`);
+      return;
+    }
+
+    const ATTACH_LIMIT = 40;
+    const slicedDocs = groupDocs.slice(0, ATTACH_LIMIT);
+    let addedCount = 0;
+    setAttachments((previous) => {
+      const existingFileIds = new Set(
+        previous.map((item) => String(item.fileId || "").trim()).filter(Boolean),
+      );
+      const next = [...previous];
+      for (const doc of slicedDocs) {
+        if (existingFileIds.has(doc.id)) {
+          continue;
+        }
+        next.push(createDocumentAttachment(doc, "group-doc"));
+        existingFileIds.add(doc.id);
+        addedCount += 1;
+      }
+      return next;
+    });
+
+    if (!addedCount) {
+      showActionStatus(`All documents from "${group.name}" are already attached.`);
+      return;
+    }
+    const remaining = groupDocs.length - slicedDocs.length;
+    if (remaining > 0) {
+      showActionStatus(
+        `Attached ${addedCount} docs from "${group.name}" (limit ${ATTACH_LIMIT}, ${remaining} not added).`,
+      );
+      return;
+    }
+    showActionStatus(`Attached ${addedCount} docs from "${group.name}".`);
+  };
+
+  const attachProjectById = (projectId: string) => {
+    const project = availableProjects.find((item) => item.id === projectId);
+    if (!project) {
+      showActionStatus("Project not found.");
+      return;
+    }
+    const projectEntityId = `project:${project.id}`;
+    let added = false;
+    setAttachments((previous) => {
+      if (
+        previous.some(
+          (item) => item.kind === "project" && String(item.entityId || "").trim() === projectEntityId,
+        )
+      ) {
+        return previous;
+      }
+      added = true;
+      return [
+        ...previous,
+        {
+          id: `project-${project.id}-${Date.now()}`,
+          name: `Project: ${project.name}`,
+          status: "indexed",
+          kind: "project",
+          entityId: projectEntityId,
+        },
+      ];
+    });
+    if (!added) {
+      showActionStatus(`"${project.name}" is already attached.`);
+      return;
+    }
+    showActionStatus(`Attached project "${project.name}".`);
   };
 
   const submit = async () => {
@@ -169,7 +294,7 @@ function useChatMainInteractions({
     const value = text.trim();
     if (!value) {
       showActionStatus(`Nothing to copy from ${label}.`);
-      return;
+      return false;
     }
     try {
       if (navigator?.clipboard?.writeText) {
@@ -186,8 +311,10 @@ function useChatMainInteractions({
         document.body.removeChild(fallback);
       }
       showActionStatus(`${label} copied.`);
+      return true;
     } catch {
       showActionStatus(`Unable to copy ${label.toLowerCase()}.`);
+      return false;
     }
   };
 
@@ -310,6 +437,7 @@ function useChatMainInteractions({
       message: "Uploading 0%",
       localUrl: URL.createObjectURL(file),
       mimeType: String(file.type || ""),
+      kind: "file" as const,
     }));
     setAttachments((prev) => [...prev, ...pending]);
     const updatePendingMessage = (text: string) => {
@@ -348,6 +476,8 @@ function useChatMainInteractions({
               status: "indexed",
               message: undefined,
               fileId: mappedFileId,
+              entityId: mappedFileId,
+              kind: "file" as const,
             };
           }
           const failureMessage = item?.message || result.errors[0] || "Upload failed.";
@@ -487,6 +617,9 @@ function useChatMainInteractions({
 
   return {
     agentControlsVisible,
+    attachDocumentById,
+    attachGroupById,
+    attachProjectById,
     attachments,
     beginInlineEdit,
     cancelInlineEdit,

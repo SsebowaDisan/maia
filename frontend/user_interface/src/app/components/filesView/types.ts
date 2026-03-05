@@ -30,6 +30,7 @@ interface FilesViewProps {
       groupId?: string;
     },
   ) => Promise<IngestionJob>;
+  onCancelFileUpload?: () => Promise<void>;
   onUploadUrls?: (
     urlText: string,
     options?: {
@@ -61,6 +62,7 @@ interface FilesViewProps {
   uploadStatus?: string;
   uploadProgressPercent?: number | null;
   uploadProgressLabel?: string;
+  isCancelingUpload?: boolean;
 }
 
 type FileKind = "all" | "pdf" | "office" | "text" | "image" | "other";

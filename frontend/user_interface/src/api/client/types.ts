@@ -1,6 +1,7 @@
 type ConversationSummary = {
   id: string;
   name: string;
+  icon_key?: string | null;
   user: string;
   is_public: boolean;
   date_created: string;

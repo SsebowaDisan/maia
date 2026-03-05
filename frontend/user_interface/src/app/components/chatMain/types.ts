@@ -1,4 +1,6 @@
 import type { UploadResponse } from "../../../api/client";
+import type { FileGroupRecord, FileRecord } from "../../../api/client";
+import type { SidebarProject } from "../../appShell/types";
 import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from "../../types";
 
 type ChatMainProps = {
@@ -43,6 +45,9 @@ type ChatMainProps = {
     file_ids: string[];
     message: string;
   }>;
+  availableDocuments?: FileRecord[];
+  availableGroups?: FileGroupRecord[];
+  availableProjects?: SidebarProject[];
   isSending: boolean;
   citationMode: string;
   onCitationModeChange: (mode: string) => void;
@@ -73,6 +78,8 @@ type ComposerAttachment = {
   fileId?: string;
   localUrl?: string;
   mimeType?: string;
+  kind?: "file" | "project";
+  entityId?: string;
 };
 
 type FilePreviewAttachment = {

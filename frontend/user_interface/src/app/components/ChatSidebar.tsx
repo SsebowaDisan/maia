@@ -1,19 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRightLeft,
+  BarChart3,
+  BookOpen,
+  Briefcase,
+  Building2,
+  CalendarDays,
   Check,
   ChevronRight,
+  Code2,
   Folder,
   FolderOpen,
   FolderPlus,
   Globe,
   HelpCircle,
+  Lightbulb,
   Link2,
+  ListChecks,
   Loader2,
+  Mail,
+  MessageCircle,
   PencilLine,
   Plus,
+  Rocket,
+  Search,
   Settings,
+  Shield,
   Trash2,
+  Wrench,
   X,
   FileText,
   Library,
@@ -50,7 +64,7 @@ function startsWithIcon(text: string) {
 }
 
 function displayConversationName(name: string) {
-  const cleaned = String(name || "").trim();
+  const cleaned = stripChatIcon(String(name || "").trim());
   if (!cleaned) {
     return "New chat";
   }
@@ -64,6 +78,97 @@ function stripChatIcon(name: string) {
     return chars.slice(2).join("").trim();
   }
   return cleaned;
+}
+
+const CHAT_ICON_COMPONENTS = {
+  "message-circle": MessageCircle,
+  briefcase: Briefcase,
+  "bar-chart-3": BarChart3,
+  globe: Globe,
+  "file-text": FileText,
+  search: Search,
+  lightbulb: Lightbulb,
+  calendar: CalendarDays,
+  mail: Mail,
+  "building-2": Building2,
+  shield: Shield,
+  rocket: Rocket,
+  wrench: Wrench,
+  "code-2": Code2,
+  "book-open": BookOpen,
+  "list-checks": ListChecks,
+} as const;
+
+type ChatIconKey = keyof typeof CHAT_ICON_COMPONENTS;
+
+function normalizeChatIconKey(value: unknown): ChatIconKey {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+  const aliases: Record<string, ChatIconKey> = {
+    message: "message-circle",
+    chat: "message-circle",
+    company: "building-2",
+    business: "briefcase",
+    chart: "bar-chart-3",
+    analytics: "bar-chart-3",
+    file: "file-text",
+    document: "file-text",
+    idea: "lightbulb",
+    email: "mail",
+    code: "code-2",
+    checklist: "list-checks",
+    list: "list-checks",
+  };
+  if (text in CHAT_ICON_COMPONENTS) {
+    return text as ChatIconKey;
+  }
+  if (text in aliases) {
+    return aliases[text];
+  }
+  return "message-circle";
+}
+
+type ConversationDayGroup = "Today" | "Yesterday" | "Earlier";
+
+function parseDate(value: string): Date | null {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function conversationDayGroup(dateUpdated: string, now: Date): ConversationDayGroup {
+  const parsed = parseDate(dateUpdated);
+  if (!parsed) {
+    return "Earlier";
+  }
+  const today = startOfDay(now).getTime();
+  const target = startOfDay(parsed).getTime();
+  const days = Math.floor((today - target) / 86_400_000);
+  if (days <= 0) {
+    return "Today";
+  }
+  if (days === 1) {
+    return "Yesterday";
+  }
+  return "Earlier";
+}
+
+function conversationMetaLabel(dateUpdated: string, now: Date): string {
+  const parsed = parseDate(dateUpdated);
+  if (!parsed) {
+    return "Updated recently";
+  }
+  const group = conversationDayGroup(dateUpdated, now);
+  if (group === "Today" || group === "Yesterday") {
+    return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  return parsed.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 type ProjectEvidenceItem = {
@@ -99,6 +204,13 @@ type AggregateItem = {
   fileIds: Set<string>;
   usageCount: number;
   conversationIds: Set<string>;
+};
+
+type DeletePromptArgs = {
+  title: string;
+  description: string;
+  confirmLabel?: string;
+  action: () => Promise<void> | void;
 };
 
 const HTTP_URL_RE = /^https?:\/\/\S+/i;
@@ -473,7 +585,7 @@ interface ChatSidebarProps {
   allConversations: ConversationSummary[];
   selectedConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
-  onNewConversation: () => void;
+  onNewConversation: (projectId?: string) => void | Promise<void>;
   projects: SidebarProject[];
   selectedProjectId: string;
   onSelectProject: (projectId: string) => void;
@@ -521,6 +633,7 @@ export function ChatSidebar({
   const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [openProjectEvidenceId, setOpenProjectEvidenceId] = useState<string | null>(null);
+  const [collapsedProjectsById, setCollapsedProjectsById] = useState<Record<string, boolean>>({});
   const [projectEvidenceById, setProjectEvidenceById] = useState<
     Record<string, ProjectEvidenceState>
   >({});
@@ -594,6 +707,14 @@ export function ChatSidebar({
   const [evidenceActionBusyByKey, setEvidenceActionBusyByKey] = useState<
     Record<string, boolean>
   >({});
+  const [deletePromptOpen, setDeletePromptOpen] = useState(false);
+  const [deletePromptTitle, setDeletePromptTitle] = useState("Delete item");
+  const [deletePromptDescription, setDeletePromptDescription] = useState("");
+  const [deletePromptConfirmLabel, setDeletePromptConfirmLabel] = useState("Delete");
+  const [deletePromptInput, setDeletePromptInput] = useState("");
+  const [deletePromptBusy, setDeletePromptBusy] = useState(false);
+  const [deletePromptError, setDeletePromptError] = useState("");
+  const deletePromptActionRef = useRef<(() => Promise<void>) | null>(null);
   const projectEvidenceRequestRef = useRef(0);
   const fileInputByProjectRef = useRef<Record<string, HTMLInputElement | null>>({});
 
@@ -607,6 +728,18 @@ export function ChatSidebar({
       ),
     [conversations],
   );
+  const groupedProjectConversations = useMemo(() => {
+    const now = new Date();
+    const groups: Record<ConversationDayGroup, ConversationSummary[]> = {
+      Today: [],
+      Yesterday: [],
+      Earlier: [],
+    };
+    for (const conversation of selectedProjectConversations) {
+      groups[conversationDayGroup(conversation.date_updated, now)].push(conversation);
+    }
+    return groups;
+  }, [selectedProjectConversations]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -638,6 +771,58 @@ export function ChatSidebar({
       [projectId]: isBusy,
     }));
   }, []);
+
+  const closeDeletePrompt = useCallback(() => {
+    if (deletePromptBusy) {
+      return;
+    }
+    setDeletePromptOpen(false);
+    setDeletePromptInput("");
+    setDeletePromptError("");
+    setDeletePromptConfirmLabel("Delete");
+    deletePromptActionRef.current = null;
+  }, [deletePromptBusy]);
+
+  const openDeletePrompt = useCallback((args: DeletePromptArgs) => {
+    setDeletePromptTitle(args.title);
+    setDeletePromptDescription(args.description);
+    setDeletePromptConfirmLabel(String(args.confirmLabel || "Delete"));
+    setDeletePromptInput("");
+    setDeletePromptError("");
+    deletePromptActionRef.current = async () => {
+      await Promise.resolve(args.action());
+    };
+    setDeletePromptOpen(true);
+  }, []);
+
+  const confirmDeletePrompt = useCallback(async () => {
+    if (deletePromptBusy) {
+      return;
+    }
+    if (deletePromptInput.trim().toLowerCase() !== "delete") {
+      setDeletePromptError('Type "delete" to confirm.');
+      return;
+    }
+    const action = deletePromptActionRef.current;
+    if (!action) {
+      closeDeletePrompt();
+      return;
+    }
+    setDeletePromptBusy(true);
+    setDeletePromptError("");
+    try {
+      await action();
+      setDeletePromptOpen(false);
+      setDeletePromptInput("");
+      setDeletePromptError("");
+      setDeletePromptConfirmLabel("Delete");
+      deletePromptActionRef.current = null;
+    } catch (error) {
+      setDeletePromptError(`Delete failed: ${String(error)}`);
+    } finally {
+      setDeletePromptBusy(false);
+    }
+  }, [closeDeletePrompt, deletePromptBusy, deletePromptInput]);
 
   const appendProjectSourceBindings = useCallback(
     (projectId: string, payload: { fileIds?: string[]; urls?: string[] }) => {
@@ -916,6 +1101,29 @@ export function ChatSidebar({
     setEditingEvidenceDraft("");
   }, []);
 
+  const handleProjectClick = useCallback(
+    (projectId: string) => {
+      onSelectProject(projectId);
+      setCollapsedProjectsById((prev) => {
+        if (!prev[projectId]) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [projectId]: false,
+        };
+      });
+    },
+    [onSelectProject],
+  );
+
+  const handleProjectDoubleClick = useCallback((projectId: string) => {
+    setCollapsedProjectsById((prev) => ({
+      ...prev,
+      [projectId]: !Boolean(prev[projectId]),
+    }));
+  }, []);
+
   const getEvidenceDisplayLabel = useCallback(
     (item: ProjectEvidenceItem) => {
       const alias = String(sourceAliases[item.key] || "").trim();
@@ -983,7 +1191,7 @@ export function ChatSidebar({
     : "";
 
   const handleDeleteEvidenceItem = useCallback(
-    async (item: ProjectEvidenceItem) => {
+    (item: ProjectEvidenceItem) => {
       if (!evidenceProjectId) {
         return;
       }
@@ -998,88 +1206,90 @@ export function ChatSidebar({
         return;
       }
 
-      const confirmed = window.confirm(
-        `Delete "${getEvidenceDisplayLabel(item)}" from indexed sources? This removes it from retrieval.`,
-      );
-      if (!confirmed) {
-        return;
-      }
-
-      setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: true }));
-      try {
-        if (fileIds.length) {
-          const response = await deleteFiles(fileIds);
-          const deletedCount = response.deleted_ids.length;
-          const failedCount = response.failed.length;
-          setProjectUploadStatus(
-            evidenceProjectId,
-            failedCount > 0
-              ? `Deleted ${deletedCount} source(s), ${failedCount} failed.`
-              : `Deleted ${deletedCount} source(s).`,
-          );
-        } else {
-          const response = await deleteUrls([fallbackUrl]);
-          const deletedCount = response.deleted_ids.length;
-          const failedCount = response.failed.length;
-          if (deletedCount > 0) {
+      const label = getEvidenceDisplayLabel(item);
+      openDeletePrompt({
+        title: "Delete source",
+        description: `Type delete to remove "${label}" from indexed sources.`,
+        confirmLabel: "Delete source",
+        action: async () => {
+          setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: true }));
+          try {
+            if (fileIds.length) {
+              const response = await deleteFiles(fileIds);
+              const deletedCount = response.deleted_ids.length;
+              const failedCount = response.failed.length;
+              setProjectUploadStatus(
+                evidenceProjectId,
+                failedCount > 0
+                  ? `Deleted ${deletedCount} source(s), ${failedCount} failed.`
+                  : `Deleted ${deletedCount} source(s).`,
+              );
+            } else {
+              const response = await deleteUrls([fallbackUrl]);
+              const deletedCount = response.deleted_ids.length;
+              const failedCount = response.failed.length;
+              if (deletedCount > 0) {
+                setProjectUploadStatus(
+                  evidenceProjectId,
+                  failedCount > 0
+                    ? `Deleted ${deletedCount} source(s), ${failedCount} URL(s) failed.`
+                    : `Deleted ${deletedCount} source(s) from URL.`,
+                );
+              } else {
+                const firstFailure = response.failed[0];
+                setProjectUploadStatus(
+                  evidenceProjectId,
+                  firstFailure?.message || "No indexed source matched this URL.",
+                );
+              }
+            }
+            setSourceAliases((prev) => {
+              if (!Object.prototype.hasOwnProperty.call(prev, item.key)) {
+                return prev;
+              }
+              const next = { ...prev };
+              delete next[item.key];
+              return next;
+            });
+            setProjectSourceBindings((prev) => {
+              const current = prev[evidenceProjectId];
+              if (!current) {
+                return prev;
+              }
+              const itemFileIds = new Set((item.fileIds || []).map((value) => String(value || "").trim()).filter(Boolean));
+              const fallbackUrl = normalizeSourceUrl(String(item.href || item.label || ""));
+              const nextFileIds = current.fileIds.filter((value) => !itemFileIds.has(String(value || "").trim()));
+              const nextUrls = fallbackUrl
+                ? current.urls.filter((value) => normalizeSourceUrl(String(value || "")) !== fallbackUrl)
+                : current.urls;
+              if (
+                nextFileIds.length === current.fileIds.length &&
+                nextUrls.length === current.urls.length
+              ) {
+                return prev;
+              }
+              return {
+                ...prev,
+                [evidenceProjectId]: {
+                  fileIds: nextFileIds,
+                  urls: nextUrls,
+                },
+              };
+            });
+            await loadProjectEvidence(evidenceProjectId);
+          } catch (error) {
             setProjectUploadStatus(
               evidenceProjectId,
-              failedCount > 0
-                ? `Deleted ${deletedCount} source(s), ${failedCount} URL(s) failed.`
-                : `Deleted ${deletedCount} source(s) from URL.`,
+              `Delete failed for "${label}": ${String(error)}`,
             );
-          } else {
-            const firstFailure = response.failed[0];
-            setProjectUploadStatus(
-              evidenceProjectId,
-              firstFailure?.message || "No indexed source matched this URL.",
-            );
+            throw error;
+          } finally {
+            setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: false }));
           }
-        }
-        setSourceAliases((prev) => {
-          if (!Object.prototype.hasOwnProperty.call(prev, item.key)) {
-            return prev;
-          }
-          const next = { ...prev };
-          delete next[item.key];
-          return next;
-        });
-        setProjectSourceBindings((prev) => {
-          const current = prev[evidenceProjectId];
-          if (!current) {
-            return prev;
-          }
-          const itemFileIds = new Set((item.fileIds || []).map((value) => String(value || "").trim()).filter(Boolean));
-          const fallbackUrl = normalizeSourceUrl(String(item.href || item.label || ""));
-          const nextFileIds = current.fileIds.filter((value) => !itemFileIds.has(String(value || "").trim()));
-          const nextUrls = fallbackUrl
-            ? current.urls.filter((value) => normalizeSourceUrl(String(value || "")) !== fallbackUrl)
-            : current.urls;
-          if (
-            nextFileIds.length === current.fileIds.length &&
-            nextUrls.length === current.urls.length
-          ) {
-            return prev;
-          }
-          return {
-            ...prev,
-            [evidenceProjectId]: {
-              fileIds: nextFileIds,
-              urls: nextUrls,
-            },
-          };
-        });
-        await loadProjectEvidence(evidenceProjectId);
-      } catch (error) {
-        setProjectUploadStatus(
-          evidenceProjectId,
-          `Delete failed for "${getEvidenceDisplayLabel(item)}": ${String(error)}`,
-        );
-      } finally {
-        setEvidenceActionBusyByKey((prev) => ({ ...prev, [item.key]: false }));
-      }
+        },
+      });
     },
-    [evidenceProjectId, getEvidenceDisplayLabel, loadProjectEvidence, setProjectUploadStatus],
+    [evidenceProjectId, getEvidenceDisplayLabel, loadProjectEvidence, openDeletePrompt, setProjectUploadStatus],
   );
 
   useEffect(() => {
@@ -1108,6 +1318,19 @@ export function ChatSidebar({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeEvidenceModal, openProjectEvidenceId]);
+
+  useEffect(() => {
+    if (!deletePromptOpen) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeDeletePrompt();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeDeletePrompt, deletePromptOpen]);
 
   const submitProject = () => {
     const normalized = projectDraft.trim();
@@ -1147,22 +1370,25 @@ export function ChatSidebar({
       return;
     }
     const deletingLastProject = projects.length <= 1;
-    const confirmed = window.confirm(
-      deletingLastProject
-        ? `Delete project \"${project.name}\"? Maia will create a replacement project automatically.`
-        : `Delete project \"${project.name}\"? Conversations in it will be reassigned automatically.`,
-    );
-    if (confirmed) {
-      setProjectSourceBindings((prev) => {
-        if (!Object.prototype.hasOwnProperty.call(prev, project.id)) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[project.id];
-        return next;
-      });
-      onDeleteProject(project.id);
-    }
+    const details = deletingLastProject
+      ? "Maia will create a replacement project automatically."
+      : "Conversations in it will be reassigned automatically.";
+    openDeletePrompt({
+      title: "Delete project",
+      description: `Type delete to remove "${project.name}". ${details}`,
+      confirmLabel: "Delete project",
+      action: async () => {
+        setProjectSourceBindings((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, project.id)) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[project.id];
+          return next;
+        });
+        onDeleteProject(project.id);
+      },
+    });
   };
 
   const startRenameConversation = (conversation: ConversationSummary) => {
@@ -1193,27 +1419,27 @@ export function ChatSidebar({
     }
   };
 
-  const requestDeleteConversation = async (conversation: ConversationSummary) => {
-    const confirmed = window.confirm(
-      `Delete chat \"${displayConversationName(conversation.name)}\"?`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    setBusyConversationId(conversation.id);
-    try {
-      await onDeleteConversation(conversation.id);
-      if (movingConversationId === conversation.id) {
-        setMovingConversationId(null);
-      }
-      if (renamingConversationId === conversation.id) {
-        cancelRenameConversation();
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setBusyConversationId(null);
-    }
+  const requestDeleteConversation = (conversation: ConversationSummary) => {
+    const label = displayConversationName(conversation.name);
+    openDeletePrompt({
+      title: "Delete chat",
+      description: `Type delete to remove "${label}". This cannot be undone.`,
+      confirmLabel: "Delete chat",
+      action: async () => {
+        setBusyConversationId(conversation.id);
+        try {
+          await onDeleteConversation(conversation.id);
+          if (movingConversationId === conversation.id) {
+            setMovingConversationId(null);
+          }
+          if (renamingConversationId === conversation.id) {
+            cancelRenameConversation();
+          }
+        } finally {
+          setBusyConversationId(null);
+        }
+      },
+    });
   };
 
   if (isCollapsed) {
@@ -1237,14 +1463,25 @@ export function ChatSidebar({
     >
       <div className="px-4 pt-4 pb-3 border-b border-black/[0.06]">
         <div className="flex items-center justify-between">
-          <h2 className="text-[17px] font-medium tracking-tight text-[#1d1d1f]">Projects</h2>
-          <button
-            onClick={onToggleCollapse}
-            className="p-1.5 rounded-lg hover:bg-black/5 transition-colors"
-            title="Collapse sidebar"
-          >
-            <ChevronRight className="w-4 h-4 text-[#6e6e73]" />
-          </button>
+          <h2 className="text-[17px] font-medium tracking-tight text-[#1d1d1f]">Chats</h2>
+          <div className="inline-flex items-center gap-1.5">
+            <button
+              onClick={() => {
+                void onNewConversation(selectedProjectId);
+              }}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] transition-colors hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"
+              title="New chat"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={onToggleCollapse}
+              className="p-1.5 rounded-lg hover:bg-black/5 transition-colors"
+              title="Collapse sidebar"
+            >
+              <ChevronRight className="w-4 h-4 text-[#6e6e73]" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1283,6 +1520,8 @@ export function ChatSidebar({
 
           {projects.map((project) => {
             const isActive = project.id === selectedProjectId;
+            const isProjectCollapsed = Boolean(collapsedProjectsById[project.id]);
+            const isProjectOpen = isActive && !isProjectCollapsed;
             const isEditing = editingProjectId === project.id;
             const isEvidenceOpen = openProjectEvidenceId === project.id;
             return (
@@ -1322,10 +1561,15 @@ export function ChatSidebar({
                 ) : (
                   <div className={`group h-10 px-2.5 rounded-xl inline-flex items-center gap-2 w-full ${isActive ? "bg-[#e7e7ea]" : "hover:bg-[#ececef]"}`}>
                     <button
-                      onClick={() => onSelectProject(project.id)}
+                      onClick={() => handleProjectClick(project.id)}
+                      onDoubleClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        handleProjectDoubleClick(project.id);
+                      }}
                       className="flex-1 min-w-0 inline-flex items-center gap-2 text-left"
                     >
-                      {isActive ? (
+                      {isProjectOpen ? (
                         <FolderOpen className="w-4.5 h-4.5 text-[#1d1d1f] shrink-0" />
                       ) : (
                         <Folder className="w-4.5 h-4.5 text-[#1d1d1f] shrink-0" />
@@ -1361,28 +1605,40 @@ export function ChatSidebar({
                   </div>
                 )}
 
-                {isActive ? (
+                {isProjectOpen ? (
                   <div className="pl-8 pr-1 pb-2 pt-1">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[12px] text-[#8d8d93]">Recent</span>
-                      <button
-                        onClick={onNewConversation}
-                        className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f]"
-                        title="New chat in this project"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#8d8d93]">
+                          Chats
+                        </span>
+                        <p className="truncate text-[11px] text-[#8d8d93]">{project.name}</p>
+                      </div>
+                      <span className="text-[11px] text-[#8d8d93]">
+                        {selectedProjectConversations.length}
+                      </span>
                     </div>
 
                     {selectedProjectConversations.length ? (
-                      <div className="space-y-1">
-                        {selectedProjectConversations.map((conversation) => {
+                      <div className="space-y-2">
+                        {(["Today", "Yesterday", "Earlier"] as const).map((groupLabel) => {
+                          const rows = groupedProjectConversations[groupLabel];
+                          if (!rows.length) {
+                            return null;
+                          }
+                          return (
+                            <div key={`${project.id}-${groupLabel}`} className="space-y-1">
+                              <p className="px-2 text-[11px] font-medium text-[#8d8d93]">{groupLabel}</p>
+                              {rows.map((conversation) => {
                           const isSelected = conversation.id === selectedConversationId;
                           const isMoving = movingConversationId === conversation.id;
                           const isRenaming = renamingConversationId === conversation.id;
                           const isBusy = busyConversationId === conversation.id;
                           const assignedProjectId =
                             conversationProjects[conversation.id] || fallbackProjectId;
+                          const subtitle = conversationMetaLabel(conversation.date_updated, new Date());
+                          const ConversationIcon =
+                            CHAT_ICON_COMPONENTS[normalizeChatIconKey(conversation.icon_key)];
 
                           return (
                             <div key={conversation.id} className="rounded-lg">
@@ -1421,17 +1677,27 @@ export function ChatSidebar({
                                   </button>
                                 </div>
                               ) : (
-                                <div className={`group rounded-lg px-2 py-1.5 inline-flex items-center gap-1 w-full ${isSelected ? "bg-[#e4e4e8]" : "hover:bg-[#ececef]"}`}>
+                                <div className={`group inline-flex min-h-[44px] w-full items-center gap-1 rounded-xl px-2.5 py-1.5 ${isSelected ? "bg-[#e3e3e8]" : "hover:bg-[#ececef]"}`}>
                                   <button
                                     onClick={() => onSelectConversation(conversation.id)}
-                                    className="flex-1 min-w-0 text-left"
+                                    className="inline-flex min-w-0 flex-1 items-start gap-2 text-left"
                                   >
-                                    <p className="text-[14px] text-[#1d1d1f] truncate">{displayConversationName(conversation.name)}</p>
+                                    <ConversationIcon
+                                      className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${
+                                        isSelected ? "text-[#1d1d1f]" : "text-[#8d8d93]"
+                                      }`}
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="truncate text-[14px] font-medium text-[#1d1d1f]">
+                                        {displayConversationName(conversation.name)}
+                                      </p>
+                                      <p className="mt-0.5 truncate text-[11px] text-[#8d8d93]">{subtitle}</p>
+                                    </div>
                                   </button>
                                   <button
                                     onClick={() => startRenameConversation(conversation)}
                                     disabled={isBusy}
-                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                                    className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
                                     title="Rename chat"
                                   >
                                     <PencilLine className="w-3.5 h-3.5" />
@@ -1443,7 +1709,7 @@ export function ChatSidebar({
                                       )
                                     }
                                     disabled={isBusy}
-                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                                    className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
                                     title="Move chat"
                                   >
                                     <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -1451,7 +1717,7 @@ export function ChatSidebar({
                                   <button
                                     onClick={() => void requestDeleteConversation(conversation)}
                                     disabled={isBusy}
-                                    className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                                    className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
                                     title="Delete chat"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -1485,6 +1751,9 @@ export function ChatSidebar({
                                   })}
                                 </div>
                               ) : null}
+                            </div>
+                          );
+                              })}
                             </div>
                           );
                         })}
@@ -1534,6 +1803,66 @@ export function ChatSidebar({
           ) : null}
         </div>
       </div>
+
+      {deletePromptOpen ? (
+        <div
+          className="fixed inset-0 z-[130] flex items-center justify-center p-5"
+          onClick={closeDeletePrompt}
+          role="dialog"
+          aria-modal="true"
+          aria-label={deletePromptTitle}
+        >
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
+          <div
+            className="relative z-[131] w-full max-w-[440px] rounded-2xl border border-black/[0.1] bg-white shadow-[0_24px_70px_rgba(0,0,0,0.3)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-black/[0.08] px-5 py-4">
+              <p className="text-[17px] font-semibold tracking-tight text-[#1d1d1f]">{deletePromptTitle}</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-[#6e6e73]">{deletePromptDescription}</p>
+            </div>
+            <div className="px-5 py-4">
+              <label className="block text-[12px] font-medium text-[#6e6e73]">
+                Type <span className="rounded bg-[#f5f5f7] px-1 py-0.5 font-semibold text-[#1d1d1f]">delete</span> to confirm
+              </label>
+              <input
+                value={deletePromptInput}
+                onChange={(event) => {
+                  setDeletePromptInput(event.target.value);
+                  if (deletePromptError) {
+                    setDeletePromptError("");
+                  }
+                }}
+                disabled={deletePromptBusy}
+                placeholder="delete"
+                className="mt-2 h-10 w-full rounded-xl border border-black/[0.1] bg-white px-3 text-[14px] text-[#1d1d1f] placeholder:text-[#a1a1aa] focus:outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-60"
+              />
+              {deletePromptError ? (
+                <p className="mt-2 text-[12px] text-[#d44848]">{deletePromptError}</p>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-black/[0.08] px-5 py-4">
+              <button
+                type="button"
+                onClick={closeDeletePrompt}
+                disabled={deletePromptBusy}
+                className="h-9 rounded-xl border border-black/[0.08] bg-white px-3 text-[13px] font-semibold text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDeletePrompt()}
+                disabled={deletePromptBusy || deletePromptInput.trim().toLowerCase() !== "delete"}
+                className="inline-flex h-9 items-center gap-2 rounded-xl bg-[#1d1d1f] px-3 text-[13px] font-semibold text-white transition-colors hover:bg-[#343438] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deletePromptBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                <span>{deletePromptBusy ? "Deleting..." : deletePromptConfirmLabel}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {evidenceProject ? (
         <div

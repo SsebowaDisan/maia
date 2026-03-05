@@ -195,9 +195,12 @@ export function useConversationChat({
     [conversationMindmapSettings, conversationModes],
   );
 
-  const handleCreateConversation = useCallback(async () => {
-    const activeProjectId = projects.some((project) => project.id === selectedProjectId)
-      ? selectedProjectId
+  const handleCreateConversation = useCallback(async (preferredProjectId?: string) => {
+    const requestedProjectId = String(preferredProjectId || "").trim();
+    const activeProjectId = projects.some((project) => project.id === requestedProjectId)
+      ? requestedProjectId
+      : projects.some((project) => project.id === selectedProjectId)
+        ? selectedProjectId
       : projects[0]?.id || DEFAULT_PROJECT_ID;
     if (activeProjectId !== selectedProjectId) {
       setSelectedProjectId(activeProjectId);

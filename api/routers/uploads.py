@@ -411,6 +411,15 @@ def get_ingestion_job(
     return manager.get_job(user_id=user_id, job_id=job_id)
 
 
+@router.post("/jobs/{job_id}/cancel", response_model=IngestionJobResponse)
+def cancel_ingestion_job(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    manager = get_ingestion_manager()
+    return manager.cancel_job(user_id=user_id, job_id=job_id)
+
+
 @router.get("/files", response_model=FileListResponse)
 def list_files(
     index_id: int | None = None,

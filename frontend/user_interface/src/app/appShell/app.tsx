@@ -275,6 +275,7 @@ export default function App() {
           onRefreshFiles={fileLibrary.refreshFileCount}
           onUploadFiles={fileLibrary.handleUploadFiles}
           onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
+          onCancelFileUpload={fileLibrary.handleCancelFileUpload}
           onUploadUrls={fileLibrary.handleUploadUrlsToLibrary}
           onDeleteFiles={fileLibrary.handleDeleteFiles}
           onMoveFilesToGroup={fileLibrary.handleMoveFilesToGroup}
@@ -286,6 +287,7 @@ export default function App() {
           uploadStatus={fileLibrary.uploadStatus}
           uploadProgressPercent={fileLibrary.uploadProgressPercent}
           uploadProgressLabel={fileLibrary.uploadProgressLabel}
+          isCancelingUpload={fileLibrary.isCancelingUpload}
         />
       );
     }
@@ -348,6 +350,9 @@ export default function App() {
               onSendMessage={chatState.handleSendMessage}
               onUploadFiles={fileLibrary.handleUploadFilesForChat}
               onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
+              availableDocuments={fileLibrary.indexedFiles}
+              availableGroups={fileLibrary.fileGroups}
+              availableProjects={projectState.projects}
               isSending={chatState.isSending}
               citationMode={chatState.citationMode}
               onCitationModeChange={chatState.setCitationMode}
@@ -462,7 +467,7 @@ export default function App() {
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="min-h-0 flex-1 overflow-hidden">
+                  <div className="min-h-0 flex flex-1 flex-col overflow-hidden">
                     {renderWorkspaceTab(workspaceModalTab)}
                   </div>
                 </div>

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  cancelIngestionJob,
   createFileGroup,
   createFileIngestionJob,
   createUrlIngestionJob,
@@ -31,6 +32,11 @@ export function useFileLibrary() {
   const [fileGroups, setFileGroups] = useState<FileGroupRecord[]>([]);
   const [defaultIndexId, setDefaultIndexId] = useState<number | null>(null);
   const [ingestionJobs, setIngestionJobs] = useState<IngestionJob[]>([]);
+  const [isCancelingUpload, setIsCancelingUpload] = useState(false);
+  const activeUploadControllerRef = useRef<AbortController | null>(null);
+  const activeUploadStartedAtRef = useRef<number>(0);
+  const activeUploadBytesRef = useRef<number>(0);
+  const activeFileJobIdRef = useRef<string | null>(null);
 
   const setProgressFromUploadBytes = (loadedBytes: number, totalBytes: number, label: string) => {
     if (!totalBytes || totalBytes <= 0) {
@@ -41,6 +47,34 @@ export function useFileLibrary() {
     const percent = Math.max(0, Math.min(100, Math.round((loadedBytes / totalBytes) * 100)));
     setUploadProgressPercent(percent);
     setUploadProgressLabel(`${label} ${percent}%`);
+  };
+
+  const isAbortError = (error: unknown) => {
+    const message = String(error || "").toLowerCase();
+    return message.includes("aborterror") || message.includes("upload canceled") || message.includes("aborted");
+  };
+
+  const findLikelyJobFromAbortedUpload = (jobs: IngestionJob[]) => {
+    const expectedBytes = Math.max(0, Number(activeUploadBytesRef.current || 0));
+    const startedAt = Number(activeUploadStartedAtRef.current || 0);
+    if (!startedAt) return null;
+    return (
+      jobs.find((job) => {
+        if (job.kind !== "files") return false;
+        if (job.status !== "queued" && job.status !== "running") return false;
+        const createdAt = job.date_created ? new Date(job.date_created).getTime() : 0;
+        if (createdAt && createdAt < startedAt - 10_000) {
+          return false;
+        }
+        if (expectedBytes > 0) {
+          const bytesTotal = Math.max(0, Number(job.bytes_total || 0));
+          if (bytesTotal !== expectedBytes) {
+            return false;
+          }
+        }
+        return true;
+      }) || null
+    );
   };
 
   const refreshFileCount = useCallback(async () => {
@@ -64,10 +98,12 @@ export function useFileLibrary() {
         job.kind === "files" && (job.status === "queued" || job.status === "running"),
     );
     if (!activeFileJob) {
+      activeFileJobIdRef.current = null;
       setUploadProgressPercent(null);
       setUploadProgressLabel("");
-      return;
+      return jobs;
     }
+    activeFileJobIdRef.current = activeFileJob.id;
 
     const totalBytes = Math.max(0, Number(activeFileJob.bytes_total || 0));
     const indexedBytes = Math.max(0, Number(activeFileJob.bytes_indexed || 0));
@@ -89,6 +125,7 @@ export function useFileLibrary() {
     setUploadProgressLabel(
       `Indexing ${activeFileJob.processed_items}/${activeFileJob.total_items} (${activeFileJob.status})`,
     );
+    return jobs;
   }, []);
 
   useEffect(() => {
@@ -241,17 +278,25 @@ export function useFileLibrary() {
     setUploadStatus("Queueing ingestion job...");
     setUploadProgressPercent(0);
     setUploadProgressLabel("Uploading");
+    const uploadBytes = Array.from(files).reduce((total, file) => total + file.size, 0);
+    const controller = new AbortController();
+    activeUploadControllerRef.current = controller;
+    activeUploadStartedAtRef.current = Date.now();
+    activeUploadBytesRef.current = uploadBytes;
     try {
       const job = await createFileIngestionJob(files, {
         reindex: options?.reindex ?? false,
         indexId: defaultIndexId ?? undefined,
         groupId: options?.groupId,
         scope: options?.scope ?? "persistent",
+        signal: controller.signal,
         onUploadProgress: (loadedBytes, totalBytes) => {
           options?.onUploadProgress?.(loadedBytes, totalBytes);
           setProgressFromUploadBytes(loadedBytes, totalBytes, "Uploading");
         },
       });
+      activeUploadControllerRef.current = null;
+      activeFileJobIdRef.current = job.id;
       setUploadProgressPercent(0);
       setUploadProgressLabel("Indexing 0%");
       setUploadStatus(
@@ -260,6 +305,23 @@ export function useFileLibrary() {
       await refreshIngestionJobs();
       return job;
     } catch (error) {
+      activeUploadControllerRef.current = null;
+      if (isAbortError(error)) {
+        setUploadStatus("Upload canceled.");
+        setUploadProgressPercent(null);
+        setUploadProgressLabel("");
+        const jobsAfterAbort = await refreshIngestionJobs();
+        const likelyJob = findLikelyJobFromAbortedUpload(jobsAfterAbort || []);
+        if (likelyJob) {
+          try {
+            await cancelIngestionJob(likelyJob.id);
+            await Promise.all([refreshIngestionJobs(), refreshFileCount()]);
+          } catch {
+            // Best-effort cleanup for race conditions when backend already queued a job.
+          }
+        }
+        throw new Error("Upload canceled.");
+      }
       if (isMissingJobEndpointError(error)) {
         setUploadStatus(
           "Async ingestion endpoint unavailable on this server. Uploading with sync fallback...",
@@ -313,6 +375,10 @@ export function useFileLibrary() {
       setUploadProgressPercent(null);
       setUploadProgressLabel("");
       throw error;
+    } finally {
+      activeUploadControllerRef.current = null;
+      activeUploadBytesRef.current = 0;
+      activeUploadStartedAtRef.current = 0;
     }
   };
 
@@ -386,6 +452,49 @@ export function useFileLibrary() {
       }
       setUploadStatus(`Failed to queue URL ingestion job: ${String(error)}`);
       throw error;
+    }
+  };
+
+  const handleCancelFileUpload = async () => {
+    if (isCancelingUpload) {
+      return;
+    }
+    setIsCancelingUpload(true);
+    try {
+      const activeController = activeUploadControllerRef.current;
+      if (activeController && !activeController.signal.aborted) {
+        setUploadStatus("Canceling upload...");
+        activeController.abort();
+        activeUploadControllerRef.current = null;
+        return;
+      }
+
+      const activeJob =
+        ingestionJobs.find(
+          (job) =>
+            job.kind === "files" &&
+            (job.status === "queued" || job.status === "running") &&
+            (!activeFileJobIdRef.current || job.id === activeFileJobIdRef.current),
+        ) ||
+        ingestionJobs.find(
+          (job) => job.kind === "files" && (job.status === "queued" || job.status === "running"),
+        );
+
+      if (!activeJob) {
+        setUploadStatus("No active upload job to cancel.");
+        return;
+      }
+
+      await cancelIngestionJob(activeJob.id);
+      activeFileJobIdRef.current = null;
+      setUploadStatus("Upload canceled and partial data removed.");
+      setUploadProgressPercent(null);
+      setUploadProgressLabel("");
+      await Promise.all([refreshIngestionJobs(), refreshFileCount()]);
+    } catch (error) {
+      setUploadStatus(`Cancel failed: ${String(error)}`);
+    } finally {
+      setIsCancelingUpload(false);
     }
   };
 
@@ -486,9 +595,11 @@ export function useFileLibrary() {
     defaultIndexId,
     fileCount,
     fileGroups,
+    isCancelingUpload,
     handleCreateFileGroup,
     handleCreateFileIngestionJob,
     handleCreateUrlIngestionJob,
+    handleCancelFileUpload,
     handleDeleteFileGroup,
     handleDeleteFiles,
     handleMoveFilesToGroup,
