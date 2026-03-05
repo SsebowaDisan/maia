@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from api.schemas import ChatRequest
+from api.services.agent.planner_helpers import infer_intent_signals_from_text
 from api.services.agent.planner import PlannedStep
 
 from ..models import TaskPreparation
@@ -13,7 +14,21 @@ def apply_intent_enrichment(
     steps: list[PlannedStep],
 ) -> list[PlannedStep]:
     intent_tags = set(task_prep.task_intelligence.intent_tags)
-    if "highlight_extract" in intent_tags and not any(
+    lexical_signals = infer_intent_signals_from_text(
+        message=request.message,
+        agent_goal=request.agent_goal,
+    )
+    highlight_requested = ("highlight_extract" in intent_tags) or bool(
+        lexical_signals.get("wants_highlight_words")
+    )
+    docs_requested = ("docs_write" in intent_tags) or bool(
+        lexical_signals.get("wants_docs_output")
+    )
+    sheets_requested = ("sheets_update" in intent_tags) or bool(
+        lexical_signals.get("wants_sheets_output")
+    )
+
+    if highlight_requested and not any(
         step.tool_id == "documents.highlight.extract" for step in steps
     ):
         insertion = (
@@ -27,7 +42,7 @@ def apply_intent_enrichment(
                 params={},
             ),
         )
-    if "docs_write" in intent_tags and not any(
+    if docs_requested and not any(
         step.tool_id
         in (
             "docs.create",
@@ -43,7 +58,7 @@ def apply_intent_enrichment(
                 params={"note": request.message},
             )
         )
-    if "sheets_update" in intent_tags and not any(
+    if sheets_requested and not any(
         step.tool_id in ("workspace.sheets.track_step", "workspace.sheets.append")
         for step in steps
     ):

@@ -31,38 +31,45 @@ function ReplayTimeline({
   onSelectEvent,
   listRef,
 }: ReplayTimelineProps) {
-  if (streaming) {
-    return (
-      <div className="rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2 text-[12px] text-[#6e6e73]">
-        Live scene is pinned inside the theater. Full replay timeline appears below after execution completes.
-      </div>
-    );
-  }
-
   const activeStyle = styleForEvent(activeEvent);
   const ActiveIcon = activeStyle.icon;
+  const recentFilmstripEvents = streaming ? filmstripEvents.slice(-24) : filmstripEvents;
 
   return (
     <>
-      <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-[11px] text-[#6e6e73]">
-            Step {safeCursor + 1} of {totalEvents}
-          </span>
-          <span className="text-[11px] text-[#6e6e73]">{progressPercent}%</span>
+      {streaming ? (
+        <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2 text-[12px] text-[#4c4c50]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">Live timeline</span>
+            <span className="text-[11px] text-[#6e6e73]">
+              {totalEvents} event{totalEvents === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-[#6e6e73]">
+            Streaming every theatre event in real time.
+          </p>
         </div>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(totalEvents - 1, 0)}
-          value={safeCursor}
-          onChange={(event) => {
-            setCursor(Number(event.target.value));
-            setIsPlaying(false);
-          }}
-          className="w-full accent-[#2f2f34]"
-        />
-      </div>
+      ) : (
+        <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-[11px] text-[#6e6e73]">
+              Step {safeCursor + 1} of {totalEvents}
+            </span>
+            <span className="text-[11px] text-[#6e6e73]">{progressPercent}%</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(totalEvents - 1, 0)}
+            value={safeCursor}
+            onChange={(event) => {
+              setCursor(Number(event.target.value));
+              setIsPlaying(false);
+            }}
+            className="w-full accent-[#2f2f34]"
+          />
+        </div>
+      )}
 
       <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/90 p-3">
         <div className="mb-1 flex items-center gap-2 text-[12px] text-[#6e6e73]">Current scene</div>
@@ -88,13 +95,18 @@ function ReplayTimeline({
 
       <div className="mb-2 overflow-x-auto pb-1">
         <div className="inline-flex min-w-full gap-2">
-          {filmstripEvents.map(({ event, index }) => {
+          {recentFilmstripEvents.map(({ event, index }) => {
             const isActive = index === safeCursor;
             return (
               <button
                 key={`${event.event_id}-chip`}
                 type="button"
-                onClick={() => onSelectEvent(event, index)}
+                onClick={() => {
+                  if (streaming) {
+                    return;
+                  }
+                  onSelectEvent(event, index);
+                }}
                 className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] transition ${
                   isActive
                     ? "border-[#1d1d1f]/25 bg-[#1d1d1f] text-white"
@@ -109,17 +121,27 @@ function ReplayTimeline({
         </div>
       </div>
 
-      <div ref={listRef} className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+      <div
+        ref={listRef}
+        className={`${streaming ? "max-h-72" : "max-h-56"} space-y-1.5 overflow-y-auto pr-1`}
+      >
         {visibleEvents.map((event, index) => {
           const style = styleForEvent(event);
           const Icon = style.icon;
           const isActive = index === safeCursor;
+          const sequenceLabel =
+            typeof event.seq === "number" && Number.isFinite(event.seq) ? `#${event.seq}` : `${index + 1}`;
           return (
             <button
               key={event.event_id || `${event.timestamp}-${index}`}
               type="button"
               data-activity-active={isActive ? "true" : "false"}
-              onClick={() => onSelectEvent(event, index)}
+              onClick={() => {
+                if (streaming) {
+                  return;
+                }
+                onSelectEvent(event, index);
+              }}
               className={`w-full rounded-xl border px-3 py-2 text-left transition ${
                 isActive ? "border-[#1d1d1f]/20 bg-white" : "border-black/[0.06] bg-white/80 hover:bg-white"
               }`}
@@ -130,7 +152,7 @@ function ReplayTimeline({
                   <p className="truncate text-[12px] font-medium text-[#1d1d1f]">{event.title}</p>
                 </div>
                 <span className="shrink-0 text-[10px] text-[#86868b]">
-                  {new Date(event.timestamp).toLocaleTimeString()}
+                  {streaming ? sequenceLabel : new Date(event.timestamp).toLocaleTimeString()}
                 </span>
               </div>
               {event.detail ? <p className="mt-0.5 line-clamp-2 text-[11px] text-[#6e6e73]">{event.detail}</p> : null}

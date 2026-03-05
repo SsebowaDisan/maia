@@ -14,12 +14,22 @@ import {
   type GoogleOAuthStatus,
 } from "../../../api/client";
 import {
+  analyzeGoogleWorkspaceLink,
   clearMapsIntegrationKey,
+  checkGoogleWorkspaceLinkAccess,
   getBraveIntegrationStatus,
+  getGoogleServiceAccountStatus,
+  listGoogleWorkspaceLinkAliases,
   getMapsIntegrationStatus,
   getOllamaIntegrationStatus,
   getOllamaQuickstart,
+  saveGoogleWorkspaceLinkAlias,
+  saveGoogleWorkspaceAuthMode,
+  type GoogleWorkspaceAliasRecord,
+  type GoogleWorkspaceLinkAccessResult,
+  type GoogleWorkspaceLinkAnalyzeResult,
   saveMapsIntegrationKey,
+  type GoogleServiceAccountStatus,
   type IntegrationStatus,
   type OllamaQuickstart,
   type OllamaStatus,
@@ -39,6 +49,15 @@ export function useSettingsController(activeTab: string) {
     connected: false,
     scopes: [],
   });
+  const [googleServiceAccountStatus, setGoogleServiceAccountStatus] = useState<GoogleServiceAccountStatus>({
+    configured: false,
+    usable: false,
+    email: "",
+    auth_mode: "oauth",
+    message: "Service-account credentials are not configured.",
+    instructions: [],
+  });
+  const [googleWorkspaceAliases, setGoogleWorkspaceAliases] = useState<GoogleWorkspaceAliasRecord[]>([]);
   const [mapsStatus, setMapsStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [braveStatus, setBraveStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [mapsKeyInput, setMapsKeyInput] = useState("");
@@ -59,13 +78,16 @@ export function useSettingsController(activeTab: string) {
   const refreshIntegrations = async () => {
     setLoading(true);
     try {
-      const [healthRows, credentialRows, oauthRow, mapsRow, braveRow, ollamaRow] = await Promise.all([
+      const [healthRows, credentialRows, oauthRow, mapsRow, braveRow, ollamaRow, serviceAccountRow, aliasRows] =
+        await Promise.all([
         listConnectorHealth(),
         listConnectorCredentials(),
         getGoogleOAuthStatus(),
         getMapsIntegrationStatus(),
         getBraveIntegrationStatus(),
         getOllamaIntegrationStatus(),
+        getGoogleServiceAccountStatus(),
+        listGoogleWorkspaceLinkAliases(),
       ]);
       const quickstartRow = await getOllamaQuickstart(ollamaRow.base_url || undefined);
 
@@ -89,6 +111,8 @@ export function useSettingsController(activeTab: string) {
       setHealthMap(nextHealthMap);
       setCredentialMap(nextCredentialMap);
       setGoogleOAuthStatus(oauthRow);
+      setGoogleServiceAccountStatus(serviceAccountRow);
+      setGoogleWorkspaceAliases(Array.isArray(aliasRows.aliases) ? aliasRows.aliases : []);
       setMapsStatus(mapsRow);
       setBraveStatus(braveRow);
       ollama.syncFromStatus(ollamaRow as OllamaStatus, quickstartRow as OllamaQuickstart | null);
@@ -131,6 +155,18 @@ export function useSettingsController(activeTab: string) {
     const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}`;
     window.history.replaceState({}, "", nextUrl);
     void refreshIntegrations();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "integrations" || typeof window === "undefined") {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshIntegrations();
+    }, 20000);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [activeTab]);
 
   useEffect(() => {
@@ -199,12 +235,37 @@ export function useSettingsController(activeTab: string) {
     }
   };
 
-  const handleGoogleOAuthConnect = async () => {
+  const handleGoogleOAuthConnect = async (): Promise<{
+    ok: boolean;
+    authorize_url?: string;
+    message: string;
+  }> => {
     try {
       const payload = await startGoogleOAuth();
-      window.location.assign(payload.authorize_url);
+      const authorizeUrl = String(payload.authorize_url || "").trim();
+      if (!authorizeUrl) {
+        const message = "OAuth setup failed: missing Google authorize URL.";
+        setOauthStatus(message);
+        return { ok: false, message };
+      }
+      let opened = false;
+      if (typeof window !== "undefined") {
+        const popup = window.open(authorizeUrl, "_blank", "noopener,noreferrer");
+        if (popup && !popup.closed) {
+          popup.focus();
+          opened = true;
+        } else {
+          window.location.assign(authorizeUrl);
+          opened = true;
+        }
+      }
+      const message = "Google sign-in started.";
+      setOauthStatus(message);
+      return { ok: opened, authorize_url: authorizeUrl, message };
     } catch (error) {
-      setOauthStatus(`OAuth setup error: ${String(error)}`);
+      const message = `OAuth setup error: ${String(error)}`;
+      setOauthStatus(message);
+      return { ok: false, message };
     }
   };
 
@@ -218,6 +279,43 @@ export function useSettingsController(activeTab: string) {
     } catch (error) {
       setOauthStatus(`OAuth disconnect error: ${String(error)}`);
     }
+  };
+
+  const handleGoogleWorkspaceAuthModeChange = async (mode: "oauth" | "service_account") => {
+    try {
+      await saveGoogleWorkspaceAuthMode(mode);
+      await refreshIntegrations();
+      setStatusMessage(
+        mode === "service_account"
+          ? "Google auth mode set to service account."
+          : "Google auth mode set to OAuth.",
+      );
+    } catch (error) {
+      setStatusMessage(`Failed to update Google auth mode: ${String(error)}`);
+    }
+  };
+
+  const handleAnalyzeGoogleWorkspaceLink = async (
+    link: string,
+  ): Promise<GoogleWorkspaceLinkAnalyzeResult> => {
+    return analyzeGoogleWorkspaceLink(link.trim());
+  };
+
+  const handleCheckGoogleWorkspaceLinkAccess = async (payload: {
+    link: string;
+    action: "read" | "edit";
+  }): Promise<GoogleWorkspaceLinkAccessResult> => {
+    return checkGoogleWorkspaceLinkAccess({ link: payload.link.trim(), action: payload.action });
+  };
+
+  const handleSaveGoogleWorkspaceLinkAlias = async (
+    alias: string,
+    link: string,
+  ): Promise<GoogleWorkspaceAliasRecord[]> => {
+    const response = await saveGoogleWorkspaceLinkAlias({ alias: alias.trim(), link: link.trim() });
+    const aliases = Array.isArray(response.aliases) ? response.aliases : [];
+    setGoogleWorkspaceAliases(aliases);
+    return aliases;
   };
 
   const handleSaveMapsKey = async () => {
@@ -289,6 +387,8 @@ export function useSettingsController(activeTab: string) {
     statusMessage,
     oauthStatus,
     googleOAuthStatus,
+    googleServiceAccountStatus,
+    googleWorkspaceAliases,
     mapsStatus,
     braveStatus,
     mapsKeyInput,
@@ -303,6 +403,10 @@ export function useSettingsController(activeTab: string) {
     handleClearConnector,
     handleGoogleOAuthConnect,
     handleGoogleOAuthDisconnect,
+    handleGoogleWorkspaceAuthModeChange,
+    handleAnalyzeGoogleWorkspaceLink,
+    handleCheckGoogleWorkspaceLinkAccess,
+    handleSaveGoogleWorkspaceLinkAlias,
     handleSaveMapsKey,
     handleClearMapsKey,
     handleSaveBraveKey,

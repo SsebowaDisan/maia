@@ -54,6 +54,25 @@ def test_report_generation_tool_persists_latest_report_context() -> None:
     assert "Weekly KPI" in context.settings["__latest_report_content"]
 
 
+def test_report_generation_includes_reference_links_from_recent_web_sources() -> None:
+    context = _context()
+    context.settings["__latest_web_sources"] = [
+        {
+            "label": "OpenAI",
+            "url": "https://openai.com",
+            "metadata": {"excerpt": "Research and deployment of safe AI systems."},
+        }
+    ]
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt="build report",
+        params={"title": "AI Brief", "summary": "Machine learning overview."},
+    )
+    assert "### Detailed Analysis" in result.content
+    assert "### Reference Links" in result.content
+    assert "[OpenAI](https://openai.com)" in result.content
+
+
 def test_chart_generate_tool_returns_artifact_path() -> None:
     result = ChartGenerateTool().execute(
         context=_context(),

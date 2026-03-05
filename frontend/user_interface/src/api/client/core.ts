@@ -150,7 +150,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    const trimmed = text.trim();
+    if (trimmed) {
+      let parsedMessage = "";
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          detail?: {
+            code?: string;
+            message?: string;
+            details?: Record<string, unknown>;
+          } | string;
+          code?: string;
+          message?: string;
+        };
+        if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+          parsedMessage = parsed.detail.trim();
+        }
+        if (!parsedMessage && parsed?.detail && typeof parsed.detail === "object") {
+          const code = String(parsed.detail.code || "").trim();
+          const message = String(parsed.detail.message || "").trim();
+          if (message) {
+            parsedMessage = code ? `${code}: ${message}` : message;
+          }
+        }
+        if (!parsedMessage) {
+          const code = String(parsed?.code || "").trim();
+          const message = String(parsed?.message || "").trim();
+          if (message) {
+            parsedMessage = code ? `${code}: ${message}` : message;
+          }
+        }
+      } catch {
+        parsedMessage = "";
+      }
+      if (parsedMessage) {
+        throw new Error(parsedMessage);
+      }
+      throw new Error(trimmed);
+    }
+    throw new Error(`Request failed: ${response.status}`);
   }
 
   return (await response.json()) as T;

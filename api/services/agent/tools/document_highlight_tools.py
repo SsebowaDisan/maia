@@ -71,6 +71,129 @@ def _safe_snippet(text: str, *, limit: int = 220) -> str:
     return f"{compact[: max(1, limit - 1)].rstrip()}..."
 
 
+def _page_number_from_label(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d+", text)
+    if not match:
+        return None
+    try:
+        parsed = int(match.group(0))
+    except Exception:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _build_pdf_scan_steps(
+    *,
+    chunks: list[dict[str, Any]],
+    highlights: list[dict[str, str]],
+    max_pages: int = 8,
+) -> list[dict[str, Any]]:
+    page_rows: list[dict[str, Any]] = []
+
+    def _append(
+        *,
+        source_id: str,
+        source_name: str,
+        page_label: str,
+        snippet: str,
+    ) -> None:
+        cleaned_source_id = str(source_id or "").strip()
+        cleaned_source_name = str(source_name or "Indexed file").strip() or "Indexed file"
+        cleaned_page_label = str(page_label or "").strip()
+        cleaned_snippet = _safe_snippet(snippet, limit=180)
+        page_rows.append(
+            {
+                "source_id": cleaned_source_id,
+                "source_name": cleaned_source_name,
+                "page_label": cleaned_page_label,
+                "page_number": _page_number_from_label(cleaned_page_label),
+                "snippet": cleaned_snippet,
+            }
+        )
+
+    for row in highlights:
+        if not isinstance(row, dict):
+            continue
+        _append(
+            source_id=str(row.get("source_id") or ""),
+            source_name=str(row.get("source_name") or "Indexed file"),
+            page_label=str(row.get("page_label") or ""),
+            snippet=str(row.get("snippet") or row.get("word") or "").strip(),
+        )
+
+    for row in chunks:
+        if not isinstance(row, dict):
+            continue
+        _append(
+            source_id=str(row.get("source_id") or ""),
+            source_name=str(row.get("source_name") or "Indexed file"),
+            page_label=str(row.get("page_label") or ""),
+            snippet=str(row.get("text") or "").strip(),
+        )
+
+    if not page_rows:
+        return []
+
+    deduped: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, int | None]] = set()
+    for row in page_rows:
+        key = (
+            str(row.get("source_name") or "").strip().lower(),
+            str(row.get("page_label") or "").strip().lower(),
+            row.get("page_number") if isinstance(row.get("page_number"), int) else None,
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(row)
+
+    deduped.sort(
+        key=lambda row: (
+            str(row.get("source_name") or "").strip().lower(),
+            row.get("page_number") if isinstance(row.get("page_number"), int) else 10_000_000,
+            str(row.get("page_label") or "").strip().lower(),
+        )
+    )
+    limited = deduped[: max(1, int(max_pages))]
+    total = len(limited)
+    if total <= 0:
+        return []
+
+    output: list[dict[str, Any]] = []
+    previous_page_number: int | None = None
+    for index, row in enumerate(limited, start=1):
+        page_number = row.get("page_number")
+        if not isinstance(page_number, int):
+            page_number = index
+        if previous_page_number is None:
+            direction = "down"
+        else:
+            direction = "up" if page_number < previous_page_number else "down"
+        previous_page_number = page_number
+        scroll_percent = (
+            0.0 if total == 1 else round(((index - 1) / max(1, total - 1)) * 100.0, 2)
+        )
+        output.append(
+            {
+                "source_id": str(row.get("source_id") or ""),
+                "source_name": str(row.get("source_name") or "Indexed file"),
+                "page_label": str(row.get("page_label") or ""),
+                "page_number": page_number,
+                "page_index": index,
+                "page_total": total,
+                "scroll_percent": scroll_percent,
+                "scroll_direction": direction,
+                "snippet": str(row.get("snippet") or "").strip(),
+            }
+        )
+    return output
+
+
 def _extract_terms(prompt: str, params: dict[str, Any], chunks: list[dict[str, Any]]) -> list[str]:
     provided = params.get("words")
     words: list[str] = []
@@ -313,19 +436,107 @@ class DocumentHighlightExtractTool(AgentTool):
 
         highlighted_words = [row.get("word", "") for row in highlights if row.get("word")]
         unique_words = list(dict.fromkeys(highlighted_words))
+        pdf_scan_steps = _build_pdf_scan_steps(chunks=chunks, highlights=highlights)
+        has_pdf_file = any(
+            str(row.get("source_name") or "").strip().lower().endswith(".pdf")
+            for row in chunks
+            if isinstance(row, dict)
+        )
+        is_pdf_scan = bool(pdf_scan_steps) and (
+            has_pdf_file
+            or any(str(row.get("page_label") or "").strip() for row in pdf_scan_steps)
+        )
+
         events: list[ToolTraceEvent] = [
             ToolTraceEvent(
                 event_type="document_opened",
                 title="Open selected files",
                 detail=f"Scanning {len(chunks)} file excerpt(s)",
-                data={"chunk_count": len(chunks)},
+                data={
+                    "chunk_count": len(chunks),
+                    "scene_surface": "document",
+                },
             ),
+        ]
+        if is_pdf_scan and pdf_scan_steps:
+            first_step = pdf_scan_steps[0]
+            events.append(
+                ToolTraceEvent(
+                    event_type="pdf_open",
+                    title="Open PDF preview",
+                    detail=str(first_step.get("source_name") or "Indexed PDF"),
+                    data={
+                        "scene_surface": "document",
+                        "source_name": str(first_step.get("source_name") or ""),
+                        "pdf_page": int(first_step.get("page_number") or 1),
+                        "page_index": int(first_step.get("page_index") or 1),
+                        "page_total": int(first_step.get("page_total") or len(pdf_scan_steps)),
+                        "pdf_total_pages": int(first_step.get("page_total") or len(pdf_scan_steps)),
+                        "scroll_percent": float(first_step.get("scroll_percent") or 0.0),
+                    },
+                )
+            )
+            for step in pdf_scan_steps:
+                page_number = int(step.get("page_number") or 1)
+                page_index = int(step.get("page_index") or 1)
+                page_total = int(step.get("page_total") or len(pdf_scan_steps))
+                source_name = str(step.get("source_name") or "Indexed PDF")
+                page_label = str(step.get("page_label") or "").strip()
+                snippet_preview = str(step.get("snippet") or "").strip()
+                direction = str(step.get("scroll_direction") or "down").strip().lower()
+                if direction not in {"up", "down"}:
+                    direction = "down"
+                base_payload = {
+                    "scene_surface": "document",
+                    "source_name": source_name,
+                    "source_id": str(step.get("source_id") or ""),
+                    "pdf_page": page_number,
+                    "page_index": page_index,
+                    "page_total": page_total,
+                    "pdf_total_pages": page_total,
+                    "page_label": page_label,
+                    "scroll_percent": float(step.get("scroll_percent") or 0.0),
+                    "scroll_direction": direction,
+                }
+                events.append(
+                    ToolTraceEvent(
+                        event_type="pdf_page_change",
+                        title=f"Navigate to PDF page {page_number}",
+                        detail=(
+                            f"{source_name} - page {page_number}"
+                            if not page_label
+                            else f"{source_name} - page {page_label}"
+                        ),
+                        data=base_payload,
+                    )
+                )
+                events.append(
+                    ToolTraceEvent(
+                        event_type="pdf_scan_region",
+                        title=f"Scan PDF page {page_number}",
+                        detail=_safe_snippet(snippet_preview, limit=120)
+                        or "Scanning visible text region",
+                        data={
+                            **base_payload,
+                            "scan_region": _safe_snippet(snippet_preview, limit=240),
+                            "scan_pass": page_index,
+                        },
+                    )
+                )
+
+        events.append(
             ToolTraceEvent(
                 event_type="document_scanned",
                 title="Scan document excerpts",
                 detail=f"Detected {len(unique_words)} candidate highlighted word(s)",
-                data={"terms": terms[:10], "highlight_color": highlight_color},
-            ),
+                data={
+                    "terms": terms[:10],
+                    "highlight_color": highlight_color,
+                    "scene_surface": "document",
+                },
+            )
+        )
+        events.append(
             ToolTraceEvent(
                 event_type="highlights_detected",
                 title="Highlight words in files",
@@ -335,9 +546,27 @@ class DocumentHighlightExtractTool(AgentTool):
                     "highlight_color": highlight_color,
                     "highlighted_words": highlights[:18],
                     "copied_snippets": copied_snippets[:10],
+                    "page_total": len(pdf_scan_steps) if pdf_scan_steps else 0,
+                    "scene_surface": "document",
                 },
-            ),
-        ]
+            )
+        )
+        if highlights:
+            first_highlight = highlights[0]
+            events.append(
+                ToolTraceEvent(
+                    event_type="pdf_evidence_linked",
+                    title="Link highlight evidence",
+                    detail=_safe_snippet(str(first_highlight.get("snippet") or ""), limit=140),
+                    data={
+                        "scene_surface": "document",
+                        "highlight_color": highlight_color,
+                        "keyword": str(first_highlight.get("word") or ""),
+                        "source_name": str(first_highlight.get("source_name") or ""),
+                        "page_label": str(first_highlight.get("page_label") or ""),
+                    },
+                )
+            )
         if copied_snippets:
             events.append(
                 ToolTraceEvent(
@@ -376,6 +605,18 @@ class DocumentHighlightExtractTool(AgentTool):
                 "highlighted_words": highlights[:18],
                 "copied_snippets": copied_snippets[:10],
                 "chunk_count": len(chunks),
+                "scene_surface": "document",
+                "pdf_page": int(pdf_scan_steps[-1].get("page_number") or 1) if pdf_scan_steps else 1,
+                "page_index": int(pdf_scan_steps[-1].get("page_index") or 1) if pdf_scan_steps else 1,
+                "page_total": len(pdf_scan_steps),
+                "pdf_total_pages": len(pdf_scan_steps),
+                "scroll_percent": float(pdf_scan_steps[-1].get("scroll_percent") or 0.0)
+                if pdf_scan_steps
+                else 0.0,
+                "scroll_direction": str(pdf_scan_steps[-1].get("scroll_direction") or "down")
+                if pdf_scan_steps
+                else "down",
+                "scan_region": str(pdf_scan_steps[-1].get("snippet") or "") if pdf_scan_steps else "",
             },
             sources=list(source_by_id.values()),
             next_steps=[],

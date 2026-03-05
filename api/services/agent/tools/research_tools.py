@@ -373,6 +373,13 @@ class WebResearchTool(AgentTool):
 
         content = "\n".join(bullets)
         summary = f"Collected {len(sources)} web sources for query using {used_provider}: {query}"
+        if sources:
+            context.settings["__latest_web_sources"] = [
+                source.to_dict()
+                for source in sources[:12]
+            ]
+            context.settings["__latest_web_query"] = query
+            context.settings["__latest_web_provider"] = used_provider
         next_steps = [
             "Validate top 2 sources against internal company data.",
             "Convert findings into a competitor/market briefing.",

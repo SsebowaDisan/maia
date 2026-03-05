@@ -73,6 +73,27 @@ MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE = float(
 )
 
 
+def _normalize_request_attachments(request: ChatRequest) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in list(getattr(request, "attachments", []) or []):
+        name_raw = str(getattr(item, "name", "") or "").strip()
+        file_id_raw = str(getattr(item, "file_id", "") or "").strip()
+        if not name_raw and not file_id_raw:
+            continue
+        name = " ".join(name_raw.split())[:220]
+        file_id = " ".join(file_id_raw.split())[:160]
+        dedupe_key = (file_id, name.lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        payload = {"name": name or file_id or "Uploaded file"}
+        if file_id:
+            payload["file_id"] = file_id
+        normalized.append(payload)
+    return normalized
+
+
 def _extract_text_content(raw_content: Any) -> str:
     if isinstance(raw_content, str):
         return raw_content.strip()
@@ -1754,6 +1775,7 @@ def run_fast_chat_turn(
     plot_history = deepcopy(data_source.get("plot_history", []))
     plot_history.append(None)
     message_meta = deepcopy(data_source.get("message_meta", []))
+    turn_attachments = _normalize_request_attachments(request)
     message_meta.append(
         {
             "mode": "ask",
@@ -1761,6 +1783,7 @@ def run_fast_chat_turn(
             "actions_taken": [],
             "sources_used": [],
             "source_usage": source_usage,
+            "attachments": turn_attachments,
             "claim_signal_summary": claim_signal_summary,
             "citation_quality_metrics": citation_quality_metrics,
             "next_recommended_steps": [],

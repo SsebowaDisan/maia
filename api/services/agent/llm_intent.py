@@ -196,8 +196,18 @@ def detect_web_routing_mode(
     agent_goal: str | None,
     heuristic: dict[str, Any],
 ) -> dict[str, Any]:
-    heuristic_url = str(heuristic.get("url") or "").strip() if isinstance(heuristic, dict) else ""
-    fallback_mode = "url_scrape" if heuristic_url else "none"
+    heuristic_rows = heuristic if isinstance(heuristic, dict) else {}
+    heuristic_url = str(
+        heuristic_rows.get("url")
+        or heuristic_rows.get("target_url")
+        or ""
+    ).strip()
+    explicit_web_discovery = bool(heuristic_rows.get("explicit_web_discovery")) or bool(
+        heuristic_rows.get("requires_web_inspection")
+    )
+    fallback_mode = "url_scrape" if heuristic_url else (
+        "online_research" if explicit_web_discovery else "none"
+    )
     if not env_bool("MAIA_AGENT_LLM_WEB_ROUTING_ENABLED", default=True):
         return {
             "routing_mode": fallback_mode,

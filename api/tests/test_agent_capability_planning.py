@@ -220,3 +220,32 @@ def test_capability_analysis_accepts_data_science_domain_from_llm_inference() ->
     assert "data_analysis" in analysis.required_domains
     assert "data.science.profile" in analysis.preferred_tool_ids
     assert any(signal.startswith("llm_domain:data_analysis") for signal in analysis.matched_signals)
+
+
+def test_capability_analysis_does_not_force_workspace_tools_without_workspace_signal() -> None:
+    registry = _RegistryStub(
+        [
+            "marketing.web_research",
+            "report.generate",
+            "workspace.docs.research_notes",
+            "workspace.sheets.track_step",
+        ]
+    )
+    request = ChatRequest(
+        message="Research this company and summarize key findings.",
+        agent_mode="company_agent",
+    )
+    prep = _task_prep(
+        intent_tags=("web_research",),
+        contract_actions=[],
+        contract_objective="Research and summarize key findings",
+    )
+
+    analysis = analyze_capability_plan(
+        request=request,
+        task_prep=prep,
+        registry=registry,
+    )
+
+    assert "workspace.docs.research_notes" not in analysis.preferred_tool_ids
+    assert "workspace.sheets.track_step" not in analysis.preferred_tool_ids

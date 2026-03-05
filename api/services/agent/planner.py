@@ -62,8 +62,6 @@ _CORE_FLOW_TOOL_IDS = {
     "docs.create",
     "marketing.web_research",
     "report.generate",
-    "workspace.docs.research_notes",
-    "workspace.sheets.track_step",
 }
 
 DEFAULT_WEB_RESEARCH_PROVIDER = "brave_search"
@@ -91,6 +89,47 @@ def resolve_web_routing(request: ChatRequest) -> dict[str, Any]:
 
 def is_deep_research_request(request: ChatRequest) -> bool:
     return request.agent_mode == "company_agent" and bool(str(request.agent_goal or "").strip())
+
+
+def _explicit_web_research_requested(request: ChatRequest) -> bool:
+    combined = " ".join(
+        [str(request.message or "").strip(), str(request.agent_goal or "").strip()]
+    ).lower()
+    if not combined:
+        return False
+    cues = (
+        "search online",
+        "web research",
+        "online research",
+        "online sources",
+        "internet",
+        "browse",
+        "latest",
+        "recent",
+        "news",
+        "look up",
+    )
+    return any(cue in combined for cue in cues)
+
+
+def _request_has_selected_files(request: ChatRequest) -> bool:
+    selection = request.index_selection if isinstance(request.index_selection, dict) else {}
+    for selected in selection.values():
+        mode = str(getattr(selected, "mode", "") or "").strip().lower()
+        file_ids = getattr(selected, "file_ids", [])
+        normalized_ids = [
+            str(item).strip()
+            for item in (file_ids if isinstance(file_ids, list) else [])
+            if str(item).strip()
+        ]
+        if mode == "select" and normalized_ids:
+            return True
+    attachments = request.attachments if isinstance(request.attachments, list) else []
+    for row in attachments:
+        file_id = str(getattr(row, "file_id", "") or "").strip()
+        if file_id:
+            return True
+    return False
 
 
 def _sort_steps(steps: list[PlannedStep], *, preferred_tool_ids: set[str] | None = None) -> list[PlannedStep]:
@@ -143,6 +182,23 @@ def _normalize_steps(
     signals = intent_signals(request)
     url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
+    combined_text = " ".join(
+        [
+            str(request.message or "").strip(),
+            str(request.agent_goal or "").strip(),
+        ]
+    ).lower()
+    attachment_delivery_requested = any(
+        token in combined_text
+        for token in (
+            "attach",
+            "attachment",
+            "attached",
+            "pdf",
+            "file",
+            "download",
+        )
+    )
     highlight_color = str(signals.get("highlight_color") or "yellow")
     routing = web_routing if isinstance(web_routing, dict) else detect_web_routing_mode(
         message=request.message,
@@ -154,6 +210,7 @@ def _normalize_steps(
     online_research_requested = routing_mode == "online_research"
     company_agent_mode = request.agent_mode == "company_agent"
     has_highlight_extract = any(step.tool_id == "documents.highlight.extract" for step in steps)
+    has_selected_files = _request_has_selected_files(request)
 
     normalized: list[PlannedStep] = []
     for step in steps:
@@ -210,6 +267,10 @@ def _normalize_steps(
             params.setdefault("message", request.message)
         if step.tool_id == "docs.create" and has_highlight_extract:
             params.setdefault("include_copied_highlights", True)
+        if step.tool_id == "workspace.docs.fill_template" and attachment_delivery_requested:
+            params.setdefault("export_pdf", True)
+        if step.tool_id in ("gmail.draft", "gmail.send") and attachment_delivery_requested:
+            params.setdefault("attach_latest_report_pdf", True)
         normalized.append(
             PlannedStep(
                 tool_id=step.tool_id,
@@ -218,6 +279,19 @@ def _normalize_steps(
                 why_this_step=step.why_this_step,
                 expected_evidence=step.expected_evidence,
             )
+        )
+
+    pdf_live_required = has_selected_files or bool(signals.get("wants_file_scope"))
+    has_pdf_step = any(step.tool_id == "documents.highlight.extract" for step in normalized)
+    if pdf_live_required and not has_pdf_step:
+        insert_at = 1 if normalized and normalized[0].tool_id == "browser.playwright.inspect" else 0
+        normalized.insert(
+            insert_at,
+            PlannedStep(
+                tool_id="documents.highlight.extract",
+                title="Highlight words in selected files",
+                params={"highlight_color": highlight_color},
+            ),
         )
 
     if scrape_url_requested and url:
@@ -251,6 +325,25 @@ def _normalize_steps(
                     },
                 ),
             )
+    elif (
+        routing_mode == "none"
+        and not url
+        and not _explicit_web_research_requested(request)
+    ):
+        pruned: list[PlannedStep] = []
+        for step in normalized:
+            if step.tool_id not in (
+                "marketing.web_research",
+                "browser.playwright.inspect",
+                "web.extract.structured",
+                "web.dataset.adapter",
+            ):
+                pruned.append(step)
+                continue
+            step_url = " ".join(str(step.params.get("url") or "").split()).strip()
+            if step_url.startswith(("http://", "https://")):
+                pruned.append(step)
+        normalized = pruned
 
     if company_agent_mode:
         normalized = [
@@ -270,6 +363,15 @@ def _normalize_steps(
             continue
         seen.add(signature)
         deduped.append(step)
+
+    if not deduped:
+        deduped.append(
+            PlannedStep(
+                tool_id="report.generate",
+                title="Create concise executive output",
+                params={"summary": request.message},
+            )
+        )
 
     return _sort_steps(deduped, preferred_tool_ids=preferred_tool_ids)
 
@@ -648,7 +750,7 @@ def build_browser_followup_steps(
         if isinstance(raw_rows, list):
             rows = raw_rows
 
-    followups: list[PlannedStep] = []
+    candidates: list[tuple[bool, str, str]] = []
     seen_urls: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -658,14 +760,24 @@ def build_browser_followup_steps(
         if not url or not url.startswith(("http://", "https://")) or url in seen_urls:
             continue
         seen_urls.add(url)
+        lowered_url = url.lower()
+        is_pdf = ".pdf" in lowered_url or "application/pdf" in str(row.get("mime_type") or "").lower()
+        candidates.append((is_pdf, url, label))
+
+    # Prioritize PDF sources so live theatre includes PDF interaction when research discovers PDFs.
+    candidates.sort(key=lambda item: (0 if item[0] else 1))
+    followups: list[PlannedStep] = []
+    for is_pdf, url, label in candidates[: max(1, int(max_urls))]:
         followups.append(
             PlannedStep(
                 tool_id="browser.playwright.inspect",
-                title=f"Inspect source: {label[:72] or 'Website'}",
-                params={"url": url},
+                title=(
+                    f"Inspect PDF source: {label[:64] or 'PDF'}"
+                    if is_pdf
+                    else f"Inspect source: {label[:72] or 'Website'}"
+                ),
+                params={"url": url, "follow_same_domain_links": False if is_pdf else True},
             )
         )
-        if len(followups) >= max(1, int(max_urls)):
-            break
 
     return followups

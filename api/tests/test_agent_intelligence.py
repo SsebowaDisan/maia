@@ -44,6 +44,22 @@ def test_derive_task_intelligence_treats_sent_as_delivery_intent() -> None:
     assert task.requires_delivery is True
 
 
+def test_derive_task_intelligence_detects_docs_sheets_and_web_intents() -> None:
+    task = derive_task_intelligence(
+        message=(
+            "Research online agent architectures, write findings in Google Docs, "
+            "and track steps in Google Sheets."
+        ),
+        agent_goal="Use latest web sources and produce a brief report.",
+    )
+    tags = set(task.intent_tags)
+    assert "web_research" in tags
+    assert "docs_write" in tags
+    assert "sheets_update" in tags
+    assert task.requires_web_inspection is True
+    assert task.requested_report is True
+
+
 def test_verification_report_marks_delivery_warning_on_failed_send() -> None:
     task = derive_task_intelligence(
         message="Analyze https://axongroup.com and send report to ops@example.com",

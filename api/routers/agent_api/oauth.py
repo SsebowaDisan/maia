@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
@@ -27,6 +29,7 @@ from .common import (
 from .schemas import GOOGLE_OAUTH_CONNECTOR_IDS, GoogleOAuthExchangeRequest
 
 router = APIRouter(tags=["agent"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/oauth/google/start")
@@ -46,15 +49,27 @@ def start_google_oauth(
         )
     except GoogleServiceError as exc:
         raise http_error_from_google(exc) from exc
-    get_live_event_broker().publish(
-        user_id=user_id,
-        run_id=None,
-        event={
-            "type": "oauth.start",
-            "message": "Google OAuth flow started",
-            "data": {"redirect_uri": payload.get("redirect_uri"), "scopes": payload.get("scopes", [])},
-        },
-    )
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.exception("Unexpected OAuth start failure for user %s", user_id)
+        raise oauth_error(
+            500,
+            "oauth_start_failed",
+            "Google OAuth setup failed before redirect URL generation.",
+            reason=str(exc)[:220],
+        ) from exc
+
+    try:
+        get_live_event_broker().publish(
+            user_id=user_id,
+            run_id=None,
+            event={
+                "type": "oauth.start",
+                "message": "Google OAuth flow started",
+                "data": {"redirect_uri": payload.get("redirect_uri"), "scopes": payload.get("scopes", [])},
+            },
+        )
+    except Exception:  # pragma: no cover - event stream should not block OAuth
+        logger.exception("OAuth start event publish failed for user %s", user_id)
     return payload
 
 

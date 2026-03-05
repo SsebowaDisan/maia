@@ -5,6 +5,52 @@ export type IntegrationStatus = {
   source?: "env" | "stored" | null;
 };
 
+export type GoogleServiceAccountStatus = {
+  configured: boolean;
+  usable: boolean;
+  email: string;
+  client_id?: string | null;
+  project_id?: string | null;
+  source?: string | null;
+  auth_mode: "oauth" | "service_account";
+  message: string;
+  instructions: string[];
+  aliases_count?: number;
+};
+
+export type GoogleWorkspaceAliasRecord = {
+  alias: string;
+  resource_type: string;
+  resource_id: string;
+  canonical_url: string;
+};
+
+export type GoogleWorkspaceLinkAnalyzeResult = {
+  detected: boolean;
+  source: "link" | "alias" | "unknown";
+  resource_type?: string;
+  resource_id?: string;
+  canonical_url?: string;
+  label?: string;
+  message?: string;
+};
+
+export type GoogleWorkspaceLinkAccessResult = {
+  action: "read" | "edit";
+  resource_type: string;
+  checked_at: string;
+  ready: boolean;
+  required_role: string;
+  can_read: boolean;
+  can_edit: boolean;
+  resource_name: string;
+  resource_mime_type: string;
+  canonical_url: string;
+  resource_id: string;
+  message: string;
+  error_code?: string;
+};
+
 export type OllamaModelRecord = {
   name: string;
   size: number;
@@ -125,6 +171,68 @@ export function clearMapsIntegrationKey() {
 
 export function getBraveIntegrationStatus() {
   return request<IntegrationStatus>("/api/agent/integrations/brave/status");
+}
+
+export function getGoogleServiceAccountStatus() {
+  return request<GoogleServiceAccountStatus>(
+    "/api/agent/integrations/google-workspace/service-account/status",
+  );
+}
+
+export function saveGoogleWorkspaceAuthMode(mode: "oauth" | "service_account") {
+  return request<{ status: string; mode: "oauth" | "service_account" }>(
+    "/api/agent/integrations/google-workspace/service-account/auth-mode",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    },
+  );
+}
+
+export function listGoogleWorkspaceLinkAliases() {
+  return request<{ aliases: GoogleWorkspaceAliasRecord[] }>(
+    "/api/agent/integrations/google-workspace/link-assistant/aliases",
+  );
+}
+
+export function analyzeGoogleWorkspaceLink(link: string) {
+  return request<GoogleWorkspaceLinkAnalyzeResult>(
+    "/api/agent/integrations/google-workspace/link-assistant/analyze",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    },
+  );
+}
+
+export function checkGoogleWorkspaceLinkAccess(payload: {
+  link: string;
+  action: "read" | "edit";
+}) {
+  return request<GoogleWorkspaceLinkAccessResult>(
+    "/api/agent/integrations/google-workspace/link-assistant/check-access",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function saveGoogleWorkspaceLinkAlias(payload: {
+  alias: string;
+  link: string;
+}) {
+  return request<{ status: string; alias: GoogleWorkspaceAliasRecord; aliases: GoogleWorkspaceAliasRecord[] }>(
+    "/api/agent/integrations/google-workspace/link-assistant/aliases/save",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getOllamaIntegrationStatus() {

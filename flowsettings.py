@@ -29,6 +29,17 @@ KH_GRADIO_SHARE = config("KH_GRADIO_SHARE", default=False, cast=bool)
 KH_ENABLE_FIRST_SETUP = config("KH_ENABLE_FIRST_SETUP", default=True, cast=bool)
 KH_DEMO_MODE = config("KH_DEMO_MODE", default=False, cast=bool)
 KH_OLLAMA_URL = config("KH_OLLAMA_URL", default="http://localhost:11434/v1/")
+KH_CHAT_TIMEOUT_SECONDS = config("KH_CHAT_TIMEOUT_SECONDS", default=45, cast=int)
+KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA = config(
+    "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA",
+    default=180,
+    cast=int,
+)
+MAIA_CHAT_AUTO_INDEX_URLS_TIMEOUT_SECONDS = config(
+    "MAIA_CHAT_AUTO_INDEX_URLS_TIMEOUT_SECONDS",
+    default=40,
+    cast=int,
+)
 
 # App can be ran from anywhere and it's not trivial to decide where to store app data.
 # So let's use the same directory as the flowsetting.py file.
@@ -229,75 +240,92 @@ if config("LOCAL_MODEL", default=""):
     }
 
 # additional LLM configurations
-KH_LLMS["claude"] = {
-    "spec": {
-        "__type__": "maia.llms.chats.LCAnthropicChat",
-        "model_name": "claude-3-5-sonnet-20240620",
-        "api_key": "your-key",
-    },
-    "default": False,
-}
-KH_LLMS["google"] = {
-    "spec": {
-        "__type__": "maia.llms.chats.LCGeminiChat",
-        "model_name": "gemini-1.5-flash",
-        "api_key": GOOGLE_API_KEY,
-    },
-    "default": not IS_OPENAI_DEFAULT,
-}
-KH_LLMS["groq"] = {
-    "spec": {
-        "__type__": "maia.llms.ChatOpenAI",
-        "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.1-8b-instant",
-        "api_key": "your-key",
-    },
-    "default": False,
-}
-KH_LLMS["cohere"] = {
-    "spec": {
-        "__type__": "maia.llms.chats.LCCohereChat",
-        "model_name": "command-r-plus-08-2024",
-        "api_key": config("COHERE_API_KEY", default="your-key"),
-    },
-    "default": False,
-}
-KH_LLMS["mistral"] = {
-    "spec": {
-        "__type__": "maia.llms.ChatOpenAI",
-        "base_url": "https://api.mistral.ai/v1",
-        "model": "ministral-8b-latest",
-        "api_key": config("MISTRAL_API_KEY", default="your-key"),
-    },
-    "default": False,
-}
+ANTHROPIC_API_KEY = config("ANTHROPIC_API_KEY", default="")
+if ANTHROPIC_API_KEY:
+    KH_LLMS["claude"] = {
+        "spec": {
+            "__type__": "maia.llms.chats.LCAnthropicChat",
+            "model_name": "claude-3-5-sonnet-20240620",
+            "api_key": ANTHROPIC_API_KEY,
+        },
+        "default": False,
+    }
+
+if GOOGLE_API_KEY and GOOGLE_API_KEY != "your-key":
+    KH_LLMS["google"] = {
+        "spec": {
+            "__type__": "maia.llms.chats.LCGeminiChat",
+            "model_name": "gemini-1.5-flash",
+            "api_key": GOOGLE_API_KEY,
+        },
+        "default": not IS_OPENAI_DEFAULT,
+    }
+
+GROQ_API_KEY = config("GROQ_API_KEY", default="")
+if GROQ_API_KEY:
+    KH_LLMS["groq"] = {
+        "spec": {
+            "__type__": "maia.llms.ChatOpenAI",
+            "base_url": "https://api.groq.com/openai/v1",
+            "model": "llama-3.1-8b-instant",
+            "api_key": GROQ_API_KEY,
+        },
+        "default": False,
+    }
+
+COHERE_API_KEY = config("COHERE_API_KEY", default="")
+if COHERE_API_KEY:
+    KH_LLMS["cohere"] = {
+        "spec": {
+            "__type__": "maia.llms.chats.LCCohereChat",
+            "model_name": "command-r-plus-08-2024",
+            "api_key": COHERE_API_KEY,
+        },
+        "default": False,
+    }
+
+MISTRAL_API_KEY = config("MISTRAL_API_KEY", default="")
+if MISTRAL_API_KEY:
+    KH_LLMS["mistral"] = {
+        "spec": {
+            "__type__": "maia.llms.ChatOpenAI",
+            "base_url": "https://api.mistral.ai/v1",
+            "model": "ministral-8b-latest",
+            "api_key": MISTRAL_API_KEY,
+        },
+        "default": False,
+    }
 
 # additional embeddings configurations
-KH_EMBEDDINGS["cohere"] = {
-    "spec": {
-        "__type__": "maia.embeddings.LCCohereEmbeddings",
-        "model": "embed-multilingual-v3.0",
-        "cohere_api_key": config("COHERE_API_KEY", default="your-key"),
-        "user_agent": "default",
-    },
-    "default": False,
-}
-KH_EMBEDDINGS["google"] = {
-    "spec": {
-        "__type__": "maia.embeddings.LCGoogleEmbeddings",
-        "model": "models/text-embedding-004",
-        "google_api_key": GOOGLE_API_KEY,
-    },
-    "default": not IS_OPENAI_DEFAULT,
-}
-KH_EMBEDDINGS["mistral"] = {
-    "spec": {
-        "__type__": "maia.embeddings.LCMistralEmbeddings",
-        "model": "mistral-embed",
-        "api_key": config("MISTRAL_API_KEY", default="your-key"),
-    },
-    "default": False,
-}
+if COHERE_API_KEY:
+    KH_EMBEDDINGS["cohere"] = {
+        "spec": {
+            "__type__": "maia.embeddings.LCCohereEmbeddings",
+            "model": "embed-multilingual-v3.0",
+            "cohere_api_key": COHERE_API_KEY,
+            "user_agent": "default",
+        },
+        "default": False,
+    }
+if GOOGLE_API_KEY and GOOGLE_API_KEY != "your-key":
+    KH_EMBEDDINGS["google"] = {
+        "spec": {
+            "__type__": "maia.embeddings.LCGoogleEmbeddings",
+            "model": "models/text-embedding-004",
+            "google_api_key": GOOGLE_API_KEY,
+        },
+        "default": not IS_OPENAI_DEFAULT,
+    }
+
+if MISTRAL_API_KEY:
+    KH_EMBEDDINGS["mistral"] = {
+        "spec": {
+            "__type__": "maia.embeddings.LCMistralEmbeddings",
+            "model": "mistral-embed",
+            "api_key": MISTRAL_API_KEY,
+        },
+        "default": False,
+    }
 # KH_EMBEDDINGS["huggingface"] = {
 #     "spec": {
 #         "__type__": "maia.embeddings.LCHuggingFaceEmbeddings",

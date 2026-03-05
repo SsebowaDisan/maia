@@ -41,6 +41,70 @@ class LiveRunStream:
         return {"type": "activity", "event": event.to_dict()}
 
     @staticmethod
+    def _infer_scene_surface(
+        *,
+        event_type: str,
+        tool_id: str,
+        payload: dict[str, Any],
+    ) -> str:
+        normalized_event = str(event_type or "").strip().lower()
+        normalized_tool = str(tool_id or "").strip().lower()
+
+        def _surface_from_url(candidate: Any) -> str:
+            url = str(candidate or "").strip().lower()
+            if not url:
+                return ""
+            if "docs.google.com/spreadsheets/" in url:
+                return "google_sheets"
+            if "docs.google.com/document/" in url:
+                return "google_docs"
+            if url.startswith("http://") or url.startswith("https://"):
+                return "website"
+            return ""
+
+        for key in (
+            "spreadsheet_url",
+            "document_url",
+            "source_url",
+            "url",
+            "target_url",
+            "page_url",
+            "final_url",
+            "link",
+        ):
+            inferred = _surface_from_url(payload.get(key))
+            if inferred:
+                return inferred
+
+        if normalized_event.startswith(("browser_", "web_", "brave.", "bing.")):
+            return "website"
+        if normalized_event.startswith(("email_", "email.", "gmail_", "gmail.")):
+            return "email"
+        if normalized_event.startswith(("sheet_", "sheets.")) or normalized_event == "drive.go_to_sheet":
+            return "google_sheets"
+        if normalized_event.startswith(("document_", "pdf_")):
+            return "document"
+        if normalized_event.startswith(("doc_", "docs.")) or normalized_event == "drive.go_to_doc":
+            return "google_docs"
+        if normalized_event.startswith("drive."):
+            if normalized_tool.startswith("workspace.sheets."):
+                return "google_sheets"
+            if normalized_tool.startswith("workspace.docs."):
+                return "google_docs"
+            return "document"
+
+        if normalized_tool.startswith(("workspace.docs.", "docs.create", "documents.highlight.")):
+            return "google_docs"
+        if normalized_tool.startswith("workspace.sheets."):
+            return "google_sheets"
+        if normalized_tool.startswith(("browser.", "marketing.web_research", "web.extract.", "web.dataset.")):
+            return "website"
+        if normalized_tool.startswith(("gmail.", "email.")):
+            return "email"
+
+        return "system"
+
+    @staticmethod
     def _trace_payload(trace: ToolTraceEvent | Any) -> dict[str, Any] | None:
         if isinstance(trace, ToolTraceEvent):
             return trace.to_dict()
@@ -66,11 +130,11 @@ class LiveRunStream:
             trace_detail = str(payload.get("detail") or "").strip()
             trace_data = payload.get("data")
             trace_data_dict = dict(trace_data) if isinstance(trace_data, dict) else {}
-            if "scene_surface" not in trace_data_dict:
-                trace_data_dict["scene_surface"] = (
-                    "preview"
-                    if trace_event_type.startswith(("browser_", "web_"))
-                    else "system"
+            if not str(trace_data_dict.get("scene_surface") or "").strip():
+                trace_data_dict["scene_surface"] = self._infer_scene_surface(
+                    event_type=trace_event_type,
+                    tool_id=step.tool_id,
+                    payload=trace_data_dict,
                 )
             trace_snapshot = payload.get("snapshot_ref")
             trace_event = activity_event_factory(

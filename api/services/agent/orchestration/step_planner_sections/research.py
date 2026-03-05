@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
 from api.services.agent.llm_research_blueprint import build_research_blueprint
 from api.services.agent.planner import PlannedStep, is_deep_research_request
+
+RESEARCH_INTENT_HINTS = (
+    "research",
+    "analyze",
+    "analysis",
+    "compare",
+    "competitor",
+    "market",
+    "source",
+    "citations",
+    "benchmark",
+    "latest",
+    "news",
+)
+HIGHLIGHT_HINTS = (
+    "highlight",
+    "copied words",
+    "copied word",
+    "extract keywords",
+    "keyword extraction",
+)
+FILE_HINTS = ("file", "files", "pdf", "document", "page")
+WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
 
 
 @dataclass(slots=True, frozen=True)
@@ -14,6 +38,40 @@ class ResearchBlueprint:
     highlight_color: str
     planned_search_terms: list[str]
     planned_keywords: list[str]
+
+
+def _keyword_floor_for_request(request: ChatRequest) -> int:
+    text = " ".join([str(request.message or "").strip(), str(request.agent_goal or "").strip()]).strip()
+    lowered = text.lower()
+    token_count = len(WORD_RE.findall(text))
+    has_research_signal = any(token in lowered for token in RESEARCH_INTENT_HINTS)
+    if token_count <= 7 and not has_research_signal:
+        return 4
+    if token_count <= 12 and not has_research_signal:
+        return 6
+    return 10
+
+
+def _has_selected_files(request: ChatRequest) -> bool:
+    for selection in request.index_selection.values():
+        file_ids = getattr(selection, "file_ids", []) or []
+        if any(str(file_id).strip() for file_id in file_ids):
+            return True
+    for attachment in request.attachments:
+        if str(getattr(attachment, "file_id", "") or "").strip():
+            return True
+    return False
+
+
+def _should_auto_insert_highlight_step(request: ChatRequest) -> bool:
+    combined = " ".join([str(request.message or "").strip(), str(request.agent_goal or "").strip()]).lower()
+    if not combined:
+        return False
+    if any(hint in combined for hint in HIGHLIGHT_HINTS):
+        return True
+    if _has_selected_files(request) and any(hint in combined for hint in FILE_HINTS):
+        return True
+    return False
 
 
 def build_research_plan(
@@ -33,7 +91,7 @@ def build_research_plan(
     research_blueprint = build_research_blueprint(
         message=request.message,
         agent_goal=request.agent_goal,
-        min_keywords=10,
+        min_keywords=_keyword_floor_for_request(request),
     )
     planned_search_terms = [
         str(item).strip()
@@ -93,6 +151,8 @@ def ensure_company_agent_highlight_step(
     planned_keywords: list[str],
 ) -> list[PlannedStep]:
     if request.agent_mode != "company_agent":
+        return steps
+    if not _should_auto_insert_highlight_step(request):
         return steps
     if any(step.tool_id == "documents.highlight.extract" for step in steps):
         return steps

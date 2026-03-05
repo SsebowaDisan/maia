@@ -27,6 +27,11 @@ def _allowed_keys(context: ApiContext) -> set[str]:
             "agent.smtp_port",
             "agent.smtp_username",
             "agent.smtp_password",
+            "agent.google_auth_mode",
+            "agent.google_service_account_email",
+            "agent.google_service_account_json_path",
+            "agent.google_service_account_impersonate",
+            "agent.google_workspace_link_aliases",
             "agent.ollama.base_url",
             "agent.ollama.default_model",
             "agent.ollama.embedding_model",
@@ -51,6 +56,11 @@ def load_user_settings(context: ApiContext, user_id: str) -> dict[str, Any]:
     values.setdefault("agent.smtp_port", 587)
     values.setdefault("agent.smtp_username", "")
     values.setdefault("agent.smtp_password", "")
+    values.setdefault("agent.google_auth_mode", "oauth")
+    values.setdefault("agent.google_service_account_email", "")
+    values.setdefault("agent.google_service_account_json_path", "")
+    values.setdefault("agent.google_service_account_impersonate", "")
+    values.setdefault("agent.google_workspace_link_aliases", {})
     values.setdefault(
         "agent.ollama.base_url",
         str(os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).strip()

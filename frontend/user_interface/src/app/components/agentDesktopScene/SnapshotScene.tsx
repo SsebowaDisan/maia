@@ -20,7 +20,7 @@ function SnapshotScene({
       <img
         src={snapshotUrl}
         alt="Agent scene snapshot"
-        className="absolute inset-0 h-full w-full object-cover"
+        className="absolute inset-0 h-full w-full object-contain bg-[#080a0f]"
         onError={onSnapshotError}
       />
       <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/15 to-black/20" />

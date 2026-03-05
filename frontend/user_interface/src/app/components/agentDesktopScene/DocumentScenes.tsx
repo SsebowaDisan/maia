@@ -5,18 +5,80 @@ function highlightBackground(color: "yellow" | "green") {
 }
 
 type DocumentPdfSceneProps = {
+  activeDetail: string;
   documentHighlights: DocumentHighlight[];
+  pdfPage: number;
+  pdfPageTotal: number;
+  pdfScanRegion: string;
+  pdfScrollDirection: "up" | "down" | "";
+  pdfScrollPercent: number | null;
+  sceneText: string;
   stageFileUrl: string;
 };
 
-function DocumentPdfScene({ documentHighlights, stageFileUrl }: DocumentPdfSceneProps) {
+function PdfScrollRail({
+  pdfScrollPercent,
+}: {
+  pdfScrollPercent: number | null;
+}) {
+  if (typeof pdfScrollPercent !== "number") {
+    return null;
+  }
+  return (
+    <div className="pointer-events-none absolute right-2 top-14 bottom-4 flex flex-col items-center">
+      <div className="h-full w-1.5 rounded-full bg-black/20">
+        <div
+          className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
+          style={{ height: "24px", marginTop: `calc(${pdfScrollPercent}% - 12px)` }}
+        />
+      </div>
+      <span className="mt-1 text-[10px] font-medium text-black/70">{Math.round(pdfScrollPercent)}%</span>
+    </div>
+  );
+}
+
+function DocumentPdfScene({
+  activeDetail,
+  documentHighlights,
+  pdfPage,
+  pdfPageTotal,
+  pdfScanRegion,
+  pdfScrollDirection,
+  pdfScrollPercent,
+  sceneText,
+  stageFileUrl,
+}: DocumentPdfSceneProps) {
+  const page = Math.max(1, Math.round(pdfPage));
+  const totalPages = Math.max(page, Math.round(pdfPageTotal));
+  const frameUrl = `${stageFileUrl}#page=${page}&zoom=page-width&toolbar=0&navpanes=0&scrollbar=0`;
   return (
     <div className="absolute inset-0">
       <iframe
-        src={`${stageFileUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+        src={frameUrl}
         title="Agent PDF live preview"
         className="absolute inset-0 h-full w-full bg-white"
       />
+      <div className="pointer-events-none absolute left-3 right-3 top-3 rounded-xl border border-black/15 bg-white/86 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-semibold">Live PDF review</p>
+          <p className="rounded-full border border-black/10 bg-white/95 px-2 py-0.5 text-[10px] font-medium">
+            Page {page}/{totalPages}
+          </p>
+        </div>
+        <p className="mt-1 text-[11px] text-[#3a3a3d]">
+          {sceneText || activeDetail || "Scanning document pages and collecting evidence."}
+        </p>
+        {pdfScanRegion ? (
+          <p className="mt-1.5 line-clamp-2 rounded-md border border-black/10 bg-white/95 px-2 py-1 text-[10px] text-[#2e2e31]">
+            {pdfScanRegion}
+          </p>
+        ) : null}
+        {pdfScrollDirection ? (
+          <p className="mt-1 text-[10px] uppercase tracking-[0.06em] text-[#5b5b60]">
+            Scroll {pdfScrollDirection}
+          </p>
+        ) : null}
+      </div>
       {documentHighlights.length ? (
         <div className="pointer-events-none absolute left-3 right-3 bottom-3 rounded-xl border border-black/15 bg-white/85 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
           <p className="text-[11px] font-semibold">Copied highlights</p>
@@ -35,6 +97,7 @@ function DocumentPdfScene({ documentHighlights, stageFileUrl }: DocumentPdfScene
           </div>
         </div>
       ) : null}
+      <PdfScrollRail pdfScrollPercent={pdfScrollPercent} />
     </div>
   );
 }

@@ -5,6 +5,10 @@ import type { SidebarProject } from "./types";
 
 type ConversationMode = "ask" | "company_agent";
 
+function createProjectId() {
+  return `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 export function useProjectState() {
   const [projects, setProjects] = useState<SidebarProject[]>(() => {
     const stored = readStoredJson<SidebarProject[]>(STORAGE_KEYS.projects, []);
@@ -74,9 +78,7 @@ export function useProjectState() {
       return;
     }
 
-    const newProjectId = `project-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 6)}`;
+    const newProjectId = createProjectId();
     const nextProject: SidebarProject = { id: newProjectId, name: normalizedName };
     setProjects((prev) => [...prev, nextProject]);
     setSelectedProjectId(newProjectId);
@@ -102,20 +104,16 @@ export function useProjectState() {
   };
 
   const handleDeleteProject = (projectId: string) => {
-    if (projects.length <= 1) {
-      return;
-    }
-
     const remainingProjects = projects.filter((project) => project.id !== projectId);
-    if (!remainingProjects.length) {
-      return;
-    }
+    const nextProjects = remainingProjects.length
+      ? remainingProjects
+      : [{ id: createProjectId(), name: "General" }];
 
     const fallbackProjectId =
-      remainingProjects.find((project) => project.id === DEFAULT_PROJECT_ID)?.id ||
-      remainingProjects[0].id;
+      nextProjects.find((project) => project.id === DEFAULT_PROJECT_ID)?.id ||
+      nextProjects[0].id;
 
-    setProjects(remainingProjects);
+    setProjects(nextProjects);
     setConversationProjects((prev) => {
       const next = { ...prev };
       Object.entries(next).forEach(([conversationId, assignedProjectId]) => {

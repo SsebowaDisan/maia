@@ -3,11 +3,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from langchain.output_parsers.boolean import BooleanOutputParser
 
 from maia.base import Document
 
-from .llm import LLMReranking
+from .llm import LLMReranking, _parse_boolean_output
 
 
 class LLMScoring(LLMReranking):
@@ -18,7 +17,6 @@ class LLMScoring(LLMReranking):
     ) -> list[Document]:
         """Filter down documents based on their relevance to the query."""
         filtered_docs: list[Document] = []
-        output_parser = BooleanOutputParser()
 
         if self.concurrent:
             with ThreadPoolExecutor() as executor:
@@ -40,7 +38,7 @@ class LLMScoring(LLMReranking):
 
         for result, doc in zip(results, documents):
             score = np.exp(np.average(result.logprobs))
-            include_doc = output_parser.parse(result.text)
+            include_doc = _parse_boolean_output(result.text)
             if include_doc:
                 doc.metadata["llm_reranking_score"] = score
             else:

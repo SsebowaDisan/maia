@@ -44,7 +44,7 @@ function DocsScene({
             />
           ) : (
             <div className="h-full p-5">
-              <div className="mx-auto h-full w-full max-w-[860px] rounded-xl border border-black/[0.08] bg-white px-8 py-6">
+              <div className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white px-8 py-6">
                 <p className="text-[18px] font-semibold text-[#202024]">
                   {activeTitle || "Execution Plan & Notes"}
                 </p>
@@ -65,8 +65,8 @@ function DocsScene({
               </div>
             </div>
           )}
-          {docBodyPreview && !docsFrameUrl ? (
-            <div className="pointer-events-none absolute right-3 bottom-3 w-[min(42%,460px)] rounded-lg border border-black/[0.08] bg-white/88 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
+          {docBodyPreview ? (
+            <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,460px)] rounded-lg border border-black/[0.08] bg-white/88 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
                 Live docs typing
               </p>

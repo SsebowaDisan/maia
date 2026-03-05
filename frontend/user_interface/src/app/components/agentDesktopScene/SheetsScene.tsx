@@ -40,7 +40,7 @@ function SheetsScene({
             />
           ) : (
             <div className="h-full p-5">
-              <div className="h-full rounded-xl border border-black/[0.08] bg-white">
+              <div className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white">
                 <div className="grid grid-cols-[120px_repeat(4,minmax(0,1fr))] border-b border-black/[0.06] bg-[#f8f9fc] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7b7b80]">
                   <div className="border-r border-black/[0.06] px-3 py-2">A</div>
                   <div className="border-r border-black/[0.06] px-3 py-2">B</div>
@@ -72,8 +72,7 @@ function SheetsScene({
               </div>
             </div>
           )}
-          {!sheetsFrameUrl ? (
-            <div className="pointer-events-none absolute right-3 bottom-3 w-[min(42%,440px)] rounded-lg border border-black/[0.08] bg-white/90 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
+          <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,440px)] rounded-lg border border-black/[0.08] bg-white/90 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
               <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
                 Live sheet typing
               </p>
@@ -95,7 +94,6 @@ function SheetsScene({
                 )}
               </div>
             </div>
-          ) : null}
         </div>
       </div>
     </div>

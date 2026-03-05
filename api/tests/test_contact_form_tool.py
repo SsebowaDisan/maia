@@ -17,6 +17,8 @@ class _ContactConnectorStub:
         url: str,
         sender_name: str,
         sender_email: str,
+        sender_company: str = "",
+        sender_phone: str = "",
         subject: str,
         message: str,
         auto_accept_cookies: bool = True,
@@ -28,6 +30,8 @@ class _ContactConnectorStub:
                 "url": url,
                 "sender_name": sender_name,
                 "sender_email": sender_email,
+                "sender_company": sender_company,
+                "sender_phone": sender_phone,
                 "subject": subject,
                 "message": message,
                 "auto_accept_cookies": auto_accept_cookies,
@@ -55,7 +59,7 @@ class _ContactConnectorStub:
             "confirmation_text": "Thank you, we will get in touch.",
             "url": url,
             "title": "Contact",
-            "fields_filled": ["name", "email", "subject", "message"],
+            "fields_filled": ["name", "email", "company", "phone", "subject", "message"],
         }
 
 
@@ -111,11 +115,41 @@ class ContactFormToolTests(unittest.TestCase):
         assert call["url"] == "https://example.com/contact"
         assert call["subject"] == "Polished subject"
         assert call["message"] == "Polished message body"
+        assert call["sender_phone"] == "+1 415 555 0199"
         latest_submission = self.context.settings.get("__latest_contact_form_submission")
         assert isinstance(latest_submission, dict)
         assert latest_submission.get("status") == "submitted"
+        assert latest_submission.get("sender_phone") == "+1 415 555 0199"
+
+    def test_contact_form_tool_uses_explicit_phone_and_company(self) -> None:
+        connector = _ContactConnectorStub()
+        registry = _RegistryStub(connector)
+        with patch(
+            "api.services.agent.tools.contact_form_tools.get_connector_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.agent.tools.contact_form_tools.polish_contact_form_content",
+            return_value={
+                "subject": "Polished subject",
+                "message_text": "Polished message body",
+            },
+        ):
+            tool = BrowserContactFormSendTool()
+            _ = tool.execute(
+                context=self.context,
+                prompt="Open https://example.com/contact and submit the contact form.",
+                params={
+                    "confirmed": True,
+                    "sender_company": "Micrurus",
+                    "sender_phone": "+1 617 555 0101",
+                },
+            )
+
+        assert connector.calls, "expected connector to be invoked"
+        call = connector.calls[0]
+        assert call["sender_company"] == "Micrurus"
+        assert call["sender_phone"] == "+1 617 555 0101"
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -6,7 +6,7 @@ from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import ToolExecutionContext, ToolExecutionResult, ToolMetadata, ToolTraceEvent
 
 from .base import WorkspaceConnectorTool
-from .common import drain_stream, now_iso, sheet_col_name
+from .common import drain_stream, now_iso, resolve_public_share_options, sheet_col_name
 
 
 class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
@@ -33,6 +33,10 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
         title = str(params.get("title") or "").strip() or f"Maia Deep Research Tracker {context.run_id[:8]}"
         sheet_name = str(params.get("sheet_name") or "Tracker").strip() or "Tracker"
         sheet_range = f"{sheet_name}!A1"
+        make_public, public_role, public_discoverable = resolve_public_share_options(
+            params=params,
+            settings=context.settings,
+        )
         connector = self._workspace_connector(settings=context.settings)
 
         spreadsheet_id = str(context.settings.get("__deep_research_sheet_id") or "").strip()
@@ -49,6 +53,8 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
 
         header_written = bool(context.settings.get("__deep_research_sheet_header_written"))
         created_now = False
+        public_shared = bool(context.settings.get("__deep_research_sheet_public_shared"))
+        public_share_error = ""
         if not spreadsheet_id:
             create_event = ToolTraceEvent(
                 event_type="sheet_open",
@@ -95,6 +101,63 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 )
                 trace_events.append(open_sheet_event)
                 yield open_sheet_event
+        should_share_public = bool(
+            make_public and spreadsheet_id and (created_now or not public_shared)
+        )
+        if should_share_public:
+            share_start = ToolTraceEvent(
+                event_type="drive.share_started",
+                title="Enable public link access for tracker",
+                detail=spreadsheet_id,
+                data={
+                    "file_id": spreadsheet_id,
+                    "role": public_role,
+                    "scope": "anyone",
+                    "discoverable": public_discoverable,
+                    "source_url": spreadsheet_url,
+                },
+            )
+            trace_events.append(share_start)
+            yield share_start
+            try:
+                connector.share_drive_file_public(
+                    file_id=spreadsheet_id,
+                    role=public_role,
+                    discoverable=public_discoverable,
+                )
+                context.settings["__deep_research_sheet_public_shared"] = True
+                public_shared = True
+                share_done = ToolTraceEvent(
+                    event_type="drive.share_completed",
+                    title="Public link access enabled for tracker",
+                    detail=spreadsheet_id,
+                    data={
+                        "file_id": spreadsheet_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": spreadsheet_url,
+                    },
+                )
+                trace_events.append(share_done)
+                yield share_done
+            except Exception as exc:
+                public_share_error = str(exc)
+                share_failed = ToolTraceEvent(
+                    event_type="drive.share_failed",
+                    title="Failed to enable public link access for tracker",
+                    detail=public_share_error[:200],
+                    data={
+                        "file_id": spreadsheet_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": spreadsheet_url,
+                        "error": public_share_error[:300],
+                    },
+                )
+                trace_events.append(share_failed)
+                yield share_failed
 
         if spreadsheet_id and not header_written:
             header_start = ToolTraceEvent(
@@ -216,6 +279,7 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                     f"Step: {step_name}",
                     f"Status: {status}",
                     f"Updated rows: {updated_rows or 0}",
+                    f"Public link enabled: {'yes' if public_shared else 'no'}",
                 ]
             ),
             data={
@@ -225,6 +289,10 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 "step_name": step_name,
                 "status": status,
                 "created_now": created_now,
+                "public_shared": public_shared,
+                "public_role": public_role if make_public else "",
+                "public_discoverable": public_discoverable if make_public else False,
+                "public_share_error": public_share_error,
             },
             sources=[
                 AgentSource(

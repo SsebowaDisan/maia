@@ -8,6 +8,45 @@ from urllib.parse import urlparse
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+PHRASE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{1,}")
+PLACEHOLDER_KEYWORD_RE = re.compile(r"^([a-z][a-z0-9-]*)_([0-9]{1,3})$")
+GENERIC_STOPWORDS = {
+    "about",
+    "all",
+    "and",
+    "are",
+    "build",
+    "can",
+    "create",
+    "for",
+    "from",
+    "goal",
+    "how",
+    "into",
+    "is",
+    "its",
+    "make",
+    "new",
+    "our",
+    "out",
+    "please",
+    "report",
+    "that",
+    "the",
+    "their",
+    "them",
+    "they",
+    "this",
+    "use",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+    "your",
+}
 
 
 def _extract_url(message: str, goal: str) -> str:
@@ -25,8 +64,46 @@ def _host_tokens(url: str) -> list[str]:
     return pieces[:3]
 
 
+def _is_noise_keyword(token: str) -> bool:
+    clean = str(token or "").strip().lower()
+    if not clean:
+        return True
+    if clean in GENERIC_STOPWORDS:
+        return True
+    if len(clean) <= 2:
+        return True
+    return False
+
+
+def _phrase_candidates(message: str, goal: str) -> list[str]:
+    words = [
+        match.group(0).lower()
+        for match in PHRASE_WORD_RE.finditer(f"{message} {goal}")
+    ]
+    if not words:
+        return []
+    phrases: list[str] = []
+    for width in (2, 3):
+        if len(words) < width:
+            continue
+        for idx in range(0, len(words) - width + 1):
+            window = words[idx : idx + width]
+            if all(_is_noise_keyword(item) for item in window):
+                continue
+            phrase = " ".join(window).strip()
+            if phrase and phrase not in phrases:
+                phrases.append(phrase)
+            if len(phrases) >= 32:
+                return phrases
+    return phrases
+
+
 def _extract_candidate_keywords(message: str, goal: str, *, url: str = "") -> list[str]:
-    tokens = [match.group(0).lower() for match in WORD_RE.finditer(f"{message} {goal}")]
+    tokens = [
+        match.group(0).lower()
+        for match in WORD_RE.finditer(f"{message} {goal}")
+        if not _is_noise_keyword(match.group(0))
+    ]
     deduped = list(dict.fromkeys(tokens))
     for host_token in _host_tokens(url):
         if host_token not in deduped:
@@ -35,18 +112,19 @@ def _extract_candidate_keywords(message: str, goal: str, *, url: str = "") -> li
 
 
 def _seed_keywords(message: str, goal: str, *, min_keywords: int, url: str = "") -> list[str]:
+    target = max(4, int(min_keywords or 4))
     deduped = _extract_candidate_keywords(message, goal, url=url)
-    if len(deduped) >= min_keywords:
-        return deduped[: max(min_keywords, 16)]
     if not deduped:
         host_parts = _host_tokens(url)
-        deduped.extend(host_parts or ["request"])
-    base = deduped[0]
-    while len(deduped) < min_keywords:
-        candidate = f"{base}_{len(deduped) + 1}"
-        if candidate not in deduped:
-            deduped.append(candidate)
-    return deduped[: max(min_keywords, 16)]
+        deduped.extend(host_parts or ["research"])
+    if len(deduped) >= target:
+        return deduped[: max(target, 16)]
+    for phrase in _phrase_candidates(message, goal):
+        if phrase not in deduped:
+            deduped.append(phrase)
+        if len(deduped) >= target:
+            break
+    return deduped[: max(target, 16)]
 
 
 def _heuristic_search_terms(
@@ -77,12 +155,24 @@ def _normalize_keywords(raw: Any, *, min_keywords: int) -> list[str]:
     if not isinstance(raw, list):
         return []
     cleaned = []
+    seen: set[str] = set()
     for item in raw:
         text = " ".join(str(item or "").split()).strip().lower()
         if len(text) < 2:
             continue
-        cleaned.append(text[:80])
-    deduped = list(dict.fromkeys(cleaned))
+        text = text[:80]
+        if _is_noise_keyword(text):
+            continue
+        placeholder_match = PLACEHOLDER_KEYWORD_RE.match(text)
+        if placeholder_match:
+            base = placeholder_match.group(1)
+            if base in seen or base in GENERIC_STOPWORDS:
+                continue
+        if text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+    deduped = cleaned
     return deduped[: max(min_keywords, 24)]
 
 
@@ -114,10 +204,11 @@ def _request_blueprint_with_llm(*, message: str, goal: str, url: str, min_keywor
         '  "rationale": "one short sentence"\n'
         "}\n"
         "Rules:\n"
-        "- keywords must contain at least min_keywords unique items.\n"
+        "- Aim for at least min_keywords unique items when it adds real value.\n"
         "- search_terms should be executable web queries.\n"
         "- No markdown.\n"
         "- Keep each keyword concise.\n\n"
+        "- Never fabricate placeholder keywords like 'term_4' or repeated numbering.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     return call_json_response(

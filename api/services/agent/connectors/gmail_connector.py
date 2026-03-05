@@ -21,7 +21,12 @@ class GmailConnector(BaseConnector):
             or self._read_secret("GOOGLE_WORKSPACE_REFRESH_TOKEN"),
             "token_type": "Bearer",
         }
-        return GoogleAuthSession(user_id=user_id, run_id=run_id, fallback_tokens=fallback)
+        return GoogleAuthSession(
+            user_id=user_id,
+            run_id=run_id,
+            fallback_tokens=fallback,
+            settings=self.settings,
+        )
 
     def _access_token(self) -> str:
         token = self._session().require_access_token()
@@ -107,6 +112,32 @@ class GmailConnector(BaseConnector):
         return {
             "id": result.get("message_id") or "",
             "threadId": result.get("thread_id") or "",
+        }
+
+    def send_message_with_attachments(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        attachments: list[dict[str, str]],
+        sender: str = "",
+    ) -> dict[str, Any]:
+        _ = sender
+        service = GmailService(session=self._session())
+        try:
+            result = service.send_message_with_attachments(
+                to=to,
+                subject=subject,
+                body_html=body,
+                attachments=attachments,
+            )
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+        return {
+            "id": result.get("message_id") or "",
+            "threadId": result.get("thread_id") or "",
+            "attachments_count": int(result.get("attachments_count") or 0),
         }
 
     def list_messages(self, *, query: str = "", max_results: int = 20) -> dict[str, Any]:

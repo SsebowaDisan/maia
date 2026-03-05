@@ -23,10 +23,15 @@ function cursorLabelForEventType(type: string): string {
   if (type === "response_writing") return "Writing";
   if (type === "browser_open") return "Opening browser";
   if (type === "browser_contact_form_detected") return "Detecting contact form";
+  if (type === "browser_contact_required_scan") return "Checking required fields";
   if (type === "browser_contact_fill_name") return "Typing name";
   if (type === "browser_contact_fill_email") return "Typing email";
+  if (type === "browser_contact_fill_company") return "Typing company";
+  if (type === "browser_contact_fill_phone") return "Typing phone";
   if (type === "browser_contact_fill_subject") return "Typing subject";
   if (type === "browser_contact_fill_message") return "Typing message";
+  if (type === "browser_contact_llm_fill") return "Typing mapped field";
+  if (type === "llm.form_field_mapping") return "Resolving fields with LLM";
   if (type === "browser_contact_submit") return "Submitting form";
   if (type === "browser_contact_confirmation") return "Checking confirmation";
   if (type === "browser_keyword_highlight") return "Highlighting keywords";

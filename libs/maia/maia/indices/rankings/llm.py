@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
-
-from langchain.output_parsers.boolean import BooleanOutputParser
 
 from maia.base import Document
 from maia.llms import BaseLLM, PromptTemplate
@@ -20,6 +19,22 @@ return YES if the context is relevant to the question and NO if it isn't.
 > Relevant (YES / NO):"""
 
 
+def _parse_boolean_output(output: str) -> bool:
+    """Parse LLM YES/NO-style output without langchain parser dependencies."""
+    normalized = output.strip().lower()
+
+    if normalized.startswith(("yes", "true")):
+        return True
+    if normalized.startswith(("no", "false")):
+        return False
+
+    match = re.search(r"\b(yes|no|true|false)\b", normalized)
+    if match:
+        return match.group(1) in ("yes", "true")
+
+    return False
+
+
 class LLMReranking(BaseReranking):
     llm: BaseLLM
     prompt_template: PromptTemplate = PromptTemplate(template=RERANK_PROMPT_TEMPLATE)
@@ -33,7 +48,6 @@ class LLMReranking(BaseReranking):
     ) -> list[Document]:
         """Filter down documents based on their relevance to the query."""
         filtered_docs = []
-        output_parser = BooleanOutputParser()
 
         if self.concurrent:
             with ThreadPoolExecutor() as executor:
@@ -53,8 +67,8 @@ class LLMReranking(BaseReranking):
                 )
                 results.append(self.llm(_prompt).text)
 
-        # use Boolean parser to extract relevancy output from LLM
-        results = [output_parser.parse(result) for result in results]
+        # Parse each LLM output to keep documents marked as relevant.
+        results = [_parse_boolean_output(result) for result in results]
         for include_doc, doc in zip(results, documents):
             if include_doc:
                 filtered_docs.append(doc)

@@ -42,6 +42,7 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "llm.web_routing_decision": "plan",
     "llm.plan_step": "plan",
     "llm.plan_fact_coverage": "plan",
+    "llm.form_field_mapping": "preview",
     "llm.delivery_check_started": "result",
     "llm.delivery_check_completed": "result",
     "llm.delivery_check_failed": "result",
@@ -122,6 +123,10 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Contact form detected on target website",
         "user_visible": True,
     },
+    "browser_contact_required_scan": {
+        "description": "Required contact-form fields scanned before submission",
+        "user_visible": True,
+    },
     "browser_contact_fill_name": {
         "description": "Contact form name field populated",
         "user_visible": True,
@@ -130,12 +135,24 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Contact form email field populated",
         "user_visible": True,
     },
+    "browser_contact_fill_company": {
+        "description": "Contact form company field populated",
+        "user_visible": True,
+    },
+    "browser_contact_fill_phone": {
+        "description": "Contact form phone field populated",
+        "user_visible": True,
+    },
     "browser_contact_fill_subject": {
         "description": "Contact form subject field populated",
         "user_visible": True,
     },
     "browser_contact_fill_message": {
         "description": "Contact form message field populated",
+        "user_visible": True,
+    },
+    "browser_contact_llm_fill": {
+        "description": "LLM fallback populated unresolved contact-form field",
         "user_visible": True,
     },
     "browser_contact_submit": {
@@ -186,6 +203,13 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "sheets.update_completed": {"description": "Google Sheet update completed", "user_visible": True},
     "drive.go_to_doc": {"description": "Navigate to Google Doc URL", "user_visible": True},
     "drive.go_to_sheet": {"description": "Navigate to Google Sheet URL", "user_visible": True},
+    "drive.share_started": {"description": "Drive sharing update started", "user_visible": True},
+    "drive.share_completed": {"description": "Drive sharing update completed", "user_visible": True},
+    "drive.share_failed": {"description": "Drive sharing update failed", "user_visible": True},
+    "llm.form_field_mapping": {
+        "description": "LLM mapped unresolved required contact-form fields",
+        "user_visible": True,
+    },
     "llm.context_summary": {"description": "LLM conversation context summary generated", "user_visible": True},
     "llm.context_memory": {"description": "Memory context snippets loaded for planning", "user_visible": True},
     "llm.intent_tags": {"description": "LLM intent tags generated", "user_visible": True},

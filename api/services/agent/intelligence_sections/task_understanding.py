@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse
 
 from api.services.agent.llm_intent import classify_intent_tags, enrich_task_intelligence
+from api.services.agent.planner_helpers import infer_intent_signals_from_text
 
 from .constants import EMAIL_RE, URL_RE
 from .models import TaskIntelligence
@@ -59,12 +60,16 @@ def _normalize_url_candidate(raw_url: str) -> str:
 def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> TaskIntelligence:
     raw = f"{message} {agent_goal or ''}".strip()
     lowered_raw = raw.lower()
-    target_url = _extract_first_url(raw)
+    lexical_signals = infer_intent_signals_from_text(
+        message=message,
+        agent_goal=agent_goal,
+    )
+    target_url = str(lexical_signals.get("url") or "").strip() or _extract_first_url(raw)
     host = (urlparse(target_url).hostname or "").strip().lower() if target_url else ""
-    delivery_email = _extract_first_email(raw)
-    requires_delivery = bool(delivery_email)
-    requires_web_inspection = bool(target_url)
-    requested_report = any(
+    delivery_email = str(lexical_signals.get("recipient_email") or "").strip() or _extract_first_email(raw)
+    requires_delivery = bool(delivery_email) or bool(lexical_signals.get("wants_send"))
+    requires_web_inspection = bool(target_url) or bool(lexical_signals.get("explicit_web_discovery"))
+    requested_report = bool(lexical_signals.get("wants_report")) or any(
         phrase in lowered_raw
         for phrase in (" report", " summary", " writeup", " findings")
     )
@@ -75,6 +80,11 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         "requires_delivery": requires_delivery,
         "requires_web_inspection": requires_web_inspection,
         "requested_report": requested_report,
+        "requires_contact_form_submission": bool(lexical_signals.get("wants_contact_form")),
+        "wants_docs_output": bool(lexical_signals.get("wants_docs_output")),
+        "wants_sheets_output": bool(lexical_signals.get("wants_sheets_output")),
+        "wants_highlight_extract": bool(lexical_signals.get("wants_highlight_words")),
+        "wants_location_lookup": bool(lexical_signals.get("wants_location_info")),
     }
     intent_tags = classify_intent_tags(
         message=message,

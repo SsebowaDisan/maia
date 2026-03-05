@@ -20,10 +20,11 @@ def should_skip_step_for_workspace_logging(
     state: ExecutionState,
     step: PlannedStep,
 ) -> bool:
-    return (not state.deep_workspace_logging_enabled) and step.tool_id in (
-        "workspace.docs.research_notes",
-        "workspace.sheets.track_step",
-    )
+    if state.deep_workspace_logging_enabled:
+        return False
+    if step.tool_id not in ("workspace.docs.research_notes", "workspace.sheets.track_step"):
+        return False
+    return bool(step.params.get("__workspace_logging_step"))
 
 
 def prepare_step_params(

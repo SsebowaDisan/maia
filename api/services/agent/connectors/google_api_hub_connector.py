@@ -28,6 +28,7 @@ class GoogleApiHubConnector(BaseConnector):
             user_id=user_id,
             run_id=run_id,
             fallback_tokens=fallback,
+            settings=self.settings,
         )
 
     def _oauth_token(self) -> str:
@@ -101,4 +102,3 @@ class GoogleApiHubConnector(BaseConnector):
             payload=payload if isinstance(payload, dict) else None,
             timeout_seconds=30,
         )
-

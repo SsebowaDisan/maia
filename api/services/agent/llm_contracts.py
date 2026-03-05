@@ -15,6 +15,14 @@ from api.services.agent.llm_runtime import call_json_response, env_bool, sanitiz
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 MARKDOWN_LINK_URL_RE = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+DELIVERY_TARGET_HINT_RE = re.compile(
+    r"(?:recipient(?:\s+for\s+(?:the\s+)?)?(?:findings|research report|report)?\s*[:=]\s*([^\n.;]+))",
+    re.IGNORECASE,
+)
+DELIVERY_TARGET_ALT_RE = re.compile(
+    r"(?:delivery\s+target\s*[:=]\s*([^\n.;]+))",
+    re.IGNORECASE,
+)
 NO_HARDCODE_WORDS_CONSTRAINT = (
     "Never use hardcoded words or keyword lists; rely on LLM semantic understanding."
 )
@@ -41,6 +49,10 @@ def _enforce_contract_constraints(raw: Any) -> list[str]:
     return [NO_HARDCODE_WORDS_CONSTRAINT, *rows][:6]
 
 
+def _normalize_for_match(text: str) -> str:
+    return " ".join(str(text or "").lower().split()).strip()
+
+
 def _extract_first_url(*chunks: str) -> str:
     joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
     markdown_match = MARKDOWN_LINK_URL_RE.search(joined)
@@ -52,6 +64,25 @@ def _extract_first_url(*chunks: str) -> str:
     if not match:
         return ""
     return _normalize_url_candidate(match.group(0))
+
+
+def _extract_delivery_target(*chunks: str) -> str:
+    joined = "\n".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
+    if not joined:
+        return ""
+
+    match = EMAIL_RE.search(joined)
+    if match:
+        return match.group(1).strip()
+
+    for pattern in (DELIVERY_TARGET_HINT_RE, DELIVERY_TARGET_ALT_RE):
+        hint_match = pattern.search(joined)
+        if not hint_match:
+            continue
+        candidate = " ".join(str(hint_match.group(1) or "").split()).strip(" .,;:")
+        if candidate:
+            return candidate[:180]
+    return ""
 
 
 def _normalize_url_candidate(raw_url: str) -> str:
@@ -162,8 +193,6 @@ def _classify_missing_requirements(
     needs_target_url = (
         "submit_contact_form" in actions
         or "contact_form_submission" in tags
-        or "web_research" in tags
-        or "location_lookup" in tags
     )
     if needs_target_url and not target_url:
         missing.append("Target website URL")
@@ -180,11 +209,15 @@ def _classify_missing_requirements(
     needs_output_format = (
         "create_document" in actions
         or "update_sheet" in actions
-        or "report_generation" in tags
+    )
+    # For report/docs/sheets intents we can safely default to existing templates
+    # and tracker formats, so output format is optional by default.
+    has_defaultable_output = (
+        "report_generation" in tags
         or "docs_write" in tags
         or "sheets_update" in tags
     )
-    if needs_output_format and not required_outputs:
+    if needs_output_format and not required_outputs and not has_defaultable_output:
         missing.append("Preferred output format or artifact type")
 
     return missing[:6]
@@ -225,13 +258,78 @@ def _sanitize_missing_requirements(
     delivery_target: str,
     target_url: str,
     required_facts: list[str],
+    context_text: str = "",
+    requires_target_url: bool = False,
+    output_format_optional: bool = False,
 ) -> list[str]:
     cleaned = _clean_text_list(items, limit=12)
     fact_rows = [str(item).strip().lower() for item in required_facts if str(item).strip()]
+    normalized_context = _normalize_for_match(context_text)
+    has_live_thread_context = any(
+        marker in normalized_context
+        for marker in ("live thread", "in thread", "in-thread", "chat thread", "this thread")
+    )
+    has_workspace_format_context = any(
+        marker in normalized_context
+        for marker in ("google sheet", "google sheets", "google doc", "google docs")
+    )
     filtered: list[str] = []
     for row in cleaned:
         lowered = row.lower()
-        if delivery_target and ("recipient" in lowered and "email" in lowered):
+        normalized_row = _normalize_for_match(row)
+
+        # The requirement is already explicitly present in user/context text.
+        if normalized_context and normalized_row and normalized_row in normalized_context:
+            continue
+
+        if delivery_target and "recipient" in lowered:
+            # Keep explicit email-recipient requirements only when target is non-email.
+            if "email" in lowered and not EMAIL_RE.search(delivery_target):
+                pass
+            else:
+                continue
+        if (
+            normalized_context
+            and ("recipient" in lowered)
+            and ("email" not in lowered)
+            and (
+                "recipient:" in normalized_context
+                or "recipient for the findings:" in normalized_context
+                or "delivery target:" in normalized_context
+            )
+        ):
+            continue
+        if has_live_thread_context and "recipient" in lowered and ("thread" in lowered or "live" in lowered):
+            continue
+        if (
+            has_workspace_format_context
+            and "recipient" in lowered
+            and "email" not in lowered
+            and ("google doc" in lowered or "google sheet" in lowered or ("google" in lowered and "doc" in lowered))
+        ):
+            continue
+        if (
+            normalized_context
+            and ("format" in lowered or "artifact type" in lowered)
+            and (
+                "format:" in normalized_context
+                or "target format:" in normalized_context
+                or "markdown" in normalized_context
+            )
+        ):
+            continue
+        if output_format_optional and ("format" in lowered or "artifact type" in lowered or "specif" in lowered):
+            continue
+        if (
+            has_workspace_format_context
+            and ("format" in lowered or "artifact type" in lowered or "specif" in lowered)
+            and ("google" in lowered or "sheet" in lowered or "doc" in lowered)
+        ):
+            continue
+        if (
+            ("target website url" in lowered or "target url" in lowered or "website url" in lowered)
+            and not requires_target_url
+        ):
             continue
         if target_url and (
             "target website url" in lowered
@@ -280,10 +378,8 @@ def build_task_contract(
     clean_rewrite = " ".join(str(rewritten_task or "").split()).strip()
     clean_context = " ".join(str(conversation_summary or "").split()).strip()
     clean_intent_tags = _clean_text_list(intent_tags or [], limit=8, max_item_len=64)
-    delivery_target = ""
-    match = EMAIL_RE.search(" ".join([clean_message, clean_goal]))
-    if match:
-        delivery_target = match.group(1).strip()
+    clean_intent_tag_set = {str(item).strip().lower() for item in clean_intent_tags if str(item).strip()}
+    delivery_target = _extract_delivery_target(clean_message, clean_goal, clean_rewrite)
     target_url = _extract_first_url(clean_message, clean_goal, clean_rewrite)
 
     heuristic_facts = _derive_required_facts(
@@ -302,6 +398,7 @@ def build_task_contract(
         delivery_target=delivery_target,
         target_url=target_url,
     )
+    heuristic_action_set = {str(item).strip().lower() for item in heuristic_actions if str(item).strip()}
     heuristic_outputs = _clean_text_list(deliverables or [], limit=6)
     heuristic_missing_requirements = _classify_missing_requirements(
         required_actions=heuristic_actions,
@@ -316,6 +413,18 @@ def build_task_contract(
         delivery_target=delivery_target,
         target_url=target_url,
         required_facts=heuristic_facts,
+        context_text=" ".join([clean_message, clean_goal, clean_rewrite]),
+        requires_target_url=(
+            "submit_contact_form" in set(heuristic_actions)
+            or "contact_form_submission" in clean_intent_tag_set
+        ),
+        output_format_optional=(
+            "report_generation" in clean_intent_tag_set
+            or "docs_write" in clean_intent_tag_set
+            or "sheets_update" in clean_intent_tag_set
+            or "create_document" in heuristic_action_set
+            or "update_sheet" in heuristic_action_set
+        ),
     )
 
     if not env_bool("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", default=True):
@@ -404,6 +513,7 @@ def build_task_contract(
         delivery_target=clean_target,
         target_url=target_url,
     )
+    required_action_set = {str(item).strip().lower() for item in required_actions if str(item).strip()}
     response_missing_requirements = _clean_text_list(response.get("missing_requirements"), limit=6)
     classifier_missing_requirements = _classify_missing_requirements(
         required_actions=required_actions,
@@ -423,6 +533,18 @@ def build_task_contract(
         delivery_target=clean_target,
         target_url=target_url,
         required_facts=required_facts,
+        context_text=" ".join([clean_message, clean_goal, clean_rewrite]),
+        requires_target_url=(
+            "submit_contact_form" in set(required_actions)
+            or "contact_form_submission" in clean_intent_tag_set
+        ),
+        output_format_optional=(
+            "report_generation" in clean_intent_tag_set
+            or "docs_write" in clean_intent_tag_set
+            or "sheets_update" in clean_intent_tag_set
+            or "create_document" in required_action_set
+            or "update_sheet" in required_action_set
+        ),
     )
     return {
         "objective": " ".join(str(response.get("objective") or clean_rewrite or clean_message).split()).strip()[:420],

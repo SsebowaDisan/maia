@@ -218,6 +218,58 @@ class GoogleDriveService:
         )
         return {"ok": True, "file_id": file_id, "email": email, "role": role}
 
+    def share_file_public(
+        self,
+        *,
+        file_id: str,
+        role: str = "reader",
+        discoverable: bool = False,
+    ) -> dict[str, Any]:
+        safe_role = str(role or "reader").strip().lower() or "reader"
+        if safe_role not in {"reader", "commenter", "writer"}:
+            safe_role = "reader"
+        payload = {
+            "type": "anyone",
+            "role": safe_role,
+            "allowFileDiscovery": bool(discoverable),
+        }
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.share_started",
+            message="Sharing Drive file with anyone-link access",
+            data={
+                "file_id": file_id,
+                "role": safe_role,
+                "scope": "anyone",
+                "discoverable": bool(discoverable),
+            },
+        )
+        self.session.request_json(
+            method="POST",
+            url=f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+            payload=payload,
+        )
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.share_completed",
+            message="Drive file shared with anyone-link access",
+            data={
+                "file_id": file_id,
+                "role": safe_role,
+                "scope": "anyone",
+                "discoverable": bool(discoverable),
+            },
+        )
+        return {
+            "ok": True,
+            "file_id": file_id,
+            "role": safe_role,
+            "scope": "anyone",
+            "discoverable": bool(discoverable),
+        }
+
     def download_file(self, *, file_id: str) -> bytes:
         emit_google_event(
             user_id=self.session.user_id,

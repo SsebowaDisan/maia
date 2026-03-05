@@ -6,6 +6,7 @@ import re
 from statistics import mean
 from typing import Any
 
+from api.services.agent.llm_runtime import call_text_response, env_bool
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -79,6 +80,173 @@ def _extract_location_signal(text: str) -> str:
         if value:
             return value
     return ""
+
+
+def _looks_like_direct_question(text: str) -> bool:
+    clean = " ".join(str(text or "").split()).strip().lower()
+    if not clean:
+        return False
+    if "?" in clean:
+        return True
+    question_starts = (
+        "what is ",
+        "what are ",
+        "how does ",
+        "how do ",
+        "why ",
+        "define ",
+        "explain ",
+    )
+    return any(clean.startswith(prefix) for prefix in question_starts)
+
+
+def _draft_direct_answer(question: str) -> str:
+    if not env_bool("MAIA_AGENT_LLM_REPORT_QA_ENABLED", default=True):
+        return ""
+    payload = " ".join(str(question or "").split()).strip()
+    if not payload:
+        return ""
+    response = call_text_response(
+        system_prompt=(
+            "You answer user questions clearly and concisely for enterprise reports. "
+            "Do not mention tools or execution steps."
+        ),
+        user_prompt=(
+            "Provide a direct answer in 2-5 sentences.\n"
+            "If confidence is low, state uncertainty briefly.\n\n"
+            f"Question:\n{payload}"
+        ),
+        temperature=0.1,
+        timeout_seconds=10,
+        max_tokens=260,
+    )
+    clean = " ".join(str(response or "").split()).strip()
+    if not clean:
+        return ""
+    if len(clean) > 900:
+        return f"{clean[:899].rstrip()}..."
+    return clean
+
+
+def _normalize_source_rows(raw: Any, *, limit: int = 12) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("title") or "").strip()
+        url = str(item.get("url") or "").strip()
+        snippet = str(item.get("snippet") or item.get("excerpt") or "").strip()
+        metadata = item.get("metadata")
+        if not snippet and isinstance(metadata, dict):
+            snippet = str(metadata.get("excerpt") or metadata.get("summary") or "").strip()
+        if not label and not url:
+            continue
+        normalized.append(
+            {
+                "label": label or url,
+                "url": url,
+                "snippet": _first_sentence(snippet, max_len=180),
+            }
+        )
+        if len(normalized) >= max(1, int(limit)):
+            break
+    return normalized
+
+
+def _detect_report_topic(*parts: str) -> str:
+    combined = " ".join(str(part or "").lower() for part in parts)
+    if "machine learning" in combined or "ml " in combined or "ml," in combined:
+        return "machine_learning"
+    if "headquarter" in combined or "located" in combined or "address" in combined:
+        return "location"
+    return "general"
+
+
+def _topic_analysis_paragraphs(*, topic: str, summary: str) -> list[str]:
+    if topic == "machine_learning":
+        return [
+            (
+                "Machine learning (ML) is a data-driven approach where statistical models learn "
+                "patterns from historical examples and generalize to new inputs. A typical ML "
+                "lifecycle includes problem framing, data collection, feature engineering, model "
+                "training, validation, deployment, and continuous monitoring."
+            ),
+            (
+                "Core ML paradigms include supervised learning (classification/regression with "
+                "labeled data), unsupervised learning (clustering, dimensionality reduction, and "
+                "anomaly detection), and reinforcement learning (policy optimization through "
+                "reward signals). Teams usually start with simpler baseline models before adopting "
+                "higher-complexity architectures."
+            ),
+            (
+                "Common business applications include demand forecasting, fraud detection, "
+                "recommendation systems, customer segmentation, predictive maintenance, and "
+                "document intelligence. Success depends on clearly defined evaluation metrics "
+                "(for example precision/recall, F1, AUC, or RMSE) that match operational outcomes."
+            ),
+            (
+                "Operational risks include data drift, concept drift, bias, limited explainability, "
+                "and governance/compliance gaps. Strong production practice includes model versioning, "
+                "feature/data quality checks, guardrails for high-risk decisions, and periodic "
+                "retraining with post-deployment performance audits."
+            ),
+        ]
+    if topic == "location":
+        return [
+            (
+                "This report focuses on validating location-specific evidence from captured sources. "
+                "When location claims are present, they should be grounded in direct, attributable "
+                "evidence such as official company pages, filings, or verified profile records."
+            ),
+            (
+                "If location evidence is ambiguous, the recommended path is to collect supporting "
+                "signals from contact/about pages and corroborate findings using authoritative external "
+                "sources before finalizing any headquarters or address claim."
+            ),
+        ]
+    return [
+        (
+            "This report expands the initial summary with structured analysis, actionable takeaways, "
+            "and source references to support downstream execution decisions."
+        ),
+        (
+            "Use the highlights and recommendations to prioritize next actions, and validate any "
+            "high-impact claims against authoritative sources before external distribution."
+        ),
+        _first_sentence(summary, max_len=260) or "No additional context provided.",
+    ]
+
+
+def _auto_highlights_from_sources(rows: list[dict[str, str]], *, limit: int = 6) -> list[str]:
+    output: list[str] = []
+    for row in rows:
+        label = str(row.get("label") or "").strip()
+        snippet = str(row.get("snippet") or "").strip()
+        if label and snippet:
+            output.append(f"{label}: {snippet}")
+        elif label:
+            output.append(label)
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _reference_lines(rows: list[dict[str, str]], *, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for row in rows[: max(1, int(limit))]:
+        label = str(row.get("label") or "").strip() or "Source"
+        url = str(row.get("url") or "").strip()
+        snippet = str(row.get("snippet") or "").strip()
+        if url:
+            line = f"- [{label}]({url})"
+        else:
+            line = f"- {label}"
+        if snippet:
+            line = f"{line} - {snippet}"
+        lines.append(line)
+    return lines
 
 
 def _event(
@@ -293,8 +461,17 @@ class ReportGenerationTool(AgentTool):
             if finding_excerpt:
                 summary_parts.append(f"Evidence note: {finding_excerpt}")
             summary = " ".join(summary_parts)
+        elif _looks_like_direct_question(summary):
+            direct_answer = _draft_direct_answer(summary)
+            if direct_answer:
+                summary = direct_answer
         if len(summary) > 900:
             summary = f"{summary[:899].rstrip()}..."
+        raw_sources = params.get("sources")
+        if not isinstance(raw_sources, list):
+            raw_sources = context.settings.get("__latest_web_sources")
+        source_rows = _normalize_source_rows(raw_sources, limit=12)
+
         highlights = params.get("highlights")
         if not isinstance(highlights, list):
             highlights = []
@@ -304,11 +481,24 @@ class ReportGenerationTool(AgentTool):
             actions = []
 
         highlight_lines = [f"- {str(item).strip()}" for item in highlights if str(item).strip()]
-        action_lines = [f"- {str(item).strip()}" for item in actions if str(item).strip()]
+        if not highlight_lines and source_rows:
+            highlight_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=8)]
         if not highlight_lines:
             highlight_lines = ["- Key findings will appear here once evidence is synthesized."]
+
+        action_lines = [f"- {str(item).strip()}" for item in actions if str(item).strip()]
         if not action_lines:
-            action_lines = ["- Validate findings and assign an owner + timeline."]
+            action_lines = [
+                "- Validate findings with at least two independent sources before distribution.",
+                "- Assign an owner and deadline for each follow-up action item.",
+                "- Capture assumptions, risks, and open questions in the final review note.",
+            ]
+
+        topic = _detect_report_topic(title, summary, prompt)
+        analysis_paragraphs = _topic_analysis_paragraphs(topic=topic, summary=summary)
+        reference_lines = _reference_lines(source_rows, limit=8)
+        if not reference_lines:
+            reference_lines = ["- No external links were captured for this run."]
 
         content = "\n".join(
             [
@@ -317,19 +507,28 @@ class ReportGenerationTool(AgentTool):
                 "### Executive Summary",
                 summary,
                 "",
+                "### Detailed Analysis",
+                "",
+                *analysis_paragraphs[:8],
+                "",
                 "### Highlights",
                 *highlight_lines[:8],
                 "",
-                "### Action Plan",
+                "### Recommended Next Steps",
                 *action_lines[:8],
+                "",
+                "### Reference Links",
+                *reference_lines,
             ]
         )
         context.settings["__latest_report_title"] = title
         context.settings["__latest_report_content"] = content
+        if source_rows:
+            context.settings["__latest_report_sources"] = source_rows
         return ToolExecutionResult(
             summary=f"Generated report draft: {title}",
             content=content,
-            data={"title": title},
+            data={"title": title, "source_count": len(source_rows)},
             sources=[],
             next_steps=[
                 "Attach owner/timeline for each action.",

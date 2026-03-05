@@ -9,6 +9,20 @@ def append_execution_plan(lines: list[str], ctx: AnswerBuildContext) -> None:
     for idx, step in enumerate(ctx.planned_steps, start=1):
         lines.append(f"{idx}. {step.title} (`{step.tool_id}`)")
 
+    has_research_steps = any(
+        step.tool_id
+        in (
+            "marketing.web_research",
+            "browser.playwright.inspect",
+            "web.extract.structured",
+            "web.dataset.adapter",
+            "documents.highlight.extract",
+        )
+        for step in ctx.planned_steps
+    )
+    if not has_research_steps:
+        return
+
     search_terms_raw = ctx.runtime_settings.get("__research_search_terms")
     keywords_raw = ctx.runtime_settings.get("__research_keywords")
     if isinstance(search_terms_raw, list) or isinstance(keywords_raw, list):

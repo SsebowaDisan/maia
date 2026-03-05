@@ -213,7 +213,7 @@ export default function App() {
               onCreateProject={projectState.handleCreateProject}
               onRenameProject={projectState.handleRenameProject}
               onDeleteProject={projectState.handleDeleteProject}
-              canDeleteProject={projectState.projects.length > 1}
+              canDeleteProject={projectState.projects.length > 0}
               conversationProjects={projectState.conversationProjects}
               onMoveConversationToProject={projectState.handleMoveConversationToProject}
               onRenameConversation={chatState.handleRenameConversation}

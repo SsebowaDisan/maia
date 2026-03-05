@@ -84,6 +84,11 @@ def test_document_highlight_extract_tool_stashes_copied_entries(monkeypatch) -> 
     assert result.data.get("highlighted_words")
     assert context.settings.get("__copied_highlights")
     assert any(event.event_type == "highlights_detected" for event in result.events)
+    event_types = [event.event_type for event in result.events]
+    assert "pdf_open" in event_types
+    assert "pdf_page_change" in event_types
+    assert "pdf_scan_region" in event_types
+    assert "pdf_evidence_linked" in event_types
 
 
 def test_invoice_create_tool_generates_pdf_artifact() -> None:
@@ -113,6 +118,7 @@ class _StubWorkspaceConnector:
     def __init__(self) -> None:
         self.docs_insert_calls = []
         self.sheet_append_calls = []
+        self.public_share_calls = []
 
     def create_docs_document(self, *, title: str):
         del title
@@ -128,6 +134,10 @@ class _StubWorkspaceConnector:
     def append_sheet_values(self, *, spreadsheet_id: str, sheet_range: str, values: list[list[object]]):
         self.sheet_append_calls.append((spreadsheet_id, sheet_range, values))
         return {"updates": {"updatedRows": len(values)}}
+
+    def share_drive_file_public(self, *, file_id: str, role: str = "reader", discoverable: bool = False):
+        self.public_share_calls.append((file_id, role, discoverable))
+        return {"ok": True, "file_id": file_id, "role": role, "scope": "anyone", "discoverable": discoverable}
 
 
 class _RegistryStub:
@@ -172,6 +182,22 @@ def test_workspace_research_notes_tool_appends_note() -> None:
     assert "docs.insert_completed" in event_types
 
 
+def test_workspace_research_notes_tool_can_enable_public_link() -> None:
+    workspace = _StubWorkspaceConnector()
+    context = _context()
+    with patch("api.services.agent.tools.workspace_tools.get_connector_registry", return_value=_RegistryStub(workspace)):
+        result = WorkspaceResearchNotesTool().execute(
+            context=context,
+            prompt="note",
+            params={"note": "Public note.", "make_public": True},
+        )
+    assert workspace.public_share_calls == [("doc-1", "reader", False)]
+    assert bool(result.data.get("public_shared")) is True
+    event_types = [event.event_type for event in result.events]
+    assert "drive.share_started" in event_types
+    assert "drive.share_completed" in event_types
+
+
 def test_workspace_sheets_track_step_tool_appends_rows() -> None:
     workspace = _StubWorkspaceConnector()
     context = _context()
@@ -188,6 +214,39 @@ def test_workspace_sheets_track_step_tool_appends_rows() -> None:
     assert "sheets.create_completed" in event_types
     assert "sheets.append_started" in event_types
     assert "sheets.append_completed" in event_types
+
+
+def test_workspace_sheets_track_step_tool_can_enable_public_link() -> None:
+    workspace = _StubWorkspaceConnector()
+    context = _context()
+    with patch("api.services.agent.tools.workspace_tools.get_connector_registry", return_value=_RegistryStub(workspace)):
+        result = WorkspaceSheetsTrackStepTool().execute(
+            context=context,
+            prompt="track",
+            params={"step_name": "Analyze", "status": "completed", "detail": "done", "make_public": True},
+        )
+    assert workspace.public_share_calls == [("sheet-1", "reader", False)]
+    assert bool(result.data.get("public_shared")) is True
+    event_types = [event.event_type for event in result.events]
+    assert "drive.share_started" in event_types
+    assert "drive.share_completed" in event_types
+
+
+def test_document_create_tool_google_workspace_can_enable_public_link() -> None:
+    workspace = _StubWorkspaceConnector()
+    with patch("api.services.agent.tools.document_tools.get_connector_registry", return_value=_RegistryStub(workspace)):
+        result = DocumentCreateTool().execute(
+            context=_context(),
+            prompt="body",
+            params={
+                "provider": "google_workspace",
+                "title": "Public Brief",
+                "body": "hello",
+                "make_public": True,
+            },
+        )
+    assert workspace.public_share_calls == [("doc-1", "reader", False)]
+    assert bool(result.data.get("public_shared")) is True
 
 
 def test_report_generation_respects_location_objective_without_hardcoded_phrase() -> None:

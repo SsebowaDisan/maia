@@ -208,10 +208,16 @@ class IndexSelection(BaseModel):
     file_ids: list[str] = Field(default_factory=list)
 
 
+class ChatAttachmentRecord(BaseModel):
+    name: str = ""
+    file_id: str | None = None
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
     index_selection: dict[str, IndexSelection] = Field(default_factory=dict)
+    attachments: list[ChatAttachmentRecord] = Field(default_factory=list)
     reasoning_type: str | None = None
     llm: str | None = None
     use_mindmap: bool | None = None

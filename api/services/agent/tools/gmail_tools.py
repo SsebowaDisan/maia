@@ -74,6 +74,198 @@ def _chunk_text(text: str, *, chunk_size: int = 140, max_chunks: int = 8) -> lis
     return chunks
 
 
+def _compact_text(value: Any, *, limit: int = 280) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(1, limit - 1)].rstrip()}..."
+
+
+def _looks_like_path(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    if "/" in candidate or "\\" in candidate:
+        return True
+    if candidate.startswith("."):
+        return True
+    lowered = candidate.lower()
+    return lowered.endswith(
+        (
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".txt",
+            ".csv",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".png",
+            ".jpg",
+            ".jpeg",
+        )
+    )
+
+
+def _normalize_attachment_row(item: Any) -> dict[str, str] | None:
+    if isinstance(item, dict):
+        local_path = str(
+            item.get("local_path")
+            or item.get("path")
+            or item.get("pdf_path")
+            or item.get("attachment_path")
+            or ""
+        ).strip()
+        file_id = str(
+            item.get("file_id")
+            or item.get("document_id")
+            or item.get("drive_file_id")
+            or item.get("attachment_file_id")
+            or ""
+        ).strip()
+        label = str(item.get("label") or item.get("name") or local_path or file_id).strip()
+        if local_path:
+            return {"local_path": local_path, "label": label or local_path}
+        if file_id:
+            return {"file_id": file_id, "label": label or file_id}
+        return None
+
+    text = str(item or "").strip()
+    if not text:
+        return None
+    if _looks_like_path(text):
+        return {"local_path": text, "label": text}
+    return {"file_id": text, "label": text}
+
+
+def _dedupe_attachments(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        local_path = str(row.get("local_path") or "").strip()
+        file_id = str(row.get("file_id") or "").strip()
+        if not local_path and not file_id:
+            continue
+        key = ("local_path", local_path) if local_path else ("file_id", file_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(row.get("label") or local_path or file_id).strip() or (local_path or file_id)
+        payload: dict[str, str] = {"label": label}
+        if local_path:
+            payload["local_path"] = local_path
+        if file_id:
+            payload["file_id"] = file_id
+        deduped.append(payload)
+    return deduped
+
+
+def _resolve_attachments(
+    *,
+    context: ToolExecutionContext,
+    params: dict[str, Any],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+
+    raw_list = params.get("attachments")
+    if isinstance(raw_list, list):
+        for item in raw_list[:16]:
+            normalized = _normalize_attachment_row(item)
+            if normalized:
+                rows.append(normalized)
+
+    for value in (
+        params.get("attachment_path"),
+        params.get("local_path"),
+        params.get("pdf_path"),
+    ):
+        normalized = _normalize_attachment_row({"local_path": value})
+        if normalized:
+            rows.append(normalized)
+
+    for value in (
+        params.get("attachment_file_id"),
+        params.get("file_id"),
+        params.get("document_id"),
+    ):
+        normalized = _normalize_attachment_row({"file_id": value})
+        if normalized:
+            rows.append(normalized)
+
+    attach_latest_raw = params.get("attach_latest_report_pdf")
+    if attach_latest_raw is None:
+        attach_latest = False
+    else:
+        attach_latest = _truthy(attach_latest_raw)
+    if attach_latest:
+        latest_pdf_path = str(context.settings.get("__latest_report_pdf_path") or "").strip()
+        latest_document_id = str(context.settings.get("__latest_report_document_id") or "").strip()
+        if latest_pdf_path:
+            rows.append(
+                {
+                    "local_path": latest_pdf_path,
+                    "label": str(context.settings.get("__latest_report_title") or latest_pdf_path).strip()
+                    or latest_pdf_path,
+                }
+            )
+        elif latest_document_id:
+            rows.append(
+                {
+                    "file_id": latest_document_id,
+                    "label": str(context.settings.get("__latest_report_title") or latest_document_id).strip()
+                    or latest_document_id,
+                }
+            )
+
+    return _dedupe_attachments(rows)
+
+
+def _attachment_data(row: dict[str, str]) -> dict[str, str]:
+    local_path = str(row.get("local_path") or "").strip()
+    file_id = str(row.get("file_id") or "").strip()
+    payload = {"attachment_label": str(row.get("label") or local_path or file_id).strip()}
+    if local_path:
+        payload["local_path"] = local_path
+    if file_id:
+        payload["file_id"] = file_id
+    return payload
+
+
+def _attach_to_gmail_draft(
+    *,
+    connector: Any,
+    draft_id: str,
+    attachments: list[dict[str, str]],
+    trace_events: list[ToolTraceEvent],
+) -> Generator[ToolTraceEvent, None, list[str]]:
+    labels: list[str] = []
+    if not attachments:
+        return labels
+    if not draft_id:
+        raise ToolExecutionError("Draft ID is required before adding attachments.")
+    for index, row in enumerate(attachments, start=1):
+        payload = _attachment_data(row)
+        detail = _compact_text(payload.get("attachment_label"), limit=160)
+        attach_event = ToolTraceEvent(
+            event_type="email_add_attachment",
+            title=f"Attach file {index}/{len(attachments)}",
+            detail=detail,
+            data={"draft_id": draft_id, "index": index, "total": len(attachments), **payload},
+        )
+        trace_events.append(attach_event)
+        yield attach_event
+
+        local_path = str(row.get("local_path") or "").strip() or None
+        file_id = str(row.get("file_id") or "").strip() or None
+        connector.add_attachment(
+            draft_id=draft_id,
+            file_id=file_id,
+            local_path=local_path,
+        )
+        labels.append(payload.get("attachment_label") or local_path or file_id or f"attachment-{index}")
+    return labels
+
+
 class GmailDraftTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="gmail.draft",
@@ -99,10 +291,28 @@ class GmailDraftTool(AgentTool):
         subject = str(params.get("subject") or report_title or _extract_subject(prompt)).strip()
         body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
         sender = str(params.get("from") or "").strip()
+        attachments = _resolve_attachments(
+            context=context,
+            params=params,
+        )
         live_desktop = desktop_mode_enabled(context, params)
         desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
+        if attachments and live_desktop:
+            if desktop_required:
+                raise ToolExecutionError(
+                    "Live desktop draft does not support attachments yet. Set `live_desktop=false`."
+                )
+            attachment_fallback = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Attachments require Gmail API draft flow",
+                detail="Switching from live desktop to Gmail API to attach files",
+                data={"attachments": len(attachments)},
+            )
+            trace_events.append(attachment_fallback)
+            yield attachment_fallback
+            live_desktop = False
         if live_desktop:
             try:
                 desktop_result = yield from stream_live_desktop_compose(
@@ -187,14 +397,27 @@ class GmailDraftTool(AgentTool):
         draft = response.get("draft") if isinstance(response, dict) else {}
         draft_id = str((draft or {}).get("id") or "")
         message_id = str(((draft or {}).get("message") or {}).get("id") or "")
+        attached_labels = yield from _attach_to_gmail_draft(
+            connector=connector,
+            draft_id=draft_id,
+            attachments=attachments,
+            trace_events=trace_events,
+        )
         ready_event = ToolTraceEvent(
             event_type="email_ready_to_send",
             title="Draft ready in Gmail",
-            detail=f"Draft ID: {draft_id or 'unknown'}",
+            detail=(
+                f"Draft ID: {draft_id or 'unknown'}"
+                if not attached_labels
+                else f"Draft ID: {draft_id or 'unknown'} with {len(attached_labels)} attachment(s)"
+            ),
         )
         trace_events.append(ready_event)
         yield ready_event
 
+        attachment_lines = [f"- Attachments: {len(attached_labels)}"] if attached_labels else []
+        if attached_labels:
+            attachment_lines.extend([f"  - {item}" for item in attached_labels[:6]])
         return ToolExecutionResult(
             summary=f"Gmail draft created for {to}.",
             content=(
@@ -202,13 +425,16 @@ class GmailDraftTool(AgentTool):
                 f"- To: {to}\n"
                 f"- Subject: {subject}\n"
                 f"- Draft ID: {draft_id or 'unknown'}\n"
-                f"- Message ID: {message_id or 'unknown'}"
+                f"- Message ID: {message_id or 'unknown'}\n"
+                + ("\n".join(attachment_lines) if attachment_lines else "- Attachments: 0")
             ),
             data={
                 "to": to,
                 "subject": subject,
                 "draft_id": draft_id,
                 "message_id": message_id,
+                "attachments_count": len(attached_labels),
+                "attachments": attached_labels[:16],
                 "delivery_mode": "gmail_api",
             },
             sources=[],
@@ -260,11 +486,29 @@ class GmailSendTool(AgentTool):
         subject = str(params.get("subject") or report_title or _extract_subject(prompt)).strip()
         body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
         sender = str(params.get("from") or "").strip()
+        attachments = _resolve_attachments(
+            context=context,
+            params=params,
+        )
         dry_run = _truthy(params.get("dry_run")) or _infer_dry_run(prompt)
         live_desktop = desktop_mode_enabled(context, params)
         desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
+        if attachments and live_desktop and not dry_run:
+            if desktop_required:
+                raise ToolExecutionError(
+                    "Live desktop send does not support attachments yet. Set `live_desktop=false`."
+                )
+            attachment_fallback = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Attachments require Gmail API send flow",
+                detail="Switching from live desktop to Gmail API to attach files",
+                data={"attachments": len(attachments)},
+            )
+            trace_events.append(attachment_fallback)
+            yield attachment_fallback
+            live_desktop = False
         if live_desktop and not dry_run:
             try:
                 desktop_result = yield from stream_live_desktop_compose(
@@ -344,7 +588,11 @@ class GmailSendTool(AgentTool):
             dry_run_ready = ToolTraceEvent(
                 event_type="email_ready_to_send",
                 title="Dry run complete",
-                detail="Message prepared but not sent",
+                detail=(
+                    "Message prepared but not sent"
+                    if not attachments
+                    else f"Message + {len(attachments)} attachment(s) prepared but not sent"
+                ),
             )
             trace_events.append(dry_run_ready)
             yield dry_run_ready
@@ -354,9 +602,16 @@ class GmailSendTool(AgentTool):
                     "Gmail send dry run completed.\n"
                     f"- To: {to}\n"
                     f"- Subject: {subject}\n"
+                    f"- Attachments: {len(attachments)}\n"
                     "- Status: not sent (dry run)"
                 ),
-                data={"to": to, "subject": subject, "dry_run": True, "delivery_mode": "dry_run"},
+                data={
+                    "to": to,
+                    "subject": subject,
+                    "dry_run": True,
+                    "attachments_count": len(attachments),
+                    "delivery_mode": "dry_run",
+                },
                 sources=[],
                 next_steps=["Remove dry-run and confirm send to dispatch message."],
                 events=trace_events,
@@ -377,13 +632,86 @@ class GmailSendTool(AgentTool):
         trace_events.append(click_send_event)
         yield click_send_event
         connector = get_connector_registry().build("gmail", settings=context.settings)
-        response = connector.send_message(to=to, subject=subject, body=body, sender=sender)
+        attached_labels: list[str] = []
+        draft_id = ""
+        if attachments:
+            try:
+                draft_response = connector.create_draft(to=to, subject=subject, body=body, sender=sender)
+                draft = draft_response.get("draft") if isinstance(draft_response, dict) else {}
+                draft_id = str((draft or {}).get("id") or "")
+                attached_labels = yield from _attach_to_gmail_draft(
+                    connector=connector,
+                    draft_id=draft_id,
+                    attachments=attachments,
+                    trace_events=trace_events,
+                )
+                response = connector.send_draft(draft_id=draft_id)
+            except Exception as exc:
+                exc_text = str(exc or "")
+                normalized_error = exc_text.lower()
+                scope_blocked = (
+                    "insufficient authentication scopes" in normalized_error
+                    or "insufficientpermissions" in normalized_error
+                    or "insufficient permission" in normalized_error
+                )
+                if not scope_blocked:
+                    raise
+                fallback_event = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title="Draft API blocked by scope, using direct send fallback",
+                    detail="Sending with Gmail API raw message attachment flow",
+                    data={"reason": _compact_text(exc_text, limit=220)},
+                )
+                trace_events.append(fallback_event)
+                yield fallback_event
+                send_attachments: list[dict[str, str]] = []
+                attached_labels = []
+                for row in attachments:
+                    if not isinstance(row, dict):
+                        continue
+                    local_path = str(row.get("local_path") or "").strip()
+                    file_id = str(row.get("file_id") or "").strip()
+                    label = str(row.get("label") or local_path or file_id).strip()
+                    if not local_path and not file_id:
+                        continue
+                    payload: dict[str, str] = {}
+                    if local_path:
+                        payload["local_path"] = local_path
+                    if file_id:
+                        payload["file_id"] = file_id
+                    send_attachments.append(payload)
+                    attached_labels.append(label or local_path or file_id)
+                    attach_event = ToolTraceEvent(
+                        event_type="email_add_attachment",
+                        title=f"Attach file {len(attached_labels)}/{len(attachments)}",
+                        detail=_compact_text(label or local_path or file_id, limit=160),
+                        data={**payload, "send_mode": "gmail_send_direct"},
+                    )
+                    trace_events.append(attach_event)
+                    yield attach_event
+                send_with_attachments = getattr(connector, "send_message_with_attachments", None)
+                if not callable(send_with_attachments):
+                    raise ToolExecutionError(
+                        "Gmail connector does not support attachment send fallback."
+                    ) from exc
+                response = send_with_attachments(
+                    to=to,
+                    subject=subject,
+                    body=body,
+                    sender=sender,
+                    attachments=send_attachments,
+                )
+        else:
+            response = connector.send_message(to=to, subject=subject, body=body, sender=sender)
         message_id = str(response.get("id") or "")
         thread_id = str(response.get("threadId") or "")
         sent_event = ToolTraceEvent(event_type="email_sent", title="Gmail message sent", detail=message_id or to)
         trace_events.append(sent_event)
         yield sent_event
 
+        attachment_lines = [f"- Attachments: {len(attached_labels)}"] if attached_labels else []
+        if attached_labels:
+            attachment_lines.extend([f"  - {item}" for item in attached_labels[:6]])
         return ToolExecutionResult(
             summary=f"Gmail message sent to {to}.",
             content=(
@@ -391,13 +719,17 @@ class GmailSendTool(AgentTool):
                 f"- To: {to}\n"
                 f"- Subject: {subject}\n"
                 f"- Message ID: {message_id or 'unknown'}\n"
-                f"- Thread ID: {thread_id or 'unknown'}"
+                f"- Thread ID: {thread_id or 'unknown'}\n"
+                + ("\n".join(attachment_lines) if attachment_lines else "- Attachments: 0")
             ),
             data={
                 "to": to,
                 "subject": subject,
                 "id": message_id,
                 "thread_id": thread_id,
+                "draft_id": draft_id or None,
+                "attachments_count": len(attached_labels),
+                "attachments": attached_labels[:16],
                 "delivery_mode": "gmail_api",
             },
             sources=[],

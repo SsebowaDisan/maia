@@ -1,5 +1,9 @@
 from api.services.agent import llm_intent
-from api.services.agent.llm_intent import classify_intent_tags, enrich_task_intelligence
+from api.services.agent.llm_intent import (
+    classify_intent_tags,
+    detect_web_routing_mode,
+    enrich_task_intelligence,
+)
 
 
 def test_enrich_task_intelligence_disabled(monkeypatch) -> None:
@@ -77,3 +81,14 @@ def test_classify_intent_tags_merges_and_sanitizes_llm_tags(monkeypatch) -> None
     assert "docs_write" in tags
     assert "sheets_update" in tags
     assert "not_allowed" not in tags
+
+
+def test_detect_web_routing_mode_falls_back_to_online_research_when_web_discovery_signal(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_WEB_ROUTING_ENABLED", "0")
+    routing = detect_web_routing_mode(
+        message="Research online competitors",
+        agent_goal=None,
+        heuristic={"explicit_web_discovery": True},
+    )
+    assert routing["routing_mode"] == "online_research"
+    assert routing["llm_used"] is False

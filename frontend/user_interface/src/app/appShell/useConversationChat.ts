@@ -348,6 +348,12 @@ export function useConversationChat({
 
         const sharedPayload = {
           indexSelection,
+          attachments: (attachments || [])
+            .map((item) => ({
+              name: String(item.name || "").trim(),
+              fileId: String(item.fileId || "").trim() || undefined,
+            }))
+            .filter((item) => Boolean(item.name || item.fileId)),
           citation: options?.citationMode ?? citationMode,
           useMindmap: options?.useMindmap ?? mindmapEnabled,
           mindmapSettings: options?.mindmapSettings ?? {

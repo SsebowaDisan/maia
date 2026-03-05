@@ -121,6 +121,7 @@ function sendChat(
     agentMode?: "ask" | "company_agent";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
+    attachments?: Array<{ name: string; fileId?: string }>;
   },
 ) {
   return request<ChatResponse>("/api/chat", {
@@ -138,6 +139,10 @@ function sendChat(
       agent_mode: options?.agentMode ?? "ask",
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,
+      attachments: (options?.attachments || []).map((item) => ({
+        name: item.name,
+        file_id: item.fileId,
+      })),
     }),
   });
 }
@@ -185,6 +190,7 @@ async function sendChatStream(
     agentMode?: "ask" | "company_agent";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
+    attachments?: Array<{ name: string; fileId?: string }>;
     onEvent?: (event: ChatStreamEvent) => void;
     idleTimeoutMs?: number;
   },
@@ -220,6 +226,10 @@ async function sendChatStream(
       agent_mode: options?.agentMode ?? "ask",
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,
+      attachments: (options?.attachments || []).map((item) => ({
+        name: item.name,
+        file_id: item.fileId,
+      })),
     }),
   });
 

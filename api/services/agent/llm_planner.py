@@ -89,8 +89,9 @@ def _request_openai_plan(
         "- For invoice create/send requests, prefer `business.invoice_workflow`.\n"
         "- For meeting/calendar scheduling requests, prefer `business.meeting_scheduler`.\n"
         "- For proposal/RFP drafting requests, prefer `business.proposal_workflow`.\n"
-        "- When `agent_mode` is `company_agent`, prefer server-side execution tools and include roadmap logging steps "
-        "(`workspace.sheets.track_step`, `workspace.docs.research_notes`) where relevant.\n\n"
+        "- When `agent_mode` is `company_agent`, prefer server-side execution tools.\n"
+        "- Include workspace roadmap logging steps (`workspace.sheets.track_step`, `workspace.docs.research_notes`) "
+        "only when explicitly requested or clearly needed for workspace artifact tracking.\n\n"
         f"Input:\n{json.dumps(user_payload, ensure_ascii=True)}"
     )
     return call_json_response(

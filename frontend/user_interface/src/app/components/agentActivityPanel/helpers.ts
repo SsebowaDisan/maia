@@ -124,6 +124,7 @@ function mergeLiveSceneData(
       "highlight_color",
       "find_query",
       "clipboard_text",
+      "scroll_direction",
       "doc_id",
       "document_id",
       "document_url",
@@ -142,7 +143,28 @@ function mergeLiveSceneData(
       "render_quality",
       "blocked_reason",
       "routing_mode",
+      "scan_region",
+      "page_label",
+      "source_name",
     ].forEach((key) => assignString(key, payload[key]));
+
+    [
+      "scroll_percent",
+      "scroll_top",
+      "scroll_height",
+      "viewport_height",
+      "viewport_width",
+      "pdf_page",
+      "page_index",
+      "page_total",
+      "pdf_total_pages",
+      "scan_pass",
+    ].forEach((key) => {
+      const numeric = readNumberField(payload[key]);
+      if (numeric !== null) {
+        merged[key] = numeric;
+      }
+    });
 
     const contentDensity = readNumberField(payload["content_density"]);
     if (contentDensity !== null) {

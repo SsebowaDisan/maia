@@ -120,7 +120,7 @@ def handle_step_success(
             refined_event = activity_event_factory(
                 event_type="plan_refined",
                 title="Expanded research plan with live source inspections",
-                detail=f"Inserted {len(followup_steps)} website inspection step(s)",
+                detail=f"Inserted {len(followup_steps)} source inspection step(s)",
                 metadata={
                     "inserted": len(followup_steps),
                     "total_steps": len(steps),

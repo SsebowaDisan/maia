@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from api.services.ollama import DEFAULT_OLLAMA_BASE_URL
@@ -52,3 +54,21 @@ class OllamaEmbeddingApplyAllRequest(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     base_url: str | None = Field(default=None, min_length=8, max_length=256)
     run_id: str | None = Field(default=None, max_length=120)
+
+
+class GoogleWorkspaceAuthModeRequest(BaseModel):
+    mode: Literal["oauth", "service_account"] = "oauth"
+
+
+class GoogleWorkspaceLinkAnalyzeRequest(BaseModel):
+    link: str = Field(min_length=4, max_length=2048)
+
+
+class GoogleWorkspaceLinkCheckRequest(BaseModel):
+    link: str = Field(min_length=4, max_length=2048)
+    action: Literal["read", "edit"] = "read"
+
+
+class GoogleWorkspaceLinkAliasSaveRequest(BaseModel):
+    alias: str = Field(min_length=2, max_length=120)
+    link: str = Field(min_length=4, max_length=2048)

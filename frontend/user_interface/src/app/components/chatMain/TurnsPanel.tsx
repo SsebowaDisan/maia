@@ -472,7 +472,7 @@ function TurnsPanel({
             </div>
             {turnActivityEvents.length > 0 ? (
               <div className="flex justify-end">
-                <div className="w-full max-w-[90%]">
+                <div className="w-full max-w-[98%] xl:max-w-full">
                   <AgentActivityPanel
                     events={turnActivityEvents}
                     streaming={isLatestTurn && isActivityStreaming}

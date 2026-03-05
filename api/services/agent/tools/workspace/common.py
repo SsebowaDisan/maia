@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from typing import Any, Generator
 
 from api.services.agent.tools.base import ToolExecutionResult, ToolTraceEvent
@@ -55,3 +56,43 @@ def drain_stream(
 
 def coerce_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def coerce_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def normalize_public_role(value: Any) -> str:
+    role = str(value or "reader").strip().lower() or "reader"
+    if role not in {"reader", "commenter", "writer"}:
+        return "reader"
+    return role
+
+
+def resolve_public_share_options(*, params: dict[str, Any], settings: dict[str, Any]) -> tuple[bool, str, bool]:
+    make_public_default = coerce_bool(
+        settings.get("agent.workspace_make_public"),
+        default=coerce_bool(os.getenv("MAIA_WORKSPACE_MAKE_PUBLIC"), default=False),
+    )
+    make_public = coerce_bool(params.get("make_public"), default=make_public_default)
+
+    role_default = normalize_public_role(
+        settings.get("agent.workspace_public_role") or os.getenv("MAIA_WORKSPACE_PUBLIC_ROLE")
+    )
+    role = normalize_public_role(params.get("public_role") or role_default)
+
+    discoverable_default = coerce_bool(
+        settings.get("agent.workspace_public_discoverable"),
+        default=coerce_bool(os.getenv("MAIA_WORKSPACE_PUBLIC_DISCOVERABLE"), default=False),
+    )
+    discoverable = coerce_bool(params.get("public_discoverable"), default=discoverable_default)
+    return make_public, role, discoverable

@@ -21,7 +21,12 @@ class GoogleWorkspaceConnector(BaseConnector):
             "refresh_token": self._read_secret("GOOGLE_WORKSPACE_REFRESH_TOKEN"),
             "token_type": "Bearer",
         }
-        return GoogleAuthSession(user_id=user_id, run_id=run_id, fallback_tokens=fallback)
+        return GoogleAuthSession(
+            user_id=user_id,
+            run_id=run_id,
+            fallback_tokens=fallback,
+            settings=self.settings,
+        )
 
     def _token(self) -> str:
         token = self._session().require_access_token()
@@ -93,6 +98,18 @@ class GoogleWorkspaceConnector(BaseConnector):
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc
 
+    def docs_insert_markdown(
+        self,
+        *,
+        document_id: str,
+        markdown_text: str,
+    ) -> dict[str, Any]:
+        service = GoogleDocsService(session=self._session())
+        try:
+            return service.insert_markdown(doc_id=document_id, markdown_text=markdown_text)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+
     def create_spreadsheet(
         self,
         *,
@@ -142,6 +159,23 @@ class GoogleWorkspaceConnector(BaseConnector):
         service = GoogleDriveService(session=self._session())
         try:
             return service.share_file(file_id=file_id, email=email, role=role)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+
+    def share_drive_file_public(
+        self,
+        *,
+        file_id: str,
+        role: str = "reader",
+        discoverable: bool = False,
+    ) -> dict[str, Any]:
+        service = GoogleDriveService(session=self._session())
+        try:
+            return service.share_file_public(
+                file_id=file_id,
+                role=role,
+                discoverable=bool(discoverable),
+            )
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc
 

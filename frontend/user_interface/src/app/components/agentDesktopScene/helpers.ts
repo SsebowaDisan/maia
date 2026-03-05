@@ -4,6 +4,7 @@ import type {
   HighlightColor,
   HighlightPalette,
   HighlightRegion,
+  PdfPlaybackState,
 } from "./types";
 
 function compactValue(value: unknown): string {
@@ -166,6 +167,62 @@ function parseSheetState(sheetBodyPreview: string): { sheetPreviewRows: string[]
   };
 }
 
+function parsePdfPlaybackState(
+  activeSceneData: Record<string, unknown>,
+  activeEventType: string,
+): PdfPlaybackState {
+  const parsePositiveInt = (value: unknown, fallback: number) => {
+    const parsed = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(1, Math.round(parsed));
+  };
+
+  const fallbackPageFromLabel = () => {
+    const pageLabel = compactValue(activeSceneData["page_label"]);
+    const match = pageLabel.match(/\d+/);
+    if (!match) {
+      return 1;
+    }
+    const parsed = Number(match[0]);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 1;
+    }
+    return Math.round(parsed);
+  };
+
+  const pdfPage = parsePositiveInt(
+    activeSceneData["pdf_page"] ?? activeSceneData["page_index"],
+    fallbackPageFromLabel(),
+  );
+  const pdfPageTotal = parsePositiveInt(
+    activeSceneData["pdf_total_pages"] ?? activeSceneData["page_total"],
+    pdfPage,
+  );
+  const scrollPercent = parseScrollPercent(
+    activeSceneData["scroll_percent"] ?? activeSceneData["pdf_scroll_percent"],
+  );
+  const normalizedDirection = String(activeSceneData["scroll_direction"] || "")
+    .trim()
+    .toLowerCase();
+  const pdfScrollDirection: "up" | "down" | "" =
+    normalizedDirection === "up" || normalizedDirection === "down"
+      ? (normalizedDirection as "up" | "down")
+      : activeEventType === "pdf_page_change"
+        ? "down"
+        : "";
+  const pdfScanRegion = compactValue(activeSceneData["scan_region"]);
+
+  return {
+    pdfPage,
+    pdfPageTotal: Math.max(pdfPage, pdfPageTotal),
+    pdfScrollPercent: scrollPercent,
+    pdfScrollDirection,
+    pdfScanRegion,
+  };
+}
+
 export {
   asHttpUrl,
   compactValue,
@@ -174,6 +231,7 @@ export {
   parseDocumentHighlights,
   parseHighlightRegions,
   parseLiveCopiedWords,
+  parsePdfPlaybackState,
   parseScrollPercent,
   parseSheetState,
 };

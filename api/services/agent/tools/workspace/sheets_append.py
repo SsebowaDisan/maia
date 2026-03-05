@@ -11,6 +11,7 @@ from api.services.agent.tools.base import (
 )
 
 from .base import WorkspaceConnectorTool
+from ..google_target_resolution import resolve_sheet_reference
 
 
 class WorkspaceSheetsAppendTool(WorkspaceConnectorTool):
@@ -33,13 +34,28 @@ class WorkspaceSheetsAppendTool(WorkspaceConnectorTool):
         spreadsheet_id = str(params.get("spreadsheet_id") or "").strip()
         sheet_range = str(params.get("sheet_range") or "Sheet1!A1").strip()
         values = params.get("values")
+        resolved_ref = None
         if not spreadsheet_id:
-            raise ToolExecutionError("`spreadsheet_id` is required.")
+            resolved_ref = resolve_sheet_reference(
+                prompt=prompt,
+                params=params,
+                settings=context.settings,
+            )
+            if resolved_ref is not None:
+                spreadsheet_id = resolved_ref.resource_id
+        if not spreadsheet_id:
+            raise ToolExecutionError(
+                "`spreadsheet_id` is required. Provide spreadsheet_id, a Google Sheets link, or a saved alias."
+            )
         if not isinstance(values, list) or not values:
             raise ToolExecutionError("`values` must be a non-empty 2D array.")
 
         connector = self._workspace_connector(settings=context.settings)
-        spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+        spreadsheet_url = (
+            str(resolved_ref.canonical_url).strip()
+            if resolved_ref is not None and str(resolved_ref.canonical_url).strip()
+            else f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+        )
         response = connector.append_sheet_values(
             spreadsheet_id=spreadsheet_id,
             sheet_range=sheet_range,

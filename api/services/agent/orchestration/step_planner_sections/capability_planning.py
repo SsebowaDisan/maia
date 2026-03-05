@@ -107,7 +107,6 @@ def _build_preferred_tools(
     *,
     domains: list[str],
     capabilities: list[AgentToolCapability],
-    request: ChatRequest,
 ) -> list[str]:
     domain_map: dict[str, list[AgentToolCapability]] = {}
     for capability in capabilities:
@@ -124,11 +123,6 @@ def _build_preferred_tools(
         )
         for capability in rows[:4]:
             preferred.append(capability.tool_id)
-
-    if request.agent_mode == "company_agent":
-        for sticky_tool in ("workspace.sheets.track_step", "workspace.docs.research_notes"):
-            if any(cap.tool_id == sticky_tool for cap in capabilities):
-                preferred.append(sticky_tool)
 
     return list(dict.fromkeys(preferred))
 
@@ -257,14 +251,6 @@ def analyze_capability_plan(
         if llm_signal not in matched_signals:
             matched_signals.append(llm_signal)
 
-    if request.agent_mode == "company_agent":
-        _append_domains(
-            domains=domains,
-            matched_signals=matched_signals,
-            reason="company_agent_mode",
-            candidate_domains=("document_ops",),
-        )
-
     if not domains:
         domains.update(("marketing_research", "reporting"))
         matched_signals.append("fallback:default_domains")
@@ -273,7 +259,6 @@ def analyze_capability_plan(
     preferred_tool_ids = _build_preferred_tools(
         domains=ordered_domains,
         capabilities=capabilities,
-        request=request,
     )
     preferred_tool_ids = [tool_id for tool_id in preferred_tool_ids if tool_id in available_tool_ids]
     preferred_tool_ids = list(dict.fromkeys(preferred_tool_ids))
@@ -282,10 +267,9 @@ def analyze_capability_plan(
         f"Selected {len(ordered_domains)} capability domain(s) from {len(matched_signals)} signal(s).",
         "Planner should prioritize preferred tools while keeping execution policy constraints.",
     ]
-    if request.agent_mode == "company_agent":
-        rationale.append(
-            "Company Agent mode keeps workspace tracking tools in preferred set for theatre-first visibility."
-        )
+    rationale.append(
+        "Workspace tools are included only when task intent or contract actions require Docs/Sheets artifacts."
+    )
 
     return CapabilityPlanningAnalysis(
         required_domains=ordered_domains,

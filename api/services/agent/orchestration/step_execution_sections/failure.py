@@ -40,14 +40,32 @@ def handle_step_failure(
             data={},
             sources=[],
         )
-    if (
+    workspace_auth_error = (
         step.tool_id in ("workspace.docs.research_notes", "workspace.sheets.track_step")
         and any(
             marker in str(exc).lower()
             for marker in ("google_tokens_missing", "oauth", "refresh_token")
         )
-    ):
+    )
+    is_workspace_logging_step = bool(step.params.get("__workspace_logging_step"))
+    if workspace_auth_error and is_workspace_logging_step:
         state.deep_workspace_logging_enabled = False
+        if not state.deep_workspace_warning_emitted:
+            state.deep_workspace_warning_emitted = True
+            warning_event = activity_event_factory(
+                event_type="tool_failed",
+                title="Workspace logging disabled",
+                detail=(
+                    "Google Docs/Sheets is not connected. "
+                    "Continuing execution without automatic roadmap sync."
+                ),
+                metadata={
+                    "tool_id": step.tool_id,
+                    "step": index,
+                    "workspace_logging": True,
+                },
+            )
+            yield emit_event(warning_event)
     action = registry.get(step.tool_id).to_action(
         status="failed",
         summary=str(exc),

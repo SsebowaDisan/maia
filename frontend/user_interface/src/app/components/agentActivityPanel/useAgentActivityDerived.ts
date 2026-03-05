@@ -49,6 +49,7 @@ function tabForSceneSurface(surface: string): PreviewTab | null {
     normalized === "browser" ||
     normalized === "website" ||
     normalized === "web" ||
+    normalized === "preview" ||
     normalized === "maps"
   ) {
     return "browser";
@@ -75,14 +76,14 @@ function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
   if (!event) {
     return "system";
   }
+  const byType = tabForEventType(event.event_type || "");
   const sceneSurface =
     eventMetadataString(event, "scene_surface") ||
     readStringField(event.data?.["scene_surface"]);
   const surfaceTab = tabForSceneSurface(sceneSurface);
-  if (surfaceTab) {
+  if (surfaceTab && (surfaceTab !== "system" || byType === "system")) {
     return surfaceTab;
   }
-  const byType = tabForEventType(event.event_type || "");
   if (byType !== "system") {
     return byType;
   }
@@ -246,17 +247,32 @@ function useAgentActivityDerived({
   const hasSpreadsheetUrlSignal =
     sceneSpreadsheetUrl.length > 0 ||
     currentSceneSourceUrl.includes("docs.google.com/spreadsheets/");
+  const hasDocumentUrlSignal =
+    sceneDocumentUrl.length > 0 ||
+    currentSceneSourceUrl.includes("docs.google.com/document/");
   const isSheetsScene =
     isDocumentScene &&
     (sceneEventType.startsWith("sheet_") ||
       sceneEventType.startsWith("sheets.") ||
       sceneEventType === "drive.go_to_sheet" ||
       hasSpreadsheetUrlSignal);
-  const isDocsScene = isDocumentScene && !isSheetsScene;
+  const mergedPdfPage = readNumberField(mergedSceneData["pdf_page"]);
+  const mergedPdfTotal = readNumberField(mergedSceneData["pdf_total_pages"]);
+  const hasPdfEventSignal = sceneEventType.startsWith("pdf_");
+  const hasPdfDataSignal = mergedPdfPage !== null || mergedPdfTotal !== null;
+  const isPdfScene =
+    isDocumentScene &&
+    canRenderPdfFrame &&
+    !isSheetsScene &&
+    !hasDocumentUrlSignal &&
+    (hasPdfEventSignal || hasPdfDataSignal || !sceneSpreadsheetUrl);
+  const isDocsScene = isDocumentScene && !isSheetsScene && !isPdfScene;
   const sceneSurfaceKey = isBrowserScene
     ? "website"
     : isSheetsScene
       ? "google_sheets"
+      : isPdfScene
+        ? "document"
       : isDocsScene
         ? "google_docs"
         : isEmailScene
@@ -268,6 +284,8 @@ function useAgentActivityDerived({
     ? "Website"
     : sceneSurfaceKey === "google_sheets"
       ? "Google Sheets"
+      : sceneSurfaceKey === "document"
+        ? "Document"
       : sceneSurfaceKey === "google_docs"
         ? "Google Docs"
         : sceneSurfaceKey === "email"
@@ -494,6 +512,7 @@ function useAgentActivityDerived({
     isDocsScene,
     isDocumentScene,
     isEmailScene,
+    isPdfScene,
     isSheetsScene,
     isSystemScene,
     mergedSceneData,

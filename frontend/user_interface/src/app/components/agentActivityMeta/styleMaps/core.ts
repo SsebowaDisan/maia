@@ -172,6 +172,11 @@ const coreEventStyles: Record<string, EventStyle> = {
     icon: Search,
     accent: "text-[#4c4c50]",
   },
+  browser_contact_required_scan: {
+    label: "Scan Required",
+    icon: FileSearch,
+    accent: "text-[#4c4c50]",
+  },
   browser_contact_fill_name: {
     label: "Fill Name",
     icon: Activity,
@@ -179,6 +184,16 @@ const coreEventStyles: Record<string, EventStyle> = {
   },
   browser_contact_fill_email: {
     label: "Fill Email",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_company: {
+    label: "Fill Company",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_fill_phone: {
+    label: "Fill Phone",
     icon: Activity,
     accent: "text-[#4c4c50]",
   },
@@ -190,6 +205,16 @@ const coreEventStyles: Record<string, EventStyle> = {
   browser_contact_fill_message: {
     label: "Fill Message",
     icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  browser_contact_llm_fill: {
+    label: "LLM Fill",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
+  "llm.form_field_mapping": {
+    label: "LLM Field Map",
+    icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
   browser_contact_submit: {

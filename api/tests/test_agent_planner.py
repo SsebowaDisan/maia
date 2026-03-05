@@ -567,7 +567,121 @@ def test_build_plan_scopes_allowed_tools_when_preferred_tools_are_provided(monke
     allowed = captured.get("allowed_tool_ids")
     assert isinstance(allowed, set)
     assert "google.api.google_sheets" in allowed
-    assert "workspace.sheets.track_step" in allowed
-    assert "workspace.docs.research_notes" in allowed
+    assert "workspace.sheets.track_step" not in allowed
+    assert "workspace.docs.research_notes" not in allowed
     assert "report.generate" in allowed
     assert "invoice.send" not in allowed
+
+
+def test_simple_definition_request_avoids_web_research_when_routing_is_none(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    request = ChatRequest(
+        message="what is machine learning",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "marketing.web_research" not in tool_ids
+    assert "report.generate" in tool_ids
+
+
+def test_explicit_online_search_request_keeps_web_research_step(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    request = ChatRequest(
+        message="search online for the latest machine learning trends and summarize",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "marketing.web_research" in tool_ids
+
+
+def test_generic_prompt_does_not_force_pdf_highlight_step(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    request = ChatRequest(
+        message="what is machine learning",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "documents.highlight.extract" not in tool_ids
+
+
+def test_build_browser_followup_steps_prioritizes_pdf_sources() -> None:
+    followups = planner_module.build_browser_followup_steps(
+        {
+            "items": [
+                {"label": "Website article", "url": "https://example.com/article"},
+                {"label": "Research PDF", "url": "https://example.com/research-paper.pdf"},
+            ]
+        },
+        max_urls=1,
+    )
+    assert len(followups) == 1
+    assert followups[0].tool_id == "browser.playwright.inspect"
+    assert str(followups[0].params.get("url") or "").endswith(".pdf")
+    assert followups[0].params.get("follow_same_domain_links") is False
+
+
+def test_attachment_intent_enables_doc_export_and_gmail_attachment(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = (request, allowed_tool_ids)
+        return [
+            {
+                "tool_id": "workspace.docs.fill_template",
+                "title": "Write report in Google Docs",
+                "params": {"title": "Market Report"},
+            },
+            {
+                "tool_id": "gmail.send",
+                "title": "Send report email",
+                "params": {},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    request = ChatRequest(
+        message="Research AI agents, write report, download pdf and send attached to ops@example.com",
+        agent_mode="ask",
+    )
+    steps = build_plan(request)
+
+    docs_step = next(step for step in steps if step.tool_id == "workspace.docs.fill_template")
+    gmail_step = next(step for step in steps if step.tool_id == "gmail.send")
+
+    assert docs_step.params.get("export_pdf") is True
+    assert gmail_step.params.get("attach_latest_report_pdf") is True
+    assert gmail_step.params.get("to") == "ops@example.com"
+
+
+def test_no_attachment_intent_does_not_force_doc_export_or_email_attachment(monkeypatch) -> None:
+    def _fake_plan_with_llm(*, request, allowed_tool_ids):
+        _ = (request, allowed_tool_ids)
+        return [
+            {
+                "tool_id": "workspace.docs.fill_template",
+                "title": "Write report in Google Docs",
+                "params": {"title": "Market Report"},
+            },
+            {
+                "tool_id": "gmail.send",
+                "title": "Send report email",
+                "params": {},
+            },
+        ]
+
+    monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    request = ChatRequest(
+        message="Research AI agents and send the summary to ops@example.com",
+        agent_mode="ask",
+    )
+    steps = build_plan(request)
+
+    docs_step = next(step for step in steps if step.tool_id == "workspace.docs.fill_template")
+    gmail_step = next(step for step in steps if step.tool_id == "gmail.send")
+
+    assert "export_pdf" not in docs_step.params
+    assert "attach_latest_report_pdf" not in gmail_step.params

@@ -7,7 +7,7 @@ from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import ToolExecutionContext, ToolExecutionResult, ToolMetadata, ToolTraceEvent
 
 from .base import WorkspaceConnectorTool
-from .common import chunk_text, drain_stream
+from .common import chunk_text, drain_stream, resolve_public_share_options
 
 
 class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
@@ -32,6 +32,11 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
         if not isinstance(replacements, dict):
             replacements = {}
         prompt_text = str(params.get("body") or prompt).strip()
+        render_markdown = bool(params.get("render_markdown", True))
+        make_public, public_role, public_discoverable = resolve_public_share_options(
+            params=params,
+            settings=context.settings,
+        )
         connector = self._workspace_connector(settings=context.settings)
 
         trace_events: list[ToolTraceEvent] = []
@@ -50,6 +55,10 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
         created = connector.create_docs_document(title=title)
         document_id = str(created.get("documentId") or "")
         doc_url = f"https://docs.google.com/document/d/{document_id}/edit" if document_id else ""
+        if document_id:
+            context.settings["__latest_report_document_id"] = document_id
+            context.settings["__latest_report_document_url"] = doc_url
+            context.settings["__latest_report_title"] = title
         docs_create_completed = ToolTraceEvent(
             event_type="docs.create_completed",
             title="Google Doc created",
@@ -58,6 +67,61 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
         )
         trace_events.append(docs_create_completed)
         yield docs_create_completed
+        public_shared = False
+        public_share_error = ""
+        if make_public and document_id:
+            share_start = ToolTraceEvent(
+                event_type="drive.share_started",
+                title="Enable public link access for document",
+                detail=document_id,
+                data={
+                    "file_id": document_id,
+                    "role": public_role,
+                    "scope": "anyone",
+                    "discoverable": public_discoverable,
+                    "source_url": doc_url,
+                },
+            )
+            trace_events.append(share_start)
+            yield share_start
+            try:
+                connector.share_drive_file_public(
+                    file_id=document_id,
+                    role=public_role,
+                    discoverable=public_discoverable,
+                )
+                public_shared = True
+                share_done = ToolTraceEvent(
+                    event_type="drive.share_completed",
+                    title="Public link access enabled for document",
+                    detail=document_id,
+                    data={
+                        "file_id": document_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": doc_url,
+                    },
+                )
+                trace_events.append(share_done)
+                yield share_done
+            except Exception as exc:
+                public_share_error = str(exc)
+                share_failed = ToolTraceEvent(
+                    event_type="drive.share_failed",
+                    title="Failed to enable public link access for document",
+                    detail=public_share_error[:200],
+                    data={
+                        "file_id": document_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": doc_url,
+                        "error": public_share_error[:300],
+                    },
+                )
+                trace_events.append(share_failed)
+                yield share_failed
         if doc_url:
             go_to_doc_event = ToolTraceEvent(
                 event_type="drive.go_to_doc",
@@ -147,22 +211,37 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
             out_file = out_dir / f"{document_id}.pdf"
             out_file.write_bytes(pdf_bytes)
             pdf_path = str(out_file.resolve())
+            if pdf_path:
+                context.settings["__latest_report_pdf_path"] = pdf_path
 
         if prompt_text and document_id:
             insert_started = ToolTraceEvent(
                 event_type="docs.insert_started",
                 title="Start appending text",
                 detail=f"{len(prompt_text)} characters",
-                data={"doc_id": document_id, "characters": len(prompt_text), "source_url": doc_url},
+                data={
+                    "doc_id": document_id,
+                    "characters": len(prompt_text),
+                    "source_url": doc_url,
+                    "render_mode": "markdown" if render_markdown else "plain_text",
+                },
             )
             trace_events.append(insert_started)
             yield insert_started
-            connector.docs_insert_text(document_id=document_id, text=f"\n\n{prompt_text}\n")
+            if render_markdown and hasattr(connector, "docs_insert_markdown"):
+                connector.docs_insert_markdown(document_id=document_id, markdown_text=f"\n\n{prompt_text}\n")
+            else:
+                connector.docs_insert_text(document_id=document_id, text=f"\n\n{prompt_text}\n")
             insert_completed = ToolTraceEvent(
                 event_type="docs.insert_completed",
                 title="Appended text to Google Doc",
                 detail=f"{len(prompt_text)} characters",
-                data={"doc_id": document_id, "characters": len(prompt_text), "source_url": doc_url},
+                data={
+                    "doc_id": document_id,
+                    "characters": len(prompt_text),
+                    "source_url": doc_url,
+                    "render_mode": "markdown" if render_markdown else "plain_text",
+                },
             )
             trace_events.append(insert_completed)
             yield insert_completed
@@ -181,6 +260,7 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
             f"- Document ID: {document_id or 'unknown'}",
             f"- URL: {doc_url or 'not available'}",
             f"- Replacements applied: {len(replacements)}",
+            f"- Public link enabled: {'yes' if public_shared else 'no'}",
         ]
         if prompt_text:
             details.append(f"- Prompt context length: {len(prompt_text)} chars")
@@ -195,6 +275,11 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
                 "url": doc_url,
                 "replacements_count": len(replacements),
                 "pdf_path": pdf_path or None,
+                "render_markdown": render_markdown,
+                "public_shared": public_shared,
+                "public_role": public_role if make_public else "",
+                "public_discoverable": public_discoverable if make_public else False,
+                "public_share_error": public_share_error,
             },
             sources=[
                 AgentSource(

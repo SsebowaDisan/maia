@@ -65,7 +65,8 @@ def optimize_plan_rows(
         "- Fill obvious params (recipient, url, title, summary) when present in request.\n"
         "- If the user asks where a company is located/found, preserve or add location-evidence steps.\n"
         "- If the user asks to submit a website contact form, preserve or add `browser.contact_form.send`.\n"
-        "- In company_agent mode, keep server-side delivery and roadmap logging steps when available.\n"
+        "- In company_agent mode, keep server-side delivery steps.\n"
+        "- Keep workspace roadmap logging steps only when the task explicitly asks for workspace tracking.\n"
         "- Do not include more than 10 steps.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )

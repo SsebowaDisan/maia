@@ -22,13 +22,16 @@ import {
   deleteFiles,
   deleteUrls,
   getConversation,
+  listFiles,
   uploadFiles,
   uploadUrls,
   type ConversationSummary,
   type SourceUsageRecord,
   type AgentSourceRecord,
+  type FileRecord,
 } from "../../api/client";
 import { buildConversationTurns } from "../appShell/eventHelpers";
+import { parseEvidence } from "../utils/infoInsights";
 
 const LETTER_OR_NUMBER_RE = /^[\p{L}\p{N}]$/u;
 const EXTENDED_PICTOGRAPHIC_RE = /^\p{Extended_Pictographic}$/u;
@@ -100,6 +103,12 @@ type AggregateItem = {
 
 const HTTP_URL_RE = /^https?:\/\/\S+/i;
 const SOURCE_ALIAS_STORAGE_KEY = "maia.project-source-aliases";
+const PROJECT_SOURCE_BINDINGS_STORAGE_KEY = "maia.project-source-bindings";
+
+type ProjectSourceBinding = {
+  fileIds: string[];
+  urls: string[];
+};
 
 function normalizeSourceUrl(rawValue: string): string {
   const value = String(rawValue || "").trim();
@@ -113,6 +122,53 @@ function normalizeSourceUrl(rawValue: string): string {
   } catch {
     return value.replace(/\/$/, "");
   }
+}
+
+function normalizeUrlCandidates(values: Array<unknown>): string {
+  for (const candidate of values) {
+    const text = String(candidate || "").trim();
+    if (!text || !HTTP_URL_RE.test(text)) {
+      continue;
+    }
+    const normalized = normalizeSourceUrl(text);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function normalizeUrlDraftList(rawDraft: string): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  const rows = String(rawDraft || "")
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+  for (const row of rows) {
+    if (!HTTP_URL_RE.test(row)) {
+      continue;
+    }
+    const normalized = normalizeSourceUrl(row);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    urls.push(normalized);
+  }
+  return urls;
+}
+
+function getFileRecordUrl(file: FileRecord): string {
+  const note = file.note && typeof file.note === "object" ? (file.note as Record<string, unknown>) : {};
+  return normalizeUrlCandidates([
+    file.name,
+    note["url"],
+    note["source_url"],
+    note["page_url"],
+    note["canonical_url"],
+    note["original_url"],
+  ]);
 }
 
 function toProjectEvidenceItems(
@@ -144,17 +200,21 @@ function addAggregateItem(
     label: string;
     href?: string;
     fileId?: string;
-    conversationId: string;
+    conversationId?: string;
+    usageIncrement?: number;
   },
 ) {
   const normalizedLabel = String(item.label || "").trim();
   if (!item.key || !normalizedLabel) {
     return;
   }
+  const usageIncrement = Math.max(0, Number(item.usageIncrement ?? 1) || 0);
   const existing = map.get(item.key);
   if (existing) {
-    existing.usageCount += 1;
-    existing.conversationIds.add(item.conversationId);
+    existing.usageCount += usageIncrement;
+    if (item.conversationId) {
+      existing.conversationIds.add(item.conversationId);
+    }
     if (item.fileId) {
       existing.fileIds.add(item.fileId);
     }
@@ -168,8 +228,8 @@ function addAggregateItem(
     label: normalizedLabel,
     href: item.href,
     fileIds: item.fileId ? new Set([item.fileId]) : new Set(),
-    usageCount: 1,
-    conversationIds: new Set([item.conversationId]),
+    usageCount: usageIncrement,
+    conversationIds: item.conversationId ? new Set([item.conversationId]) : new Set(),
   });
 }
 
@@ -238,6 +298,165 @@ function collectFromSourcesUsed(
       label: docLabel,
       fileId: fileId || undefined,
       conversationId,
+    });
+  }
+}
+
+function collectFromAttachments(
+  attachmentRows: Array<{ name?: string; fileId?: string }>,
+  conversationId: string,
+  documents: Map<string, AggregateItem>,
+) {
+  const seen = new Set<string>();
+  for (const row of attachmentRows || []) {
+    const name = String(row?.name || "").trim();
+    const fileId = String(row?.fileId || "").trim();
+    const label = name || fileId;
+    if (!label) {
+      continue;
+    }
+    const key = fileId ? `file:${fileId}` : `doc:${label.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    addAggregateItem(documents, {
+      key,
+      label,
+      fileId: fileId || undefined,
+      conversationId,
+    });
+  }
+}
+
+function addFromFileRecord(
+  fileId: string,
+  fileRecord: FileRecord | undefined,
+  conversationId: string | undefined,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  const resolvedFileId = String(fileId || fileRecord?.id || "").trim();
+  if (!resolvedFileId) {
+    return;
+  }
+  const url = fileRecord ? getFileRecordUrl(fileRecord) : "";
+  if (url) {
+    addAggregateItem(urls, {
+      key: `url:${url.toLowerCase()}`,
+      label: url,
+      href: url,
+      fileId: resolvedFileId,
+      conversationId,
+      usageIncrement: 0,
+    });
+    return;
+  }
+  const label = String(fileRecord?.name || resolvedFileId).trim();
+  if (!label) {
+    return;
+  }
+  addAggregateItem(documents, {
+    key: `file:${resolvedFileId}`,
+    label,
+    fileId: resolvedFileId,
+    conversationId,
+    usageIncrement: 0,
+  });
+}
+
+function collectFromSelectedPayload(
+  rawSelected: unknown,
+  conversationId: string,
+  filesById: Map<string, FileRecord>,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  if (!rawSelected || typeof rawSelected !== "object") {
+    return;
+  }
+  const selectedRecord = rawSelected as Record<string, unknown>;
+  const seen = new Set<string>();
+  for (const value of Object.values(selectedRecord)) {
+    if (!Array.isArray(value) || value.length < 2) {
+      continue;
+    }
+    const mode = String(value[0] || "").trim().toLowerCase();
+    if (mode === "disabled") {
+      continue;
+    }
+    const fileIds = Array.isArray(value[1]) ? value[1] : [];
+    for (const fileIdRaw of fileIds) {
+      const fileId = String(fileIdRaw || "").trim();
+      if (!fileId || seen.has(fileId)) {
+        continue;
+      }
+      seen.add(fileId);
+      addFromFileRecord(fileId, filesById.get(fileId), conversationId, documents, urls);
+    }
+  }
+}
+
+function collectFromInfoEvidence(
+  infoHtml: string,
+  conversationId: string,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  const html = String(infoHtml || "");
+  if (!html || !/details[^>]*class=['"][^'"]*evidence/i.test(html)) {
+    return;
+  }
+  const cards = parseEvidence(html);
+  for (const card of cards) {
+    const sourceUrl = normalizeUrlCandidates([card.sourceUrl, card.source]);
+    const fileId = String(card.fileId || "").trim();
+    if (sourceUrl) {
+      addAggregateItem(urls, {
+        key: `url:${sourceUrl.toLowerCase()}`,
+        label: sourceUrl,
+        href: sourceUrl,
+        fileId: fileId || undefined,
+        conversationId,
+      });
+      continue;
+    }
+    const label = String(card.source || fileId).trim();
+    if (!label) {
+      continue;
+    }
+    addAggregateItem(documents, {
+      key: fileId ? `file:${fileId}` : `doc:${label.toLowerCase()}`,
+      label,
+      fileId: fileId || undefined,
+      conversationId,
+    });
+  }
+}
+
+function collectFromProjectBindings(
+  binding: ProjectSourceBinding,
+  filesById: Map<string, FileRecord>,
+  documents: Map<string, AggregateItem>,
+  urls: Map<string, AggregateItem>,
+) {
+  const fileIds = Array.from(
+    new Set((binding.fileIds || []).map((value) => String(value || "").trim()).filter(Boolean)),
+  );
+  for (const fileId of fileIds) {
+    addFromFileRecord(fileId, filesById.get(fileId), undefined, documents, urls);
+  }
+
+  const urlsList = Array.from(
+    new Set((binding.urls || []).map((value) => normalizeSourceUrl(String(value || ""))).filter(Boolean)),
+  );
+  for (const url of urlsList) {
+    addAggregateItem(urls, {
+      key: `url:${url.toLowerCase()}`,
+      label: url,
+      href: url,
+      conversationId: undefined,
+      usageIncrement: 0,
     });
   }
 }
@@ -325,6 +544,51 @@ export function ChatSidebar({
       return {};
     }
   });
+  const [projectSourceBindings, setProjectSourceBindings] = useState<
+    Record<string, ProjectSourceBinding>
+  >(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const raw = window.localStorage.getItem(PROJECT_SOURCE_BINDINGS_STORAGE_KEY);
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw) as Record<
+        string,
+        { fileIds?: unknown; urls?: unknown }
+      >;
+      if (!parsed || typeof parsed !== "object") {
+        return {};
+      }
+      const normalized: Record<string, ProjectSourceBinding> = {};
+      for (const [projectId, value] of Object.entries(parsed)) {
+        if (!value || typeof value !== "object") {
+          continue;
+        }
+        normalized[projectId] = {
+          fileIds: Array.from(
+            new Set(
+              (Array.isArray(value.fileIds) ? value.fileIds : [])
+                .map((item) => String(item || "").trim())
+                .filter(Boolean),
+            ),
+          ),
+          urls: Array.from(
+            new Set(
+              (Array.isArray(value.urls) ? value.urls : [])
+                .map((item) => normalizeSourceUrl(String(item || "")))
+                .filter(Boolean),
+            ),
+          ),
+        };
+      }
+      return normalized;
+    } catch {
+      return {};
+    }
+  });
   const [editingEvidenceKey, setEditingEvidenceKey] = useState<string | null>(null);
   const [editingEvidenceDraft, setEditingEvidenceDraft] = useState("");
   const [evidenceActionBusyByKey, setEvidenceActionBusyByKey] = useState<
@@ -351,6 +615,16 @@ export function ChatSidebar({
     window.localStorage.setItem(SOURCE_ALIAS_STORAGE_KEY, JSON.stringify(sourceAliases));
   }, [sourceAliases]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      PROJECT_SOURCE_BINDINGS_STORAGE_KEY,
+      JSON.stringify(projectSourceBindings),
+    );
+  }, [projectSourceBindings]);
+
   const setProjectUploadStatus = useCallback((projectId: string, message: string) => {
     setProjectUploadStatusById((prev) => ({
       ...prev,
@@ -364,6 +638,36 @@ export function ChatSidebar({
       [projectId]: isBusy,
     }));
   }, []);
+
+  const appendProjectSourceBindings = useCallback(
+    (projectId: string, payload: { fileIds?: string[]; urls?: string[] }) => {
+      setProjectSourceBindings((prev) => {
+        const current = prev[projectId] || { fileIds: [], urls: [] };
+        const nextFileIds = Array.from(
+          new Set([
+            ...current.fileIds,
+            ...((payload.fileIds || []).map((item) => String(item || "").trim()).filter(Boolean)),
+          ]),
+        );
+        const nextUrls = Array.from(
+          new Set([
+            ...current.urls,
+            ...((payload.urls || [])
+              .map((item) => normalizeSourceUrl(String(item || "")))
+              .filter(Boolean)),
+          ]),
+        );
+        return {
+          ...prev,
+          [projectId]: {
+            fileIds: nextFileIds,
+            urls: nextUrls,
+          },
+        };
+      });
+    },
+    [],
+  );
 
   const loadProjectEvidence = useCallback(
     async (projectId: string) => {
@@ -400,11 +704,36 @@ export function ChatSidebar({
       const urls = new Map<string, AggregateItem>();
 
       try {
+        const fileCatalog = await listFiles({ includeChatTemp: true }).catch(() => ({
+          index_id: 0,
+          files: [] as FileRecord[],
+        }));
+        const filesById = new Map<string, FileRecord>();
+        for (const file of fileCatalog.files || []) {
+          const fileId = String(file.id || "").trim();
+          if (!fileId || filesById.has(fileId)) {
+            continue;
+          }
+          filesById.set(fileId, file);
+        }
+
         await Promise.all(
           projectConversations.map(async (conversation) => {
             const detail = await getConversation(conversation.id);
             const { turns } = buildConversationTurns(detail);
+            collectFromSelectedPayload(
+              (detail.data_source as { selected?: unknown } | undefined)?.selected,
+              conversation.id,
+              filesById,
+              documents,
+              urls,
+            );
             for (const turn of turns) {
+              collectFromAttachments(
+                turn.attachments || [],
+                conversation.id,
+                documents,
+              );
               collectFromSourceUsage(
                 turn.sourceUsage || [],
                 conversation.id,
@@ -417,9 +746,30 @@ export function ChatSidebar({
                 documents,
                 urls,
               );
+              collectFromInfoEvidence(
+                turn.info || "",
+                conversation.id,
+                documents,
+                urls,
+              );
             }
           }),
         );
+        collectFromProjectBindings(
+          projectSourceBindings[projectId] || { fileIds: [], urls: [] },
+          filesById,
+          documents,
+          urls,
+        );
+        if (documents.size === 0 && urls.size === 0) {
+          for (const file of fileCatalog.files || []) {
+            const fileId = String(file.id || "").trim();
+            if (!fileId) {
+              continue;
+            }
+            addFromFileRecord(fileId, file, undefined, documents, urls);
+          }
+        }
         if (projectEvidenceRequestRef.current !== requestId) {
           return;
         }
@@ -448,7 +798,7 @@ export function ChatSidebar({
         }));
       }
     },
-    [allConversations, conversationProjects, fallbackProjectId],
+    [allConversations, conversationProjects, fallbackProjectId, projectSourceBindings],
   );
 
   const toggleProjectEvidenceCard = useCallback(
@@ -477,6 +827,15 @@ export function ChatSidebar({
           scope: "persistent",
           reindex: true,
         });
+        const uploadedFileIds = response.items
+          .filter((item) => item.status === "success")
+          .map((item) => String(item.file_id || "").trim())
+          .filter(Boolean);
+        if (uploadedFileIds.length > 0) {
+          appendProjectSourceBindings(projectId, {
+            fileIds: uploadedFileIds,
+          });
+        }
         const successCount = response.items.filter((item) => item.status === "success").length;
         const failureCount = response.items.length - successCount;
         setProjectUploadStatus(
@@ -485,13 +844,14 @@ export function ChatSidebar({
             ? `Uploaded ${successCount} file(s), ${failureCount} failed.`
             : `Uploaded ${successCount} file(s).`,
         );
+        await loadProjectEvidence(projectId);
       } catch (error) {
         setProjectUploadStatus(projectId, `File upload failed: ${String(error)}`);
       } finally {
         setProjectUploadBusy(projectId, false);
       }
     },
-    [setProjectUploadBusy, setProjectUploadStatus],
+    [appendProjectSourceBindings, loadProjectEvidence, setProjectUploadBusy, setProjectUploadStatus],
   );
 
   const submitProjectUrls = useCallback(
@@ -503,6 +863,7 @@ export function ChatSidebar({
       setProjectUploadBusy(projectId, true);
       setProjectUploadStatus(projectId, "Indexing URLs...");
       try {
+        const normalizedUrls = normalizeUrlDraftList(draft);
         const response = await uploadUrls(draft, {
           reindex: false,
           web_crawl_depth: 0,
@@ -511,6 +872,16 @@ export function ChatSidebar({
           include_pdfs: true,
           include_images: true,
         });
+        const indexedFileIds = response.items
+          .filter((item) => item.status === "success")
+          .map((item) => String(item.file_id || "").trim())
+          .filter(Boolean);
+        if (normalizedUrls.length > 0 || indexedFileIds.length > 0) {
+          appendProjectSourceBindings(projectId, {
+            urls: normalizedUrls,
+            fileIds: indexedFileIds,
+          });
+        }
         const successCount = response.items.filter((item) => item.status === "success").length;
         const failureCount = response.items.length - successCount;
         setProjectUploadStatus(
@@ -523,13 +894,20 @@ export function ChatSidebar({
           ...prev,
           [projectId]: "",
         }));
+        await loadProjectEvidence(projectId);
       } catch (error) {
         setProjectUploadStatus(projectId, `URL indexing failed: ${String(error)}`);
       } finally {
         setProjectUploadBusy(projectId, false);
       }
     },
-    [projectUrlDraftById, setProjectUploadBusy, setProjectUploadStatus],
+    [
+      appendProjectSourceBindings,
+      loadProjectEvidence,
+      projectUrlDraftById,
+      setProjectUploadBusy,
+      setProjectUploadStatus,
+    ],
   );
 
   const closeEvidenceModal = useCallback(() => {
@@ -666,6 +1044,31 @@ export function ChatSidebar({
           delete next[item.key];
           return next;
         });
+        setProjectSourceBindings((prev) => {
+          const current = prev[evidenceProjectId];
+          if (!current) {
+            return prev;
+          }
+          const itemFileIds = new Set((item.fileIds || []).map((value) => String(value || "").trim()).filter(Boolean));
+          const fallbackUrl = normalizeSourceUrl(String(item.href || item.label || ""));
+          const nextFileIds = current.fileIds.filter((value) => !itemFileIds.has(String(value || "").trim()));
+          const nextUrls = fallbackUrl
+            ? current.urls.filter((value) => normalizeSourceUrl(String(value || "")) !== fallbackUrl)
+            : current.urls;
+          if (
+            nextFileIds.length === current.fileIds.length &&
+            nextUrls.length === current.urls.length
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [evidenceProjectId]: {
+              fileIds: nextFileIds,
+              urls: nextUrls,
+            },
+          };
+        });
         await loadProjectEvidence(evidenceProjectId);
       } catch (error) {
         setProjectUploadStatus(
@@ -743,10 +1146,21 @@ export function ChatSidebar({
     if (!canDeleteProject) {
       return;
     }
+    const deletingLastProject = projects.length <= 1;
     const confirmed = window.confirm(
-      `Delete project \"${project.name}\"? Conversations in it will be reassigned automatically.`,
+      deletingLastProject
+        ? `Delete project \"${project.name}\"? Maia will create a replacement project automatically.`
+        : `Delete project \"${project.name}\"? Conversations in it will be reassigned automatically.`,
     );
     if (confirmed) {
+      setProjectSourceBindings((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, project.id)) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[project.id];
+        return next;
+      });
       onDeleteProject(project.id);
     }
   };
@@ -940,7 +1354,7 @@ export function ChatSidebar({
                       onClick={() => requestDeleteProject(project)}
                       disabled={!canDeleteProject}
                       className="p-1 rounded-md text-[#6e6e73] hover:bg-black/5 hover:text-[#1d1d1f] opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-35 disabled:cursor-not-allowed"
-                      title={canDeleteProject ? "Delete project" : "At least one project is required"}
+                      title={canDeleteProject ? "Delete project" : "Delete unavailable"}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1272,14 +1686,15 @@ export function ChatSidebar({
                             )}
                           </div>
                           <p className="text-[11px] text-[#8d8d93]">
-                            used {item.usageCount}x in {item.chatCount} chat
-                            {item.chatCount === 1 ? "" : "s"}
+                            {item.usageCount <= 0 && item.chatCount <= 0
+                              ? "available source"
+                              : `used ${item.usageCount}x in ${item.chatCount} chat${item.chatCount === 1 ? "" : "s"}`}
                           </p>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="mt-2 text-[12px] text-[#8d8d93]">No document sources used yet.</p>
+                    <p className="mt-2 text-[12px] text-[#8d8d93]">No documents or uploads yet.</p>
                   )}
                 </section>
 

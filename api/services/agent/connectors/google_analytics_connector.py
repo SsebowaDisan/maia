@@ -39,7 +39,12 @@ class GoogleAnalyticsConnector(BaseConnector):
             or self._read_secret("GOOGLE_WORKSPACE_REFRESH_TOKEN"),
             "token_type": "Bearer",
         }
-        return GoogleAuthSession(user_id=user_id, run_id=run_id, fallback_tokens=fallback)
+        return GoogleAuthSession(
+            user_id=user_id,
+            run_id=run_id,
+            fallback_tokens=fallback,
+            settings=self.settings,
+        )
 
     def health_check(self) -> ConnectorHealth:
         try:

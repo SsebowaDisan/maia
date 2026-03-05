@@ -10,6 +10,7 @@ import {
   parseDocumentHighlights,
   parseHighlightRegions,
   parseLiveCopiedWords,
+  parsePdfPlaybackState,
   parseScrollPercent,
   parseSheetState,
 } from "./helpers";
@@ -65,6 +66,13 @@ function AgentDesktopScene({
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
+  const {
+    pdfPage,
+    pdfPageTotal,
+    pdfScanRegion,
+    pdfScrollDirection,
+    pdfScrollPercent,
+  } = parsePdfPlaybackState(activeSceneData, activeEventType);
   const emailBodyPreview = String(emailBodyHint || "").trim();
   const rawDocBodyPreview = String(docBodyHint || "").trim();
   const rawSheetBodyPreview = String(sheetBodyHint || "").trim();
@@ -93,6 +101,12 @@ function AgentDesktopScene({
   const docBodyHtml = renderRichText(docBodyPreview);
   const sheetBodyPreview = typedSheetBodyPreview || rawSheetBodyPreview;
   const { sheetPreviewRows, sheetStatusLine } = parseSheetState(sheetBodyPreview);
+  const isPdfScene =
+    isDocumentScene &&
+    canRenderPdfFrame &&
+    !isSheetsScene &&
+    !Boolean(docsFrameUrl) &&
+    !Boolean(sheetsFrameUrl);
 
   if (isBrowserScene) {
     return (
@@ -164,6 +178,22 @@ function AgentDesktopScene({
     );
   }
 
+  if (isPdfScene) {
+    return (
+      <DocumentPdfScene
+        activeDetail={activeDetail}
+        documentHighlights={documentHighlights}
+        pdfPage={pdfPage}
+        pdfPageTotal={pdfPageTotal}
+        pdfScanRegion={pdfScanRegion}
+        pdfScrollDirection={pdfScrollDirection}
+        pdfScrollPercent={pdfScrollPercent}
+        sceneText={sceneText}
+        stageFileUrl={stageFileUrl}
+      />
+    );
+  }
+
   if (isDocsScene) {
     return (
       <DocsScene
@@ -176,10 +206,6 @@ function AgentDesktopScene({
         sceneText={sceneText}
       />
     );
-  }
-
-  if (isDocumentScene && canRenderPdfFrame) {
-    return <DocumentPdfScene documentHighlights={documentHighlights} stageFileUrl={stageFileUrl} />;
   }
 
   if (isDocumentScene) {

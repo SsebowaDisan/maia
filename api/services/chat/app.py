@@ -111,6 +111,27 @@ def _normalize_http_url(raw_value: Any) -> str:
     ).geturl()
 
 
+def _normalize_request_attachments(request: ChatRequest) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in list(getattr(request, "attachments", []) or []):
+        name_raw = str(getattr(item, "name", "") or "").strip()
+        file_id_raw = str(getattr(item, "file_id", "") or "").strip()
+        if not name_raw and not file_id_raw:
+            continue
+        name = " ".join(name_raw.split())[:220]
+        file_id = " ".join(file_id_raw.split())[:160]
+        dedupe_key = (file_id, name.lower())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        payload = {"name": name or file_id or "Uploaded file"}
+        if file_id:
+            payload["file_id"] = file_id
+        normalized.append(payload)
+    return normalized
+
+
 def _should_auto_web_fallback(
     *,
     message: str,
@@ -974,6 +995,7 @@ def stream_chat_turn(
         existing_selected=data_source.get("selected", {}),
         requested_selected=request.index_selection,
     )
+    turn_attachments = _normalize_request_attachments(request)
 
     if request.agent_mode == "company_agent":
         orchestrator = get_orchestrator()
@@ -1144,6 +1166,7 @@ def stream_chat_turn(
                 "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
                 "sources_used": [item.to_dict() for item in agent_result.sources_used],
                 "source_usage": [],
+                "attachments": turn_attachments,
                 "next_recommended_steps": agent_result.next_recommended_steps,
                 "needs_human_review": bool(getattr(agent_result, "needs_human_review", False)),
                 "human_review_notes": str(getattr(agent_result, "human_review_notes", "") or "").strip() or None,
@@ -1335,6 +1358,7 @@ def stream_chat_turn(
             "actions_taken": [],
             "sources_used": [],
             "source_usage": [],
+            "attachments": turn_attachments,
             "next_recommended_steps": [],
             "needs_human_review": False,
             "human_review_notes": None,
@@ -1431,6 +1455,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         return future.result(timeout=timeout_seconds)
     except FutureTimeoutError:
         message = request.message.strip()
+        turn_attachments = _normalize_request_attachments(request)
         conversation_id, conversation_name, data_source = get_or_create_conversation(
             user_id=user_id,
             conversation_id=request.conversation_id,
@@ -1476,6 +1501,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "actions_taken": [],
                 "sources_used": [],
                 "source_usage": [],
+                "attachments": turn_attachments,
                 "next_recommended_steps": [],
                 "needs_human_review": False,
                 "human_review_notes": None,

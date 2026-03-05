@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 from api.routers import web_preview
 
 
@@ -74,3 +76,26 @@ def test_resolve_highlight_scope_uses_heuristic_when_llm_is_disabled(monkeypatch
     )
     assert resolved in {"sentence", "context", "block", "tight"}
     assert resolved == "sentence"
+
+
+def test_preview_fetch_error_html_google_workspace_auth_failure() -> None:
+    rendered = web_preview._preview_fetch_error_html(
+        source_url="https://docs.google.com/spreadsheets/d/abc123/edit",
+        detail="Website fetch failed: HTTP Error 401: Unauthorized",
+    )
+    assert "Preview requires Google sign-in" in rendered
+    assert "Use Open to view it in your signed-in browser." in rendered
+
+
+def test_website_preview_returns_html_fallback_when_fetch_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        web_preview,
+        "_fetch_html",
+        lambda _url: (_ for _ in ()).throw(
+            HTTPException(status_code=502, detail="Website fetch failed: HTTP Error 401: Unauthorized")
+        ),
+    )
+    response = web_preview.website_preview(url="https://docs.google.com/document/d/test/edit")
+    body = response.body.decode("utf-8", errors="ignore")
+    assert response.status_code == 200
+    assert "Preview requires Google sign-in" in body

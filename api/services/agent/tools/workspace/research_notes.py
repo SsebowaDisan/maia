@@ -12,7 +12,7 @@ from api.services.agent.tools.base import (
 )
 
 from .base import WorkspaceConnectorTool
-from .common import chunk_text, drain_stream, now_iso
+from .common import chunk_text, drain_stream, now_iso, resolve_public_share_options
 
 
 class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
@@ -60,6 +60,10 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
             if copied_lines:
                 note = "\n".join([note, "", "Copied highlights:", *copied_lines]).strip()
         title = str(params.get("title") or "").strip() or f"Maia Deep Research {context.run_id[:8]}"
+        make_public, public_role, public_discoverable = resolve_public_share_options(
+            params=params,
+            settings=context.settings,
+        )
         connector = self._workspace_connector(settings=context.settings)
 
         document_id = str(context.settings.get("__deep_research_doc_id") or "").strip()
@@ -75,6 +79,8 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
         yield open_event
 
         created_now = False
+        public_shared = bool(context.settings.get("__deep_research_doc_public_shared"))
+        public_share_error = ""
         if not document_id:
             create_event = ToolTraceEvent(
                 event_type="doc_open",
@@ -117,6 +123,63 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 )
                 trace_events.append(go_to_doc_event)
                 yield go_to_doc_event
+        should_share_public = bool(
+            make_public and document_id and (created_now or not public_shared)
+        )
+        if should_share_public:
+            share_start = ToolTraceEvent(
+                event_type="drive.share_started",
+                title="Enable public link access for research notebook",
+                detail=document_id,
+                data={
+                    "file_id": document_id,
+                    "role": public_role,
+                    "scope": "anyone",
+                    "discoverable": public_discoverable,
+                    "source_url": document_url,
+                },
+            )
+            trace_events.append(share_start)
+            yield share_start
+            try:
+                connector.share_drive_file_public(
+                    file_id=document_id,
+                    role=public_role,
+                    discoverable=public_discoverable,
+                )
+                context.settings["__deep_research_doc_public_shared"] = True
+                public_shared = True
+                share_done = ToolTraceEvent(
+                    event_type="drive.share_completed",
+                    title="Public link access enabled",
+                    detail=document_id,
+                    data={
+                        "file_id": document_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": document_url,
+                    },
+                )
+                trace_events.append(share_done)
+                yield share_done
+            except Exception as exc:
+                public_share_error = str(exc)
+                share_failed = ToolTraceEvent(
+                    event_type="drive.share_failed",
+                    title="Failed to enable public link access",
+                    detail=public_share_error[:200],
+                    data={
+                        "file_id": document_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": document_url,
+                        "error": public_share_error[:300],
+                    },
+                )
+                trace_events.append(share_failed)
+                yield share_failed
         clipboard_source = chunk_text(note, chunk_size=220, max_chunks=1)
         if clipboard_source:
             copy_event = ToolTraceEvent(
@@ -212,8 +275,11 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 f"Document ID: {document_id or 'unknown'}",
                 f"Document URL: {document_url or 'not available'}",
                 f"Inserted characters: {len(note_block)}",
+                f"Public link enabled: {'yes' if public_shared else 'no'}",
             ]
         )
+        if public_share_error:
+            content = "\n".join([content, f"Public sharing error: {public_share_error}"])
 
         return ToolExecutionResult(
             summary=summary,
@@ -223,6 +289,10 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 "document_url": document_url,
                 "inserted_chars": len(note_block),
                 "created_now": created_now,
+                "public_shared": public_shared,
+                "public_role": public_role if make_public else "",
+                "public_discoverable": public_discoverable if make_public else False,
+                "public_share_error": public_share_error,
             },
             sources=[
                 AgentSource(

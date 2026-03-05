@@ -1,6 +1,166 @@
 import { useEffect, useRef, useState } from "react";
 import type { SceneAnimationState } from "./types";
 
+type TypingProfile = {
+  minChunk: number;
+  maxChunk: number;
+  baseDelayMs: number;
+  jitterMs: number;
+  punctuationPauseMs: number;
+  newlinePauseMs: number;
+  wordPauseMs: number;
+  cadenceEvery: number;
+  cadencePauseMs: number;
+};
+
+const DOC_TYPING_PROFILE: TypingProfile = {
+  minChunk: 1,
+  maxChunk: 4,
+  baseDelayMs: 18,
+  jitterMs: 16,
+  punctuationPauseMs: 80,
+  newlinePauseMs: 130,
+  wordPauseMs: 22,
+  cadenceEvery: 42,
+  cadencePauseMs: 56,
+};
+
+const SHEET_TYPING_PROFILE: TypingProfile = {
+  minChunk: 1,
+  maxChunk: 3,
+  baseDelayMs: 26,
+  jitterMs: 24,
+  punctuationPauseMs: 70,
+  newlinePauseMs: 170,
+  wordPauseMs: 28,
+  cadenceEvery: 28,
+  cadencePauseMs: 68,
+};
+
+function deterministicNoise(seed: number): number {
+  const value = Math.sin((seed + 1) * 12.9898) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function longestCommonPrefix(left: string, right: string): number {
+  const maxPrefix = Math.min(left.length, right.length);
+  let prefix = 0;
+  while (prefix < maxPrefix && left[prefix] === right[prefix]) {
+    prefix += 1;
+  }
+  return prefix;
+}
+
+function nextTypingChunk({
+  targetText,
+  cursor,
+  profile,
+}: {
+  targetText: string;
+  cursor: number;
+  profile: TypingProfile;
+}): number {
+  const remaining = targetText.length - cursor;
+  if (remaining <= 0) {
+    return 0;
+  }
+  const rhythm = (Math.sin((cursor + 7) * 0.19) + 1) / 2;
+  const jitter = deterministicNoise(cursor + remaining);
+  const blended = rhythm * 0.62 + jitter * 0.38;
+  const chunk = Math.round(
+    profile.minChunk + (profile.maxChunk - profile.minChunk) * blended,
+  );
+  return Math.max(1, Math.min(remaining, chunk));
+}
+
+function nextTypingDelay({
+  targetText,
+  cursorStart,
+  cursorEnd,
+  profile,
+}: {
+  targetText: string;
+  cursorStart: number;
+  cursorEnd: number;
+  profile: TypingProfile;
+}): number {
+  const chunkText = targetText.slice(cursorStart, cursorEnd);
+  let delay =
+    profile.baseDelayMs +
+    Math.round(profile.jitterMs * deterministicNoise(cursorEnd + chunkText.length));
+
+  if (/[,:;!?.)]\s*$/.test(chunkText)) {
+    delay += profile.punctuationPauseMs;
+  }
+  if (chunkText.includes("\n")) {
+    delay += profile.newlinePauseMs;
+  }
+  if (/\s$/.test(chunkText)) {
+    delay += profile.wordPauseMs;
+  }
+  if (cursorEnd > 0 && cursorEnd % profile.cadenceEvery === 0) {
+    delay += profile.cadencePauseMs;
+  }
+
+  return Math.max(10, delay);
+}
+
+function scheduleTypingAnimation({
+  timerRef,
+  currentValueRef,
+  targetText,
+  profile,
+  setTypedValue,
+}: {
+  timerRef: { current: number | null };
+  currentValueRef: { current: string };
+  targetText: string;
+  profile: TypingProfile;
+  setTypedValue: (value: string) => void;
+}) {
+  if (timerRef.current) {
+    window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }
+
+  if (!targetText) {
+    setTypedValue("");
+    return;
+  }
+
+  let cursor = longestCommonPrefix(currentValueRef.current, targetText);
+  setTypedValue(targetText.slice(0, cursor));
+  if (cursor >= targetText.length) {
+    return;
+  }
+
+  const tick = () => {
+    const chunkSize = nextTypingChunk({
+      targetText,
+      cursor,
+      profile,
+    });
+    const cursorStart = cursor;
+    cursor = Math.min(targetText.length, cursor + chunkSize);
+    setTypedValue(targetText.slice(0, cursor));
+
+    if (cursor >= targetText.length) {
+      timerRef.current = null;
+      return;
+    }
+
+    const delay = nextTypingDelay({
+      targetText,
+      cursorStart,
+      cursorEnd: cursor,
+      profile,
+    });
+    timerRef.current = window.setTimeout(tick, delay);
+  };
+
+  timerRef.current = window.setTimeout(tick, profile.baseDelayMs);
+}
+
 type UseSceneAnimationsParams = {
   activeEventType: string;
   clipboardPreview: string;
@@ -104,38 +264,16 @@ function useSceneAnimations({
     if (!isDocsScene) {
       return;
     }
-    if (docTypingTimerRef.current) {
-      window.clearInterval(docTypingTimerRef.current);
-      docTypingTimerRef.current = null;
-    }
-    if (!rawDocBodyPreview) {
-      setTypedDocBodyPreview("");
-      return;
-    }
-    let cursor = 0;
-    const current = typedDocBodyRef.current;
-    const maxPrefix = Math.min(current.length, rawDocBodyPreview.length);
-    while (cursor < maxPrefix && current[cursor] === rawDocBodyPreview[cursor]) {
-      cursor += 1;
-    }
-    setTypedDocBodyPreview(rawDocBodyPreview.slice(0, cursor));
-    if (cursor >= rawDocBodyPreview.length) {
-      return;
-    }
-    docTypingTimerRef.current = window.setInterval(() => {
-      cursor = Math.min(
-        rawDocBodyPreview.length,
-        cursor + Math.max(1, Math.ceil((rawDocBodyPreview.length - cursor) / 22)),
-      );
-      setTypedDocBodyPreview(rawDocBodyPreview.slice(0, cursor));
-      if (cursor >= rawDocBodyPreview.length && docTypingTimerRef.current) {
-        window.clearInterval(docTypingTimerRef.current);
-        docTypingTimerRef.current = null;
-      }
-    }, 16);
+    scheduleTypingAnimation({
+      timerRef: docTypingTimerRef,
+      currentValueRef: typedDocBodyRef,
+      targetText: rawDocBodyPreview,
+      profile: DOC_TYPING_PROFILE,
+      setTypedValue: setTypedDocBodyPreview,
+    });
     return () => {
       if (docTypingTimerRef.current) {
-        window.clearInterval(docTypingTimerRef.current);
+        window.clearTimeout(docTypingTimerRef.current);
         docTypingTimerRef.current = null;
       }
     };
@@ -145,38 +283,16 @@ function useSceneAnimations({
     if (!isSheetsScene) {
       return;
     }
-    if (sheetTypingTimerRef.current) {
-      window.clearInterval(sheetTypingTimerRef.current);
-      sheetTypingTimerRef.current = null;
-    }
-    if (!rawSheetBodyPreview) {
-      setTypedSheetBodyPreview("");
-      return;
-    }
-    let cursor = 0;
-    const current = typedSheetBodyRef.current;
-    const maxPrefix = Math.min(current.length, rawSheetBodyPreview.length);
-    while (cursor < maxPrefix && current[cursor] === rawSheetBodyPreview[cursor]) {
-      cursor += 1;
-    }
-    setTypedSheetBodyPreview(rawSheetBodyPreview.slice(0, cursor));
-    if (cursor >= rawSheetBodyPreview.length) {
-      return;
-    }
-    sheetTypingTimerRef.current = window.setInterval(() => {
-      cursor = Math.min(
-        rawSheetBodyPreview.length,
-        cursor + Math.max(1, Math.ceil((rawSheetBodyPreview.length - cursor) / 26)),
-      );
-      setTypedSheetBodyPreview(rawSheetBodyPreview.slice(0, cursor));
-      if (cursor >= rawSheetBodyPreview.length && sheetTypingTimerRef.current) {
-        window.clearInterval(sheetTypingTimerRef.current);
-        sheetTypingTimerRef.current = null;
-      }
-    }, 16);
+    scheduleTypingAnimation({
+      timerRef: sheetTypingTimerRef,
+      currentValueRef: typedSheetBodyRef,
+      targetText: rawSheetBodyPreview,
+      profile: SHEET_TYPING_PROFILE,
+      setTypedValue: setTypedSheetBodyPreview,
+    });
     return () => {
       if (sheetTypingTimerRef.current) {
-        window.clearInterval(sheetTypingTimerRef.current);
+        window.clearTimeout(sheetTypingTimerRef.current);
         sheetTypingTimerRef.current = null;
       }
     };
@@ -189,11 +305,11 @@ function useSceneAnimations({
         copyPulseTimerRef.current = null;
       }
       if (docTypingTimerRef.current) {
-        window.clearInterval(docTypingTimerRef.current);
+        window.clearTimeout(docTypingTimerRef.current);
         docTypingTimerRef.current = null;
       }
       if (sheetTypingTimerRef.current) {
-        window.clearInterval(sheetTypingTimerRef.current);
+        window.clearTimeout(sheetTypingTimerRef.current);
         sheetTypingTimerRef.current = null;
       }
     },

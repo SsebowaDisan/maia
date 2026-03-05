@@ -297,6 +297,54 @@ def _preview_error_html(*, title: str, detail: str, source_url: str = "") -> str
     )
 
 
+def _is_google_workspace_source(url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    host = str(parsed.netloc or "").lower().split("@", 1)[-1].split(":", 1)[0]
+    if host not in {"docs.google.com", "drive.google.com"}:
+        return False
+    path = str(parsed.path or "").lower()
+    return any(
+        marker in path
+        for marker in (
+            "/document/",
+            "/spreadsheets/",
+            "/presentation/",
+            "/file/d/",
+        )
+    )
+
+
+def _preview_fetch_error_html(*, source_url: str, detail: str) -> str:
+    safe_source_url = _normalize_target_url(source_url) or str(source_url or "").strip()
+    detail_text = " ".join(str(detail or "").split()).strip()
+    if _is_google_workspace_source(safe_source_url) and (
+        "401" in detail_text
+        or "403" in detail_text
+        or "unauthorized" in detail_text.lower()
+        or "forbidden" in detail_text.lower()
+    ):
+        return _preview_error_html(
+            title="Preview requires Google sign-in",
+            detail=(
+                "This citation points to a private Google Docs/Sheets/Drive file. "
+                "The embedded preview cannot render private Google Workspace pages. "
+                "Use Open to view it in your signed-in browser."
+            ),
+            source_url=safe_source_url,
+        )
+    message = "Could not load this source in the embedded preview."
+    if detail_text:
+        message = f"{message} {detail_text[:220]}"
+    return _preview_error_html(
+        title="Preview unavailable",
+        detail=message,
+        source_url=safe_source_url,
+    )
+
+
 def _fetch_html(url: str) -> tuple[str, str]:
     now = monotonic()
     with _PREVIEW_CACHE_LOCK:
@@ -627,7 +675,18 @@ def website_preview(
     normalized_url = _normalize_target_url(url)
     if not normalized_url:
         raise HTTPException(status_code=400, detail="Invalid or blocked website URL.")
-    html_text, final_url = _fetch_html(normalized_url)
+    try:
+        html_text, final_url = _fetch_html(normalized_url)
+    except HTTPException as exc:
+        return HTMLResponse(
+            content=_preview_fetch_error_html(source_url=normalized_url, detail=str(exc.detail)),
+            status_code=200,
+        )
+    except Exception as exc:
+        return HTMLResponse(
+            content=_preview_fetch_error_html(source_url=normalized_url, detail=str(exc)),
+            status_code=200,
+        )
     highlight_text = str(highlight or "")
     claim_text = str(claim or "")
     question_text = str(question or "")

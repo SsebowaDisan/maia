@@ -10,6 +10,7 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
     ToolMetadata,
 )
+from api.services.agent.tools.google_target_resolution import resolve_ga4_reference
 
 
 class GA4ReportTool(AgentTool):
@@ -30,6 +31,14 @@ class GA4ReportTool(AgentTool):
         params: dict[str, Any],
     ) -> ToolExecutionResult:
         property_id = str(params.get("property_id") or "").strip() or None
+        if not property_id:
+            resolved_ref = resolve_ga4_reference(
+                prompt=prompt,
+                params=params,
+                settings=context.settings,
+            )
+            if resolved_ref is not None:
+                property_id = resolved_ref.resource_id
         dimensions = params.get("dimensions")
         metrics = params.get("metrics")
         date_ranges = params.get("date_ranges")
@@ -100,4 +109,3 @@ class GA4ReportTool(AgentTool):
                 )
             ],
         )
-

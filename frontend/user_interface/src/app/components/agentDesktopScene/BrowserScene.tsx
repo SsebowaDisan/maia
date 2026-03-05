@@ -206,7 +206,7 @@ function BrowserScene({
           <img
             src={snapshotUrl}
             alt="Live browser capture"
-            className="h-full w-full object-cover"
+            className="h-full w-full object-contain"
             onError={onSnapshotError}
           />
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-image" />
@@ -275,7 +275,7 @@ function BrowserScene({
             <img
               src={snapshotUrl}
               alt="Browser capture"
-              className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-white/20 object-cover"
+              className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-white/20 object-contain bg-black/25"
               onError={onSnapshotError}
             />
           ) : null}

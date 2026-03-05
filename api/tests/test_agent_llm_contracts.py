@@ -22,7 +22,7 @@ def test_build_task_contract_disabled_uses_minimal_fallback(monkeypatch) -> None
     assert "send_email" in row["required_actions"]
     assert any("location" in str(item).lower() for item in row["required_facts"])
     assert row["constraints"][0] == NO_HARDCODE_WORDS_CONSTRAINT
-    assert "Target website URL" in row["missing_requirements"]
+    assert "Target website URL" not in row["missing_requirements"]
     assert "Required facts to verify in the final answer" not in row["missing_requirements"]
     assert len(row["success_checks"]) >= 2
 
@@ -55,7 +55,7 @@ def test_build_task_contract_parses_json(monkeypatch) -> None:
     assert row["required_actions"] == ["send_email", "create_document"]
     assert row["delivery_target"] == "ops@example.com"
     assert NO_HARDCODE_WORDS_CONSTRAINT in row["constraints"]
-    assert row["missing_requirements"] == ["Need target website URL"]
+    assert "Need target website URL" not in row["missing_requirements"]
     assert row["success_checks"] == ["Delivery confirmed", "Required facts present"]
 
 
@@ -89,7 +89,7 @@ def test_build_task_contract_filters_unaligned_send_email_action(monkeypatch) ->
     assert row["delivery_target"] == ""
 
 
-def test_build_task_contract_classifier_flags_missing_recipient_and_output_format(monkeypatch) -> None:
+def test_build_task_contract_classifier_flags_missing_recipient(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "0")
     row = build_task_contract(
         message="Send the final report when ready",
@@ -102,7 +102,7 @@ def test_build_task_contract_classifier_flags_missing_recipient_and_output_forma
     )
     assert "Recipient email address for delivery" in row["missing_requirements"]
     assert "Required facts to verify in the final answer" not in row["missing_requirements"]
-    assert "Preferred output format or artifact type" in row["missing_requirements"]
+    assert "Preferred output format or artifact type" not in row["missing_requirements"]
 
 
 def test_build_task_contract_merges_classifier_missing_requirements_with_llm_response(monkeypatch) -> None:
@@ -131,7 +131,7 @@ def test_build_task_contract_merges_classifier_missing_requirements_with_llm_res
         conversation_summary="",
     )
     assert "Recipient email address for delivery" in row["missing_requirements"]
-    assert "Preferred output format or artifact type" in row["missing_requirements"]
+    assert "Preferred output format or artifact type" not in row["missing_requirements"]
 
 
 def test_build_task_contract_handles_markdown_url_without_false_missing_target(monkeypatch) -> None:
@@ -186,6 +186,191 @@ def test_build_task_contract_sanitizes_false_missing_recipient_and_fact_requirem
     assert row["delivery_target"] == "ssebowadisan1@gmail.com"
     assert row["required_facts"] == ["Company location details from the analysis"]
     assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_sanitizes_missing_items_already_provided_in_goal(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Research and implementation plan",
+            "required_outputs": [],
+            "required_facts": ["Core findings for implementation plan"],
+            "required_actions": ["create_document", "update_sheet"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": [
+                "Recipient for the findings: this chat thread only",
+                "Target format for the implementation plan: markdown",
+            ],
+            "success_checks": ["Plan includes prioritized backlog"],
+        },
+    )
+    row = build_task_contract(
+        message="Research agent architectures.",
+        agent_goal=(
+            "Recipient for the findings: this chat thread only. "
+            "Target format for the implementation plan: markdown."
+        ),
+        rewritten_task="Research and propose implementation plan.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["report_generation", "docs_write", "sheets_update"],
+        conversation_summary="",
+    )
+    assert row["delivery_target"] == "this chat thread only"
+    assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_sanitizes_live_thread_and_workspace_format_missing_items(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Research agent workflows and track progress",
+            "required_outputs": ["Research notes", "Task tracker updates"],
+            "required_facts": ["Comparison of Codex, Cursor, and ChatGPT Agent"],
+            "required_actions": ["create_document", "update_sheet"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": [
+                "Recipient for the live thread updates",
+                "Output format specifications for Google Sheets and Google Doc",
+            ],
+            "success_checks": ["Research is complete"],
+        },
+    )
+    row = build_task_contract(
+        message=(
+            "Research Codex, Cursor, and ChatGPT Agent; track steps in Google Sheets; "
+            "write findings in Google Doc; show all progress in the live thread."
+        ),
+        agent_goal="Run end-to-end research with visible in-thread updates.",
+        rewritten_task="Benchmark agent workflows and produce implementation recommendations.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "docs_write", "sheets_update"],
+        conversation_summary="",
+    )
+    assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_sanitizes_google_doc_recipient_missing_item(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Write findings to Google Doc",
+            "required_outputs": ["Google Doc notes"],
+            "required_facts": ["Comparison findings"],
+            "required_actions": ["create_document"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": ["Recipient for the Google Doc"],
+            "success_checks": ["Notes captured"],
+        },
+    )
+    row = build_task_contract(
+        message="Write research findings into a Google Doc and share progress in this thread.",
+        agent_goal="Document findings in Google Docs.",
+        rewritten_task="Create and populate a Google Doc with research findings.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["docs_write", "report_generation"],
+        conversation_summary="",
+    )
+    assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_sanitizes_generic_output_format_for_defaultable_outputs(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Research and summarize findings",
+            "required_outputs": ["Research notes"],
+            "required_facts": ["Key workflow differences"],
+            "required_actions": ["create_document", "update_sheet"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": ["Output format for findings"],
+            "success_checks": ["Findings documented"],
+        },
+    )
+    row = build_task_contract(
+        message=(
+            "Research Codex, Cursor, and ChatGPT Agent. "
+            "Track each step in Google Sheets and write findings in a Google Doc."
+        ),
+        agent_goal="Show progress in-thread and provide implementation recommendations.",
+        rewritten_task="Run benchmark and capture notes in workspace artifacts.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "docs_write", "sheets_update"],
+        conversation_summary="",
+    )
+    assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_keeps_email_recipient_requirement_for_non_email_target(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Email summary to leadership",
+            "required_outputs": ["Summary email"],
+            "required_facts": ["Verified findings"],
+            "required_actions": ["send_email"],
+            "constraints": [],
+            "delivery_target": "product leadership team",
+            "missing_requirements": ["Recipient email address for delivery"],
+            "success_checks": ["Delivery completed"],
+        },
+    )
+    row = build_task_contract(
+        message="Prepare delivery to leadership.",
+        agent_goal="Recipient: product leadership team",
+        rewritten_task="Email findings to leadership",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["email_delivery", "report_generation"],
+        conversation_summary="",
+    )
+    assert row["delivery_target"] == "product leadership team"
+    assert "Recipient email address for delivery" in row["missing_requirements"]
+
+
+def test_build_task_contract_ignores_target_url_when_not_required(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Agent benchmark report",
+            "required_outputs": ["Research report"],
+            "required_facts": ["Key architectural differences"],
+            "required_actions": ["create_document"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": ["Target URL for research"],
+            "success_checks": ["Report completed"],
+        },
+    )
+    row = build_task_contract(
+        message="Research agent architectures and summarize recommendations.",
+        agent_goal="Return findings in this chat.",
+        rewritten_task="Run a broad benchmark and summarize outcomes.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "docs_write"],
+        conversation_summary="",
+    )
+    assert "Target URL for research" not in row["missing_requirements"]
 
 
 def test_verify_task_contract_disabled_returns_ready(monkeypatch) -> None:

@@ -309,6 +309,17 @@ export function AgentActivityPanel({
     };
   }, [isFullscreenViewer]);
 
+  useEffect(() => {
+    if (!streaming) {
+      return;
+    }
+    const node = listRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [streaming, orderedEvents.length, activeEvent?.event_id]);
+
   if (!orderedEvents.length) {
     return null;
   }

@@ -130,6 +130,21 @@ const integrationEventStyles: Record<string, EventStyle> = {
     icon: Eye,
     accent: "text-[#4c4c50]",
   },
+  "drive.share_started": {
+    label: "Share Link",
+    icon: Activity,
+    accent: "text-[#4c4c50]",
+  },
+  "drive.share_completed": {
+    label: "Shared",
+    icon: CheckCircle2,
+    accent: "text-[#2f6a3f]",
+  },
+  "drive.share_failed": {
+    label: "Share Failed",
+    icon: TriangleAlert,
+    accent: "text-[#9b1c1c]",
+  },
   "llm.context_summary": {
     label: "Context Summary",
     icon: Sparkles,

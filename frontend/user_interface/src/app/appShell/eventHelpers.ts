@@ -6,6 +6,7 @@ type ConversationMessageMeta = {
   actions_taken?: ChatTurn["actionsTaken"];
   sources_used?: ChatTurn["sourcesUsed"];
   source_usage?: ChatTurn["sourceUsage"];
+  attachments?: Array<{ name?: string; file_id?: string; fileId?: string }>;
   next_recommended_steps?: string[];
   needs_human_review?: boolean;
   human_review_notes?: string | null;
@@ -31,6 +32,38 @@ export function extractAgentEvents(rows: Array<{ type: string; payload: unknown 
     .filter(isAgentActivityEvent);
 }
 
+function mapMessageAttachments(
+  attachments: ConversationMessageMeta["attachments"],
+): ChatTurn["attachments"] {
+  if (!Array.isArray(attachments) || attachments.length <= 0) {
+    return undefined;
+  }
+  const normalized = attachments
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const name = String(item.name || "").trim();
+      const fileId = String(item.file_id || item.fileId || "").trim();
+      if (!name && !fileId) {
+        return null;
+      }
+      return {
+        name: name || fileId || "Uploaded file",
+        fileId: fileId || undefined,
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is {
+        name: string;
+        fileId?: string;
+      } => Boolean(item),
+    );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function buildConversationTurns(
   detail: ConversationDetail,
 ): { turns: ChatTurn[]; runIds: string[] } {
@@ -41,6 +74,7 @@ export function buildConversationTurns(
   const turns: ChatTurn[] = messages.map((entry, index) => ({
     user: entry[0] || "",
     assistant: entry[1] || "",
+    attachments: mapMessageAttachments(messageMeta[index]?.attachments),
     info: retrievalMessages[index] || "",
     plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,
     mode: messageMeta[index]?.mode || "ask",

@@ -141,30 +141,10 @@ class GmailService:
                 status_code=400,
             )
 
-        filename = ""
-        content_bytes = b""
-        mime_type = "application/octet-stream"
-
-        if local_path:
-            path = Path(local_path)
-            if not path.exists() or not path.is_file():
-                raise GoogleApiError(
-                    code="gmail_attachment_file_missing",
-                    message=f"Attachment file not found: {local_path}",
-                    status_code=400,
-                )
-            filename = path.name
-            content_bytes = path.read_bytes()
-            mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        else:
-            file_meta = self.session.request_json(
-                method="GET",
-                url=f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                params={"fields": "id,name,mimeType"},
-            )
-            filename = str(file_meta.get("name") or f"{file_id}.bin")
-            mime_type = str(file_meta.get("mimeType") or "application/octet-stream")
-            content_bytes = self.drive.download_file(file_id=str(file_id))
+        filename, content_bytes, mime_type = self._resolve_attachment_content(
+            file_id=file_id,
+            local_path=local_path,
+        )
 
         msg = self._load_draft_message(draft_id=draft_id)
         if not msg.is_multipart():
@@ -190,6 +170,49 @@ class GmailService:
             data={"draft_id": draft_id, "filename": filename, "size_bytes": len(content_bytes)},
         )
         return {"ok": True, "draft_id": draft_id, "filename": filename}
+
+    def _resolve_attachment_content(
+        self,
+        *,
+        file_id: str | None = None,
+        local_path: str | None = None,
+    ) -> tuple[str, bytes, str]:
+        if not file_id and not local_path:
+            raise GoogleApiError(
+                code="gmail_attachment_source_missing",
+                message="Provide file_id or local_path for attachment.",
+                status_code=400,
+            )
+
+        if local_path:
+            path = Path(local_path)
+            if not path.exists() or not path.is_file():
+                raise GoogleApiError(
+                    code="gmail_attachment_file_missing",
+                    message=f"Attachment file not found: {local_path}",
+                    status_code=400,
+                )
+            filename = path.name
+            content_bytes = path.read_bytes()
+            mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            return filename, content_bytes, mime_type
+
+        normalized_file_id = str(file_id or "").strip()
+        file_meta = self.session.request_json(
+            method="GET",
+            url=f"https://www.googleapis.com/drive/v3/files/{normalized_file_id}",
+            params={"fields": "id,name,mimeType"},
+        )
+        filename = str(file_meta.get("name") or f"{normalized_file_id}.bin")
+        mime_type = str(file_meta.get("mimeType") or "application/octet-stream")
+        if mime_type.startswith("application/vnd.google-apps."):
+            content_bytes = self.drive.export_pdf_bytes(file_id=normalized_file_id)
+            mime_type = "application/pdf"
+            if "." not in filename:
+                filename = f"{filename}.pdf"
+        else:
+            content_bytes = self.drive.download_file(file_id=normalized_file_id)
+        return filename, content_bytes, mime_type
 
     def send_draft(self, *, draft_id: str) -> dict[str, Any]:
         emit_google_event(
@@ -241,6 +264,68 @@ class GmailService:
         )
         return {"message_id": message_id, "thread_id": thread_id}
 
+    def send_message_with_attachments(
+        self,
+        *,
+        to: str | list[str],
+        subject: str,
+        body_html: str,
+        attachments: list[dict[str, str]],
+        cc: str | list[str] | None = None,
+        bcc: str | list[str] | None = None,
+    ) -> dict[str, Any]:
+        msg = self._build_message(to=to, subject=subject, body_html=body_html, cc=cc, bcc=bcc)
+        normalized_attachments = []
+        for row in attachments[:16]:
+            if not isinstance(row, dict):
+                continue
+            local_path = str(row.get("local_path") or "").strip()
+            file_id = str(row.get("file_id") or "").strip()
+            if not local_path and not file_id:
+                continue
+            normalized_attachments.append({"local_path": local_path, "file_id": file_id})
+
+        if normalized_attachments:
+            if not msg.is_multipart():
+                msg.make_mixed()
+            for row in normalized_attachments:
+                filename, content_bytes, mime_type = self._resolve_attachment_content(
+                    file_id=row.get("file_id") or None,
+                    local_path=row.get("local_path") or None,
+                )
+                main_type, _, sub_type = mime_type.partition("/")
+                msg.add_attachment(
+                    content_bytes,
+                    maintype=main_type or "application",
+                    subtype=sub_type or "octet-stream",
+                    filename=filename,
+                )
+
+        raw = _encode_urlsafe_base64(msg.as_bytes())
+        response = self.session.request_json(
+            method="POST",
+            url="https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            payload={"raw": raw},
+        )
+        message_id = str(response.get("id") or "")
+        thread_id = str(response.get("threadId") or "")
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="gmail.sent",
+            message="Gmail message with attachments sent",
+            data={
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "attachments_count": len(normalized_attachments),
+            },
+        )
+        return {
+            "message_id": message_id,
+            "thread_id": thread_id,
+            "attachments_count": len(normalized_attachments),
+        }
+
     def search_messages(self, *, query: str, max_results: int = 20) -> dict[str, Any]:
         emit_google_event(
             user_id=self.session.user_id,
@@ -264,4 +349,3 @@ class GmailService:
             data={"count": len(normalized)},
         )
         return {"messages": normalized}
-

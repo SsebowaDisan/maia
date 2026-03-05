@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -80,7 +81,30 @@ class DocumentCreateTool(AgentTool):
         title = str(params.get("title") or "Company Brief").strip()
         body = str(params.get("body") or prompt).strip() or "No content provided."
         provider = str(params.get("provider") or context.settings.get("agent.docs_provider") or "local").strip()
+        render_markdown = _truthy(params.get("render_markdown"), default=True)
         include_copied_highlights = _truthy(params.get("include_copied_highlights"), default=False)
+        make_public = _truthy(
+            params.get("make_public"),
+            default=_truthy(
+                context.settings.get("agent.workspace_make_public"),
+                default=_truthy(os.getenv("MAIA_WORKSPACE_MAKE_PUBLIC"), default=False),
+            ),
+        )
+        public_role = str(
+            params.get("public_role")
+            or context.settings.get("agent.workspace_public_role")
+            or os.getenv("MAIA_WORKSPACE_PUBLIC_ROLE")
+            or "reader"
+        ).strip().lower()
+        if public_role not in {"reader", "commenter", "writer"}:
+            public_role = "reader"
+        public_discoverable = _truthy(
+            params.get("public_discoverable"),
+            default=_truthy(
+                context.settings.get("agent.workspace_public_discoverable"),
+                default=_truthy(os.getenv("MAIA_WORKSPACE_PUBLIC_DISCOVERABLE"), default=False),
+            ),
+        )
         copied_section = (
             _build_copied_highlights_section(context.settings.get("__copied_highlights"))
             if include_copied_highlights
@@ -137,6 +161,96 @@ class DocumentCreateTool(AgentTool):
             created = connector.create_docs_document(title=title)
             doc_id = str(created.get("documentId") or "")
             doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else ""
+            if doc_id:
+                context.settings["__latest_report_document_id"] = doc_id
+                context.settings["__latest_report_document_url"] = doc_url
+                context.settings["__latest_report_title"] = title
+            public_shared = False
+            public_share_error = ""
+            if make_public and doc_id:
+                trace_events.append(
+                    ToolTraceEvent(
+                        event_type="drive.share_started",
+                        title="Enable public link access",
+                        detail=doc_id,
+                        data={
+                            "file_id": doc_id,
+                            "role": public_role,
+                            "scope": "anyone",
+                            "discoverable": public_discoverable,
+                            "source_url": doc_url,
+                        },
+                    )
+                )
+                try:
+                    connector.share_drive_file_public(
+                        file_id=doc_id,
+                        role=public_role,
+                        discoverable=public_discoverable,
+                    )
+                    public_shared = True
+                    trace_events.append(
+                        ToolTraceEvent(
+                            event_type="drive.share_completed",
+                            title="Public link access enabled",
+                            detail=doc_id,
+                            data={
+                                "file_id": doc_id,
+                                "role": public_role,
+                                "scope": "anyone",
+                                "discoverable": public_discoverable,
+                                "source_url": doc_url,
+                            },
+                        )
+                    )
+                except Exception as exc:
+                    public_share_error = str(exc)
+                    trace_events.append(
+                        ToolTraceEvent(
+                            event_type="drive.share_failed",
+                            title="Failed to enable public link access",
+                            detail=public_share_error[:200],
+                            data={
+                                "file_id": doc_id,
+                                "role": public_role,
+                                "scope": "anyone",
+                                "discoverable": public_discoverable,
+                                "source_url": doc_url,
+                                "error": public_share_error[:300],
+                            },
+                        )
+                    )
+            if doc_id and body:
+                trace_events.append(
+                    ToolTraceEvent(
+                        event_type="docs.insert_started",
+                        title="Append content to Google Doc",
+                        detail=f"{len(body)} characters",
+                        data={
+                            "doc_id": doc_id,
+                            "characters": len(body),
+                            "source_url": doc_url,
+                            "render_mode": "markdown" if render_markdown else "plain_text",
+                        },
+                    )
+                )
+                if render_markdown and hasattr(connector, "docs_insert_markdown"):
+                    connector.docs_insert_markdown(document_id=doc_id, markdown_text=f"\n\n{body}\n")
+                else:
+                    connector.docs_insert_text(document_id=doc_id, text=f"\n\n{body}\n")
+                trace_events.append(
+                    ToolTraceEvent(
+                        event_type="docs.insert_completed",
+                        title="Google Doc content appended",
+                        detail=f"{len(body)} characters",
+                        data={
+                            "doc_id": doc_id,
+                            "characters": len(body),
+                            "source_url": doc_url,
+                            "render_mode": "markdown" if render_markdown else "plain_text",
+                        },
+                    )
+                )
             trace_events.append(
                 ToolTraceEvent(
                     event_type="doc_save",
@@ -151,7 +265,8 @@ class DocumentCreateTool(AgentTool):
                     f"Created document `{title}` in Google Docs.\n"
                     f"- Document ID: {doc_id or 'unknown'}\n"
                     f"- URL: {doc_url or 'not available'}\n"
-                    f"- Draft body length: {len(body)} characters"
+                    f"- Draft body length: {len(body)} characters\n"
+                    f"- Public link enabled: {'yes' if public_shared else 'no'}"
                 ),
                 data={
                     "provider": provider,
@@ -160,6 +275,11 @@ class DocumentCreateTool(AgentTool):
                     "url": doc_url,
                     "body_length": len(body),
                     "copied_highlights_included": bool(copied_section),
+                    "render_markdown": render_markdown,
+                    "public_shared": public_shared,
+                    "public_role": public_role if make_public else "",
+                    "public_discoverable": public_discoverable if make_public else False,
+                    "public_share_error": public_share_error,
                 },
                 sources=[],
                 next_steps=[
@@ -173,6 +293,8 @@ class DocumentCreateTool(AgentTool):
         out_dir.mkdir(parents=True, exist_ok=True)
         file_path = out_dir / f"{_safe_slug(title)}.md"
         file_path.write_text(f"# {title}\n\n{body}\n", encoding="utf-8")
+        context.settings["__latest_report_title"] = title
+        context.settings["__latest_report_document_path"] = str(file_path.resolve())
         trace_events.append(
             ToolTraceEvent(
                 event_type="doc_save",

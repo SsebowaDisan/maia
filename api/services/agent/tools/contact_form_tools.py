@@ -68,6 +68,19 @@ class BrowserContactFormSendTool(AgentTool):
             fallback="disan@micrurus.com",
             max_len=180,
         )
+        sender_company = _safe_text(
+            params.get("sender_company")
+            or context.settings.get("agent.contact_sender_company"),
+            fallback="",
+            max_len=120,
+        )
+        sender_phone = _safe_text(
+            params.get("sender_phone")
+            or context.settings.get("agent.contact_sender_phone")
+            or context.settings.get("agent.contact_phone"),
+            fallback="+1 415 555 0199",
+            max_len=48,
+        )
         raw_subject = _safe_text(
             params.get("subject"),
             fallback="Business Inquiry",
@@ -93,6 +106,8 @@ class BrowserContactFormSendTool(AgentTool):
             url=url,
             sender_name=sender_name,
             sender_email=sender_email,
+            sender_company=sender_company,
+            sender_phone=sender_phone,
             subject=subject,
             message=message,
             auto_accept_cookies=bool(params.get("auto_accept_cookies", True)),
@@ -128,6 +143,8 @@ class BrowserContactFormSendTool(AgentTool):
             "submitted": submitted,
             "status": status,
             "url": final_url,
+            "sender_company": sender_company,
+            "sender_phone": sender_phone,
             "subject": subject,
             "message_preview": message[:280],
             "confirmation_text": confirmation_text[:280],
@@ -142,6 +159,8 @@ class BrowserContactFormSendTool(AgentTool):
             "## Contact Form Submission",
             f"- Target URL: {final_url}",
             f"- Sender: {sender_name} <{sender_email}>",
+            f"- Company: {sender_company or 'n/a'}",
+            f"- Phone: {sender_phone or 'n/a'}",
             f"- Subject: {subject}",
             f"- Status: {status}",
             f"- Fields filled: {', '.join(str(item) for item in fields_filled) or 'n/a'}",
@@ -163,6 +182,8 @@ class BrowserContactFormSendTool(AgentTool):
                 "status": status,
                 "url": final_url,
                 "title": title,
+                "sender_company": sender_company,
+                "sender_phone": sender_phone,
                 "subject": subject,
                 "message_preview": message[:280],
                 "confirmation_text": confirmation_text,

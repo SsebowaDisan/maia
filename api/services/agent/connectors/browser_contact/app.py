@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any, Generator
 
@@ -10,6 +11,33 @@ from .capture import capture_page_state, move_cursor
 from .detection import locate_contact_form
 from .fields import fill_contact_fields
 from .submission import submit_and_confirm
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = str(value or "").strip().lower()
+    if not token:
+        return default
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _coerce_float(
+    value: Any,
+    *,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    return max(float(minimum), min(float(maximum), parsed))
 
 
 class BrowserContactConnector(BaseConnector):
@@ -38,6 +66,8 @@ class BrowserContactConnector(BaseConnector):
         url: str,
         sender_name: str,
         sender_email: str,
+        sender_company: str = "",
+        sender_phone: str = "",
         subject: str,
         message: str,
         auto_accept_cookies: bool = True,
@@ -144,10 +174,26 @@ class BrowserContactConnector(BaseConnector):
                 form=form,
                 sender_name=sender_name,
                 sender_email=sender_email,
+                sender_company=sender_company,
+                sender_phone=sender_phone,
                 subject=subject,
                 message=message,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
+                enable_llm_fallback=_coerce_bool(
+                    self.settings.get("agent.contact_form_llm_fallback_enabled")
+                    or self.settings.get("MAIA_AGENT_CONTACT_FORM_LLM_FALLBACK_ENABLED")
+                    or os.getenv("MAIA_AGENT_CONTACT_FORM_LLM_FALLBACK_ENABLED"),
+                    default=True,
+                ),
+                llm_min_confidence=_coerce_float(
+                    self.settings.get("agent.contact_form_llm_fallback_confidence")
+                    or self.settings.get("MAIA_AGENT_CONTACT_FORM_LLM_FALLBACK_CONFIDENCE")
+                    or os.getenv("MAIA_AGENT_CONTACT_FORM_LLM_FALLBACK_CONFIDENCE"),
+                    default=0.68,
+                    minimum=0.45,
+                    maximum=0.98,
+                ),
             )
             for payload in fill_events:
                 yield payload

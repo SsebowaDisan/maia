@@ -8,6 +8,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from api.services.google.errors import GoogleApiError, GoogleServiceError, GoogleTokenError
+from api.services.google.service_account import (
+    DEFAULT_SERVICE_ACCOUNT_SCOPES,
+    issue_service_account_access_token,
+    resolve_google_auth_mode,
+)
 from api.services.google.store import GoogleTokenRecord
 
 
@@ -32,6 +37,7 @@ class GoogleAuthSession:
         user_id: str,
         run_id: str | None = None,
         fallback_tokens: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> None:
         self.user_id = user_id
         self.run_id = run_id
@@ -39,6 +45,21 @@ class GoogleAuthSession:
 
         self.oauth = get_google_oauth_manager()
         self.fallback_tokens = dict(fallback_tokens or {})
+        self.settings = dict(settings or {})
+
+    def _service_account_scopes(self) -> list[str]:
+        raw = self.fallback_tokens.get("scopes")
+        if isinstance(raw, list):
+            scopes = [str(item).strip() for item in raw if str(item).strip()]
+            if scopes:
+                return scopes
+        return list(DEFAULT_SERVICE_ACCOUNT_SCOPES)
+
+    def _service_account_access_token(self) -> str:
+        return issue_service_account_access_token(
+            settings=self.settings,
+            scopes=self._service_account_scopes(),
+        )
 
     def get_tokens(self) -> GoogleTokenRecord | None:
         record = self.oauth.tokens.get_tokens(user_id=self.user_id)
@@ -62,6 +83,9 @@ class GoogleAuthSession:
         )
 
     def require_access_token(self) -> str:
+        auth_mode = resolve_google_auth_mode(settings=self.settings)
+        if auth_mode == "service_account":
+            return self._service_account_access_token()
         try:
             record = self.oauth.ensure_valid_tokens(user_id=self.user_id)
             return record.access_token
@@ -69,7 +93,14 @@ class GoogleAuthSession:
             fallback = self.get_tokens()
             if fallback and fallback.access_token:
                 return fallback.access_token
-            raise
+            raise GoogleTokenError(
+                code="google_tokens_missing",
+                message=(
+                    "Google OAuth token is missing or expired. Connect Google OAuth in Settings, "
+                    "or switch auth mode to service_account."
+                ),
+                status_code=401,
+            )
 
     def _build_headers(self, headers: dict[str, str] | None = None) -> dict[str, str]:
         final_headers = dict(headers or {})

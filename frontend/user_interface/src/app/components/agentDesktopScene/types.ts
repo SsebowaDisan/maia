@@ -58,6 +58,14 @@ type BrowserFindState = {
   showFindOverlay: boolean;
 };
 
+type PdfPlaybackState = {
+  pdfPage: number;
+  pdfPageTotal: number;
+  pdfScrollPercent: number | null;
+  pdfScrollDirection: "up" | "down" | "";
+  pdfScanRegion: string;
+};
+
 type SceneAnimationState = {
   copyPulseText: string;
   copyPulseVisible: boolean;
@@ -74,5 +82,6 @@ export type {
   HighlightColor,
   HighlightPalette,
   HighlightRegion,
+  PdfPlaybackState,
   SceneAnimationState,
 };

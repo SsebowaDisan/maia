@@ -80,11 +80,19 @@ export function SettingsView() {
       {activeTab === "integrations" ? (
         <IntegrationsSettings
           googleOAuthStatus={controller.googleOAuthStatus}
+          googleServiceAccountStatus={controller.googleServiceAccountStatus}
+          googleWorkspaceAliases={controller.googleWorkspaceAliases}
           oauthStatus={controller.oauthStatus}
           googleToolHealth={controller.googleToolHealth}
           liveEvents={controller.liveEvents}
-          onConnectGoogle={() => void controller.handleGoogleOAuthConnect()}
+          onConnectGoogle={() => controller.handleGoogleOAuthConnect()}
           onDisconnectGoogle={() => void controller.handleGoogleOAuthDisconnect()}
+          onGoogleAuthModeChange={(mode) => void controller.handleGoogleWorkspaceAuthModeChange(mode)}
+          onAnalyzeGoogleLink={(link) => controller.handleAnalyzeGoogleWorkspaceLink(link)}
+          onCheckGoogleLinkAccess={(payload) => controller.handleCheckGoogleWorkspaceLinkAccess(payload)}
+          onSaveGoogleLinkAlias={(alias, link) =>
+            controller.handleSaveGoogleWorkspaceLinkAlias(alias, link)
+          }
         />
       ) : null}
 

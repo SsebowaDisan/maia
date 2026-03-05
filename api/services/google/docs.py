@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from api.services.google.auth import GoogleAuthSession
@@ -27,6 +28,155 @@ class GoogleDocsService:
             if isinstance(end_index, int) and end_index > 1:
                 return end_index - 1
         return 1
+
+    @staticmethod
+    def _strip_line_markdown(line: str) -> tuple[str, str, str]:
+        text = str(line or "")
+        heading_match = re.match(r"^(#{1,3})\s+(.*)$", text)
+        if heading_match:
+            hashes = heading_match.group(1)
+            body = heading_match.group(2)
+            style = {
+                1: "HEADING_1",
+                2: "HEADING_2",
+                3: "HEADING_3",
+            }.get(len(hashes), "NORMAL_TEXT")
+            return body, style, ""
+
+        bullet_match = re.match(r"^\s*[-*]\s+(.*)$", text)
+        if bullet_match:
+            return bullet_match.group(1), "NORMAL_TEXT", "BULLET_DISC_CIRCLE_SQUARE"
+
+        numbered_match = re.match(r"^\s*\d+\.\s+(.*)$", text)
+        if numbered_match:
+            return numbered_match.group(1), "NORMAL_TEXT", "NUMBERED_DECIMAL_NESTED"
+
+        return text, "NORMAL_TEXT", ""
+
+    @staticmethod
+    def _render_inline_markdown(text: str) -> tuple[str, list[tuple[int, int, str]]]:
+        clean = str(text or "")
+        pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+        cursor = 0
+        chunks: list[str] = []
+        links: list[tuple[int, int, str]] = []
+        out_len = 0
+        for match in pattern.finditer(clean):
+            start, end = match.span()
+            if start > cursor:
+                before = clean[cursor:start]
+                chunks.append(before)
+                out_len += len(before)
+            label = str(match.group(1) or "").strip()
+            url = str(match.group(2) or "").strip()
+            if label and url:
+                chunks.append(label)
+                link_start = out_len
+                out_len += len(label)
+                links.append((link_start, out_len, url))
+            else:
+                raw = clean[start:end]
+                chunks.append(raw)
+                out_len += len(raw)
+            cursor = end
+        if cursor < len(clean):
+            tail = clean[cursor:]
+            chunks.append(tail)
+            out_len += len(tail)
+        return "".join(chunks), links
+
+    @classmethod
+    def _build_markdown_requests(
+        cls,
+        *,
+        markdown_text: str,
+        insert_index: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        rows = str(markdown_text or "").splitlines()
+        if not rows:
+            rows = [""]
+
+        full_text_parts: list[str] = []
+        paragraph_styles: list[tuple[int, int, str]] = []
+        bullet_ranges: list[tuple[int, int, str]] = []
+        link_ranges: list[tuple[int, int, str]] = []
+        char_cursor = 0
+
+        for raw_row in rows:
+            line_text, style, bullet_preset = cls._strip_line_markdown(raw_row)
+            rendered_line, inline_links = cls._render_inline_markdown(line_text)
+
+            line_start = char_cursor
+            full_text_parts.append(rendered_line)
+            char_cursor += len(rendered_line)
+            line_end = char_cursor
+            full_text_parts.append("\n")
+            char_cursor += 1
+
+            absolute_start = insert_index + line_start
+            absolute_end = insert_index + line_end
+            absolute_end_with_newline = absolute_end + 1
+
+            if rendered_line.strip() and style != "NORMAL_TEXT":
+                paragraph_styles.append((absolute_start, absolute_end_with_newline, style))
+            if rendered_line.strip() and bullet_preset:
+                bullet_ranges.append((absolute_start, absolute_end_with_newline, bullet_preset))
+            for local_start, local_end, url in inline_links:
+                link_ranges.append(
+                    (
+                        absolute_start + local_start,
+                        absolute_start + local_end,
+                        url,
+                    )
+                )
+
+        full_text = "".join(full_text_parts)
+        inserted_chars = len(full_text)
+        if inserted_chars <= 0:
+            return ([], 0)
+
+        requests: list[dict[str, Any]] = [
+            {
+                "insertText": {
+                    "location": {"index": insert_index},
+                    "text": full_text,
+                }
+            }
+        ]
+
+        for start, end, style in paragraph_styles:
+            requests.append(
+                {
+                    "updateParagraphStyle": {
+                        "range": {"startIndex": start, "endIndex": end},
+                        "paragraphStyle": {"namedStyleType": style},
+                        "fields": "namedStyleType",
+                    }
+                }
+            )
+
+        for start, end, bullet_preset in bullet_ranges:
+            requests.append(
+                {
+                    "createParagraphBullets": {
+                        "range": {"startIndex": start, "endIndex": end},
+                        "bulletPreset": bullet_preset,
+                    }
+                }
+            )
+
+        for start, end, url in link_ranges:
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {"startIndex": start, "endIndex": end},
+                        "textStyle": {"link": {"url": url}},
+                        "fields": "link",
+                    }
+                }
+            )
+
+        return requests, inserted_chars
 
     def copy_template(self, *, template_file_id: str, title: str) -> dict[str, Any]:
         emit_google_event(
@@ -156,6 +306,56 @@ class GoogleDocsService:
             "ok": True,
             "doc_id": doc_id,
             "inserted_chars": len(safe_text),
+            "index": insert_index,
+        }
+
+    def insert_markdown(self, *, doc_id: str, markdown_text: str) -> dict[str, Any]:
+        safe_text = str(markdown_text or "")
+        if not safe_text:
+            return {"ok": True, "doc_id": doc_id, "inserted_chars": 0, "index": 1}
+
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.insert_started",
+            message="Appending markdown to Google Doc",
+            data={"doc_id": doc_id, "characters": len(safe_text), "render_mode": "markdown"},
+        )
+        document_payload = self.session.request_json(
+            method="GET",
+            url=f"https://docs.googleapis.com/v1/documents/{doc_id}",
+            params={"fields": "body/content/endIndex"},
+        )
+        insert_index = self._document_end_index(
+            document_payload if isinstance(document_payload, dict) else {}
+        )
+        requests, inserted_chars = self._build_markdown_requests(
+            markdown_text=safe_text,
+            insert_index=insert_index,
+        )
+        if inserted_chars <= 0 or not requests:
+            return {"ok": True, "doc_id": doc_id, "inserted_chars": 0, "index": insert_index}
+        self.session.request_json(
+            method="POST",
+            url=f"https://docs.googleapis.com/v1/documents/{doc_id}:batchUpdate",
+            payload={"requests": requests},
+        )
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.insert_completed",
+            message="Markdown appended to Google Doc",
+            data={
+                "doc_id": doc_id,
+                "characters": inserted_chars,
+                "index": insert_index,
+                "render_mode": "markdown",
+            },
+        )
+        return {
+            "ok": True,
+            "doc_id": doc_id,
+            "inserted_chars": inserted_chars,
             "index": insert_index,
         }
 
