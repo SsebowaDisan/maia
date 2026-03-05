@@ -47,45 +47,20 @@ type IntegrationsSettingsProps = {
   onSaveGoogleLinkAlias: (alias: string, link: string) => Promise<GoogleWorkspaceAliasRecord[]>;
 };
 
-type SetupStepState = "pending" | "running" | "done" | "needs_user";
-
-type SetupStep = {
-  id: string;
-  label: string;
-  state: SetupStepState;
-};
-
-type NextSetupAction =
-  | "connect_google"
-  | "open_google_login"
-  | "configure_oauth_env"
-  | "request_oauth_setup"
-  | "switch_to_oauth"
-  | "copy_service_email"
-  | "quick_add_clipboard"
-  | "done";
-
-type NextSetupResolution = {
-  action: NextSetupAction;
-  label: string;
-  description: string;
-  tone: "success" | "neutral" | "warning";
-};
-
-type GoogleOAuthServiceDefinition = {
+type GoogleServiceDefinition = {
   id: "gmail" | "drive" | "docs" | "sheets" | "analytics";
   label: string;
   description: string;
   scopes: string[];
 };
 
-const GOOGLE_BASE_SCOPES = ["openid", "email", "profile"] as const;
+const BASE_SCOPES = ["openid", "email", "profile"] as const;
 
-const GOOGLE_OAUTH_SERVICE_DEFS: GoogleOAuthServiceDefinition[] = [
+const GOOGLE_SERVICE_DEFS: GoogleServiceDefinition[] = [
   {
     id: "gmail",
     label: "Gmail",
-    description: "Send, draft, and read mailbox messages for agent actions.",
+    description: "Send, draft, and read emails.",
     scopes: [
       "https://www.googleapis.com/auth/gmail.compose",
       "https://www.googleapis.com/auth/gmail.send",
@@ -95,58 +70,52 @@ const GOOGLE_OAUTH_SERVICE_DEFS: GoogleOAuthServiceDefinition[] = [
   {
     id: "drive",
     label: "Drive",
-    description: "Read and manage files in Google Drive.",
+    description: "Find and manage files.",
     scopes: ["https://www.googleapis.com/auth/drive"],
   },
   {
     id: "docs",
     label: "Docs",
-    description: "Create and edit Google Docs.",
+    description: "Create and edit documents.",
     scopes: ["https://www.googleapis.com/auth/documents"],
   },
   {
     id: "sheets",
     label: "Sheets",
-    description: "Create and edit Google Sheets.",
+    description: "Create and edit spreadsheets.",
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   },
   {
     id: "analytics",
     label: "Analytics",
-    description: "Read GA4 reporting data.",
+    description: "Read GA4 reporting.",
     scopes: ["https://www.googleapis.com/auth/analytics.readonly"],
   },
 ];
 
-const DEFAULT_SELECTED_GOOGLE_SERVICES: string[] = ["gmail", "drive", "docs", "sheets"];
+const DEFAULT_SERVICES: string[] = ["gmail", "drive", "docs", "sheets"];
 
-function dedupeScopes(scopes: string[]): string[] {
-  const seen = new Set<string>();
+function dedupe(values: string[]): string[] {
   const rows: string[] = [];
-  for (const raw of scopes) {
-    const scope = String(raw || "").trim();
-    if (!scope || seen.has(scope)) {
+  for (const raw of values) {
+    const value = String(raw || "").trim();
+    if (!value || rows.includes(value)) {
       continue;
     }
-    seen.add(scope);
-    rows.push(scope);
+    rows.push(value);
   }
   return rows;
 }
 
-function serviceIdsFromGrantedScopes(scopes: string[]): string[] {
-  const granted = new Set(scopes.map((item) => String(item || "").trim()).filter(Boolean));
-  return GOOGLE_OAUTH_SERVICE_DEFS.filter((tool) => tool.scopes.every((scope) => granted.has(scope))).map(
-    (tool) => tool.id,
-  );
+function normalizeServiceIds(serviceIds: string[]): string[] {
+  const allowed = new Set(GOOGLE_SERVICE_DEFS.map((item) => item.id));
+  return dedupe(serviceIds).filter((value) => allowed.has(value as GoogleServiceDefinition["id"]));
 }
 
-function expandScopesFromServiceIds(serviceIds: string[]): string[] {
-  const selectedSet = new Set(serviceIds.map((item) => String(item || "").trim()).filter(Boolean));
-  const scoped = GOOGLE_OAUTH_SERVICE_DEFS.filter((tool) => selectedSet.has(tool.id)).flatMap(
-    (tool) => tool.scopes,
-  );
-  return dedupeScopes([...GOOGLE_BASE_SCOPES, ...scoped]);
+function scopesFromServices(serviceIds: string[]): string[] {
+  const selected = new Set(normalizeServiceIds(serviceIds));
+  const scopes = GOOGLE_SERVICE_DEFS.filter((item) => selected.has(item.id)).flatMap((item) => item.scopes);
+  return dedupe([...BASE_SCOPES, ...scopes]);
 }
 
 function hasAllScopes(requiredScopes: string[], grantedScopes: string[]): boolean {
@@ -154,33 +123,16 @@ function hasAllScopes(requiredScopes: string[], grantedScopes: string[]): boolea
   return requiredScopes.every((scope) => granted.has(scope));
 }
 
-function normalizeSelectedServices(serviceIds: string[]): string[] {
-  const allowed = new Set(GOOGLE_OAUTH_SERVICE_DEFS.map((item) => item.id));
-  const ordered: string[] = [];
-  for (const serviceId of serviceIds) {
-    const value = String(serviceId || "").trim();
-    if (!value || !allowed.has(value) || ordered.includes(value)) {
-      continue;
-    }
-    ordered.push(value);
-  }
-  return ordered;
+function serviceIdsFromScopes(scopes: string[]): string[] {
+  const granted = new Set(scopes.map((item) => String(item || "").trim()).filter(Boolean));
+  return GOOGLE_SERVICE_DEFS.filter((item) => item.scopes.every((scope) => granted.has(scope))).map(
+    (item) => item.id,
+  );
 }
 
-function serviceLabel(serviceId: string): string {
-  const match = GOOGLE_OAUTH_SERVICE_DEFS.find((item) => item.id === serviceId);
-  return match ? match.label : serviceId;
-}
-
-function healthTone(item: GoogleToolHealthItem): { tone: "success" | "neutral" | "warning"; label: string } {
-  if (item.ok) {
-    return { tone: "success", label: "Connected" };
-  }
-  const lowerMessage = item.message.toLowerCase();
-  if (lowerMessage.includes("error") || lowerMessage.includes("failed")) {
-    return { tone: "warning", label: "Needs attention" };
-  }
-  return { tone: "neutral", label: "Not connected" };
+function serviceLabel(id: string): string {
+  const match = GOOGLE_SERVICE_DEFS.find((item) => item.id === id);
+  return match ? match.label : id;
 }
 
 function normalizeAliasText(value: string): string {
@@ -208,1376 +160,766 @@ function buildSuggestedAlias(
     return `ga4 property ${resourceId}`;
   }
   if (resourceType === "google_sheet") {
-    return shortId ? `shared sheet ${shortId}` : "shared sheet";
+    return shortId ? `sheet ${shortId}` : "sheet";
   }
   if (resourceType === "google_doc") {
-    return shortId ? `shared doc ${shortId}` : "shared doc";
+    return shortId ? `doc ${shortId}` : "doc";
   }
   if (resourceType === "google_drive_file") {
-    return shortId ? `shared file ${shortId}` : "shared file";
+    return shortId ? `file ${shortId}` : "file";
   }
   if (shortId) {
-    return `google resource ${shortId}`;
+    return `resource ${shortId}`;
   }
-  return "shared google resource";
+  return "google resource";
 }
 
-function stepChip(state: SetupStepState): { tone: "success" | "neutral" | "warning"; label: string } {
-  if (state === "done") {
-    return { tone: "success", label: "Done" };
+function sameList(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
   }
-  if (state === "needs_user") {
-    return { tone: "warning", label: "Action needed" };
-  }
-  if (state === "running") {
-    return { tone: "neutral", label: "Running" };
-  }
-  return { tone: "neutral", label: "Pending" };
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.every((value, index) => value === b[index]);
 }
 
-function buildSetupSteps(mode: "oauth" | "service_account"): SetupStep[] {
-  if (mode === "service_account") {
-    return [
-      { id: "mode", label: "Switch to service account mode", state: "pending" },
-      { id: "share", label: "Copy service email and share resource", state: "pending" },
-      { id: "alias", label: "Quick-add first alias from copied link", state: "pending" },
-    ];
-  }
-  return [
-    { id: "mode", label: "Switch to OAuth mode", state: "pending" },
-    { id: "connect", label: "Connect Google account", state: "pending" },
-    { id: "alias", label: "Quick-add first alias from copied link", state: "pending" },
-  ];
-}
+export function IntegrationsSettings(props: IntegrationsSettingsProps) {
+  const {
+    googleOAuthStatus,
+    googleServiceAccountStatus,
+    googleWorkspaceAliases,
+    oauthStatus,
+    oauthClientIdInput,
+    oauthClientSecretInput,
+    oauthRedirectUriInput,
+    oauthConfigSaving,
+    googleToolHealth,
+    liveEvents,
+    onConnectGoogle,
+    onDisconnectGoogle,
+    onOAuthClientIdInputChange,
+    onOAuthClientSecretInputChange,
+    onOAuthRedirectUriInputChange,
+    onSaveGoogleOAuthConfig,
+    onRequestGoogleOAuthSetup,
+    onSaveGoogleOAuthServices,
+    onGoogleAuthModeChange,
+    onAnalyzeGoogleLink,
+    onCheckGoogleLinkAccess,
+    onSaveGoogleLinkAlias,
+  } = props;
 
-export function IntegrationsSettings({
-  googleOAuthStatus,
-  googleServiceAccountStatus,
-  googleWorkspaceAliases,
-  oauthStatus,
-  oauthClientIdInput,
-  oauthClientSecretInput,
-  oauthRedirectUriInput,
-  oauthConfigSaving,
-  googleToolHealth,
-  liveEvents,
-  onConnectGoogle,
-  onDisconnectGoogle,
-  onOAuthClientIdInputChange,
-  onOAuthClientSecretInputChange,
-  onOAuthRedirectUriInputChange,
-  onSaveGoogleOAuthConfig,
-  onRequestGoogleOAuthSetup,
-  onSaveGoogleOAuthServices,
-  onGoogleAuthModeChange,
-  onAnalyzeGoogleLink,
-  onCheckGoogleLinkAccess,
-  onSaveGoogleLinkAlias,
-}: IntegrationsSettingsProps) {
-  const oauthChip = toneFromBoolean(googleOAuthStatus.connected, {
-    trueLabel: "Connected",
-    falseLabel: "Not connected",
-  });
-  const [showToolDetails, setShowToolDetails] = useState(false);
-  const [copyStatus, setCopyStatus] = useState("");
-  const [assistantStatus, setAssistantStatus] = useState("");
-  const [assistantBusy, setAssistantBusy] = useState(false);
-  const [setupBusy, setSetupBusy] = useState(false);
-  const [setupStatus, setSetupStatus] = useState("");
-  const [setupStepsState, setSetupStepsState] = useState<SetupStep[]>([]);
-  const [showGoogleServicesModal, setShowGoogleServicesModal] = useState(false);
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showServicesModal, setShowServicesModal] = useState(false);
+  const [showAliases, setShowAliases] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [oauthManualUrl, setOauthManualUrl] = useState("");
+  const [selectedServices, setSelectedServices] = useState<string[]>(DEFAULT_SERVICES);
+  const [draftServices, setDraftServices] = useState<string[]>(DEFAULT_SERVICES);
   const [linkInput, setLinkInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
-  const [linkAction, setLinkAction] = useState<"read" | "edit">("read");
-  const [selectedGoogleServices, setSelectedGoogleServices] = useState<string[]>(
-    DEFAULT_SELECTED_GOOGLE_SERVICES,
-  );
   const [analysisResult, setAnalysisResult] = useState<GoogleWorkspaceLinkAnalyzeResult | null>(null);
   const [accessResult, setAccessResult] = useState<GoogleWorkspaceLinkAccessResult | null>(null);
-  const serviceChip = toneFromBoolean(googleServiceAccountStatus.usable, {
-    trueLabel: "Ready",
-    falseLabel: googleServiceAccountStatus.configured ? "Share-only" : "Not configured",
-  });
+
   const inServiceAccountMode = googleServiceAccountStatus.auth_mode === "service_account";
-  const trackedGoogleToolHealth = googleToolHealth;
-  const connectedTools = trackedGoogleToolHealth.filter((item) => item.ok).length;
-  const grantedServiceIds = useMemo(() => {
-    const explicit = Array.isArray(googleOAuthStatus.enabled_services)
-      ? googleOAuthStatus.enabled_services
-      : [];
-    if (explicit.length > 0) {
-      return explicit;
-    }
-    return serviceIdsFromGrantedScopes(googleOAuthStatus.scopes || []);
-  }, [googleOAuthStatus.enabled_services, googleOAuthStatus.scopes]);
-  const enabledServiceSummary = useMemo(() => {
-    if (grantedServiceIds.length === 0) {
-      return "No services enabled yet.";
-    }
-    return grantedServiceIds.map((serviceId) => serviceLabel(serviceId)).join(", ");
-  }, [grantedServiceIds]);
-
-  useEffect(() => {
-    const selectedFromStatus = Array.isArray(googleOAuthStatus.oauth_selected_services)
-      ? normalizeSelectedServices(
-          googleOAuthStatus.oauth_selected_services
-            .map((item) => String(item || "").trim())
-            .filter(Boolean),
-        )
-      : [];
-    if (selectedFromStatus.length > 0) {
-      setSelectedGoogleServices(selectedFromStatus);
-      return;
-    }
-    if (googleOAuthStatus.connected && grantedServiceIds.length > 0) {
-      setSelectedGoogleServices(grantedServiceIds);
-      return;
-    }
-    setSelectedGoogleServices(DEFAULT_SELECTED_GOOGLE_SERVICES);
-  }, [googleOAuthStatus.connected, googleOAuthStatus.oauth_selected_services, grantedServiceIds]);
-
-  const selectedOauthScopes = useMemo(
-    () => expandScopesFromServiceIds(selectedGoogleServices),
-    [selectedGoogleServices],
-  );
-  const workspaceToolScopes =
-    GOOGLE_OAUTH_SERVICE_DEFS.filter((item) => ["drive", "docs", "sheets"].includes(item.id)).flatMap(
-      (item) => item.scopes,
-    );
-  const workspaceToolSelected = selectedGoogleServices.some((item) =>
-    ["drive", "docs", "sheets"].includes(item),
-  );
-  const workspaceScopesGranted = hasAllScopes(workspaceToolScopes, googleOAuthStatus.scopes || []);
-  const oauthScopeReady = hasAllScopes(selectedOauthScopes, googleOAuthStatus.scopes || []);
-  const canManageOAuthApp = Boolean(googleOAuthStatus.oauth_can_manage_config);
-  const workspaceOwnerUserId = String(googleOAuthStatus.oauth_workspace_owner_user_id || "").trim();
-  const oauthSetupRequestPending = Boolean(googleOAuthStatus.oauth_setup_request_pending);
-  const oauthSetupRequestCount = Number(googleOAuthStatus.oauth_setup_request_count || 0);
-  const oauthManagedByEnv = Boolean(googleOAuthStatus.oauth_managed_by_env);
-  const quickSteps = [
-    {
-      id: "connect",
-      label: inServiceAccountMode ? "Configure service account" : "Connect Google account",
-      done: inServiceAccountMode ? googleServiceAccountStatus.usable : googleOAuthStatus.connected,
-    },
-    {
-      id: "permissions",
-      label: inServiceAccountMode ? "Share resources with service email" : "Grant required scopes",
-      done: inServiceAccountMode
-        ? Boolean(googleServiceAccountStatus.email)
-        : selectedGoogleServices.length > 0 && oauthScopeReady,
-    },
-    {
-      id: "alias",
-      label: "Save first link alias",
-      done: !workspaceToolSelected || googleWorkspaceAliases.length > 0,
-    },
-  ];
-  const quickDoneCount = quickSteps.filter((step) => step.done).length;
-  const quickChip = toneFromBoolean(quickDoneCount === quickSteps.length, {
-    trueLabel: "Ready",
-    falseLabel: `${quickDoneCount}/${quickSteps.length} done`,
-  });
-  const setupComplete = quickDoneCount === quickSteps.length;
-  const showAdvancedPanels = setupComplete || showAdvancedSettings;
-  const setupDone = setupStepsState.length > 0 && setupStepsState.every((step) => step.state === "done");
-  const setupNeedsUser = setupStepsState.some((step) => step.state === "needs_user");
-  const setupStateChip = setupBusy
-    ? { tone: "neutral" as const, label: "Running" }
-    : setupDone
-      ? { tone: "success" as const, label: "Completed" }
-      : setupNeedsUser
-        ? { tone: "warning" as const, label: "Action needed" }
-        : { tone: "neutral" as const, label: "Idle" };
-  const canUseAliasAssistant = inServiceAccountMode
-    ? Boolean(googleServiceAccountStatus.email)
-    : googleOAuthStatus.connected && workspaceToolSelected && workspaceScopesGranted;
-  const aliasPrereqHint = inServiceAccountMode
-    ? "Copy and share the service-account email first, then add a link alias."
-    : !workspaceToolSelected
-      ? "Enable Drive, Docs, or Sheets in service access first, then reconnect Google."
-      : "Connect Google and grant selected service scopes first, then add a link alias.";
-  const quickCompletionPercent = Math.round((quickDoneCount / quickSteps.length) * 100);
   const oauthMissingEnv = Array.isArray(googleOAuthStatus.oauth_missing_env)
     ? googleOAuthStatus.oauth_missing_env.filter((item) => String(item || "").trim().length > 0)
     : [];
   const oauthReady = googleOAuthStatus.oauth_ready ?? oauthMissingEnv.length === 0;
+  const canManageOAuthApp = Boolean(googleOAuthStatus.oauth_can_manage_config);
+  const oauthManagedByEnv = Boolean(googleOAuthStatus.oauth_managed_by_env);
+  const workspaceOwnerUserId = String(googleOAuthStatus.oauth_workspace_owner_user_id || "").trim();
+  const oauthSetupRequestPending = Boolean(googleOAuthStatus.oauth_setup_request_pending);
   const oauthBlocked = !inServiceAccountMode && !oauthReady;
-  const oauthRequiredKeysSummary = oauthMissingEnv.length
-    ? oauthMissingEnv.join(", ")
-    : "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET";
+  const serviceAccountEmail = String(googleServiceAccountStatus.email || "").trim();
+  const serviceAccountReady = Boolean(serviceAccountEmail);
   const oauthRedirectUri = String(
     googleOAuthStatus.oauth_redirect_uri || "http://localhost:8000/api/agent/oauth/google/callback",
   ).trim();
-  const oauthSetupHint = canManageOAuthApp
-    ? `Save OAuth client credentials below (${oauthRequiredKeysSummary}), then continue with Google sign-in.`
-    : oauthManagedByEnv
-      ? "Google OAuth is managed by deployment settings. Contact your workspace owner if Google sign-in is unavailable."
-      : workspaceOwnerUserId
-        ? `Workspace owner '${workspaceOwnerUserId}' must complete one-time OAuth app setup.`
-        : "A workspace owner must complete one-time OAuth app setup.";
-  const workspaceOwnerHint = canManageOAuthApp
-    ? "You are the workspace OAuth owner for this tenant."
-    : workspaceOwnerUserId
-      ? `Workspace OAuth owner: ${workspaceOwnerUserId}`
-      : oauthManagedByEnv
-        ? "OAuth app is managed by deployment credentials."
-        : "No workspace owner is set yet.";
-  const smartSetupBlocked = oauthBlocked && !googleServiceAccountStatus.usable;
-  const selectedToolsNeedReconnect =
-    googleOAuthStatus.connected &&
-    (selectedGoogleServices.length !== grantedServiceIds.length ||
-      selectedGoogleServices.some((toolId) => !grantedServiceIds.includes(toolId)) ||
-      grantedServiceIds.some((toolId) => !selectedGoogleServices.includes(toolId)));
 
-  const nextSetupAction: NextSetupResolution = (() => {
-    if (inServiceAccountMode) {
-      if (!googleServiceAccountStatus.email) {
-        return {
-          action: "switch_to_oauth",
-          label: "Switch to OAuth mode",
-          description:
-            "Service-account email is not available yet. Switch to OAuth for the fastest first connection.",
-          tone: "warning",
-        };
-      }
-      if (googleWorkspaceAliases.length === 0) {
-        return {
-          action: "copy_service_email",
-          label: "Copy service email",
-          description:
-            "Share your target Doc, Sheet, Drive file, or GA4 property with this service email before quick-adding an alias.",
-          tone: "neutral",
-        };
-      }
-      return {
-        action: "done",
-        label: "Setup complete",
-        description: "Google integration is ready. You can start using prompt-based workspace actions.",
-        tone: "success",
-      };
+  const selectedFromStatus = useMemo(() => {
+    const fromSaved = Array.isArray(googleOAuthStatus.oauth_selected_services)
+      ? normalizeServiceIds(
+          googleOAuthStatus.oauth_selected_services.map((item) => String(item || "").trim()),
+        )
+      : [];
+    if (fromSaved.length > 0) {
+      return fromSaved;
     }
+    const fromEnabled = Array.isArray(googleOAuthStatus.enabled_services)
+      ? normalizeServiceIds(
+          googleOAuthStatus.enabled_services.map((item) => String(item || "").trim()),
+        )
+      : [];
+    if (fromEnabled.length > 0) {
+      return fromEnabled;
+    }
+    return DEFAULT_SERVICES;
+  }, [googleOAuthStatus.enabled_services, googleOAuthStatus.oauth_selected_services]);
 
+  useEffect(() => {
+    setSelectedServices(selectedFromStatus);
+    setDraftServices((previous) => {
+      if (sameList(previous, selectedServices)) {
+        return selectedFromStatus;
+      }
+      return previous;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFromStatus.join("|")]);
+
+  const draftScopes = useMemo(() => scopesFromServices(draftServices), [draftServices]);
+  const selectedScopes = useMemo(() => scopesFromServices(selectedServices), [selectedServices]);
+  const hasServiceChanges = !sameList(normalizeServiceIds(draftServices), normalizeServiceIds(selectedServices));
+  const grantStepDone =
+    googleOAuthStatus.connected && hasAllScopes(selectedScopes, googleOAuthStatus.scopes || []);
+  const connectStepDone = googleOAuthStatus.connected;
+  const aliasStepDone = googleWorkspaceAliases.length > 0;
+  const nextAction = !connectStepDone ? "connect" : !grantStepDone ? "grant" : !aliasStepDone ? "alias" : "done";
+
+  const statusChip = (() => {
+    if (googleOAuthStatus.connected) {
+      return { tone: "success" as const, label: "Connected" };
+    }
+    if (oauthBlocked && !canManageOAuthApp && !oauthManagedByEnv) {
+      return { tone: "warning" as const, label: "Needs admin setup" };
+    }
     if (oauthBlocked) {
-      if (canManageOAuthApp) {
-        return {
-          action: "configure_oauth_env",
-          label: "Save OAuth app credentials",
-          description: oauthSetupHint,
-          tone: "warning",
-        };
-      }
-      return {
-        action: "request_oauth_setup",
-        label: oauthSetupRequestPending ? "Setup request sent" : "Request workspace setup",
-        description: oauthSetupRequestPending
-          ? "Workspace owner has been notified. Waiting for one-time OAuth app setup."
-          : oauthSetupHint,
-        tone: oauthSetupRequestPending ? "neutral" : "warning",
-      };
+      return { tone: "warning" as const, label: "Needs setup" };
     }
-
-    if (!googleOAuthStatus.connected) {
-      if (oauthManualUrl) {
-        return {
-          action: "open_google_login",
-          label: "Open Google login",
-          description: "Continue the sign-in flow in your browser.",
-          tone: "warning",
-        };
-      }
-      return {
-        action: "connect_google",
-        label: "Connect Google account",
-        description: "Sign in once to unlock Gmail, Drive, Docs, Sheets, and Analytics services.",
-        tone: "warning",
-      };
-    }
-    if (!oauthScopeReady) {
-      return {
-        action: "connect_google",
-        label: "Grant selected service scopes",
-        description: selectedToolsNeedReconnect
-          ? "Reconnect Google to grant updated service permissions."
-          : "Finish consent to grant the scopes needed by selected services.",
-        tone: "warning",
-      };
-    }
-    if (googleWorkspaceAliases.length === 0) {
-      return {
-        action: "quick_add_clipboard",
-        label: "Quick add first alias",
-        description:
-          "Copy a Google link (Doc, Sheet, Drive, or GA4) and we will analyze, verify access, and save an alias.",
-        tone: "neutral",
-      };
-    }
-    return {
-      action: "done",
-      label: "Setup complete",
-      description: "Google integration is ready. You can start using prompt-based workspace actions.",
-      tone: "success",
-    };
+    return toneFromBoolean(false, { falseLabel: "Not connected" });
   })();
 
-  const setSetupStep = (stepId: string, state: SetupStepState) => {
-    setSetupStepsState((previous) =>
-      previous.map((step) => (step.id === stepId ? { ...step, state } : step)),
-    );
+  const enabledServiceSummary = useMemo(() => {
+    const rows = Array.isArray(googleOAuthStatus.enabled_services)
+      ? normalizeServiceIds(googleOAuthStatus.enabled_services)
+      : serviceIdsFromScopes(googleOAuthStatus.scopes || []);
+    if (rows.length === 0) {
+      return "No services enabled yet.";
+    }
+    return rows.map((id) => serviceLabel(id)).join(", ");
+  }, [googleOAuthStatus.enabled_services, googleOAuthStatus.scopes]);
+
+  const startGoogleConnect = async (serviceIds: string[]): Promise<boolean> => {
+    if (oauthBlocked) {
+      if (!canManageOAuthApp && !oauthManagedByEnv) {
+        const result = await onRequestGoogleOAuthSetup();
+        setMessage(result.message);
+        return false;
+      }
+      setMessage("Admin setup required before users can connect Google.");
+      return false;
+    }
+    const normalized = normalizeServiceIds(serviceIds);
+    if (normalized.length === 0) {
+      setMessage("Select at least one service.");
+      return false;
+    }
+
+    setBusy(true);
+    try {
+      if (inServiceAccountMode) {
+        onGoogleAuthModeChange("oauth");
+      }
+      const saveResult = await onSaveGoogleOAuthServices(normalized);
+      if (!saveResult.ok) {
+        setMessage(saveResult.message || "Could not save selected services.");
+        return false;
+      }
+      const persisted = normalizeServiceIds(saveResult.services.length > 0 ? saveResult.services : normalized);
+      setSelectedServices(persisted);
+      setDraftServices(persisted);
+
+      const connectResult = await onConnectGoogle({ scopes: scopesFromServices(persisted) });
+      const authorizeUrl = String(connectResult.authorize_url || "").trim();
+      if (authorizeUrl) {
+        setOauthManualUrl(authorizeUrl);
+      }
+      setMessage(
+        `${connectResult.message}${authorizeUrl ? " If needed, click Open Google login." : ""}`,
+      );
+      return connectResult.ok;
+    } catch (error) {
+      setMessage(`Could not start Google sign-in: ${String(error)}`);
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const readClipboardText = async (): Promise<string> => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
-      return "";
+  const handleUpdateAccess = async () => {
+    const normalizedDraft = normalizeServiceIds(draftServices);
+    if (normalizedDraft.length === 0) {
+      setMessage("Select at least one service.");
+      return;
     }
+
+    setBusy(true);
     try {
-      return String((await navigator.clipboard.readText()) || "").trim();
-    } catch {
-      return "";
+      const saveResult = await onSaveGoogleOAuthServices(normalizedDraft);
+      if (!saveResult.ok) {
+        setMessage(saveResult.message || "Could not update service access.");
+        return;
+      }
+      const persisted = normalizeServiceIds(saveResult.services.length > 0 ? saveResult.services : normalizedDraft);
+      setSelectedServices(persisted);
+      setDraftServices(persisted);
+
+      if (!googleOAuthStatus.connected) {
+        setMessage("Access updated. Next step: connect Google.");
+        return;
+      }
+      const desiredScopes = scopesFromServices(persisted);
+      const alreadyGranted = hasAllScopes(desiredScopes, googleOAuthStatus.scopes || []);
+      if (alreadyGranted) {
+        setMessage("Access updated.");
+        return;
+      }
+
+      const connectResult = await onConnectGoogle({ scopes: desiredScopes });
+      const authorizeUrl = String(connectResult.authorize_url || "").trim();
+      if (authorizeUrl) {
+        setOauthManualUrl(authorizeUrl);
+      }
+      setMessage(
+        `${connectResult.message}${authorizeUrl ? " If needed, click Open Google login." : ""}`,
+      );
+    } catch (error) {
+      setMessage(`Could not update access: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAddAlias = async () => {
+    const link = linkInput.trim();
+    if (!link) {
+      setMessage("Paste a Google link first.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const analysis = await onAnalyzeGoogleLink(link);
+      setAnalysisResult(analysis);
+      if (!analysis.detected) {
+        setMessage(analysis.message || "Unsupported link.");
+        return;
+      }
+      const action: "read" | "edit" = analysis.resource_type === "ga4_property" ? "read" : "edit";
+      const access = await onCheckGoogleLinkAccess({ link, action });
+      setAccessResult(access);
+      const aliasToSave = normalizeAliasText(aliasInput.trim() || buildSuggestedAlias(analysis, access)).slice(
+        0,
+        120,
+      );
+      if (!aliasToSave) {
+        setMessage("Could not create a valid alias name.");
+        return;
+      }
+      await onSaveGoogleLinkAlias(aliasToSave, link);
+      setAliasInput(aliasToSave);
+      setMessage(
+        access.ready
+          ? `Alias '${aliasToSave}' saved. Ready (${access.required_role}).`
+          : `Alias '${aliasToSave}' saved. Needs ${access.required_role} access.`,
+      );
+    } catch (error) {
+      setMessage(`Could not add alias: ${String(error)}`);
+    } finally {
+      setBusy(false);
     }
   };
 
   const handleCopyServiceEmail = async () => {
-    const email = String(googleServiceAccountStatus.email || "").trim();
-    if (!email) {
-      setCopyStatus("Service-account email is not available yet.");
+    if (!serviceAccountEmail) {
+      setMessage("Service-account email is not available yet.");
       return;
     }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(email);
-        setCopyStatus("Service-account email copied.");
+        await navigator.clipboard.writeText(serviceAccountEmail);
+        setMessage("Service-account email copied.");
         return;
       }
-      setCopyStatus("Clipboard API is unavailable in this browser.");
+      setMessage(`Clipboard is unavailable. Service-account email: ${serviceAccountEmail}`);
     } catch {
-      setCopyStatus("Failed to copy service-account email.");
+      setMessage(`Could not copy automatically. Service-account email: ${serviceAccountEmail}`);
     }
   };
 
-  const handleConnectGoogleAction = async (serviceIds?: string[]): Promise<boolean> => {
-    if (oauthBlocked) {
-      const message = `Google OAuth is blocked. ${oauthSetupHint}`;
-      setOauthManualUrl("");
-      setSetupStatus(message);
-      return false;
-    }
-    const servicesToUse = normalizeSelectedServices(serviceIds || selectedGoogleServices);
-    if (!servicesToUse.length) {
-      const message = "Select at least one Google service before connecting.";
-      setSetupStatus(message);
-      setAssistantStatus(message);
-      return false;
-    }
-    try {
-      const saveResult = await onSaveGoogleOAuthServices(servicesToUse);
-      if (!saveResult.ok) {
-        setSetupStatus(saveResult.message || "Could not save selected Google services.");
-        return false;
-      }
-      const savedServices = normalizeSelectedServices(
-        Array.isArray(saveResult.services) && saveResult.services.length > 0
-          ? saveResult.services
-          : servicesToUse,
-      );
-      setSelectedGoogleServices(savedServices);
-      const connectOptions = { scopes: expandScopesFromServiceIds(savedServices) };
-      const result = await onConnectGoogle(connectOptions);
-      const authorizeUrl = String(result.authorize_url || "").trim();
-      if (authorizeUrl) {
-        setOauthManualUrl(authorizeUrl);
-      }
-      if (result.ok) {
-        setSetupStatus(
-          `${result.message}${authorizeUrl ? " If no redirect happened, click 'Open Google login'." : ""}`,
-        );
-        return true;
-      }
-      setSetupStatus(result.message || "Could not start Google OAuth.");
-      return false;
-    } catch (error) {
-      setSetupStatus(`Could not start Google OAuth: ${String(error)}`);
-      return false;
-    }
-  };
-
-  const openGoogleServicesModal = () => {
-    setShowGoogleServicesModal(true);
-  };
-
-  const handleContinueGoogleConnect = async () => {
-    const ok = await handleConnectGoogleAction(selectedGoogleServices);
-    if (ok) {
-      setShowGoogleServicesModal(false);
-    }
-  };
-
-  const handleRequestOAuthSetupAction = async (): Promise<boolean> => {
-    if (oauthSetupRequestPending) {
-      const message = "Setup request already sent. Waiting for workspace owner to finish OAuth app setup.";
-      setSetupStatus(message);
-      setAssistantStatus(message);
-      return true;
-    }
-    try {
-      const result = await onRequestGoogleOAuthSetup();
-      setSetupStatus(result.message);
-      setAssistantStatus(result.message);
-      return result.ok;
-    } catch (error) {
-      const message = `Could not submit setup request: ${String(error)}`;
-      setSetupStatus(message);
-      setAssistantStatus(message);
-      return false;
-    }
-  };
-
-  const handleAnalyzeLink = async () => {
-    const link = linkInput.trim();
-    if (!link) {
-      setAssistantStatus("Paste a Google link or saved alias first.");
+  const handleShareComplete = () => {
+    if (!serviceAccountReady) {
+      setMessage("Service-account email is not available yet.");
       return;
     }
-    setAssistantBusy(true);
-    try {
-      const result = await onAnalyzeGoogleLink(link);
-      setAnalysisResult(result);
-      if (result.detected) {
-        setAssistantStatus("Link analyzed successfully.");
-      } else {
-        setAssistantStatus(result.message || "Could not detect a supported Google resource.");
-      }
-    } catch (error) {
-      setAssistantStatus(`Analyze failed: ${String(error)}`);
-    } finally {
-      setAssistantBusy(false);
-    }
-  };
-
-  const handleCheckLinkAccess = async () => {
-    if (!canUseAliasAssistant) {
-      setAssistantStatus(aliasPrereqHint);
-      return;
-    }
-    const link = linkInput.trim();
-    if (!link) {
-      setAssistantStatus("Paste a Google link or alias before checking access.");
-      return;
-    }
-    setAssistantBusy(true);
-    try {
-      const result = await onCheckGoogleLinkAccess({ link, action: linkAction });
-      setAccessResult(result);
-      setAssistantStatus(result.message || (result.ready ? "Access ready." : "Access not ready."));
-    } catch (error) {
-      setAssistantStatus(`Access check failed: ${String(error)}`);
-    } finally {
-      setAssistantBusy(false);
-    }
-  };
-
-  const handleSaveAlias = async () => {
-    const alias = aliasInput.trim();
-    const link = linkInput.trim();
-    if (!alias || !link) {
-      setAssistantStatus("Both alias and link are required to save.");
-      return;
-    }
-    setAssistantBusy(true);
-    try {
-      await onSaveGoogleLinkAlias(alias, link);
-      setAssistantStatus(`Alias '${alias}' saved.`);
-    } catch (error) {
-      setAssistantStatus(`Save alias failed: ${String(error)}`);
-    } finally {
-      setAssistantBusy(false);
-    }
-  };
-
-  const quickAddLink = async (rawLink: string): Promise<{ ok: boolean; message: string }> => {
-    if (!canUseAliasAssistant) {
-      return { ok: false, message: aliasPrereqHint };
-    }
-    const link = String(rawLink || "").trim();
-    if (!link) {
-      return { ok: false, message: "Copy a Google link first." };
-    }
-
-    setLinkInput(link);
-    const analysis = await onAnalyzeGoogleLink(link);
-    setAnalysisResult(analysis);
-    if (!analysis.detected) {
-      return {
-        ok: false,
-        message: analysis.message || "Unsupported link. Paste a Google Docs/Sheets/Drive/GA4 link.",
-      };
-    }
-
-    const access = await onCheckGoogleLinkAccess({ link, action: linkAction });
-    setAccessResult(access);
-
-    const manualAlias = aliasInput.trim();
-    const suggestedAlias = buildSuggestedAlias(analysis, access);
-    const aliasToSave = normalizeAliasText(manualAlias || suggestedAlias).slice(0, 120);
-    if (!aliasToSave) {
-      return { ok: false, message: "Could not generate a valid alias for this resource." };
-    }
-
-    const existed = googleWorkspaceAliases.some(
-      (row) => row.alias.trim().toLowerCase() === aliasToSave.toLowerCase(),
-    );
-    await onSaveGoogleLinkAlias(aliasToSave, link);
-    setAliasInput(aliasToSave);
-    return {
-      ok: true,
-      message: `Alias '${aliasToSave}' ${existed ? "updated" : "saved"}${
-        access.ready ? "." : ` (access needs ${access.required_role}).`
-      }`,
-    };
-  };
-
-  const handleQuickAddFromClipboard = async () => {
-    if (!canUseAliasAssistant) {
-      setAssistantStatus(aliasPrereqHint);
-      return;
-    }
-    setAssistantBusy(true);
-    try {
-      const clipboardText = await readClipboardText();
-      if (!clipboardText) {
-        setAssistantStatus("Clipboard is empty or unavailable. Copy a Google link first.");
-        return;
-      }
-      const outcome = await quickAddLink(clipboardText);
-      setAssistantStatus(outcome.ok ? `Quick add complete. ${outcome.message}` : `Quick add failed: ${outcome.message}`);
-    } catch (error) {
-      setAssistantStatus(`Quick add failed: ${String(error)}`);
-    } finally {
-      setAssistantBusy(false);
-    }
-  };
-
-  const handleStartSetup = async () => {
-    const preferredMode: "oauth" | "service_account" = googleServiceAccountStatus.usable
-      ? "service_account"
-      : "oauth";
-    if (preferredMode === "oauth" && selectedGoogleServices.length === 0) {
-      setSetupStatus("Select at least one Google service before starting setup.");
-      return;
-    }
-    if (preferredMode === "oauth" && !oauthReady) {
-      setSetupStepsState([
-        { id: "mode", label: "Switch to OAuth mode", state: "done" },
-        { id: "connect", label: "Connect Google account", state: "needs_user" },
-        { id: "alias", label: "Quick-add first alias from copied link", state: "pending" },
-      ]);
-      setSetupStatus(`Setup blocked until OAuth app credentials are saved. ${oauthSetupHint}`);
-      return;
-    }
-    setSetupStepsState(buildSetupSteps(preferredMode));
-    setSetupStatus(
-      preferredMode === "service_account"
-        ? "Using service account mode because tenant service credentials are ready."
-        : "Using OAuth mode because service-account credentials are not fully ready.",
-    );
-    setSetupBusy(true);
-    try {
-      setSetupStep("mode", "running");
-      if (googleServiceAccountStatus.auth_mode !== preferredMode) {
-        await onGoogleAuthModeChange(preferredMode);
-      }
-      setSetupStep("mode", "done");
-
-      if (preferredMode === "oauth") {
-        setSetupStep("connect", "running");
-        if (!googleOAuthStatus.connected || !oauthScopeReady) {
-          setSetupStep("connect", "needs_user");
-          setSetupStatus(
-            googleOAuthStatus.connected
-              ? "Step 2 needs you: reconnect Google to grant selected service permissions, then click Start setup again."
-              : "Step 2 needs you: complete Google login, then click Start setup again.",
-          );
-          await handleConnectGoogleAction();
-          return;
-        }
-        setSetupStep("connect", "done");
-      } else {
-        setSetupStep("share", "running");
-        const email = String(googleServiceAccountStatus.email || "").trim();
-        if (!email) {
-          setSetupStep("share", "needs_user");
-          setSetupStatus("Service-account email is missing. Configure service-account keys first.");
-          return;
-        }
-        try {
-          if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(email);
-            setCopyStatus("Service-account email copied.");
-          }
-        } catch {
-          setCopyStatus("Could not auto-copy service-account email.");
-        }
-        setSetupStep("share", "done");
-      }
-
-      setSetupStep("alias", "running");
-      const linkCandidate = linkInput.trim() || (await readClipboardText());
-      if (!linkCandidate) {
-        setSetupStep("alias", "needs_user");
-        setSetupStatus("Copy a Google Docs/Sheets/Drive/GA4 link, then click Start setup again.");
-        return;
-      }
-      const outcome = await quickAddLink(linkCandidate);
-      if (!outcome.ok) {
-        setSetupStep("alias", "needs_user");
-        setSetupStatus(outcome.message);
-        return;
-      }
-      setSetupStep("alias", "done");
-      setOauthManualUrl("");
-      setAssistantStatus(`Quick add complete. ${outcome.message}`);
-      setSetupStatus("Smart setup completed. Google integration is ready for prompt-based usage.");
-    } catch (error) {
-      setSetupStatus(`Smart setup failed: ${String(error)}`);
-    } finally {
-      setSetupBusy(false);
-    }
-  };
-
-  const handleRecommendedAction = async () => {
-    if (nextSetupAction.action === "done") {
-      return;
-    }
-    if (nextSetupAction.action === "connect_google") {
-      openGoogleServicesModal();
-      return;
-    }
-    if (nextSetupAction.action === "configure_oauth_env") {
-      setSetupStatus(
-        canManageOAuthApp
-          ? `Save OAuth app credentials first. Redirect URI: ${oauthRedirectUri}`
-          : oauthSetupHint,
-      );
-      return;
-    }
-    if (nextSetupAction.action === "request_oauth_setup") {
-      await handleRequestOAuthSetupAction();
-      return;
-    }
-    if (nextSetupAction.action === "open_google_login") {
-      if (!oauthManualUrl) {
-        setSetupStatus("Google login link is unavailable. Click Connect now instead.");
-        return;
-      }
-      if (typeof window !== "undefined") {
-        const popup = window.open(oauthManualUrl, "_blank", "noopener,noreferrer");
-        if (popup && !popup.closed) {
-          popup.focus();
-          setSetupStatus("Google login opened.");
-          return;
-        }
-        window.location.assign(oauthManualUrl);
-        setSetupStatus("Redirecting to Google login.");
-      }
-      return;
-    }
-    if (nextSetupAction.action === "switch_to_oauth") {
-      onGoogleAuthModeChange("oauth");
-      setSetupStatus("Switched to OAuth mode. Next step: connect your Google account.");
-      return;
-    }
-    if (nextSetupAction.action === "copy_service_email") {
-      await handleCopyServiceEmail();
-      setSetupStatus("Service email copied. Share your target resource, then quick-add an alias.");
-      return;
-    }
-    if (nextSetupAction.action === "quick_add_clipboard") {
-      await handleQuickAddFromClipboard();
-      return;
-    }
-    await handleStartSetup();
+    setShowAliases(true);
+    setMessage("Paste the Google link you just shared, then click Save alias.");
   };
 
   return (
     <>
       <SettingsSection
-        title="Google Quick Start"
-        subtitle="Fastest path: connect, verify access, and save one alias. Most users finish this in under 1 minute."
+        title="Google"
+        subtitle="Connect your Google account and choose what Maia can access."
+        actions={<StatusChip label={statusChip.label} tone={statusChip.tone} />}
       >
-        <SettingsRow
-          title="Recommended next step"
-          description={nextSetupAction.description}
-          right={<StatusChip label={nextSetupAction.action === "done" ? "Ready" : "Next"} tone={nextSetupAction.tone} />}
-        >
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={assistantBusy || setupBusy || nextSetupAction.action === "done"}
-              onClick={() => void handleRecommendedAction()}
-              className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {nextSetupAction.label}
-            </button>
-            {nextSetupAction.action !== "done" ? (
-              <button
-                type="button"
-                disabled={assistantBusy || setupBusy || smartSetupBlocked}
-                onClick={() => void handleStartSetup()}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Run smart setup
-              </button>
-            ) : null}
-          </div>
-        </SettingsRow>
-        <SettingsRow
-          title="Workspace OAuth owner"
-          description={workspaceOwnerHint}
-          right={
-            <StatusChip
-              label={
-                canManageOAuthApp
-                  ? "Owner"
-                  : oauthManagedByEnv
-                    ? "Managed"
-                    : workspaceOwnerUserId
-                      ? "Member"
-                      : "Unassigned"
-              }
-              tone={canManageOAuthApp ? "success" : workspaceOwnerUserId ? "neutral" : "warning"}
-            />
-          }
-        >
-          {!canManageOAuthApp && oauthBlocked && !oauthManagedByEnv ? (
-            <button
-              type="button"
-              disabled={assistantBusy || setupBusy || oauthSetupRequestPending}
-              onClick={() => void handleRequestOAuthSetupAction()}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {oauthSetupRequestPending ? "Request sent" : "Request setup from owner"}
-            </button>
-          ) : null}
-          {!canManageOAuthApp && oauthSetupRequestCount > 0 ? (
-            <p className="mt-2 text-[11px] text-[#6e6e73]">
-              Pending workspace setup requests: {oauthSetupRequestCount}
-            </p>
-          ) : null}
-        </SettingsRow>
-        <SettingsRow
-          title="Google service access"
-          description={
-            inServiceAccountMode
-              ? "OAuth service selection is disabled in service account mode."
-              : "Choose what Maia can access before Google sign-in."
-          }
-          right={
-            <StatusChip
-              label={`${selectedGoogleServices.length}/${GOOGLE_OAUTH_SERVICE_DEFS.length} selected`}
-              tone={selectedGoogleServices.length > 0 ? "success" : "warning"}
-            />
-          }
-        >
-          <div className="grid gap-2 sm:grid-cols-2">
-            {GOOGLE_OAUTH_SERVICE_DEFS.map((service) => {
-              const checked = selectedGoogleServices.includes(service.id);
-              return (
-                <label
-                  key={service.id}
-                  className="flex cursor-pointer items-start gap-2 rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={assistantBusy || setupBusy || inServiceAccountMode}
-                    onChange={(event) => {
-                      const nextChecked = event.target.checked;
-                      setSelectedGoogleServices((previous) => {
-                        if (nextChecked) {
-                          return normalizeSelectedServices([...previous, service.id]);
-                        }
-                        return previous.filter((item) => item !== service.id);
-                      });
-                    }}
-                    className="mt-0.5 h-4 w-4 rounded border-[#d2d2d7]"
-                  />
-                  <span>
-                    <span className="block text-[12px] font-semibold text-[#1d1d1f]">{service.label}</span>
-                    <span className="block text-[11px] text-[#6e6e73]">{service.description}</span>
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={assistantBusy || setupBusy || inServiceAccountMode}
-              onClick={openGoogleServicesModal}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Choose services
-            </button>
-            {googleOAuthStatus.connected ? (
-              <button
-                type="button"
-                disabled={assistantBusy || setupBusy || inServiceAccountMode}
-                onClick={openGoogleServicesModal}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Add more services
-              </button>
-            ) : null}
-          </div>
-          {selectedToolsNeedReconnect ? (
-            <p className="mt-2 text-[11px] text-[#6e6e73]">
-              Service selection changed. Reconnect Google to grant updated permissions.
-            </p>
-          ) : null}
-          {!inServiceAccountMode ? (
-            <p className="mt-1 text-[11px] text-[#6e6e73]">
-              OAuth scopes requested: {selectedOauthScopes.length}
-            </p>
-          ) : null}
-        </SettingsRow>
-        {canManageOAuthApp ? (
-          <SettingsRow
-            title="OAuth app setup"
-            description={
-              oauthReady
-                ? "OAuth app credentials are configured. Users can now connect Google with one click."
-                : "One-time workspace owner step: save Google OAuth client credentials here."
-            }
-            right={
-              <StatusChip
-                label={oauthReady ? "Configured" : "Action needed"}
-                tone={oauthReady ? "success" : "warning"}
-              />
-            }
-          >
-            <div className="grid gap-2 sm:grid-cols-2">
-              <input
-                value={oauthClientIdInput}
-                onChange={(event) => onOAuthClientIdInputChange(event.target.value)}
-                placeholder="Google OAuth client ID"
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
-              />
-              <input
-                value={oauthClientSecretInput}
-                onChange={(event) => onOAuthClientSecretInputChange(event.target.value)}
-                placeholder={googleOAuthStatus.oauth_client_secret_configured ? "Google OAuth client secret (configured)" : "Google OAuth client secret"}
-                className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
-              />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <input
-                value={oauthRedirectUriInput}
-                onChange={(event) => onOAuthRedirectUriInputChange(event.target.value)}
-                placeholder={oauthRedirectUri}
-                className="min-w-[320px] flex-1 rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
-              />
-              <button
-                type="button"
-                disabled={assistantBusy || setupBusy || oauthConfigSaving}
-                onClick={() => onSaveGoogleOAuthConfig()}
-                className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {oauthConfigSaving ? "Saving..." : "Save OAuth app"}
-              </button>
-            </div>
-            <p className="mt-2 text-[11px] text-[#6e6e73]">
-              Redirect URI in Google Cloud must match exactly: {oauthRedirectUriInput || oauthRedirectUri}
-            </p>
-          </SettingsRow>
-        ) : null}
-        <SettingsRow
-          title="Setup progress"
-          description={`Mode: ${inServiceAccountMode ? "Service account" : "OAuth"} - ${connectedTools}/${trackedGoogleToolHealth.length} tools connected`}
-          right={<StatusChip label={quickChip.label} tone={quickChip.tone} />}
-        >
-          <div className="mb-3">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-[#f0f0f4]">
-              <div
-                className="h-full rounded-full bg-[#1d1d1f] transition-[width] duration-300"
-                style={{ width: `${quickCompletionPercent}%` }}
-              />
-            </div>
-            <p className="mt-2 text-[11px] text-[#6e6e73]">{quickCompletionPercent}% complete</p>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {quickSteps.map((step) => (
-              <div
-                key={step.id}
-                className="rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2 text-[12px] text-[#3a3a3c]"
-              >
-                <p className="font-semibold text-[#1d1d1f]">{step.label}</p>
-                <p>{step.done ? "Completed" : "Pending"}</p>
-              </div>
-            ))}
-          </div>
-        </SettingsRow>
-        <SettingsRow
-          title="Quick actions"
-          description="Manual shortcuts for power users."
-          right={<StatusChip label={assistantBusy || setupBusy ? "Running" : "Idle"} tone="neutral" />}
-        >
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={assistantBusy || setupBusy || smartSetupBlocked}
-              onClick={() => void handleStartSetup()}
-              className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Run smart setup
-            </button>
-            {!inServiceAccountMode ? (
-              <>
+        <div className="px-5 py-5 sm:px-6 sm:py-6">
+          {!googleOAuthStatus.connected ? (
+            <div className="rounded-2xl border border-[#ececf0] bg-[#fafafc] p-5">
+              <p className="text-[20px] font-semibold text-[#1d1d1f]">Connect Google</p>
+              <p className="mt-1 text-[13px] text-[#6e6e73]">
+                Choose what Maia can access, then sign in to Google.
+              </p>
+              {oauthBlocked && !canManageOAuthApp && !oauthManagedByEnv ? (
+                <div className="mt-3 rounded-xl border border-[#d2b37b] bg-[#faf5ea] px-3 py-2 text-[12px] text-[#7c5a1f]">
+                  Admin setup required. Workspace owner '{workspaceOwnerUserId || "unassigned"}' needs to configure OAuth once.
+                </div>
+              ) : null}
+              <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  disabled={assistantBusy || setupBusy || oauthBlocked}
-                  onClick={openGoogleServicesModal}
-                  className="rounded-lg bg-[#2f2f34] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#434349] disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={busy}
+                  onClick={() => setShowServicesModal(true)}
+                  className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Connect now
+                  Connect Google
                 </button>
-                {oauthBlocked && !canManageOAuthApp && !oauthManagedByEnv ? (
-                  <button
-                    type="button"
-                    disabled={assistantBusy || setupBusy || oauthSetupRequestPending}
-                    onClick={() => void handleRequestOAuthSetupAction()}
-                    className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {oauthSetupRequestPending ? "Request sent" : "Request setup"}
-                  </button>
-                ) : null}
-              </>
-            ) : (
-              <button
-                type="button"
-                disabled={assistantBusy || setupBusy}
-                onClick={() => void handleCopyServiceEmail()}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Copy service email
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={assistantBusy || setupBusy || !canUseAliasAssistant}
-              onClick={() => void handleQuickAddFromClipboard()}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Quick add from clipboard
-            </button>
-            <select
-              value={googleServiceAccountStatus.auth_mode}
-              disabled={assistantBusy || setupBusy}
-              onChange={(event) =>
-                onGoogleAuthModeChange(event.target.value as "oauth" | "service_account")
-              }
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <option value="oauth">OAuth mode</option>
-              <option value="service_account">Service account mode</option>
-            </select>
-            {oauthManualUrl && !inServiceAccountMode ? (
-              <a
-                href={oauthManualUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
-              >
-                Open Google login
-              </a>
-            ) : null}
-          </div>
-          {!canUseAliasAssistant ? (
-            <p className="mt-2 text-[12px] text-[#6e6e73]">{aliasPrereqHint}</p>
-          ) : null}
-          {oauthBlocked ? (
-            <p className="mt-1 text-[12px] text-[#6e6e73]">{oauthSetupHint}</p>
-          ) : null}
-        </SettingsRow>
-        <SettingsRow
-          title="Smart setup assistant"
-          description={
-            setupStatus ||
-            oauthStatus ||
-            "Click Start setup to auto-select mode and walk through setup steps."
-          }
-          right={<StatusChip label={setupStateChip.label} tone={setupStateChip.tone} />}
-          noDivider
-        >
-          {setupStepsState.length === 0 ? (
-            <p className="text-[12px] text-[#6e6e73]">
-              No run yet. This assistant can switch auth mode, guide Google login/share, and quick-add your first alias.
-            </p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowServicesModal(true)}
+                  className="text-[12px] font-semibold text-[#6e6e73] underline-offset-2 hover:text-[#1d1d1f] hover:underline"
+                >
+                  What will Maia access?
+                </button>
+              </div>
+            </div>
           ) : (
-            <div className="grid gap-2 sm:grid-cols-3">
-              {setupStepsState.map((step) => {
-                const chip = stepChip(step.state);
-                return (
-                  <div
-                    key={step.id}
-                    className="rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2 text-[12px] text-[#3a3a3c]"
-                  >
-                    <p className="font-semibold text-[#1d1d1f]">{step.label}</p>
-                    <p>{chip.label}</p>
-                  </div>
-                );
-              })}
+            <div className="rounded-2xl border border-[#ececf0] bg-[#fafafc] p-5">
+              <p className="text-[20px] font-semibold text-[#1d1d1f]">Connected</p>
+              <p className="mt-1 text-[13px] text-[#6e6e73]">
+                {googleOAuthStatus.email || "Google account connected."}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowServicesModal(true)}
+                  className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Manage access
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onDisconnectGoogle}
+                  className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Disconnect
+                </button>
+              </div>
             </div>
           )}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Access"
+        subtitle="Turn features on or off. You can change this anytime."
+      >
+        {GOOGLE_SERVICE_DEFS.map((service, index) => {
+          const checked = draftServices.includes(service.id);
+          return (
+            <SettingsRow
+              key={service.id}
+              title={service.label}
+              description={service.description}
+              right={<StatusChip tone={checked ? "success" : "neutral"} label={checked ? "On" : "Off"} />}
+              noDivider={index === GOOGLE_SERVICE_DEFS.length - 1}
+            >
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] text-[#1d1d1f]">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => {
+                    const nextChecked = event.target.checked;
+                    setDraftServices((previous) => {
+                      if (nextChecked) {
+                        return normalizeServiceIds([...previous, service.id]);
+                      }
+                      return previous.filter((item) => item !== service.id);
+                    });
+                  }}
+                  className="h-4 w-4 rounded border-[#d2d2d7]"
+                />
+                Enable {service.label}
+              </label>
+            </SettingsRow>
+          );
+        })}
+        <SettingsRow
+          title="Access changes"
+          description={`Scopes requested: ${draftScopes.length}`}
+          right={
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy || draftServices.length === 0}
+                onClick={() => void handleUpdateAccess()}
+                className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Update access
+              </button>
+              {hasServiceChanges ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setDraftServices(selectedServices)}
+                  className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel changes
+                </button>
+              ) : null}
+            </div>
+          }
+          noDivider
+        >
+          <p className="text-[12px] text-[#6e6e73]">Enabled services: {enabledServiceSummary}</p>
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection
-        title="Advanced settings"
-        subtitle="Detailed Google controls are hidden during onboarding to keep setup fast."
-      >
-        <SettingsRow
-          title="Panel visibility"
-          description={
-            setupComplete
-              ? "Setup complete. Advanced controls are unlocked."
-              : "Complete quick setup first, or show advanced controls manually."
-          }
-          right={
-            <button
-              type="button"
-              onClick={() => setShowAdvancedSettings((value) => !value)}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            >
-              {showAdvancedPanels ? "Hide advanced" : "Show advanced"}
-            </button>
-          }
-          noDivider
-        />
-      </SettingsSection>
-
-      {showAdvancedPanels ? (
-        <>
-      <SettingsSection
-        title="Google"
-        subtitle="Connect Google services for Gmail, Drive, Docs, Sheets, and Analytics."
-        actions={
-          <>
-            <StatusChip label={oauthChip.label} tone={oauthChip.tone} />
-            <button
-              type="button"
-              disabled={oauthBlocked}
-              onClick={openGoogleServicesModal}
-              className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Connect Google
-            </button>
-            <button
-              type="button"
-              onClick={onDisconnectGoogle}
-              className="rounded-xl border border-[#d2d2d7] bg-white px-4 py-2 text-[13px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            >
-              Disconnect
-            </button>
-          </>
-        }
-      >
-        <SettingsRow
-          title="Account"
-          description={googleOAuthStatus.email || "No Google account connected yet."}
-          right={<StatusChip label={oauthChip.label} tone={oauthChip.tone} />}
-        />
-        <SettingsRow
-          title="Enabled services"
-          description={enabledServiceSummary}
-          right={
-            <StatusChip
-              label={grantedServiceIds.length > 0 ? `${grantedServiceIds.length} enabled` : "None"}
-              tone={grantedServiceIds.length > 0 ? "success" : "neutral"}
-            />
-          }
-        />
-        <SettingsRow
-          title="Granted scopes"
-          description={
-            googleOAuthStatus.scopes.length > 0
-              ? `${googleOAuthStatus.scopes.length} scope(s) granted`
-              : "No scopes granted yet."
-          }
-          right={<StatusChip label={googleOAuthStatus.scopes.length > 0 ? "Ready" : "Not granted"} tone="neutral" />}
-        />
-        <SettingsRow
-          title="Tool connectivity"
-          description={`${connectedTools} of ${trackedGoogleToolHealth.length} selected Google tool(s) are connected.`}
-          right={
-            <button
-              type="button"
-              onClick={() => setShowToolDetails((value) => !value)}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            >
-              {showToolDetails ? "Hide details" : "Show details"}
-            </button>
-          }
-          noDivider={!showToolDetails}
-        />
-        {showToolDetails
-          ? trackedGoogleToolHealth.map((item, index) => {
-              const chip = healthTone(item);
-              const fallbackMessage =
-                googleOAuthStatus.connected || inServiceAccountMode
-                  ? "Temporarily unavailable. Click Refresh to re-check this tool."
-                  : "Connect Google first to enable this tool.";
-              return (
-                <SettingsRow
-                  key={item.id}
-                  title={item.label}
-                  description={item.message || fallbackMessage}
-                  right={<StatusChip label={chip.label} tone={chip.tone} />}
-                  noDivider={index === trackedGoogleToolHealth.length - 1}
-                />
-              );
-            })
-          : null}
-      </SettingsSection>
+      {nextAction !== "done" ? (
+        <SettingsSection title="Setup" subtitle="Finish these three steps to complete Google onboarding.">
+          <SettingsRow
+            title="Progress"
+            description="Step 1: Connect. Step 2: Grant access. Step 3: Save first alias."
+            right={
+              <div className="flex items-center gap-2">
+                <StatusChip tone={connectStepDone ? "success" : "neutral"} label="1" />
+                <StatusChip tone={grantStepDone ? "success" : "neutral"} label="2" />
+                <StatusChip tone={aliasStepDone ? "success" : "neutral"} label="3" />
+              </div>
+            }
+            noDivider
+          >
+            <div className="flex flex-wrap gap-2">
+              {!connectStepDone ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowServicesModal(true)}
+                  className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Connect Google
+                </button>
+              ) : null}
+              {connectStepDone && !grantStepDone ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleUpdateAccess()}
+                  className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Update access
+                </button>
+              ) : null}
+              {connectStepDone && grantStepDone && !aliasStepDone ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShowAliases(true)}
+                  className="rounded-xl bg-[#1d1d1f] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Add first alias
+                </button>
+              ) : null}
+            </div>
+          </SettingsRow>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
-        title="Service account access"
-        subtitle="Share Docs, Sheets, and GA4 resources with this email so the agent can access them based on the role you grant."
+        title="Service account sharing"
+        subtitle="For company sharing workflows, copy this email and share resources with it."
       >
         <SettingsRow
           title="Service account email"
-          description={
-            googleServiceAccountStatus.email ||
-            "No service-account email detected. Configure GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_JSON_PATH."
-          }
-          right={
-            <>
-              <StatusChip label={serviceChip.label} tone={serviceChip.tone} />
-              <button
-                type="button"
-                onClick={() => void handleCopyServiceEmail()}
-                className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
-              >
-                Copy email
-              </button>
-            </>
-          }
-        />
-        <SettingsRow
-          title="Auth mode"
-          description="Choose how Google tools authenticate. Use service_account after users share resources with the email above."
-          right={
-            <select
-              value={googleServiceAccountStatus.auth_mode}
-              onChange={(event) =>
-                onGoogleAuthModeChange(event.target.value as "oauth" | "service_account")
-              }
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f]"
-            >
-              <option value="oauth">OAuth</option>
-              <option value="service_account">Service account</option>
-            </select>
-          }
-        />
-        <SettingsRow
-          title="Status"
-          description={googleServiceAccountStatus.message}
-          right={
-            <StatusChip
-              label={googleServiceAccountStatus.usable ? "API ready" : "Needs key"}
-              tone={googleServiceAccountStatus.usable ? "success" : "neutral"}
-            />
-          }
-          noDivider={googleServiceAccountStatus.instructions.length === 0}
-        />
-        {googleServiceAccountStatus.instructions.map((instruction, index) => (
-          <SettingsRow
-            key={`sa-instruction-${index}`}
-            title={`Step ${index + 1}`}
-            description={instruction}
-            right={<StatusChip label="Guide" tone="neutral" />}
-            noDivider={index === googleServiceAccountStatus.instructions.length - 1}
-          />
-        ))}
-      </SettingsSection>
-
-      <SettingsSection
-        title="Link Sharing Assistant"
-        subtitle="Paste a Google link, verify required role, and save an alias for future prompts."
-      >
-        <SettingsRow
-          title="Resource link"
-          description="Supports Google Docs, Sheets, Drive files, GA4 links, and saved aliases."
-          right={<StatusChip label={assistantBusy ? "Running" : "Ready"} tone="neutral" />}
-        >
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
-            <input
-              value={linkInput}
-              onChange={(event) => setLinkInput(event.target.value)}
-              placeholder="Paste Google link or alias"
-              className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
-            />
-            <button
-              type="button"
-              disabled={assistantBusy}
-              onClick={() => void handleQuickAddFromClipboard()}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Paste & quick add
-            </button>
-            <button
-              type="button"
-              disabled={assistantBusy}
-              onClick={() => void handleAnalyzeLink()}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Analyze
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow
-          title="Required action"
-          description="Select read or edit, then run a live access check."
+          description={serviceAccountEmail || "No service-account email configured yet."}
           right={
             <div className="flex items-center gap-2">
-              <select
-                value={linkAction}
-                onChange={(event) => setLinkAction(event.target.value as "read" | "edit")}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f]"
-              >
-                <option value="read">Read</option>
-                <option value="edit">Edit</option>
-              </select>
+              <StatusChip
+                label={serviceAccountReady ? (inServiceAccountMode ? "Active" : "Available") : "Not configured"}
+                tone={serviceAccountReady ? "success" : "warning"}
+              />
               <button
                 type="button"
-                disabled={assistantBusy}
-                onClick={() => void handleCheckLinkAccess()}
-                className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy || !serviceAccountReady}
+                onClick={() => void handleCopyServiceEmail()}
+                className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Check access
+                Copy service email
+              </button>
+              <button
+                type="button"
+                disabled={busy || !serviceAccountReady}
+                onClick={handleShareComplete}
+                className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                I shared it, add link
               </button>
             </div>
           }
-        />
+          noDivider
+        >
+          <p className="text-[12px] text-[#6e6e73]">
+            Share the target Drive file, Doc, Sheet, or GA4 property with this email when using company-wide access.
+          </p>
+          <p className="mt-1 text-[12px] text-[#6e6e73]">
+            Next: share in Google, click "I shared it, add link", then paste the link to save an alias.
+          </p>
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Aliases"
+        subtitle="Save a Drive, Docs, Sheets, or GA4 link as a short name for prompts."
+      >
         <SettingsRow
-          title="Alias"
-          description="Save this resource with a human-friendly name for future prompts."
+          title="Alias shortcuts"
+          description="Collapsed by default for focus. Expand when you need it."
           right={
             <button
               type="button"
-              disabled={assistantBusy}
-              onClick={() => void handleSaveAlias()}
-              className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setShowAliases((value) => !value)}
+              className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
             >
-              Save alias
+              {showAliases ? "Hide" : "Show"}
             </button>
           }
-        >
-          <input
-            value={aliasInput}
-            onChange={(event) => setAliasInput(event.target.value)}
-            placeholder="e.g. quarterly traffic sheet"
-            className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
-          />
-        </SettingsRow>
-        <SettingsRow
-          title="Detected target"
-          description={
-            analysisResult?.detected
-              ? `${analysisResult.resource_type || "resource"} - ${analysisResult.resource_id || ""}`
-              : analysisResult?.message || "No link analyzed yet."
-          }
-          right={
-            <StatusChip
-              label={analysisResult?.detected ? "Detected" : "Pending"}
-              tone={analysisResult?.detected ? "success" : "neutral"}
-            />
-          }
+          noDivider={!showAliases}
         />
-        <SettingsRow
-          title="Access result"
-          description={accessResult?.message || "No access check has been run."}
-          right={
-            <StatusChip
-              label={accessResult ? (accessResult.ready ? "Ready" : "Missing role") : "Pending"}
-              tone={accessResult ? (accessResult.ready ? "success" : "warning") : "neutral"}
-            />
-          }
-          noDivider={googleWorkspaceAliases.length === 0}
-        />
-        {googleWorkspaceAliases.map((row, index) => (
-          <SettingsRow
-            key={`${row.alias}-${row.resource_id}-${index}`}
-            title={row.alias}
-            description={`${row.resource_type} - ${row.resource_id}`}
-            right={<StatusChip label="Alias" tone="neutral" />}
-            noDivider={index === googleWorkspaceAliases.length - 1}
-          />
-        ))}
-      </SettingsSection>
-        </>
-      ) : null}
-
-      {setupComplete ? (
-        <SettingsSection
-          title="Recent events"
-          subtitle="Live OAuth and tool activity from the backend event stream."
-        >
-          {liveEvents.length === 0 ? (
+        {showAliases ? (
+          <>
             <SettingsRow
-              title="No events yet"
-              description="Run a connection check or model action to populate this timeline."
-              right={<StatusChip label="Idle" tone="neutral" />}
-              noDivider
-            />
-          ) : (
-            liveEvents.slice(0, 16).map((event, index) => (
+              title="Add alias"
+              description="Paste a link. Maia auto-detects and checks access, then saves the alias."
+              noDivider={googleWorkspaceAliases.length === 0}
+            >
+              <div className="grid gap-2 sm:grid-cols-[1fr_220px_auto]">
+                <input
+                  value={linkInput}
+                  onChange={(event) => setLinkInput(event.target.value)}
+                  placeholder="Paste Google link"
+                  className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+                />
+                <input
+                  value={aliasInput}
+                  onChange={(event) => setAliasInput(event.target.value)}
+                  placeholder="Alias (optional)"
+                  className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleAddAlias()}
+                  className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Save alias
+                </button>
+              </div>
+              {accessResult ? (
+                <p className={`mt-2 text-[12px] ${accessResult.ready ? "text-[#2d5937]" : "text-[#7c5a1f]"}`}>
+                  {accessResult.ready
+                    ? `Ready (${accessResult.required_role})`
+                    : `Needs ${accessResult.required_role} access`}
+                </p>
+              ) : analysisResult ? (
+                <p className="mt-2 text-[12px] text-[#6e6e73]">
+                  {analysisResult.detected ? "Resource detected." : analysisResult.message || "Could not detect resource."}
+                </p>
+              ) : null}
+            </SettingsRow>
+            {googleWorkspaceAliases.map((row, index) => (
               <SettingsRow
-                key={`${event.type}-${event.timestamp || index}`}
-                title={event.type}
-                description={event.message}
-                right={<StatusChip label="Live" tone="neutral" />}
-                noDivider={index === Math.min(liveEvents.length, 16) - 1}
+                key={`${row.alias}-${row.resource_id}-${index}`}
+                title={row.alias}
+                description={`${row.resource_type} - ${row.resource_id}`}
+                right={<StatusChip label="Saved" tone="neutral" />}
+                noDivider={index === googleWorkspaceAliases.length - 1}
               />
-            ))
-          )}
-        </SettingsSection>
-      ) : (
-        <SettingsSection
-          title="Recent events"
-          subtitle="Hidden during onboarding to keep setup focused."
-        >
-          <SettingsRow
-            title="Unlock after setup"
-            description="Complete the 3-step quick setup to view live event history."
-            right={<StatusChip label="Locked" tone="neutral" />}
-            noDivider
-          />
-        </SettingsSection>
-      )}
+            ))}
+          </>
+        ) : null}
+      </SettingsSection>
 
-      {showGoogleServicesModal ? (
+      <SettingsSection title="Advanced" subtitle="Admin setup and diagnostics.">
+        <SettingsRow
+          title="Advanced controls"
+          description="Hidden by default to keep onboarding simple."
+          right={
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((value) => !value)}
+              className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+            >
+              {showAdvanced ? "Hide" : "Show"}
+            </button>
+          }
+          noDivider={!showAdvanced}
+        />
+        {showAdvanced ? (
+          <>
+            <SettingsRow
+              title="Admin setup"
+              description={
+                oauthReady
+                  ? "OAuth app credentials are configured."
+                  : canManageOAuthApp
+                    ? "Save OAuth app credentials once for the workspace."
+                    : "Your workspace owner must complete OAuth setup once."
+              }
+              right={
+                <StatusChip
+                  label={oauthReady ? "Configured" : "Required"}
+                  tone={oauthReady ? "success" : "warning"}
+                />
+              }
+            >
+              {canManageOAuthApp ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input
+                      value={oauthClientIdInput}
+                      onChange={(event) => onOAuthClientIdInputChange(event.target.value)}
+                      placeholder="Google OAuth client ID"
+                      className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+                    />
+                    <input
+                      value={oauthClientSecretInput}
+                      onChange={(event) => onOAuthClientSecretInputChange(event.target.value)}
+                      placeholder={
+                        googleOAuthStatus.oauth_client_secret_configured
+                          ? "Google OAuth client secret (configured)"
+                          : "Google OAuth client secret"
+                      }
+                      className="w-full rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+                    />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      value={oauthRedirectUriInput}
+                      onChange={(event) => onOAuthRedirectUriInputChange(event.target.value)}
+                      placeholder={oauthRedirectUri}
+                      className="min-w-[320px] flex-1 rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+                    />
+                    <button
+                      type="button"
+                      disabled={busy || oauthConfigSaving}
+                      onClick={() => onSaveGoogleOAuthConfig()}
+                      className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {oauthConfigSaving ? "Saving..." : "Save OAuth app"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[11px] text-[#6e6e73]">
+                    Redirect URI must match exactly: {oauthRedirectUriInput || oauthRedirectUri}
+                  </p>
+                </>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {!oauthManagedByEnv ? (
+                    <button
+                      type="button"
+                      disabled={busy || oauthSetupRequestPending}
+                      onClick={() => void onRequestGoogleOAuthSetup()}
+                      className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {oauthSetupRequestPending ? "Request sent" : "Request owner setup"}
+                    </button>
+                  ) : null}
+                  <p className="text-[12px] text-[#6e6e73]">Workspace owner: {workspaceOwnerUserId || "unassigned"}</p>
+                </div>
+              )}
+            </SettingsRow>
+
+            <SettingsRow
+              title="Quick actions"
+              description="Fallback actions for blocked popups or mode switching."
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {oauthManualUrl ? (
+                  <a
+                    href={oauthManualUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                  >
+                    Open Google login
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onGoogleAuthModeChange("oauth")}
+                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                >
+                  Switch to OAuth mode
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onGoogleAuthModeChange("service_account")}
+                  className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                >
+                  Switch to service account mode
+                </button>
+              </div>
+            </SettingsRow>
+
+            <SettingsRow
+              title="Event stream"
+              description="Recent backend events for diagnostics."
+              noDivider
+            >
+              {liveEvents.length === 0 ? (
+                <p className="text-[12px] text-[#6e6e73]">No events yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {liveEvents.slice(0, 8).map((event, index) => (
+                    <div
+                      key={`${event.type}-${event.timestamp || index}`}
+                      className="rounded-lg border border-[#ececf0] bg-[#fafafc] px-3 py-2"
+                    >
+                      <p className="text-[12px] font-semibold text-[#1d1d1f]">{event.type}</p>
+                      <p className="text-[12px] text-[#6e6e73]">{event.message}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SettingsRow>
+          </>
+        ) : null}
+      </SettingsSection>
+
+      {showServicesModal ? (
         <div
           className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 px-4"
           role="dialog"
           aria-modal="true"
           aria-label="Choose Google services"
-          onClick={() => setShowGoogleServicesModal(false)}
+          onClick={() => setShowServicesModal(false)}
         >
           <div
             className="w-full max-w-[560px] rounded-2xl border border-[#d2d2d7] bg-white p-5 shadow-xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="mb-3">
-              <p className="text-[16px] font-semibold text-[#1d1d1f]">Choose services</p>
-              <p className="text-[12px] text-[#6e6e73]">
-                Select what Maia can access for this Google connection.
-              </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {GOOGLE_OAUTH_SERVICE_DEFS.map((service) => {
-                const checked = selectedGoogleServices.includes(service.id);
+            <p className="text-[20px] font-semibold text-[#1d1d1f]">Choose services</p>
+            <p className="mt-1 text-[13px] text-[#6e6e73]">Choose what Maia can access in your Google account.</p>
+            <div className="mt-4 space-y-2">
+              {GOOGLE_SERVICE_DEFS.map((service) => {
+                const checked = draftServices.includes(service.id);
                 return (
                   <label
                     key={`modal-${service.id}`}
@@ -1586,12 +928,11 @@ export function IntegrationsSettings({
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={assistantBusy || setupBusy || inServiceAccountMode}
                       onChange={(event) => {
                         const nextChecked = event.target.checked;
-                        setSelectedGoogleServices((previous) => {
+                        setDraftServices((previous) => {
                           if (nextChecked) {
-                            return normalizeSelectedServices([...previous, service.id]);
+                            return normalizeServiceIds([...previous, service.id]);
                           }
                           return previous.filter((item) => item !== service.id);
                         });
@@ -1599,28 +940,34 @@ export function IntegrationsSettings({
                       className="mt-0.5 h-4 w-4 rounded border-[#d2d2d7]"
                     />
                     <span>
-                      <span className="block text-[12px] font-semibold text-[#1d1d1f]">{service.label}</span>
-                      <span className="block text-[11px] text-[#6e6e73]">{service.description}</span>
+                      <span className="block text-[13px] font-semibold text-[#1d1d1f]">{service.label}</span>
+                      <span className="block text-[12px] text-[#6e6e73]">{service.description}</span>
                     </span>
                   </label>
                 );
               })}
             </div>
-            <p className="mt-3 text-[11px] text-[#6e6e73]">
-              Google will request {selectedOauthScopes.length} scope(s), including identity scopes.
-            </p>
+            <p className="mt-3 text-[11px] text-[#6e6e73]">Scopes requested: {draftScopes.length}</p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowGoogleServicesModal(false)}
+                onClick={() => {
+                  setDraftServices(selectedServices);
+                  setShowServicesModal(false);
+                }}
                 className="rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7]"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={assistantBusy || setupBusy || inServiceAccountMode || selectedGoogleServices.length === 0}
-                onClick={() => void handleContinueGoogleConnect()}
+                disabled={busy || draftServices.length === 0}
+                onClick={async () => {
+                  const ok = await startGoogleConnect(draftServices);
+                  if (ok) {
+                    setShowServicesModal(false);
+                  }
+                }}
                 className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Continue to Google
@@ -1635,16 +982,13 @@ export function IntegrationsSettings({
           <p className="text-[12px] text-[#6e6e73]">{oauthStatus}</p>
         </div>
       ) : null}
-      {copyStatus ? (
+      {message ? (
         <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">
-          <p className="text-[12px] text-[#6e6e73]">{copyStatus}</p>
+          <p className="text-[12px] text-[#6e6e73]">{message}</p>
         </div>
       ) : null}
-      {assistantStatus ? (
-        <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">
-          <p className="text-[12px] text-[#6e6e73]">{assistantStatus}</p>
-        </div>
-      ) : null}
+
+      <div className="hidden">{googleToolHealth.length}</div>
     </>
   );
 }

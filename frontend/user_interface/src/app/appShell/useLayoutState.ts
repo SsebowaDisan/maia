@@ -5,12 +5,19 @@ import {
   RIGHT_PANEL_MIN,
   STORAGE_KEYS,
 } from "./constants";
-import { clamp, readStoredWidth } from "./storage";
+import { clamp, readStoredText, readStoredWidth } from "./storage";
 import type { ResizeSide, WorkspaceTab } from "./types";
+
+const WORKSPACE_TABS: WorkspaceTab[] = ["Chat", "Files", "Resources", "Settings", "Help"];
+
+function readStoredActiveTab(): WorkspaceTab {
+  const raw = readStoredText(STORAGE_KEYS.activeTab, "Chat");
+  return WORKSPACE_TABS.includes(raw as WorkspaceTab) ? (raw as WorkspaceTab) : "Chat";
+}
 
 export function useLayoutState() {
   const layoutRef = useRef<HTMLDivElement | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("Chat");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => readStoredActiveTab());
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isInfoPanelOpen, setIsInfoPanelOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
@@ -20,6 +27,13 @@ export function useLayoutState() {
     readStoredWidth(STORAGE_KEYS.infoPanelWidth, 340),
   );
   const [resizeSide, setResizeSide] = useState<ResizeSide>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(STORAGE_KEYS.activeTab, activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -20,6 +21,51 @@ from api.routers.web_preview import router as web_preview_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.ingestion_service import get_ingestion_manager
+
+_ENV_FILE_LOADED = False
+
+
+def _strip_wrapped_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _load_env_file(path: Path) -> None:
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env_key = key.strip()
+        if not env_key or env_key in os.environ:
+            continue
+        os.environ[env_key] = _strip_wrapped_quotes(value.strip())
+
+
+def load_local_env_if_present() -> None:
+    global _ENV_FILE_LOADED
+    if _ENV_FILE_LOADED:
+        return
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
+    ]
+    visited: set[str] = set()
+    for candidate in candidates:
+        resolved = str(candidate.resolve())
+        if resolved in visited:
+            continue
+        visited.add(resolved)
+        if candidate.exists() and candidate.is_file():
+            _load_env_file(candidate)
+            break
+    _ENV_FILE_LOADED = True
+
 
 app = FastAPI(
     title="Maia API",
@@ -48,6 +94,7 @@ app.include_router(web_preview_router)
 
 @app.on_event("startup")
 def warm_backend_context() -> None:
+    load_local_env_if_present()
     # Ensure indices/reasonings/settings are initialized once at server startup.
     get_context()
     get_ingestion_manager().start()

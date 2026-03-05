@@ -6,6 +6,7 @@ export const DEFAULT_PROJECT_ID = "project-default";
 export const STORAGE_KEYS = {
   sidebarWidth: "maia.sidebar-width",
   infoPanelWidth: "maia.info-width",
+  activeTab: "maia.active-tab",
   projects: "maia.sidebar-projects",
   selectedProject: "maia.selected-project",
   conversationProjects: "maia.conversation-projects",

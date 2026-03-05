@@ -150,9 +150,9 @@ function ComposerPanel({
 
   return (
     <div className="border-t border-black/[0.06] bg-white">
-      <div className="mx-auto w-full max-w-[1800px] px-6 py-4">
-        <div className="assistantComposer rounded-[22px] border border-black/[0.08] bg-[#f3f3f5]">
-          <div className="assistantComposerInputShell rounded-[14px] border border-black/[0.08] bg-white">
+      <div className="mx-auto w-full max-w-[1460px] px-6 py-4">
+        <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
+          <div className="assistantComposerInputShell rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">
               <textarea
                 ref={textareaRef}
@@ -162,7 +162,7 @@ function ComposerPanel({
                 onInput={resizeComposerTextarea}
                 placeholder="What would you like to do next?"
                 aria-label="Message"
-                className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#86868b] focus:outline-none"
+                className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#8b8b92] focus:outline-none"
                 onKeyDown={handleComposerKeyDown}
               />
             </div>

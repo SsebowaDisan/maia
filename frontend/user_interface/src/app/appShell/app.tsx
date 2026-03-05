@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
@@ -16,17 +17,57 @@ import {
   clearMindmapShareInUrl,
   readMindmapShareFromUrl,
 } from "../utils/mindmapDeepLink";
+import { getMindmapPayload } from "../components/infoPanelDerived";
 import { ResizeHandle } from "./ResizeHandle";
 import { useConversationChat } from "./useConversationChat";
 import { useFileLibrary } from "./useFileLibrary";
 import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
 
+type WorkspaceModalTab = "Files" | "Resources" | "Settings" | "Help";
+
+function hasHttpUrl(value: unknown): boolean {
+  const text = String(value || "").trim();
+  return /^https?:\/\//i.test(text);
+}
+
+function webSummaryHasUrl(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const summary = value as {
+    evidence?: {
+      top_sources?: Array<{ url?: unknown }>;
+      items?: Array<{ url?: unknown; evidence?: Array<{ url?: unknown }> }>;
+    };
+  };
+  const topSources = Array.isArray(summary.evidence?.top_sources) ? summary.evidence?.top_sources : [];
+  for (const row of topSources) {
+    if (hasHttpUrl(row?.url)) {
+      return true;
+    }
+  }
+  const items = Array.isArray(summary.evidence?.items) ? summary.evidence?.items : [];
+  for (const item of items) {
+    if (hasHttpUrl(item?.url)) {
+      return true;
+    }
+    const nested = Array.isArray(item?.evidence) ? item.evidence : [];
+    for (const entry of nested) {
+      if (hasHttpUrl(entry?.url)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export default function App() {
   const deepLinkHandledRef = useRef(false);
   const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
   const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
+  const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -191,6 +232,71 @@ export default function App() {
       : activeTurn
         ? {}
         : sharedMindmap || {};
+  const resolvedMindmapPayload = getMindmapPayload(activeTurn?.infoPanel || {}, effectiveMindmapPayload || {});
+  const hasMindmapPayload = Array.isArray((resolvedMindmapPayload as { nodes?: unknown[] }).nodes)
+    ? ((resolvedMindmapPayload as { nodes?: unknown[] }).nodes as unknown[]).length > 0
+    : false;
+  const hasSourceUrl =
+    (activeTurn?.sourcesUsed || []).some((source) => hasHttpUrl(source?.url)) ||
+    webSummaryHasUrl(activeTurn?.webSummary) ||
+    /(?:href=['"]https?:\/\/|https?:\/\/)/i.test(String(activeTurn?.info || "")) ||
+    /https?:\/\//i.test(String(activeTurn?.user || ""));
+  const hasInfoPanelContent = Boolean(chatState.citationFocus) || hasMindmapPayload || hasSourceUrl;
+  const isInfoPanelVisible = layout.isInfoPanelOpen && hasInfoPanelContent;
+  const toggleInfoPanel = () => {
+    if (!hasInfoPanelContent) {
+      layout.setIsInfoPanelOpen(false);
+      return;
+    }
+    layout.setIsInfoPanelOpen(!layout.isInfoPanelOpen);
+  };
+
+  useEffect(() => {
+    if (!workspaceModalTab) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setWorkspaceModalTab(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [workspaceModalTab]);
+
+  const renderWorkspaceTab = (tab: WorkspaceModalTab) => {
+    if (tab === "Files") {
+      return (
+        <FilesView
+          citationFocus={null}
+          indexId={fileLibrary.defaultIndexId}
+          files={fileLibrary.indexedFiles}
+          fileGroups={fileLibrary.fileGroups}
+          onRefreshFiles={fileLibrary.refreshFileCount}
+          onUploadFiles={fileLibrary.handleUploadFiles}
+          onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
+          onUploadUrls={fileLibrary.handleUploadUrlsToLibrary}
+          onDeleteFiles={fileLibrary.handleDeleteFiles}
+          onMoveFilesToGroup={fileLibrary.handleMoveFilesToGroup}
+          onCreateFileGroup={fileLibrary.handleCreateFileGroup}
+          onRenameFileGroup={fileLibrary.handleRenameFileGroup}
+          onDeleteFileGroup={fileLibrary.handleDeleteFileGroup}
+          ingestionJobs={fileLibrary.ingestionJobs}
+          onRefreshIngestionJobs={fileLibrary.refreshIngestionJobs}
+          uploadStatus={fileLibrary.uploadStatus}
+          uploadProgressPercent={fileLibrary.uploadProgressPercent}
+          uploadProgressLabel={fileLibrary.uploadProgressLabel}
+        />
+      );
+    }
+    if (tab === "Resources") {
+      return <ResourcesView />;
+    }
+    if (tab === "Settings") {
+      return <SettingsView />;
+    }
+    return <HelpView />;
+  };
 
   return (
     <div className="size-full flex flex-col bg-[#f5f5f7] overflow-hidden">
@@ -218,7 +324,7 @@ export default function App() {
               onMoveConversationToProject={projectState.handleMoveConversationToProject}
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
-              onOpenWorkspaceTab={(tab) => layout.setActiveTab(tab)}
+              onOpenWorkspaceTab={(tab) => setWorkspaceModalTab(tab)}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -233,8 +339,8 @@ export default function App() {
             ) : null}
 
             <ChatMain
-              onToggleInfoPanel={() => layout.setIsInfoPanelOpen(!layout.isInfoPanelOpen)}
-              isInfoPanelOpen={layout.isInfoPanelOpen}
+              onToggleInfoPanel={toggleInfoPanel}
+              isInfoPanelOpen={isInfoPanelVisible}
               chatTurns={chatState.chatTurns}
               selectedTurnIndex={chatState.selectedTurnIndex}
               onSelectTurn={chatState.handleSelectTurn}
@@ -266,7 +372,7 @@ export default function App() {
               }}
             />
 
-            {layout.isInfoPanelOpen ? (
+            {isInfoPanelVisible ? (
               <ResizeHandle
                 side="right"
                 active={layout.resizeSide === "right"}
@@ -277,7 +383,7 @@ export default function App() {
               />
             ) : null}
 
-            {layout.isInfoPanelOpen ? (
+            {isInfoPanelVisible ? (
               <InfoPanel
                 width={layout.infoPanelWidth}
                 citationFocus={chatState.citationFocus}
@@ -329,34 +435,45 @@ export default function App() {
                 }}
               />
             ) : null}
+
+            {workspaceModalTab ? (
+              <div
+                className="fixed inset-0 z-[160] flex items-center justify-center p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`${workspaceModalTab} panel`}
+                onClick={() => setWorkspaceModalTab(null)}
+              >
+                <div className="absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
+                <div
+                  className="relative z-[161] flex h-[min(88vh,980px)] w-full max-w-[1280px] min-h-[520px] flex-col overflow-hidden rounded-3xl border border-black/[0.1] bg-white shadow-[0_28px_80px_-34px_rgba(0,0,0,0.55)]"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
+                    <h2 className="text-[16px] font-semibold tracking-tight text-[#1d1d1f]">
+                      {workspaceModalTab}
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setWorkspaceModalTab(null)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.08] text-[#6e6e73] transition-colors hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"
+                      aria-label={`Close ${workspaceModalTab}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    {renderWorkspaceTab(workspaceModalTab)}
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </>
-        ) : layout.activeTab === "Files" ? (
-          <FilesView
-            citationFocus={null}
-            indexId={fileLibrary.defaultIndexId}
-            files={fileLibrary.indexedFiles}
-            fileGroups={fileLibrary.fileGroups}
-            onRefreshFiles={fileLibrary.refreshFileCount}
-            onUploadFiles={fileLibrary.handleUploadFiles}
-            onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
-            onUploadUrls={fileLibrary.handleUploadUrlsToLibrary}
-            onDeleteFiles={fileLibrary.handleDeleteFiles}
-            onMoveFilesToGroup={fileLibrary.handleMoveFilesToGroup}
-            onCreateFileGroup={fileLibrary.handleCreateFileGroup}
-            onRenameFileGroup={fileLibrary.handleRenameFileGroup}
-            onDeleteFileGroup={fileLibrary.handleDeleteFileGroup}
-            ingestionJobs={fileLibrary.ingestionJobs}
-            onRefreshIngestionJobs={fileLibrary.refreshIngestionJobs}
-            uploadStatus={fileLibrary.uploadStatus}
-            uploadProgressPercent={fileLibrary.uploadProgressPercent}
-            uploadProgressLabel={fileLibrary.uploadProgressLabel}
-          />
-        ) : layout.activeTab === "Resources" ? (
-          <ResourcesView />
-        ) : layout.activeTab === "Settings" ? (
-          <SettingsView />
-        ) : layout.activeTab === "Help" ? (
-          <HelpView />
+        ) : layout.activeTab === "Files" ||
+          layout.activeTab === "Resources" ||
+          layout.activeTab === "Settings" ||
+          layout.activeTab === "Help" ? (
+          renderWorkspaceTab(layout.activeTab)
         ) : (
           <div className="flex-1 flex items-center justify-center bg-white">
             <p className="text-[15px] text-[#86868b]">{layout.activeTab} content coming soon...</p>
