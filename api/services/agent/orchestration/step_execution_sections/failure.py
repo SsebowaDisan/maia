@@ -104,7 +104,9 @@ def handle_step_failure(
         )
         yield emit_event(skipped_event)
         return
-    action = registry.get(step.tool_id).to_action(
+    tool_instance = registry.get(step.tool_id)
+    tool_meta = tool_instance.metadata
+    action = tool_instance.to_action(
         status="failed",
         summary=str(exc),
         started_at=step_started,
@@ -163,3 +165,26 @@ def handle_step_failure(
             },
         )
         yield emit_event(recovery_event)
+        if (
+            str(tool_meta.action_class).strip().lower() == "execute"
+            and not bool(state.execution_context.settings.get("__clarification_requested_after_attempt"))
+        ):
+            question = (
+                recovery_hint
+                if recovery_hint.strip().lower().startswith("please provide")
+                else f"Please provide: {recovery_hint}"
+            )
+            clarification_event = activity_event_factory(
+                event_type="llm.clarification_requested",
+                title="Clarification required after autonomous attempts",
+                detail=question[:200],
+                metadata={
+                    "missing_requirements": [recovery_hint[:220]],
+                    "questions": [question[:240]],
+                    "deferred_until_after_attempts": True,
+                    "tool_id": step.tool_id,
+                    "step": index,
+                },
+            )
+            yield emit_event(clarification_event)
+            state.execution_context.settings["__clarification_requested_after_attempt"] = True

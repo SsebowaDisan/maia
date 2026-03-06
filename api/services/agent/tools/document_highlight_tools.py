@@ -15,6 +15,7 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
     ToolMetadata,
 )
+from api.services.agent.tools.theater_cursor import with_scene
 from ktem.db.models import engine
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
@@ -204,6 +205,22 @@ def _build_pdf_scan_steps(
 
 def _is_pdf_name(value: Any) -> bool:
     return str(value or "").strip().lower().endswith(".pdf")
+
+
+def _pdf_scene_payload(
+    *,
+    lane: str,
+    page_index: int,
+    page_total: int,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return with_scene(
+        payload or {},
+        scene_surface="document",
+        lane=lane,
+        primary_index=max(1, int(page_index)),
+        secondary_index=max(1, int(page_total)),
+    )
 
 
 def _extract_terms(prompt: str, params: dict[str, Any], chunks: list[dict[str, Any]]) -> list[str]:
@@ -591,15 +608,19 @@ class DocumentHighlightExtractTool(AgentTool):
                     event_type="pdf_open",
                     title="Open PDF preview",
                     detail=str(first_step.get("source_name") or "Indexed PDF"),
-                    data={
-                        "scene_surface": "document",
-                        "source_name": str(first_step.get("source_name") or ""),
-                        "pdf_page": int(first_step.get("page_number") or 1),
-                        "page_index": int(first_step.get("page_index") or 1),
-                        "page_total": int(first_step.get("page_total") or len(pdf_scan_steps)),
-                        "pdf_total_pages": int(first_step.get("page_total") or len(pdf_scan_steps)),
-                        "scroll_percent": float(first_step.get("scroll_percent") or 0.0),
-                    },
+                    data=_pdf_scene_payload(
+                        lane="pdf-open",
+                        page_index=int(first_step.get("page_index") or 1),
+                        page_total=int(first_step.get("page_total") or len(pdf_scan_steps)),
+                        payload={
+                            "source_name": str(first_step.get("source_name") or ""),
+                            "pdf_page": int(first_step.get("page_number") or 1),
+                            "page_index": int(first_step.get("page_index") or 1),
+                            "page_total": int(first_step.get("page_total") or len(pdf_scan_steps)),
+                            "pdf_total_pages": int(first_step.get("page_total") or len(pdf_scan_steps)),
+                            "scroll_percent": float(first_step.get("scroll_percent") or 0.0),
+                        },
+                    ),
                 )
             )
             for step in pdf_scan_steps:
@@ -612,18 +633,22 @@ class DocumentHighlightExtractTool(AgentTool):
                 direction = str(step.get("scroll_direction") or "down").strip().lower()
                 if direction not in {"up", "down"}:
                     direction = "down"
-                base_payload = {
-                    "scene_surface": "document",
-                    "source_name": source_name,
-                    "source_id": str(step.get("source_id") or ""),
-                    "pdf_page": page_number,
-                    "page_index": page_index,
-                    "page_total": page_total,
-                    "pdf_total_pages": page_total,
-                    "page_label": page_label,
-                    "scroll_percent": float(step.get("scroll_percent") or 0.0),
-                    "scroll_direction": direction,
-                }
+                base_payload = _pdf_scene_payload(
+                    lane="pdf-page",
+                    page_index=page_index,
+                    page_total=page_total,
+                    payload={
+                        "source_name": source_name,
+                        "source_id": str(step.get("source_id") or ""),
+                        "pdf_page": page_number,
+                        "page_index": page_index,
+                        "page_total": page_total,
+                        "pdf_total_pages": page_total,
+                        "page_label": page_label,
+                        "scroll_percent": float(step.get("scroll_percent") or 0.0),
+                        "scroll_direction": direction,
+                    },
+                )
                 events.append(
                     ToolTraceEvent(
                         event_type="pdf_page_change",
@@ -681,18 +706,28 @@ class DocumentHighlightExtractTool(AgentTool):
         )
         if highlights:
             first_highlight = highlights[0]
+            evidence_page = _page_number_from_label(first_highlight.get("page_label")) or 1
+            evidence_total = len(pdf_scan_steps) if pdf_scan_steps else max(1, evidence_page)
             events.append(
                 ToolTraceEvent(
                     event_type="pdf_evidence_linked",
                     title="Link highlight evidence",
                     detail=_safe_snippet(str(first_highlight.get("snippet") or ""), limit=140),
-                    data={
-                        "scene_surface": "document",
-                        "highlight_color": highlight_color,
-                        "keyword": str(first_highlight.get("word") or ""),
-                        "source_name": str(first_highlight.get("source_name") or ""),
-                        "page_label": str(first_highlight.get("page_label") or ""),
-                    },
+                    data=_pdf_scene_payload(
+                        lane="pdf-evidence",
+                        page_index=evidence_page,
+                        page_total=evidence_total,
+                        payload={
+                            "highlight_color": highlight_color,
+                            "keyword": str(first_highlight.get("word") or ""),
+                            "source_name": str(first_highlight.get("source_name") or ""),
+                            "page_label": str(first_highlight.get("page_label") or ""),
+                            "pdf_page": evidence_page,
+                            "page_index": evidence_page,
+                            "page_total": evidence_total,
+                            "pdf_total_pages": evidence_total,
+                        },
+                    ),
                 )
             )
         if copied_snippets:

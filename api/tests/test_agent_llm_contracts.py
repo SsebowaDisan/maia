@@ -403,6 +403,103 @@ def test_build_task_contract_ignores_email_recipient_requirement_for_website_out
     assert row["missing_requirements"] == []
 
 
+def test_build_task_contract_keeps_actionable_llm_missing_requirement_for_contact_form(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Analyze site and submit contact form",
+            "required_outputs": ["Website analysis summary"],
+            "required_facts": ["Services offered"],
+            "required_actions": ["submit_contact_form"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": ["Provide sender identity details required for outreach form submission"],
+            "success_checks": ["Contact request submitted"],
+        },
+    )
+    row = build_task_contract(
+        message=(
+            "Analyze https://axongroup.com/ and send them a message asking about their services and office hours."
+        ),
+        agent_goal=None,
+        rewritten_task="Analyze website and send an outreach message.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "contact_form_submission"],
+        conversation_summary="",
+    )
+    assert "Provide sender identity details required for outreach form submission" in row["missing_requirements"]
+
+
+def test_build_task_contract_maps_post_message_to_contact_form_action(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Analyze site and send outreach message",
+            "required_outputs": ["Website analysis summary"],
+            "required_facts": ["Products and services overview"],
+            "required_actions": ["post_message"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": [],
+            "success_checks": ["Outreach completed"],
+        },
+    )
+    row = build_task_contract(
+        message="Analyze https://axongroup.com/ and send a message via their contact form.",
+        agent_goal=None,
+        rewritten_task="Analyze website and contact the company.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "contact_form_submission"],
+        conversation_summary="",
+    )
+    assert "submit_contact_form" in row["required_actions"]
+    assert "post_message" not in row["required_actions"]
+
+
+def test_build_task_contract_drops_send_email_for_contact_form_when_email_tag_is_false_positive(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "0")
+    row = build_task_contract(
+        message=(
+            "Analyze https://axongroup.com/ and send a message via their contact form "
+            "asking about products and services."
+        ),
+        agent_goal=None,
+        rewritten_task="",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "contact_form_submission", "email_delivery"],
+        conversation_summary="",
+    )
+    assert "submit_contact_form" in row["required_actions"]
+    assert "send_email" not in row["required_actions"]
+    assert "Recipient email address for delivery" not in row["missing_requirements"]
+
+
+def test_build_task_contract_keeps_send_email_when_delivery_target_is_present(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "0")
+    row = build_task_contract(
+        message=(
+            "Analyze https://axongroup.com/, send a message via their contact form, "
+            "and send delivery confirmation to ops@example.com."
+        ),
+        agent_goal=None,
+        rewritten_task="",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "contact_form_submission", "email_delivery"],
+        conversation_summary="",
+    )
+    assert "send_email" in row["required_actions"]
+    assert "submit_contact_form" in row["required_actions"]
+    assert "Recipient email address for delivery" not in row["missing_requirements"]
+
+
 def test_verify_task_contract_disabled_returns_ready(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
     row = verify_task_contract_fulfillment(
@@ -536,7 +633,7 @@ def test_verify_task_contract_parses_json_and_filters_remediation(monkeypatch) -
         },
     )
     row = verify_task_contract_fulfillment(
-        contract={"objective": "Location + delivery"},
+        contract={"objective": "Location + delivery", "required_facts": ["Company address"]},
         request_message="Analyze and send",
         executed_steps=[{"tool_id": "browser.playwright.inspect", "status": "success"}],
         actions=[],
@@ -546,9 +643,86 @@ def test_verify_task_contract_parses_json_and_filters_remediation(monkeypatch) -
     )
     assert row["ready_for_final_response"] is False
     assert row["ready_for_external_actions"] is False
-    assert row["missing_items"] == ["Missing address in final output"]
+    assert "Missing address in final output" in row["missing_items"]
     assert row["recommended_remediation"] == [
         {"tool_id": "docs.create", "title": "Draft location note", "params": {"title": "Location Brief"}}
+    ]
+
+
+def test_verify_task_contract_ignores_non_actionable_llm_block_when_deterministic_ready(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "ready_for_final_response": False,
+            "ready_for_external_actions": False,
+            "missing_items": [],
+            "reason": "Need a broader synthesis before final response.",
+            "recommended_remediation": [],
+        },
+    )
+    row = verify_task_contract_fulfillment(
+        contract={"objective": "Summarize findings", "required_facts": [], "required_actions": []},
+        request_message="Summarize findings in this chat.",
+        executed_steps=[{"tool_id": "docs.create", "status": "success", "summary": "Drafted summary."}],
+        actions=[{"tool_id": "docs.create", "status": "success", "summary": "Drafted summary."}],
+        report_body="Summary with supporting citations is ready.",
+        sources=[{"url": "https://example.com", "label": "Example source"}],
+        allowed_tool_ids=["docs.create"],
+    )
+    assert row["ready_for_final_response"] is True
+    assert row["ready_for_external_actions"] is True
+    assert row["missing_items"] == []
+
+
+def test_verify_task_contract_keeps_actionable_llm_block_when_fact_gap_is_reported(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "ready_for_final_response": False,
+            "ready_for_external_actions": False,
+            "missing_items": ["Unverified required fact: Headquarters city and country"],
+            "reason": "Required fact not fully supported.",
+            "recommended_remediation": [
+                {
+                    "tool_id": "marketing.web_research",
+                    "title": "Recheck headquarters location",
+                    "params": {"query": "company headquarters city country"},
+                }
+            ],
+        },
+    )
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Confirm headquarters",
+            "required_facts": ["Headquarters city and country"],
+            "required_actions": [],
+        },
+        request_message="Find the headquarters location.",
+        executed_steps=[
+            {
+                "tool_id": "marketing.web_research",
+                "status": "success",
+                "summary": "Headquarters city and country details were captured.",
+            }
+        ],
+        actions=[{"tool_id": "marketing.web_research", "status": "success", "summary": "Location captured"}],
+        report_body="Headquarters city and country: Brussels, Belgium.",
+        sources=[{"url": "https://example.com", "label": "Example source"}],
+        allowed_tool_ids=["marketing.web_research", "browser.playwright.inspect"],
+    )
+    assert row["ready_for_final_response"] is False
+    assert row["ready_for_external_actions"] is False
+    assert row["missing_items"] == ["Unverified required fact: Headquarters city and country"]
+    assert row["recommended_remediation"] == [
+        {
+            "tool_id": "marketing.web_research",
+            "title": "Recheck headquarters location",
+            "params": {"query": "company headquarters city country"},
+        }
     ]
 
 

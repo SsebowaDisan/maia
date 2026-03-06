@@ -1,7 +1,13 @@
 import type { UploadResponse } from "../../../api/client";
 import type { FileGroupRecord, FileRecord } from "../../../api/client";
 import type { SidebarProject } from "../../appShell/types";
-import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from "../../types";
+import type {
+  AgentActivityEvent,
+  ChatAttachment,
+  ChatTurn,
+  CitationFocus,
+  ClarificationPrompt,
+} from "../../types";
 
 type ChatMainProps = {
   onToggleInfoPanel: () => void;
@@ -67,6 +73,9 @@ type ChatMainProps = {
   onAccessModeChange: (mode: "restricted" | "full_access") => void;
   activityEvents: AgentActivityEvent[];
   isActivityStreaming: boolean;
+  clarificationPrompt: ClarificationPrompt | null;
+  onDismissClarificationPrompt: () => void;
+  onSubmitClarificationPrompt: (answers: string[]) => Promise<void>;
 };
 
 type AttachmentStatus = "uploading" | "indexed" | "error";

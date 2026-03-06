@@ -7,6 +7,7 @@ from api.services.agent.live_events import get_live_event_broker
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 from api.services.agent.tools.base import ToolExecutionContext, ToolTraceEvent
+from api.services.agent.tools.theater_cursor import cursor_payload
 
 
 class LiveRunStream:
@@ -115,6 +116,88 @@ class LiveRunStream:
             return raw if isinstance(raw, dict) else None
         return dict(trace) if isinstance(trace, dict) else None
 
+    @staticmethod
+    def _read_index_value(payload: dict[str, Any], *keys: str) -> int | None:
+        for key in keys:
+            raw = payload.get(key)
+            if raw is None:
+                continue
+            try:
+                parsed = int(raw)
+            except Exception:
+                continue
+            if parsed > 0:
+                return parsed
+        return None
+
+    @staticmethod
+    def _enrich_interaction_payload(
+        *,
+        event_type: str,
+        tool_id: str,
+        step_index: int,
+        detail: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized_event = str(event_type or "").strip().lower()
+        normalized_surface = str(payload.get("scene_surface") or "").strip().lower()
+        interactive_surface = normalized_surface in {
+            "website",
+            "document",
+            "google_docs",
+            "google_sheets",
+            "email",
+        }
+        interactive_event = normalized_event.startswith(
+            (
+                "browser_",
+                "web_",
+                "pdf_",
+                "doc_",
+                "docs.",
+                "sheet_",
+                "sheets.",
+                "drive.",
+            )
+        )
+        if not interactive_surface and not interactive_event:
+            return payload
+
+        has_cursor = payload.get("cursor_x") is not None and payload.get("cursor_y") is not None
+        primary_index = LiveRunStream._read_index_value(
+            payload,
+            "primary_index",
+            "variant_index",
+            "page_index",
+            "scan_pass",
+            "step",
+        )
+        secondary_index = LiveRunStream._read_index_value(
+            payload,
+            "secondary_index",
+            "result_rank",
+            "page_total",
+            "scan_pass",
+        )
+        primary = primary_index or max(1, int(step_index) + 1)
+        secondary = secondary_index or 1
+        if not has_cursor:
+            payload.update(
+                cursor_payload(
+                    lane=f"{tool_id}:{normalized_event or 'interaction'}",
+                    primary_index=primary,
+                    secondary_index=secondary,
+                )
+            )
+
+        if normalized_event == "browser_scroll":
+            if not str(payload.get("scroll_direction") or "").strip():
+                payload["scroll_direction"] = "up" if "up" in detail.lower() else "down"
+            if payload.get("scroll_percent") is None:
+                payload["scroll_percent"] = round(min(96.0, max(4.0, float(primary * 12))), 2)
+
+        return payload
+
     def stream_traces(
         self,
         *,
@@ -138,6 +221,13 @@ class LiveRunStream:
                     tool_id=step.tool_id,
                     payload=trace_data_dict,
                 )
+            trace_data_dict = self._enrich_interaction_payload(
+                event_type=trace_event_type,
+                tool_id=step.tool_id,
+                step_index=step_index,
+                detail=trace_detail,
+                payload=trace_data_dict,
+            )
             trace_snapshot = payload.get("snapshot_ref")
             trace_event = activity_event_factory(
                 event_type=trace_event_type,

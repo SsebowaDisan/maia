@@ -31,8 +31,11 @@ interface UploadSidebarProps {
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
 const COMPLETED_VISIBLE_MS = 15000;
 
-function normalizeJobStatus(value: string): string {
-  return " ".join(String(value || "").toLowerCase().split()).trim();
+function normalizeJobStatus(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function isActiveJob(job: IngestionJob): boolean {

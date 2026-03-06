@@ -3,6 +3,15 @@ export type ChatAttachment = {
   fileId?: string;
 };
 
+export type ClarificationPrompt = {
+  runId: string;
+  originalRequest: string;
+  questions: string[];
+  missingRequirements: string[];
+  agentMode: "ask" | "company_agent" | "deep_search";
+  accessMode: "restricted" | "full_access";
+};
+
 export type ChatTurn = {
   user: string;
   assistant: string;

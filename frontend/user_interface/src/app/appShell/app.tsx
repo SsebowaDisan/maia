@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
@@ -8,6 +7,7 @@ import { InfoPanel } from "../components/InfoPanel";
 import { ResourcesView } from "../components/ResourcesView";
 import { SettingsView } from "../components/SettingsView";
 import { TopNav } from "../components/TopNav";
+import { WorkspaceOverlayModal, type WorkspaceOverlayTab } from "../components/WorkspaceOverlayModal";
 import { getSharedMindmap } from "../../api/client";
 import {
   clearCitationDeepLinkInUrl,
@@ -24,7 +24,11 @@ import { useFileLibrary } from "./useFileLibrary";
 import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
 
-type WorkspaceModalTab = "Files" | "Resources" | "Settings" | "Help";
+type WorkspaceModalTab = WorkspaceOverlayTab;
+
+function isWorkspaceModalTab(value: string): value is WorkspaceModalTab {
+  return value === "Files" || value === "Resources" || value === "Settings" || value === "Help";
+}
 
 function hasHttpUrl(value: unknown): boolean {
   const text = String(value || "").trim();
@@ -264,6 +268,39 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [workspaceModalTab]);
 
+  useEffect(() => {
+    if (!isWorkspaceModalTab(layout.activeTab)) {
+      return;
+    }
+    setWorkspaceModalTab(layout.activeTab);
+    layout.setActiveTab("Chat");
+  }, [layout.activeTab, layout.setActiveTab]);
+
+  const closeWorkspaceModal = () => {
+    setWorkspaceModalTab(null);
+    if (isWorkspaceModalTab(layout.activeTab)) {
+      layout.setActiveTab("Chat");
+    }
+  };
+
+  const openWorkspaceModal = (tab: WorkspaceModalTab) => {
+    setWorkspaceModalTab(tab);
+    if (layout.activeTab !== "Chat") {
+      layout.setActiveTab("Chat");
+    }
+  };
+
+  const handleTopNavTabChange = (tab: string) => {
+    if (isWorkspaceModalTab(tab)) {
+      openWorkspaceModal(tab);
+      return;
+    }
+    layout.setActiveTab("Chat");
+  };
+
+  const effectiveTopNavTab = isWorkspaceModalTab(layout.activeTab) ? "Chat" : layout.activeTab;
+  const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
+
   const renderWorkspaceTab = (tab: WorkspaceModalTab) => {
     if (tab === "Files") {
       return (
@@ -302,9 +339,9 @@ export default function App() {
 
   return (
     <div className="size-full flex flex-col bg-[#f5f5f7] overflow-hidden">
-      <TopNav activeTab={layout.activeTab} onTabChange={layout.setActiveTab} />
+      <TopNav activeTab={effectiveTopNavTab} onTabChange={handleTopNavTabChange} />
       <div ref={layout.layoutRef} className="flex-1 min-h-0 flex overflow-hidden">
-        {layout.activeTab === "Chat" ? (
+        {layout.activeTab === "Chat" || isWorkspaceModalTab(layout.activeTab) ? (
           <>
             <ChatSidebar
               isCollapsed={layout.isSidebarCollapsed}
@@ -326,7 +363,7 @@ export default function App() {
               onMoveConversationToProject={projectState.handleMoveConversationToProject}
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
-              onOpenWorkspaceTab={(tab) => layout.setActiveTab(tab)}
+              onOpenWorkspaceTab={openWorkspaceModal}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -370,6 +407,9 @@ export default function App() {
               onAccessModeChange={chatState.setAccessMode}
               activityEvents={chatState.activityEvents}
               isActivityStreaming={chatState.isActivityStreaming}
+              clarificationPrompt={chatState.clarificationPrompt}
+              onDismissClarificationPrompt={chatState.dismissClarificationPrompt}
+              onSubmitClarificationPrompt={chatState.submitClarificationPrompt}
               onCitationClick={(citation) => {
                 chatState.setCitationFocus(citation);
                 layout.setActiveTab("Chat");
@@ -441,44 +481,12 @@ export default function App() {
               />
             ) : null}
 
-            {workspaceModalTab ? (
-              <div
-                className="fixed inset-0 z-[160] flex items-center justify-center p-4"
-                role="dialog"
-                aria-modal="true"
-                aria-label={`${workspaceModalTab} panel`}
-                onClick={() => setWorkspaceModalTab(null)}
-              >
-                <div className="absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
-                <div
-                  className="relative z-[161] flex h-[min(88vh,980px)] w-full max-w-[1280px] min-h-[520px] flex-col overflow-hidden rounded-3xl border border-black/[0.1] bg-white shadow-[0_28px_80px_-34px_rgba(0,0,0,0.55)]"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
-                    <h2 className="text-[16px] font-semibold tracking-tight text-[#1d1d1f]">
-                      {workspaceModalTab}
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={() => setWorkspaceModalTab(null)}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.08] text-[#6e6e73] transition-colors hover:bg-[#f5f5f7] hover:text-[#1d1d1f]"
-                      aria-label={`Close ${workspaceModalTab}`}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="min-h-0 flex flex-1 flex-col overflow-hidden">
-                    {renderWorkspaceTab(workspaceModalTab)}
-                  </div>
-                </div>
-              </div>
+            {liveWorkspaceModalTab ? (
+              <WorkspaceOverlayModal tab={liveWorkspaceModalTab} onClose={closeWorkspaceModal}>
+                {renderWorkspaceTab(liveWorkspaceModalTab)}
+              </WorkspaceOverlayModal>
             ) : null}
           </>
-        ) : layout.activeTab === "Files" ||
-          layout.activeTab === "Resources" ||
-          layout.activeTab === "Settings" ||
-          layout.activeTab === "Help" ? (
-          renderWorkspaceTab(layout.activeTab)
         ) : (
           <div className="flex-1 flex items-center justify-center bg-white">
             <p className="text-[15px] text-[#86868b]">{layout.activeTab} content coming soon...</p>

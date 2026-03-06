@@ -6,6 +6,7 @@ from typing import Any, Generator
 from urllib.parse import urlparse
 
 from api.services.agent.connectors.registry import get_connector_registry
+from api.services.agent.connectors.trusted_site_policy import build_trusted_site_overrides
 from api.services.agent.models import AgentSource
 from api.services.agent.tools.browser_interaction_guard import assess_browser_interactions
 from api.services.agent.tools.base import (
@@ -466,6 +467,11 @@ class PlaywrightInspectTool(AgentTool):
                 },
             )
         ]
+        trusted_site = build_trusted_site_overrides(
+            settings=context.settings,
+            url=final_url or inspected_url or url,
+        )
+        trusted_site_mode = bool(trusted_site.get("trusted"))
         human_handoff_required = bool(
             blocked_signal and human_handoff_on_blocked and _is_challenge_block_reason(blocked_reason)
         )
@@ -474,7 +480,18 @@ class PlaywrightInspectTool(AgentTool):
             if human_handoff_required
             else ""
         )
+        if trusted_site_mode and human_handoff_required:
+            human_handoff_required = False
+            human_handoff_note = (
+                "Trusted-site mode is enabled for this host, but a verification challenge is still present. "
+                "Check trusted header/cookie configuration on the target site."
+            )
         if human_handoff_required:
+            handoff_cursor = {
+                key: float(capture.get(key))
+                for key in ("cursor_x", "cursor_y")
+                if isinstance(capture.get(key), (int, float))
+            }
             context.settings["__barrier_handoff_required"] = True
             context.settings["__barrier_handoff_note"] = human_handoff_note
             context.settings["__barrier_handoff_url"] = final_url or inspected_url or url
@@ -488,11 +505,14 @@ class PlaywrightInspectTool(AgentTool):
                     "blocked_reason": blocked_reason,
                     "human_handoff_required": True,
                     "scene_surface": "website",
+                    **handoff_cursor,
                 },
                 snapshot_ref=screenshot_path or None,
             )
             trace_events.append(handoff_event)
             yield handoff_event
+        else:
+            context.settings["__barrier_handoff_required"] = False
         next_steps: list[str] = []
         next_steps.extend(
             quality_remediation(
@@ -540,6 +560,10 @@ class PlaywrightInspectTool(AgentTool):
                 "blocked_root_retry_improved": blocked_root_retry_improved,
                 "human_handoff_required": human_handoff_required,
                 "human_handoff_note": human_handoff_note,
+                "trusted_site_mode": trusted_site_mode,
+                "trusted_host": str(trusted_site.get("host") or ""),
+                "trusted_header_count": len(trusted_site.get("headers") or {}),
+                "trusted_cookie_count": len(trusted_site.get("cookies") or []),
                 "stages": stages,
             },
             sources=sources,

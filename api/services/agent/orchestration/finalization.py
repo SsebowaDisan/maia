@@ -329,6 +329,8 @@ def finalize_run(
         request_message=request.message,
         answer_text=answer,
         source_urls=source_urls,
+        actions=action_rows_for_contract_check(state.all_actions),
+        contract_check=state.contract_check_result,
     )
     critic_needs_human_review = bool(critic_result.get("needs_human_review"))
     critic_review_notes = " ".join(

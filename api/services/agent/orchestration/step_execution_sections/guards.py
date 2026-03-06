@@ -114,6 +114,32 @@ def run_guard_checks(
                 if isinstance(state.contract_check_result.get("missing_items"), list)
                 else []
             )
+            deferred_missing_requirements = task_prep.contract_missing_requirements[:6]
+            if (
+                deferred_missing_requirements
+                and not task_prep.clarification_blocked
+                and not bool(state.execution_context.settings.get("__clarification_requested_after_attempt"))
+            ):
+                clarification_questions = (
+                    task_prep.clarification_questions[:6]
+                    if task_prep.clarification_questions
+                    else [f"Please provide: {item}" for item in deferred_missing_requirements[:6]]
+                )
+                clarification_event = activity_event_factory(
+                    event_type="llm.clarification_requested",
+                    title="Clarification required after autonomous attempts",
+                    detail=compact("; ".join(deferred_missing_requirements[:3]), 200),
+                    metadata={
+                        "missing_requirements": deferred_missing_requirements,
+                        "questions": clarification_questions,
+                        "contract_check_missing_items": missing[:8],
+                        "deferred_until_after_attempts": True,
+                        "tool_id": step.tool_id,
+                        "step": index,
+                    },
+                )
+                yield emit_event(clarification_event)
+                state.execution_context.settings["__clarification_requested_after_attempt"] = True
             blocked_summary = "contract_gate_blocked: " + (
                 ", ".join(missing[:4])
                 if missing

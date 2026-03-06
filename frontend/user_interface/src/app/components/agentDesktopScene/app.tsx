@@ -61,6 +61,7 @@ function AgentDesktopScene({
   const providerLabel = compactValue(activeSceneData["provider"]) || compactValue(activeSceneData["web_provider"]);
   const renderQualityLabel = compactValue(activeSceneData["render_quality"]);
   const blockedSignal = Boolean(activeSceneData["blocked_signal"]);
+  const scrollDirection = compactValue(activeSceneData["scroll_direction"]).toLowerCase();
   const densityRaw = Number(activeSceneData["content_density"]);
   const contentDensityLabel = Number.isFinite(densityRaw) ? densityRaw.toFixed(2) : "";
 
@@ -111,6 +112,7 @@ function AgentDesktopScene({
     return (
       <BrowserScene
         activeDetail={activeDetail}
+        activeEventType={activeEventType}
         activeTitle={activeTitle}
         browserUrl={browserUrl}
         blockedSignal={blockedSignal}
@@ -126,6 +128,7 @@ function AgentDesktopScene({
         renderQualityLabel={renderQualityLabel}
         contentDensityLabel={contentDensityLabel}
         sceneText={sceneText}
+        scrollDirection={scrollDirection}
         scrollPercent={scrollPercent}
         showFindOverlay={showFindOverlay}
         snapshotUrl={snapshotUrl}
@@ -181,6 +184,7 @@ function AgentDesktopScene({
     return (
       <DocumentPdfScene
         activeDetail={activeDetail}
+        activeEventType={activeEventType}
         documentHighlights={documentHighlights}
         pdfPage={pdfPage}
         pdfPageTotal={pdfPageTotal}

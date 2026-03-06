@@ -36,7 +36,10 @@ def assess_browser_interactions(
         return {
             "allowed_actions": [],
             "blocked_actions": [],
-            "policy_note": "No browser interaction actions requested.",
+            "policy_note": (
+                "No explicit click/fill actions requested. "
+                "Autonomous navigation, scrolling, and extraction remain enabled."
+            ),
             "llm_used": False,
         }
 

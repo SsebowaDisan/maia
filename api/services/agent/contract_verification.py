@@ -29,7 +29,7 @@ STOPWORDS = {
 ACTION_TOOL_IDS = {
     "send_email": {"gmail.send", "email.send", "mailer.report_send"},
     "submit_contact_form": {"browser.contact_form.send"},
-    "post_message": {"slack.post_message"},
+    "post_message": {"slack.post_message", "browser.contact_form.send"},
     "create_document": {"docs.create", "workspace.docs.fill_template", "workspace.docs.research_notes"},
     "update_sheet": {"workspace.sheets.append", "workspace.sheets.track_step"},
 }

@@ -129,6 +129,11 @@ class BrowserContactConnector(BaseConnector):
                     stamp_prefix=stamp_prefix,
                 )
                 if consent.get("accepted"):
+                    consent_cursor = {
+                        key: float(consent.get(key))
+                        for key in ("cursor_x", "cursor_y")
+                        if isinstance(consent.get(key), (int, float))
+                    }
                     yield {
                         "event_type": "browser_cookie_accept",
                         "title": "Accept website cookies",
@@ -139,11 +144,26 @@ class BrowserContactConnector(BaseConnector):
                             "url": consent_capture["url"],
                             "title": consent_capture["title"],
                             "contact_target_url": consent_capture["url"],
+                            **consent_cursor,
                         },
                         "snapshot_ref": consent_capture["screenshot_path"],
                     }
 
-            form, navigated_contact_page = locate_contact_form(page, wait_ms=wait_ms)
+            form, navigated_contact_page, navigation_trace = locate_contact_form(
+                page,
+                wait_ms=wait_ms,
+                timeout_ms=timeout_ms,
+                output_dir=output_dir,
+                stamp_prefix=stamp_prefix,
+            )
+            for nav_event in navigation_trace:
+                yield {
+                    "event_type": str(nav_event.get("event_type") or "browser_navigate"),
+                    "title": str(nav_event.get("title") or "Navigate website"),
+                    "detail": str(nav_event.get("detail") or ""),
+                    "data": dict(nav_event.get("data") or {}),
+                    "snapshot_ref": str(nav_event.get("snapshot_ref") or "") or None,
+                }
             detect_capture = capture_page_state(
                 page=page,
                 label="contact-detected",

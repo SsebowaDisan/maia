@@ -3,6 +3,7 @@ import type { HighlightRegion } from "./types";
 
 type BrowserSceneProps = {
   activeDetail: string;
+  activeEventType: string;
   activeTitle: string;
   browserUrl: string;
   blockedSignal: boolean;
@@ -18,6 +19,7 @@ type BrowserSceneProps = {
   renderQualityLabel: string;
   contentDensityLabel: string;
   sceneText: string;
+  scrollDirection: string;
   scrollPercent: number | null;
   showFindOverlay: boolean;
   snapshotUrl: string;
@@ -146,8 +148,147 @@ function ScrollMeter({ scrollPercent }: { scrollPercent: number | null }) {
   );
 }
 
+function InteractionOverlay({
+  activeEventType,
+  activeDetail,
+  scrollDirection,
+}: {
+  activeEventType: string;
+  activeDetail: string;
+  scrollDirection: string;
+}) {
+  const type = String(activeEventType || "").trim().toLowerCase();
+  if (!type.startsWith("browser_") && type !== "web_result_opened") {
+    return null;
+  }
+  if (type === "browser_human_verification_required") {
+    return (
+      <div className="pointer-events-none absolute inset-x-6 top-14 z-30 rounded-xl border border-[#ff9b6a]/70 bg-[#29160f]/85 px-3 py-2 text-[11px] text-[#ffd8c2] shadow-[0_10px_24px_-18px_rgba(0,0,0,0.75)]">
+        <p className="font-semibold uppercase tracking-[0.07em]">Human verification required</p>
+        <p className="mt-0.5 line-clamp-2 text-[#ffe6d7]">{activeDetail || "Complete verification, then continue."}</p>
+      </div>
+    );
+  }
+  if (type === "browser_cookie_accept" || type === "browser_cookie_check") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#7ab7ff]/45 bg-[#112339]/82 px-3 py-1.5 text-[11px] text-[#d8e9ff]">
+        {type === "browser_cookie_accept" ? "Cookie banner accepted" : "Checking cookie banner"}
+      </div>
+    );
+  }
+  if (type === "browser_trusted_site_mode") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#78dba6]/45 bg-[#10261a]/82 px-3 py-1.5 text-[11px] text-[#d8f8e6]">
+        Trusted-site policy active
+      </div>
+    );
+  }
+  if (type === "browser_click" || type === "web_result_opened") {
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border border-[#f3d38d]/70 bg-[#3a2a11]/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#ffe6b4] animate-pulse">
+        Clicking page element
+      </div>
+    );
+  }
+  if (type === "browser_navigate") {
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border border-[#8fc4ff]/65 bg-[#13263e]/82 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#d8edff]">
+        Opening page
+      </div>
+    );
+  }
+  if (type === "browser_scroll") {
+    const direction = scrollDirection === "up" ? "up" : "down";
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border border-[#9ad9ff]/65 bg-[#0f2b3f]/84 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#d9f1ff] animate-pulse">
+        Scrolling {direction}
+      </div>
+    );
+  }
+  if (type === "browser_hover") {
+    return (
+      <div className="pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border border-white/35 bg-black/55 px-3 py-1 text-[10px] uppercase tracking-[0.08em] text-white/90">
+        Hovering target
+      </div>
+    );
+  }
+  if (type === "browser_extract") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#b4f5d0]/45 bg-[#143126]/84 px-3 py-1.5 text-[11px] text-[#dcffed]">
+        Extracting source evidence
+      </div>
+    );
+  }
+  if (type === "browser_find_in_page") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#b8c6ff]/45 bg-[#1a2042]/84 px-3 py-1.5 text-[11px] text-[#e2e8ff]">
+        Searching terms in page
+      </div>
+    );
+  }
+  if (type === "browser_keyword_highlight") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#f8d98a]/55 bg-[#35270f]/84 px-3 py-1.5 text-[11px] text-[#ffefc7]">
+        Highlighting evidence terms
+      </div>
+    );
+  }
+  if (type === "browser_copy_selection") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#f8d98a]/55 bg-[#35270f]/84 px-3 py-1.5 text-[11px] text-[#ffefc7]">
+        Copying selected evidence
+      </div>
+    );
+  }
+  if (type === "browser_contact_form_detected") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#9de2c8]/45 bg-[#112b21]/84 px-3 py-1.5 text-[11px] text-[#ddfff0]">
+        Contact form located
+      </div>
+    );
+  }
+  if (type === "browser_contact_required_scan") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#a6d4ff]/45 bg-[#142a3e]/84 px-3 py-1.5 text-[11px] text-[#dff0ff]">
+        Scanning required fields
+      </div>
+    );
+  }
+  if (type.startsWith("browser_contact_fill_")) {
+    const rawField = type.replace("browser_contact_fill_", "").replace(/_/g, " ").trim() || "field";
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#a6d4ff]/45 bg-[#142a3e]/84 px-3 py-1.5 text-[11px] text-[#dff0ff]">
+        Filling {rawField}
+      </div>
+    );
+  }
+  if (type === "browser_contact_llm_fill") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#a6d4ff]/45 bg-[#142a3e]/84 px-3 py-1.5 text-[11px] text-[#dff0ff]">
+        Mapping fields with LLM
+      </div>
+    );
+  }
+  if (type === "browser_contact_submit") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#ffd29c]/50 bg-[#39210f]/84 px-3 py-1.5 text-[11px] text-[#ffecd6]">
+        Submitting contact form
+      </div>
+    );
+  }
+  if (type === "browser_contact_confirmation") {
+    return (
+      <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#9de2c8]/45 bg-[#112b21]/84 px-3 py-1.5 text-[11px] text-[#ddfff0]">
+        Verifying submission status
+      </div>
+    );
+  }
+  return null;
+}
+
 function BrowserScene({
   activeDetail,
+  activeEventType,
   activeTitle,
   browserUrl,
   blockedSignal,
@@ -163,6 +304,7 @@ function BrowserScene({
   renderQualityLabel,
   contentDensityLabel,
   sceneText,
+  scrollDirection,
   scrollPercent,
   showFindOverlay,
   snapshotUrl,
@@ -210,6 +352,11 @@ function BrowserScene({
             onError={onSnapshotError}
           />
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-image" />
+          <InteractionOverlay
+            activeEventType={activeEventType}
+            activeDetail={activeDetail}
+            scrollDirection={scrollDirection}
+          />
           {showFindOverlay ? (
             <FindOverlay
               dedupedBrowserKeywords={dedupedBrowserKeywords}
@@ -231,6 +378,11 @@ function BrowserScene({
             referrerPolicy="no-referrer-when-downgrade"
           />
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-iframe" />
+          <InteractionOverlay
+            activeEventType={activeEventType}
+            activeDetail={activeDetail}
+            scrollDirection={scrollDirection}
+          />
           {showFindOverlay ? (
             <FindOverlay
               dedupedBrowserKeywords={dedupedBrowserKeywords}
@@ -244,6 +396,11 @@ function BrowserScene({
         </div>
       ) : (
         <div className="relative flex-1 space-y-3 p-4">
+          <InteractionOverlay
+            activeEventType={activeEventType}
+            activeDetail={activeDetail}
+            scrollDirection={scrollDirection}
+          />
           <p className="text-[13px] font-semibold text-white">{activeTitle || "Browser scene"}</p>
           <p className="text-[12px] text-white/80">
             {sceneText || activeDetail || "Inspecting page content and extracting evidence..."}

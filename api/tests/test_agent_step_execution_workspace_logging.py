@@ -141,3 +141,41 @@ def test_explicit_workspace_step_failure_keeps_logging_flag_enabled() -> None:
 
     assert state.deep_workspace_logging_enabled is True
     assert all("Workspace logging disabled" not in event.title for event in captured)
+
+
+def test_execute_failure_emits_clarification_request_from_recovery_hint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.step_execution_sections.failure.suggest_failure_recovery",
+        lambda **_: "Provide sender full name for outreach form submission.",
+    )
+    state = _state(deep_workspace_logging_enabled=True)
+    step = PlannedStep(
+        tool_id="workspace.sheets.track_step",
+        title="Execute outreach action",
+        params={},
+    )
+    captured: list[AgentActivityEvent] = []
+
+    def _emit(event: AgentActivityEvent):
+        captured.append(event)
+        return {"type": "activity", "event": event.to_dict()}
+
+    _ = list(
+        handle_step_failure(
+            execution_prompt="send outreach",
+            state=state,
+            registry=_Registry(),
+            step=step,
+            index=4,
+            step_started="2026-01-01T00:00:00Z",
+            duration_seconds=0.2,
+            exc=RuntimeError("execution failed"),
+            emit_event=_emit,
+            activity_event_factory=_activity_factory,
+        )
+    )
+
+    assert any(event.event_type == "llm.clarification_requested" for event in captured)
+    clarification_event = next(event for event in captured if event.event_type == "llm.clarification_requested")
+    assert clarification_event.data.get("deferred_until_after_attempts") is True
+    assert state.execution_context.settings.get("__clarification_requested_after_attempt") is True

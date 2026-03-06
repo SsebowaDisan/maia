@@ -3,7 +3,7 @@ import { buildRawFileUrl } from "../../../api/client";
 import { FilesViewOverlays } from "./FilesViewOverlays";
 import { inferFileKind, tokenNumber, UNGROUPED_FILTER } from "./helpers";
 import { MainPanel } from "./MainPanel";
-import { PdfPreviewPane } from "./PdfPreviewPane";
+import { PdfPreviewModal } from "./PdfPreviewModal";
 import type { FileKind, FilesViewProps, GridMode, PendingDeleteJob, SortField, UploadTab } from "./types";
 import { UploadSidebar } from "./UploadSidebar";
 import { useFilesViewActions } from "./useFilesViewActions";
@@ -63,8 +63,8 @@ export function FilesView({
   const [isManagingGroup, setIsManagingGroup] = useState(false);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPdfPreviewModalOpen, setIsPdfPreviewModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pdfPreviewRef = useRef<HTMLDivElement>(null);
 
   const groupsByFileId = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -155,6 +155,12 @@ export function FilesView({
     if (!citationFocus?.fileId) return null;
     return buildRawFileUrl(citationFocus.fileId, { indexId: typeof indexId === "number" ? indexId : undefined });
   }, [citationFocus, indexId]);
+
+  useEffect(() => {
+    if (!selectedPdfPreviewUrl && isPdfPreviewModalOpen) {
+      setIsPdfPreviewModalOpen(false);
+    }
+  }, [selectedPdfPreviewUrl, isPdfPreviewModalOpen]);
 
   const recentJobs = useMemo(
     () =>
@@ -325,7 +331,7 @@ export function FilesView({
     forceReindex,
     selectedPdfPreviewUrl,
     isDeletingSelection,
-    pdfPreviewRef,
+    onOpenPdfPreview: () => setIsPdfPreviewModalOpen(true),
     setActionMessage,
     setIsDeletingSelection,
     setPendingDelete,
@@ -348,7 +354,7 @@ export function FilesView({
   });
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-[#f5f5f7]">
+    <div className="flex h-full min-h-0 flex-1 overflow-hidden bg-[#f5f5f7]">
       <UploadSidebar
         fileGroups={fileGroups}
         uploadGroupId={uploadGroupId}
@@ -374,66 +380,57 @@ export function FilesView({
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
-        <div className={`grid gap-6 ${selectedPdfPreviewUrl ? "xl:grid-cols-[minmax(0,1fr)_440px]" : "grid-cols-1"}`}>
-          <MainPanel
-            filterText={filterText}
-            setFilterText={setFilterText}
-            sortField={sortField}
-            setSortField={setSortField}
-            sortDir={sortDir}
-            setSortDir={setSortDir}
-            kindFilter={kindFilter}
-            setKindFilter={setKindFilter}
-            groupSummaryCount={groupSummary.length}
-            groupViewMode={groupViewMode}
-            setGroupViewMode={setGroupViewMode}
-            onCreateGroupModalOpen={() => {
-              setQuickGroupName("");
-              setShowCreateGroupModal(true);
-            }}
-            canCreateGroup={Boolean(onCreateFileGroup)}
-            groupRows={groupRows}
-            activeGroupFilter={activeGroupFilter}
-            setActiveGroupFilter={setActiveGroupFilter}
-            dragOverGroupId={dragOverGroupId}
-            setDragOverGroupId={setDragOverGroupId}
-            draggingFileId={draggingFileId}
-            canMoveFiles={Boolean(onMoveFilesToGroup)}
-            onDropFilesIntoGroup={dropFilesIntoGroup}
-            activeGroupRecord={activeGroupRecord}
-            manageGroupName={manageGroupName}
-            setManageGroupName={setManageGroupName}
-            handleRenameGroup={handleRenameGroup}
-            handleDeleteGroup={handleDeleteGroup}
-            isManagingGroup={isManagingGroup}
-            canRenameGroup={canRenameGroup}
-            canDeleteGroup={canDeleteGroup}
-            pendingDelete={pendingDelete ? { count: pendingDelete.count } : null}
-            pendingDeleteSeconds={pendingDeleteSeconds}
-            handleUndoDelete={handleUndoDelete}
-            handleDeleteNow={handleDeleteNow}
-            actionMessage={actionMessage}
-            viewMode={viewMode}
-            setViewMode={setViewMode}
-            visibleFiles={visibleFiles}
-            selectedFileIds={selectedFileIds}
-            toggleSelectAllVisible={toggleSelectAllVisible}
-            areAllVisibleSelected={areAllVisibleSelected}
-            toggleFileSelection={toggleFileSelection}
-            startFileDrag={startFileDrag}
-            endFileDrag={endFileDrag}
-            groupsByFileId={groupsByFileId}
-            citationFocus={citationFocus}
-            citationRawUrl={citationRawUrl}
-          />
-
-          <PdfPreviewPane
-            selectedPdfPreviewUrl={selectedPdfPreviewUrl}
-            selectedPdfFile={selectedPdfFile}
-            selectedCount={selectedFiles.length}
-            pdfPreviewRef={pdfPreviewRef}
-          />
-        </div>
+        <MainPanel
+          filterText={filterText}
+          setFilterText={setFilterText}
+          sortField={sortField}
+          setSortField={setSortField}
+          sortDir={sortDir}
+          setSortDir={setSortDir}
+          kindFilter={kindFilter}
+          setKindFilter={setKindFilter}
+          groupSummaryCount={groupSummary.length}
+          groupViewMode={groupViewMode}
+          setGroupViewMode={setGroupViewMode}
+          onCreateGroupModalOpen={() => {
+            setQuickGroupName("");
+            setShowCreateGroupModal(true);
+          }}
+          canCreateGroup={Boolean(onCreateFileGroup)}
+          groupRows={groupRows}
+          activeGroupFilter={activeGroupFilter}
+          setActiveGroupFilter={setActiveGroupFilter}
+          dragOverGroupId={dragOverGroupId}
+          setDragOverGroupId={setDragOverGroupId}
+          draggingFileId={draggingFileId}
+          canMoveFiles={Boolean(onMoveFilesToGroup)}
+          onDropFilesIntoGroup={dropFilesIntoGroup}
+          activeGroupRecord={activeGroupRecord}
+          manageGroupName={manageGroupName}
+          setManageGroupName={setManageGroupName}
+          handleRenameGroup={handleRenameGroup}
+          handleDeleteGroup={handleDeleteGroup}
+          isManagingGroup={isManagingGroup}
+          canRenameGroup={canRenameGroup}
+          canDeleteGroup={canDeleteGroup}
+          pendingDelete={pendingDelete ? { count: pendingDelete.count } : null}
+          pendingDeleteSeconds={pendingDeleteSeconds}
+          handleUndoDelete={handleUndoDelete}
+          handleDeleteNow={handleDeleteNow}
+          actionMessage={actionMessage}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          visibleFiles={visibleFiles}
+          selectedFileIds={selectedFileIds}
+          toggleSelectAllVisible={toggleSelectAllVisible}
+          areAllVisibleSelected={areAllVisibleSelected}
+          toggleFileSelection={toggleFileSelection}
+          startFileDrag={startFileDrag}
+          endFileDrag={endFileDrag}
+          groupsByFileId={groupsByFileId}
+          citationFocus={citationFocus}
+          citationRawUrl={citationRawUrl}
+        />
       </div>
 
       <FilesViewOverlays
@@ -466,6 +463,13 @@ export function FilesView({
         setDeleteConfirmText={setDeleteConfirmText}
         handleCancelDeleteConfirmation={handleCancelDeleteConfirmation}
         handleConfirmDeleteAfterTyping={handleConfirmDeleteAfterTyping}
+      />
+
+      <PdfPreviewModal
+        isOpen={isPdfPreviewModalOpen}
+        selectedPdfPreviewUrl={selectedPdfPreviewUrl}
+        selectedPdfFile={selectedPdfFile}
+        onClose={() => setIsPdfPreviewModalOpen(false)}
       />
     </div>
   );

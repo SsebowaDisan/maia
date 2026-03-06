@@ -84,6 +84,7 @@ class ContactFormToolTests(unittest.TestCase):
             settings={
                 "agent.contact_sender_name": "Maia Outreach",
                 "agent.contact_sender_email": "disan@micrurus.com",
+                "agent.contact_sender_phone": "+1 415 555 0199",
             },
         )
 
@@ -149,6 +150,43 @@ class ContactFormToolTests(unittest.TestCase):
         call = connector.calls[0]
         assert call["sender_company"] == "Micrurus"
         assert call["sender_phone"] == "+1 617 555 0101"
+
+    def test_contact_form_tool_derives_sender_name_from_email_and_allows_empty_phone(self) -> None:
+        connector = _ContactConnectorStub()
+        registry = _RegistryStub(connector)
+        context = ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="r1",
+            mode="company_agent",
+            settings={},
+        )
+        with patch(
+            "api.services.agent.tools.contact_form_tools.get_connector_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.agent.tools.contact_form_tools.polish_contact_form_content",
+            return_value={
+                "subject": "Polished subject",
+                "message_text": "Polished message body",
+            },
+        ):
+            tool = BrowserContactFormSendTool()
+            _ = tool.execute(
+                context=context,
+                prompt=(
+                    "Open https://example.com/contact and submit the contact form. "
+                    "Use my email for reply."
+                ),
+                params={"confirmed": True, "sender_email": "ssebowadisan1@gmail.com"},
+            )
+
+        assert connector.calls, "expected connector to be invoked"
+        call = connector.calls[0]
+        assert call["sender_email"] == "ssebowadisan1@gmail.com"
+        assert isinstance(call["sender_name"], str) and str(call["sender_name"]).strip()
+        assert call["sender_phone"] == ""
 
 
 if __name__ == "__main__":

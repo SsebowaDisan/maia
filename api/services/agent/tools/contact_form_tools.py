@@ -5,6 +5,7 @@ from typing import Any, Generator
 
 from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.llm_execution_support import polish_contact_form_content
+from api.services.agent.llm_runtime import call_json_response
 from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import (
     AgentTool,
@@ -16,6 +17,7 @@ from api.services.agent.tools.base import (
 )
 
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
 
 def _resolve_url(prompt: str, params: dict[str, Any]) -> str:
@@ -33,6 +35,74 @@ def _safe_text(value: Any, *, fallback: str, max_len: int) -> str:
     if len(text) > max_len:
         text = f"{text[: max_len - 1].rstrip()}..."
     return text
+
+
+def _normalize_phone(value: str) -> str:
+    text = " ".join(str(value or "").split()).strip(" .,;:-")
+    if not text:
+        return ""
+    digits = re.sub(r"\D", "", text)
+    if len(digits) < 7:
+        return ""
+    return text[:48]
+
+
+def _infer_sender_name_from_email(email: str) -> str:
+    token = " ".join(str(email or "").split()).strip()
+    match = EMAIL_RE.search(token)
+    if not match:
+        return ""
+    local_part = match.group(1).split("@", 1)[0].strip().lower()
+    if not local_part:
+        return ""
+    chunks = [row for row in re.split(r"[._-]+", local_part) if row]
+    if not chunks:
+        return ""
+    normalized_chunks: list[str] = []
+    for chunk in chunks[:3]:
+        cleaned = re.sub(r"[^a-z0-9]", "", chunk)
+        cleaned = re.sub(r"\d+$", "", cleaned)
+        if len(cleaned) < 2:
+            continue
+        normalized_chunks.append(cleaned[:24].capitalize())
+    if not normalized_chunks:
+        return ""
+    return " ".join(normalized_chunks)[:120]
+
+
+def _infer_sender_profile_from_prompt(prompt: str) -> dict[str, str]:
+    clean_prompt = " ".join(str(prompt or "").split()).strip()
+    if not clean_prompt:
+        return {}
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You extract sender identity fields for enterprise contact-form automation. "
+                "Return strict JSON only and never invent values."
+            ),
+            user_prompt=(
+                "Extract sender details from this task text.\n"
+                "Return JSON only:\n"
+                '{ "sender_name":"", "sender_email":"", "sender_phone":"", "sender_company":"" }\n'
+                "Rules:\n"
+                "- Use only values explicitly provided by the user.\n"
+                "- If a field is not explicitly provided, return empty string for that field.\n\n"
+                f"Task:\n{clean_prompt}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=180,
+        )
+    except Exception:
+        return {}
+    if not isinstance(response, dict):
+        return {}
+    return {
+        "sender_name": " ".join(str(response.get("sender_name") or "").split()).strip()[:120],
+        "sender_email": " ".join(str(response.get("sender_email") or "").split()).strip()[:180],
+        "sender_phone": " ".join(str(response.get("sender_phone") or "").split()).strip()[:48],
+        "sender_company": " ".join(str(response.get("sender_company") or "").split()).strip()[:120],
+    }
 
 
 class BrowserContactFormSendTool(AgentTool):
@@ -56,31 +126,57 @@ class BrowserContactFormSendTool(AgentTool):
         if not url:
             raise ToolExecutionError("A valid target URL is required for contact form submission.")
 
-        sender_name = _safe_text(
-            params.get("sender_name") or context.settings.get("agent.contact_sender_name"),
-            fallback="Maia Team",
-            max_len=120,
-        )
-        sender_email = _safe_text(
+        base_sender_name = params.get("sender_name") or context.settings.get("agent.contact_sender_name")
+        base_sender_email = (
             params.get("sender_email")
             or context.settings.get("agent.contact_sender_email")
-            or context.settings.get("MAIA_GMAIL_FROM"),
-            fallback="disan@micrurus.com",
+            or context.settings.get("MAIA_GMAIL_FROM")
+        )
+        base_sender_phone = (
+            params.get("sender_phone")
+            or context.settings.get("agent.contact_sender_phone")
+            or context.settings.get("agent.contact_phone")
+        )
+        base_sender_company = params.get("sender_company") or context.settings.get("agent.contact_sender_company")
+        inferred_sender = (
+            {}
+            if (base_sender_name and base_sender_email and base_sender_phone)
+            else _infer_sender_profile_from_prompt(prompt)
+        )
+        sender_email = _safe_text(
+            base_sender_email
+            or inferred_sender.get("sender_email"),
+            fallback="",
             max_len=180,
         )
+        if not EMAIL_RE.search(sender_email):
+            raise ToolExecutionError(
+                "Sender email address is required for contact form submission."
+            )
+        sender_name = _safe_text(
+            base_sender_name
+            or inferred_sender.get("sender_name")
+            or _infer_sender_name_from_email(sender_email),
+            fallback="",
+            max_len=120,
+        )
+        if not sender_name:
+            raise ToolExecutionError(
+                "Sender full name is required for contact form submission."
+            )
         sender_company = _safe_text(
-            params.get("sender_company")
-            or context.settings.get("agent.contact_sender_company"),
+            base_sender_company
+            or inferred_sender.get("sender_company"),
             fallback="",
             max_len=120,
         )
         sender_phone = _safe_text(
-            params.get("sender_phone")
-            or context.settings.get("agent.contact_sender_phone")
-            or context.settings.get("agent.contact_phone"),
-            fallback="+1 415 555 0199",
+            base_sender_phone
+            or inferred_sender.get("sender_phone"),
+            fallback="",
             max_len=48,
         )
+        sender_phone = _normalize_phone(sender_phone)
         raw_subject = _safe_text(
             params.get("subject"),
             fallback="Business Inquiry",

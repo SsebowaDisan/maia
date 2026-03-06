@@ -13,7 +13,13 @@ import {
 import { DEFAULT_PROJECT_ID } from "./constants";
 import { buildConversationTurns, extractAgentEvents } from "./eventHelpers";
 import type { SidebarProject } from "./types";
-import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from "../types";
+import type {
+  AgentActivityEvent,
+  ChatAttachment,
+  ChatTurn,
+  CitationFocus,
+  ClarificationPrompt,
+} from "../types";
 
 type AgentMode = "ask" | "company_agent" | "deep_search";
 type AccessMode = "restricted" | "full_access";
@@ -53,6 +59,62 @@ type SendMessageOptions = {
   agentMode?: AgentMode;
   accessMode?: AccessMode;
 };
+
+function readStringList(value: unknown, limit = 8): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const rows = value
+    .map((item) => String(item || "").trim())
+    .filter((item) => item.length > 0);
+  return Array.from(new Set(rows)).slice(0, Math.max(1, limit));
+}
+
+function clarificationPromptFromEvent(options: {
+  event: AgentActivityEvent;
+  originalRequest: string;
+  agentMode: AgentMode;
+  accessMode: AccessMode;
+}): ClarificationPrompt | null {
+  const { event, originalRequest, agentMode, accessMode } = options;
+  const eventType = String(event.event_type || "").trim().toLowerCase();
+  const title = String(event.title || "").trim().toLowerCase();
+  const data =
+    (event.data && typeof event.data === "object"
+      ? (event.data as Record<string, unknown>)
+      : event.metadata && typeof event.metadata === "object"
+        ? (event.metadata as Record<string, unknown>)
+        : {}) || {};
+  const missingRequirements = readStringList(data["missing_requirements"], 8);
+  const questions = readStringList(data["questions"], 8);
+  const likelyClarificationEvent =
+    eventType === "llm.clarification_requested" ||
+    (eventType === "policy_blocked" && title.includes("clarification")) ||
+    (eventType === "policy_blocked" && (missingRequirements.length > 0 || questions.length > 0));
+  if (!likelyClarificationEvent) {
+    return null;
+  }
+  const fallbackRows =
+    missingRequirements.length > 0
+      ? missingRequirements
+      : String(event.detail || "")
+          .split(";")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+          .slice(0, 6);
+  const normalizedQuestions = questions.length > 0 ? questions : fallbackRows.map((item) => `Please provide: ${item}`);
+  if (!normalizedQuestions.length && !fallbackRows.length) {
+    return null;
+  }
+  return {
+    runId: String(event.run_id || "").trim(),
+    originalRequest: String(originalRequest || "").trim(),
+    questions: normalizedQuestions,
+    missingRequirements: fallbackRows,
+    agentMode,
+    accessMode,
+  };
+}
 
 type UseConversationChatParams = {
   projects: SidebarProject[];
@@ -108,6 +170,7 @@ export function useConversationChat({
   const [activityEvents, setActivityEvents] = useState<AgentActivityEvent[]>([]);
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [clarificationPrompt, setClarificationPrompt] = useState<ClarificationPrompt | null>(null);
 
   const refreshConversations = useCallback(async () => {
     const items = await listConversations();
@@ -341,6 +404,7 @@ export function useConversationChat({
 
       setIsSending(true);
       setIsActivityStreaming(orchestratorMode);
+      setClarificationPrompt(null);
       setInfoText("");
       setActivityEvents([]);
       setSelectedTurnIndex(pendingTurnIndex);
@@ -414,6 +478,7 @@ export function useConversationChat({
         if (orchestratorMode) {
           let streamedInfo = "";
           const streamedEvents: AgentActivityEvent[] = [];
+          let streamedRunId = "";
           try {
             response = await sendChatStream(message, selectedConversationId, {
               ...sharedPayload,
@@ -459,6 +524,28 @@ export function useConversationChat({
                 }
                 if (event.type === "activity" && event.event) {
                   const payload = event.event as AgentActivityEvent;
+                  const payloadRunId = String(payload.run_id || "").trim();
+                  if (payloadRunId) {
+                    if (!streamedRunId) {
+                      streamedRunId = payloadRunId;
+                    } else if (payloadRunId !== streamedRunId) {
+                      return;
+                    }
+                  }
+                  const detectedPrompt = clarificationPromptFromEvent({
+                    event: payload,
+                    originalRequest: message,
+                    agentMode: effectiveMode,
+                    accessMode: effectiveAccessMode,
+                  });
+                  if (detectedPrompt) {
+                    setClarificationPrompt((previous) => {
+                      if (previous?.runId && previous.runId === detectedPrompt.runId) {
+                        return previous;
+                      }
+                      return detectedPrompt;
+                    });
+                  }
                   streamedEvents.push(payload);
                   streamedEventsLocal = [...streamedEvents];
                   setActivityEvents([...streamedEvents]);
@@ -717,6 +804,52 @@ export function useConversationChat({
     setMindmapIncludeReasoning,
     setMindmapMapType,
     setMindmapMaxDepth,
+    clarificationPrompt,
+    dismissClarificationPrompt: () => setClarificationPrompt(null),
+    submitClarificationPrompt: async (answers: string[]) => {
+      if (!clarificationPrompt) {
+        return;
+      }
+      const rows = clarificationPrompt.questions.length
+        ? clarificationPrompt.questions
+        : clarificationPrompt.missingRequirements;
+      const answeredRows = rows
+        .map((row, index) => {
+          const answer = String(answers[index] || "").trim();
+          if (!answer) {
+            return "";
+          }
+          return `- ${row}: ${answer}`;
+        })
+        .filter((item) => item.length > 0);
+      if (!answeredRows.length) {
+        throw new Error("Provide the required clarification details before continuing.");
+      }
+
+      const continuationMessage = [
+        `Continue the paused task from run ${clarificationPrompt.runId || "previous run"}.`,
+        `Original request: ${clarificationPrompt.originalRequest}`,
+        "Clarification details:",
+        ...answeredRows,
+        "Proceed with execution now and complete the requested actions.",
+      ].join("\n");
+
+      const snapshot = clarificationPrompt;
+      setClarificationPrompt(null);
+      try {
+        await handleSendMessage(continuationMessage, undefined, {
+          agentMode: snapshot.agentMode,
+          accessMode: snapshot.accessMode,
+          settingOverrides: {
+            __clarification_resume: true,
+            __clarification_answers: answeredRows,
+          },
+        });
+      } catch (error) {
+        setClarificationPrompt(snapshot);
+        throw error;
+      }
+    },
     visibleConversations,
   };
 }

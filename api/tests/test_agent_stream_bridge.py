@@ -116,3 +116,50 @@ def test_stream_bridge_preserves_explicit_scene_surface() -> None:
         ),
     )
     assert payload["scene_surface"] == "email"
+
+
+def test_stream_bridge_adds_cursor_for_interactive_scene_events() -> None:
+    payload = _emit_single_trace(
+        tool_id="marketing.web_research",
+        trace=ToolTraceEvent(
+            event_type="browser_navigate",
+            title="Open page",
+            data={"url": "https://example.com"},
+        ),
+    )
+    assert payload["scene_surface"] == "website"
+    assert isinstance(payload.get("cursor_x"), float)
+    assert isinstance(payload.get("cursor_y"), float)
+    assert 0.0 <= float(payload.get("cursor_x") or 0.0) <= 100.0
+    assert 0.0 <= float(payload.get("cursor_y") or 0.0) <= 100.0
+
+
+def test_stream_bridge_keeps_existing_cursor_values() -> None:
+    payload = _emit_single_trace(
+        tool_id="marketing.web_research",
+        trace=ToolTraceEvent(
+            event_type="browser_click",
+            title="Click",
+            data={
+                "scene_surface": "website",
+                "cursor_x": 64.0,
+                "cursor_y": 18.0,
+            },
+        ),
+    )
+    assert payload["cursor_x"] == 64.0
+    assert payload["cursor_y"] == 18.0
+
+
+def test_stream_bridge_infers_scroll_fields_for_browser_scroll() -> None:
+    payload = _emit_single_trace(
+        tool_id="marketing.web_research",
+        trace=ToolTraceEvent(
+            event_type="browser_scroll",
+            title="Scroll",
+            detail="Reviewing lower cards",
+            data={"scene_surface": "website"},
+        ),
+    )
+    assert payload["scroll_direction"] == "down"
+    assert isinstance(payload.get("scroll_percent"), float)

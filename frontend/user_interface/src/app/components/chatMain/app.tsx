@@ -1,4 +1,5 @@
 import { type MouseEvent as ReactMouseEvent } from "react";
+import { ClarificationResumeModal } from "./ClarificationResumeModal";
 import type { ChatTurn } from "../../types";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
@@ -31,6 +32,9 @@ function ChatMain({
   onAccessModeChange,
   activityEvents,
   isActivityStreaming,
+  clarificationPrompt,
+  onDismissClarificationPrompt,
+  onSubmitClarificationPrompt,
 }: ChatMainProps) {
   const interactions = useChatMainInteractions({
     accessMode,
@@ -128,6 +132,14 @@ function ChatMain({
         setMessage={interactions.setMessage}
         submit={interactions.submit}
       />
+
+      {clarificationPrompt ? (
+        <ClarificationResumeModal
+          prompt={clarificationPrompt}
+          onDismiss={onDismissClarificationPrompt}
+          onSubmit={onSubmitClarificationPrompt}
+        />
+      ) : null}
     </div>
   );
 }

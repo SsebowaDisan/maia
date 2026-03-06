@@ -441,6 +441,10 @@ def prepare_task_context(
         settings.get("agent.clarification_gate_enabled"),
         default=True,
     )
+    defer_clarification_until_exploration = truthy(
+        settings.get("agent.defer_clarification_until_exploration"),
+        default=True,
+    )
     deep_research_requested = bool(
         str(request.agent_mode or "").strip().lower() == "deep_search"
         or truthy(settings.get("__deep_search_enabled"), default=False)
@@ -448,8 +452,13 @@ def prepare_task_context(
         in {"deep_research", "deep_analytics"}
     )
     clarification_blocked = clarification_gate_enabled and bool(contract_missing_requirements)
+    clarification_deferred = False
     if clarification_blocked and deep_research_requested:
         clarification_blocked = False
+        clarification_deferred = True
+    if clarification_blocked and defer_clarification_until_exploration:
+        clarification_blocked = False
+        clarification_deferred = True
     clarification_questions = [
         f"Please provide: {item}" for item in contract_missing_requirements[:6]
     ]
@@ -474,6 +483,15 @@ def prepare_task_context(
             clarification_metadata = {
                 "missing_requirements": contract_missing_requirements[:6],
                 "clarification_bypassed_for_deep_research": True,
+            }
+        elif contract_missing_requirements and clarification_deferred:
+            clarification_detail = (
+                "Proceeding with autonomous analysis and retrieval first; "
+                "clarification will be requested only if unresolved after attempts."
+            )
+            clarification_metadata = {
+                "missing_requirements": contract_missing_requirements[:6],
+                "clarification_deferred_until_after_attempts": True,
             }
         clarification_resolved_event = activity_event_factory(
             event_type="llm.clarification_resolved",

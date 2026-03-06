@@ -203,6 +203,8 @@ function parsePdfPlaybackState(
   const scrollPercent = parseScrollPercent(
     activeSceneData["scroll_percent"] ?? activeSceneData["pdf_scroll_percent"],
   );
+  const inferredPdfScrollPercent =
+    pdfPageTotal <= 1 ? 0 : Math.max(0, Math.min(100, ((pdfPage - 1) / Math.max(1, pdfPageTotal - 1)) * 100));
   const normalizedDirection = String(activeSceneData["scroll_direction"] || "")
     .trim()
     .toLowerCase();
@@ -217,7 +219,7 @@ function parsePdfPlaybackState(
   return {
     pdfPage,
     pdfPageTotal: Math.max(pdfPage, pdfPageTotal),
-    pdfScrollPercent: scrollPercent,
+    pdfScrollPercent: scrollPercent ?? inferredPdfScrollPercent,
     pdfScrollDirection,
     pdfScanRegion,
   };

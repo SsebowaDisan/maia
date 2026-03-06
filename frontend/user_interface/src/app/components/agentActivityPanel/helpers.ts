@@ -154,6 +154,8 @@ function mergeLiveSceneData(
       "scroll_height",
       "viewport_height",
       "viewport_width",
+      "cursor_x",
+      "cursor_y",
       "pdf_page",
       "page_index",
       "page_total",

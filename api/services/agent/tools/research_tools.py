@@ -22,6 +22,7 @@ from api.services.agent.tools.research_helpers import (
     safe_snippet as _safe_snippet,
     truthy as _truthy,
 )
+from api.services.agent.tools.theater_cursor import with_scene
 
 
 def _as_bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
@@ -51,6 +52,22 @@ def _hostname_label(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def _website_scene_payload(
+    *,
+    lane: str,
+    primary_index: int,
+    secondary_index: int = 1,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return with_scene(
+        payload or {},
+        scene_surface="website",
+        lane=lane,
+        primary_index=primary_index,
+        secondary_index=secondary_index,
+    )
 
 
 class WebResearchTool(AgentTool):
@@ -206,7 +223,15 @@ class WebResearchTool(AgentTool):
             event_type="browser_navigate",
             title="Open search provider",
             detail=f"Submitting {len(query_variants)} rewritten query variant(s) to {requested_provider}",
-            data={"query": query, "provider": requested_provider, "query_variants": query_variants},
+            data=_website_scene_payload(
+                lane="search-provider",
+                primary_index=1,
+                payload={
+                    "query": query,
+                    "provider": requested_provider,
+                    "query_variants": query_variants,
+                },
+            ),
         )
         trace_events.append(navigate_event)
         yield navigate_event
@@ -245,15 +270,18 @@ class WebResearchTool(AgentTool):
                             event_type="browser_navigate",
                             title=f"Open Brave results {idx}/{len(query_variants)}",
                             detail=_safe_snippet(query_variant, 140),
-                            data={
-                                "provider": "brave_search",
-                                "query": query_variant,
-                                "variant_index": idx,
-                                "url": search_url,
-                                "source_url": search_url,
-                                "scene_surface": "website",
-                                "render_quality": "live",
-                            },
+                            data=_website_scene_payload(
+                                lane="search-results-open",
+                                primary_index=idx,
+                                payload={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "url": search_url,
+                                    "source_url": search_url,
+                                    "render_quality": "live",
+                                },
+                            ),
                         )
                         trace_events.append(live_navigate_event)
                         yield live_navigate_event
@@ -296,6 +324,24 @@ class WebResearchTool(AgentTool):
                     trace_events.append(result_event)
                     yield result_event
                     if idx <= max_live_queries and search_url:
+                        hover_event = ToolTraceEvent(
+                            event_type="browser_hover",
+                            title=f"Hover search results {idx}/{len(query_variants)}",
+                            detail="Reviewing top-ranked result cards",
+                            data=_website_scene_payload(
+                                lane="search-results-hover",
+                                primary_index=idx,
+                                payload={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "url": search_url,
+                                    "source_url": search_url,
+                                },
+                            ),
+                        )
+                        trace_events.append(hover_event)
+                        yield hover_event
                         scroll_targets = [14.0, 36.0, 62.0]
                         if len(run_rows) >= 8:
                             scroll_count = 3
@@ -308,16 +354,20 @@ class WebResearchTool(AgentTool):
                                 event_type="browser_scroll",
                                 title=f"Scroll Brave results {scroll_step}/{scroll_count}",
                                 detail=f"Reviewing result cards ({int(round(scroll_percent))}%)",
-                                data={
-                                    "provider": "brave_search",
-                                    "query": query_variant,
-                                    "variant_index": idx,
-                                    "url": search_url,
-                                    "source_url": search_url,
-                                    "scroll_percent": float(scroll_percent),
-                                    "scroll_direction": "down",
-                                    "scene_surface": "website",
-                                },
+                                data=_website_scene_payload(
+                                    lane="search-results-scroll",
+                                    primary_index=idx,
+                                    secondary_index=scroll_step,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "url": search_url,
+                                        "source_url": search_url,
+                                        "scroll_percent": float(scroll_percent),
+                                        "scroll_direction": "down",
+                                    },
+                                ),
                             )
                             trace_events.append(scroll_event)
                             yield scroll_event
@@ -325,19 +375,45 @@ class WebResearchTool(AgentTool):
                             if not clicked_url:
                                 continue
                             host_label = _hostname_label(clicked_url)
+                            result_click_event = ToolTraceEvent(
+                                event_type="browser_click",
+                                title=f"Click result {rank}",
+                                detail=(f"Open {host_label}" if host_label else f"Open result {rank}"),
+                                data=_website_scene_payload(
+                                    lane="search-result-click",
+                                    primary_index=idx,
+                                    secondary_index=rank,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "result_rank": rank,
+                                        "selector": f"result_rank_{rank}",
+                                        "url": search_url,
+                                        "source_url": search_url,
+                                        "target_url": clicked_url,
+                                    },
+                                ),
+                            )
+                            trace_events.append(result_click_event)
+                            yield result_click_event
                             click_event = ToolTraceEvent(
                                 event_type="web_result_opened",
                                 title=f"Open result {rank}",
                                 detail=(f"Opening {host_label}" if host_label else f"Opening result {rank}"),
-                                data={
-                                    "provider": "brave_search",
-                                    "query": query_variant,
-                                    "variant_index": idx,
-                                    "result_rank": rank,
-                                    "url": clicked_url,
-                                    "source_url": clicked_url,
-                                    "scene_surface": "website",
-                                },
+                                data=_website_scene_payload(
+                                    lane="source-opened",
+                                    primary_index=idx,
+                                    secondary_index=rank,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "result_rank": rank,
+                                        "url": clicked_url,
+                                        "source_url": clicked_url,
+                                    },
+                                ),
                             )
                             trace_events.append(click_event)
                             yield click_event
@@ -345,16 +421,20 @@ class WebResearchTool(AgentTool):
                                 event_type="browser_navigate",
                                 title=f"Open source page {rank}",
                                 detail=_safe_snippet(clicked_url, 140),
-                                data={
-                                    "provider": "brave_search",
-                                    "query": query_variant,
-                                    "variant_index": idx,
-                                    "result_rank": rank,
-                                    "url": clicked_url,
-                                    "source_url": clicked_url,
-                                    "scene_surface": "website",
-                                    "render_quality": "live",
-                                },
+                                data=_website_scene_payload(
+                                    lane="source-navigate",
+                                    primary_index=idx,
+                                    secondary_index=rank,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "result_rank": rank,
+                                        "url": clicked_url,
+                                        "source_url": clicked_url,
+                                        "render_quality": "live",
+                                    },
+                                ),
                             )
                             trace_events.append(open_event)
                             yield open_event
@@ -363,20 +443,52 @@ class WebResearchTool(AgentTool):
                                 event_type="browser_scroll",
                                 title=f"Scroll source page {rank}",
                                 detail=f"Scanning source evidence ({int(round(source_scroll_percent))}%)",
-                                data={
-                                    "provider": "brave_search",
-                                    "query": query_variant,
-                                    "variant_index": idx,
-                                    "result_rank": rank,
-                                    "url": clicked_url,
-                                    "source_url": clicked_url,
-                                    "scroll_percent": float(source_scroll_percent),
-                                    "scroll_direction": "down",
-                                    "scene_surface": "website",
-                                },
+                                data=_website_scene_payload(
+                                    lane="source-scroll",
+                                    primary_index=idx,
+                                    secondary_index=rank,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "result_rank": rank,
+                                        "url": clicked_url,
+                                        "source_url": clicked_url,
+                                        "scroll_percent": float(source_scroll_percent),
+                                        "scroll_direction": "down",
+                                    },
+                                ),
                             )
                             trace_events.append(source_scroll_event)
                             yield source_scroll_event
+                            source_preview = ""
+                            if rank - 1 < len(run_rows) and isinstance(run_rows[rank - 1], dict):
+                                source_preview = str(
+                                    run_rows[rank - 1].get("description")
+                                    or run_rows[rank - 1].get("snippet")
+                                    or ""
+                                ).strip()
+                            extract_event = ToolTraceEvent(
+                                event_type="browser_extract",
+                                title=f"Extract source evidence {rank}",
+                                detail=_safe_snippet(source_preview or clicked_url, 140),
+                                data=_website_scene_payload(
+                                    lane="source-extract",
+                                    primary_index=idx,
+                                    secondary_index=rank,
+                                    payload={
+                                        "provider": "brave_search",
+                                        "query": query_variant,
+                                        "variant_index": idx,
+                                        "result_rank": rank,
+                                        "url": clicked_url,
+                                        "source_url": clicked_url,
+                                        "text_excerpt": _safe_snippet(source_preview, 260),
+                                    },
+                                ),
+                            )
+                            trace_events.append(extract_event)
+                            yield extract_event
 
                 fused_results = _fuse_search_results(search_runs, top_k=fused_top_k)
                 payload = {"results": fused_results, "query": query, "provider": "brave_fused"}
@@ -467,6 +579,117 @@ class WebResearchTool(AgentTool):
                 if isinstance(payload, dict):
                     web_pages = payload.get("webPages")
                     rows = web_pages.get("value") if isinstance(web_pages, dict) else []
+                bing_query = str(query_variants[0] if query_variants else query).strip() or query
+                bing_search_url = _search_results_url("bing_search", bing_query)
+                if bing_search_url:
+                    bing_nav_event = ToolTraceEvent(
+                        event_type="browser_navigate",
+                        title="Open Bing results",
+                        detail=_safe_snippet(bing_query, 140),
+                        data=_website_scene_payload(
+                            lane="bing-results-open",
+                            primary_index=1,
+                            payload={
+                                "provider": "bing_search",
+                                "query": bing_query,
+                                "variant_index": 1,
+                                "url": bing_search_url,
+                                "source_url": bing_search_url,
+                                "render_quality": "live",
+                            },
+                        ),
+                    )
+                    trace_events.append(bing_nav_event)
+                    yield bing_nav_event
+                if isinstance(rows, list) and rows:
+                    bing_hover_event = ToolTraceEvent(
+                        event_type="browser_hover",
+                        title="Hover Bing result cards",
+                        detail="Reviewing ranked Bing results",
+                        data=_website_scene_payload(
+                            lane="bing-results-hover",
+                            primary_index=1,
+                            payload={
+                                "provider": "bing_search",
+                                "query": bing_query,
+                                "variant_index": 1,
+                                "url": bing_search_url,
+                                "source_url": bing_search_url,
+                            },
+                        ),
+                    )
+                    trace_events.append(bing_hover_event)
+                    yield bing_hover_event
+                    bing_scroll_event = ToolTraceEvent(
+                        event_type="browser_scroll",
+                        title="Scroll Bing results",
+                        detail="Scanning top Bing results",
+                        data=_website_scene_payload(
+                            lane="bing-results-scroll",
+                            primary_index=1,
+                            secondary_index=1,
+                            payload={
+                                "provider": "bing_search",
+                                "query": bing_query,
+                                "variant_index": 1,
+                                "url": bing_search_url,
+                                "source_url": bing_search_url,
+                                "scroll_percent": 34.0,
+                                "scroll_direction": "down",
+                            },
+                        ),
+                    )
+                    trace_events.append(bing_scroll_event)
+                    yield bing_scroll_event
+                    for rank, row in enumerate(rows[:max_live_clicks_per_query], start=1):
+                        if not isinstance(row, dict):
+                            continue
+                        clicked_url = str(row.get("url") or "").strip()
+                        if not clicked_url:
+                            continue
+                        host_label = _hostname_label(clicked_url)
+                        click_event = ToolTraceEvent(
+                            event_type="browser_click",
+                            title=f"Click Bing result {rank}",
+                            detail=(f"Open {host_label}" if host_label else f"Open result {rank}"),
+                            data=_website_scene_payload(
+                                lane="bing-result-click",
+                                primary_index=1,
+                                secondary_index=rank,
+                                payload={
+                                    "provider": "bing_search",
+                                    "query": bing_query,
+                                    "variant_index": 1,
+                                    "result_rank": rank,
+                                    "selector": f"result_rank_{rank}",
+                                    "url": bing_search_url,
+                                    "source_url": bing_search_url,
+                                    "target_url": clicked_url,
+                                },
+                            ),
+                        )
+                        trace_events.append(click_event)
+                        yield click_event
+                        open_event = ToolTraceEvent(
+                            event_type="web_result_opened",
+                            title=f"Open Bing source {rank}",
+                            detail=_safe_snippet(clicked_url, 140),
+                            data=_website_scene_payload(
+                                lane="bing-source-opened",
+                                primary_index=1,
+                                secondary_index=rank,
+                                payload={
+                                    "provider": "bing_search",
+                                    "query": bing_query,
+                                    "variant_index": 1,
+                                    "result_rank": rank,
+                                    "url": clicked_url,
+                                    "source_url": clicked_url,
+                                },
+                            ),
+                        )
+                        trace_events.append(open_event)
+                        yield open_event
                 trace_events.append(
                     ToolTraceEvent(
                         event_type="api_call_completed",
@@ -501,7 +724,14 @@ class WebResearchTool(AgentTool):
                     event_type="browser_extract",
                     title="Parse search response",
                     detail="Decoded JSON payload from search provider",
-                    data={"provider": used_provider, "provider_requested": requested_provider},
+                    data=_website_scene_payload(
+                        lane="search-response-parse",
+                        primary_index=1,
+                        payload={
+                            "provider": used_provider,
+                            "provider_requested": requested_provider,
+                        },
+                    ),
                 )
             )
             yield trace_events[-1]

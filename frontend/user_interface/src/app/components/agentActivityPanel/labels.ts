@@ -35,6 +35,11 @@ function cursorLabelForEventType(type: string): string {
   if (type === "browser_contact_submit") return "Submitting form";
   if (type === "browser_contact_confirmation") return "Checking confirmation";
   if (type === "browser_human_verification_required") return "Waiting for human verification";
+  if (type === "browser_cookie_accept") return "Accepting cookies";
+  if (type === "browser_cookie_check") return "Checking cookie banner";
+  if (type === "browser_hover") return "Hovering element";
+  if (type === "browser_click") return "Clicking element";
+  if (type === "browser_trusted_site_mode") return "Applying trusted-site policy";
   if (type === "browser_keyword_highlight") return "Highlighting keywords";
   if (type === "browser_find_in_page") return "Searching within page";
   if (type === "browser_copy_selection") return "Copying excerpt";
@@ -66,6 +71,10 @@ function cursorLabelForEventType(type: string): string {
   if (type === "llm.step_summary") return "Summarizing step";
   if (type === "browser_navigate" || type === "web_search_started") return "Navigating";
   if (type === "sheet_open") return "Opening tracker";
+  if (type === "pdf_open") return "Opening PDF";
+  if (type === "pdf_page_change") return "Turning PDF page";
+  if (type === "pdf_scan_region") return "Scanning PDF region";
+  if (type === "pdf_evidence_linked") return "Linking PDF evidence";
   if (type === "sheet_cell_update") return "Updating cells";
   if (type === "sheet_append_row") return "Appending row";
   if (type === "sheet_save") return "Saving tracker";

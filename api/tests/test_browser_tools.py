@@ -50,6 +50,8 @@ class _AlwaysBlockedConnectorStub:
             "title": "Security check",
             "text_excerpt": "Performing security verification. Verify you are human.",
             "screenshot_path": "",
+            "cursor_x": 44.0,
+            "cursor_y": 26.0,
             "pages": [],
             "render_quality": "blocked",
             "content_density": 0.0,
@@ -162,6 +164,9 @@ class BrowserToolTests(unittest.TestCase):
         assert bool(self.context.settings.get("__barrier_handoff_required")) is True
         assert blocked_connector.urls
         assert "https://example.com/" in blocked_connector.urls
+        handoff_event = next(event for event in result.events if event.event_type == "browser_human_verification_required")
+        assert handoff_event.data.get("cursor_x") == 44.0
+        assert handoff_event.data.get("cursor_y") == 26.0
 
     def test_browser_tool_recovers_on_root_retry_without_handoff(self) -> None:
         recovery_connector = _BlockedThenRecoveredConnectorStub()
@@ -188,6 +193,34 @@ class BrowserToolTests(unittest.TestCase):
         assert "browser_human_verification_required" not in event_types
         assert bool(result.data.get("human_handoff_required")) is False
         assert bool(result.data.get("blocked_root_retry_improved")) is True
+
+    def test_browser_tool_uses_trusted_site_mode_instead_of_handoff(self) -> None:
+        blocked_connector = _AlwaysBlockedConnectorStub()
+
+        class _BlockedRegistry:
+            def build(self, connector_id: str, settings=None):
+                del settings
+                if connector_id != "playwright_browser":
+                    raise AssertionError(f"unexpected connector {connector_id}")
+                return blocked_connector
+
+        self.context.settings["browser.trusted_site_domains"] = ["example.com"]
+        with patch("api.services.agent.tools.browser_tools.get_connector_registry", return_value=_BlockedRegistry()):
+            result = PlaywrightInspectTool().execute(
+                context=self.context,
+                prompt="inspect https://example.com/path",
+                params={
+                    "url": "https://example.com/path",
+                    "blocked_retry_attempts": 0,
+                    "blocked_root_retry_attempts": 0,
+                    "human_handoff_on_blocked": True,
+                },
+            )
+        event_types = [event.event_type for event in result.events]
+        assert "browser_human_verification_required" not in event_types
+        assert bool(result.data.get("trusted_site_mode")) is True
+        assert bool(result.data.get("human_handoff_required")) is False
+        assert "Trusted-site mode is enabled" in str(result.data.get("human_handoff_note") or "")
 
 
 if __name__ == "__main__":

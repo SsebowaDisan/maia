@@ -22,6 +22,7 @@ from .browser_live_utils import (
     to_number,
 )
 from .browser_navigation_utils import accept_cookie_banner, extract_same_origin_links
+from .trusted_site_policy import build_trusted_site_overrides
 from .base import BaseConnector, ConnectorError, ConnectorHealth
 
 
@@ -145,7 +146,27 @@ class BrowserConnector(BaseConnector):
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
-            page = browser.new_page(viewport={"width": 1366, "height": 768})
+            trusted_site = build_trusted_site_overrides(settings=self.settings, url=url)
+            trusted_headers = (
+                dict(trusted_site.get("headers") or {})
+                if isinstance(trusted_site.get("headers"), dict)
+                else {}
+            )
+            browser_context = browser.new_context(
+                viewport={"width": 1366, "height": 768},
+                extra_http_headers=trusted_headers or None,
+            )
+            trusted_cookies = (
+                list(trusted_site.get("cookies") or [])
+                if isinstance(trusted_site.get("cookies"), list)
+                else []
+            )
+            if trusted_cookies:
+                try:
+                    browser_context.add_cookies(trusted_cookies)
+                except Exception:
+                    pass
+            page = browser_context.new_page()
             actions = interaction_actions if isinstance(interaction_actions, list) else []
 
             def _safe_selector(value: Any) -> str:
@@ -172,6 +193,11 @@ class BrowserConnector(BaseConnector):
                     max(8.0, min(viewport_width - 8.0, x)),
                     max(8.0, min(viewport_height - 8.0, y)),
                 )
+
+            def _website_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+                base = dict(payload or {})
+                base.setdefault("scene_surface", "website")
+                return base
 
             def _emit_extract_side_events(
                 *,
@@ -211,18 +237,20 @@ class BrowserConnector(BaseConnector):
                             "event_type": "browser_find_in_page",
                             "title": "Search terms on page",
                             "detail": find_query,
-                            "data": {
-                                "url": find_capture["url"],
-                                "title": find_capture["title"],
-                                "page_index": page_index,
-                                "find_query": find_query,
-                                "keywords": keywords[:8],
-                                "match_count": len(regions),
-                                "highlight_regions": regions,
-                                "highlight_color": effective_highlight_color,
-                                **highlight_cursor,
-                                **page_metrics(page=page),
-                            },
+                            "data": _website_payload(
+                                {
+                                    "url": find_capture["url"],
+                                    "title": find_capture["title"],
+                                    "page_index": page_index,
+                                    "find_query": find_query,
+                                    "keywords": keywords[:8],
+                                    "match_count": len(regions),
+                                    "highlight_regions": regions,
+                                    "highlight_color": effective_highlight_color,
+                                    **highlight_cursor,
+                                    **page_metrics(page=page),
+                                }
+                            ),
                             "snapshot_ref": find_capture["screenshot_path"],
                         }
                     highlight_capture = capture_page_state(
@@ -235,18 +263,20 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_keyword_highlight",
                         "title": "Highlight relevant keywords",
                         "detail": ", ".join(keywords[:5]),
-                        "data": {
-                            "url": highlight_capture["url"],
-                            "title": highlight_capture["title"],
-                            "page_index": page_index,
-                            "keywords": keywords[:8],
-                            "highlight_regions": regions,
-                            "find_query": find_query,
-                            "match_count": len(regions),
-                            "highlight_color": effective_highlight_color,
-                            **highlight_cursor,
-                            **page_metrics(page=page),
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": highlight_capture["url"],
+                                "title": highlight_capture["title"],
+                                "page_index": page_index,
+                                "keywords": keywords[:8],
+                                "highlight_regions": regions,
+                                "find_query": find_query,
+                                "match_count": len(regions),
+                                "highlight_color": effective_highlight_color,
+                                **highlight_cursor,
+                                **page_metrics(page=page),
+                            }
+                        ),
                         "snapshot_ref": highlight_capture["screenshot_path"],
                     }
                 copied = excerpt(text_excerpt, limit=420)
@@ -260,16 +290,18 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_copy_selection",
                         "title": "Copy evidence snippet",
                         "detail": excerpt(copied, limit=150),
-                        "data": {
-                            "url": str(capture.get("url") or ""),
-                            "title": str(capture.get("title") or ""),
-                            "page_index": page_index,
-                            "clipboard_text": copied,
-                            "copied_words": copied_words,
-                            "highlight_color": effective_highlight_color,
-                            **cursor_payload,
-                            **page_metrics(page=page),
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": str(capture.get("url") or ""),
+                                "title": str(capture.get("title") or ""),
+                                "page_index": page_index,
+                                "clipboard_text": copied,
+                                "copied_words": copied_words,
+                                "highlight_color": effective_highlight_color,
+                                **cursor_payload,
+                                **page_metrics(page=page),
+                            }
+                        ),
                         "snapshot_ref": str(capture.get("screenshot_path") or ""),
                     }
 
@@ -277,6 +309,7 @@ class BrowserConnector(BaseConnector):
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(max(200, wait_ms))
             except Exception as exc:
+                browser_context.close()
                 browser.close()
                 raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
 
@@ -293,16 +326,33 @@ class BrowserConnector(BaseConnector):
                 "event_type": "browser_open",
                 "title": "Start Playwright browser session",
                 "detail": open_capture["url"],
-                "data": {
-                    "url": open_capture["url"],
-                    "title": open_capture["title"],
-                    "page_index": 1,
-                    "elapsed_ms": _elapsed_ms(),
-                    **open_cursor,
-                    **open_metrics,
-                },
+                "data": _website_payload(
+                    {
+                        "url": open_capture["url"],
+                        "title": open_capture["title"],
+                        "page_index": 1,
+                        "elapsed_ms": _elapsed_ms(),
+                        **open_cursor,
+                        **open_metrics,
+                    }
+                ),
                 "snapshot_ref": open_capture["screenshot_path"],
             }
+            if bool(trusted_site.get("trusted")):
+                yield {
+                    "event_type": "browser_trusted_site_mode",
+                    "title": "Apply trusted-site browser policy",
+                    "detail": f"Trusted host: {str(trusted_site.get('host') or '')}",
+                    "data": _website_payload(
+                        {
+                            "trusted_host": str(trusted_site.get("host") or ""),
+                            "trusted_header_count": len(trusted_headers),
+                            "trusted_cookie_count": len(trusted_cookies),
+                            **open_cursor,
+                        }
+                    ),
+                    "snapshot_ref": open_capture["screenshot_path"],
+                }
 
             if auto_accept_cookies:
                 consent = accept_cookie_banner(page=page, wait_ms=wait_ms)
@@ -312,16 +362,24 @@ class BrowserConnector(BaseConnector):
                     stamp_prefix=stamp_prefix,
                     label="cookie-accept-1",
                 )
+                consent_cursor = {
+                    key: float(consent.get(key))
+                    for key in ("cursor_x", "cursor_y")
+                    if isinstance(consent.get(key), (int, float))
+                }
                 if consent.get("accepted"):
                     yield {
                         "event_type": "browser_cookie_accept",
                         "title": "Accept website cookies",
                         "detail": str(consent.get("label") or "Accepted cookie consent banner"),
-                        "data": {
-                            "url": consent_capture["url"],
-                            "title": consent_capture["title"],
-                            "page_index": 1,
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": consent_capture["url"],
+                                "title": consent_capture["title"],
+                                "page_index": 1,
+                                **consent_cursor,
+                            }
+                        ),
                         "snapshot_ref": consent_capture["screenshot_path"],
                     }
                 else:
@@ -329,11 +387,13 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_cookie_check",
                         "title": "Check website cookies",
                         "detail": "No cookie banner detected or consent already stored.",
-                        "data": {
-                            "url": consent_capture["url"],
-                            "title": consent_capture["title"],
-                            "page_index": 1,
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": consent_capture["url"],
+                                "title": consent_capture["title"],
+                                "page_index": 1,
+                            }
+                        ),
                         "snapshot_ref": consent_capture["screenshot_path"],
                     }
 
@@ -361,22 +421,24 @@ class BrowserConnector(BaseConnector):
                 "event_type": "browser_extract",
                 "title": "Fast landing-page analysis",
                 "detail": quick_capture["title"] or quick_capture["url"],
-                "data": {
-                    "url": quick_capture["url"],
-                    "title": quick_capture["title"],
-                    "page_index": 1,
-                    "extract_pass": "initial",
-                    "extract_stage": "initial_render",
-                    "characters": len(str(quick_capture["text_excerpt"] or "")),
-                    "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
-                    "render_quality": quick_quality["render_quality"],
-                    "content_density": quick_quality["content_density"],
-                    "blocked_signal": quick_quality["blocked_signal"],
-                    "blocked_reason": quick_quality["blocked_reason"],
-                    "elapsed_ms": _elapsed_ms(),
-                    **quick_cursor,
-                    **page_metrics(page=page),
-                },
+                "data": _website_payload(
+                    {
+                        "url": quick_capture["url"],
+                        "title": quick_capture["title"],
+                        "page_index": 1,
+                        "extract_pass": "initial",
+                        "extract_stage": "initial_render",
+                        "characters": len(str(quick_capture["text_excerpt"] or "")),
+                        "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
+                        "render_quality": quick_quality["render_quality"],
+                        "content_density": quick_quality["content_density"],
+                        "blocked_signal": quick_quality["blocked_signal"],
+                        "blocked_reason": quick_quality["blocked_reason"],
+                        "elapsed_ms": _elapsed_ms(),
+                        **quick_cursor,
+                        **page_metrics(page=page),
+                    }
+                ),
                 "snapshot_ref": quick_capture["screenshot_path"],
             }
             for side_event in _emit_extract_side_events(
@@ -397,28 +459,74 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_interaction_failed",
                         "title": f"Skip browser action {action_index}",
                         "detail": "Invalid action payload",
-                        "data": {
-                            "action_index": action_index,
-                            "action_type": action_type,
-                            "selector": selector,
-                            "elapsed_ms": _elapsed_ms(),
-                        },
+                        "data": _website_payload(
+                            {
+                                "action_index": action_index,
+                                "action_type": action_type,
+                                "selector": selector,
+                                "elapsed_ms": _elapsed_ms(),
+                            }
+                        ),
                     }
                     continue
-                yield {
-                    "event_type": "browser_interaction_started",
-                    "title": f"Run browser action {action_index}",
-                    "detail": f"{action_type} -> {selector}",
-                    "data": {
-                        "action_index": action_index,
-                        "action_type": action_type,
-                        "selector": selector,
-                        "elapsed_ms": _elapsed_ms(),
-                    },
-                }
                 try:
                     locator = page.locator(selector).first
                     locator.wait_for(timeout=min(timeout_ms, 7000), state="visible")
+                    interaction_cursor: dict[str, float] = {}
+                    try:
+                        box = locator.bounding_box()
+                    except Exception:
+                        box = None
+                    if isinstance(box, dict):
+                        center_x = float(box.get("x", 0.0)) + (float(box.get("width", 0.0)) / 2.0)
+                        center_y = float(box.get("y", 0.0)) + min(16.0, float(box.get("height", 0.0)) / 2.0)
+                        center_x, center_y = _jitter_target(center_x, center_y, spread=12.0)
+                        interaction_cursor = move_cursor(page=page, x=center_x, y=center_y)
+                    if not interaction_cursor:
+                        fallback_x, fallback_y = _jitter_target(168.0, 142.0, spread=22.0)
+                        interaction_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
+                    interaction_start_capture = capture_page_state(
+                        page=page,
+                        output_dir=output_dir,
+                        stamp_prefix=stamp_prefix,
+                        label=f"interaction-start-{action_index}",
+                    )
+                    yield {
+                        "event_type": "browser_hover",
+                        "title": f"Hover browser action {action_index}",
+                        "detail": f"{action_type} -> {selector}",
+                        "data": _website_payload(
+                            {
+                                "action_index": action_index,
+                                "action_type": action_type,
+                                "selector": selector,
+                                "elapsed_ms": _elapsed_ms(),
+                                "url": interaction_start_capture["url"],
+                                "title": interaction_start_capture["title"],
+                                **interaction_cursor,
+                                **page_metrics(page=page),
+                            }
+                        ),
+                        "snapshot_ref": interaction_start_capture["screenshot_path"],
+                    }
+                    yield {
+                        "event_type": "browser_interaction_started",
+                        "title": f"Run browser action {action_index}",
+                        "detail": f"{action_type} -> {selector}",
+                        "data": _website_payload(
+                            {
+                                "action_index": action_index,
+                                "action_type": action_type,
+                                "selector": selector,
+                                "elapsed_ms": _elapsed_ms(),
+                                "url": interaction_start_capture["url"],
+                                "title": interaction_start_capture["title"],
+                                **interaction_cursor,
+                                **page_metrics(page=page),
+                            }
+                        ),
+                        "snapshot_ref": interaction_start_capture["screenshot_path"],
+                    }
                     if action_type == "click":
                         locator.click(timeout=min(timeout_ms, 7000))
                     else:
@@ -434,33 +542,57 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_interaction_completed",
                         "title": f"Completed browser action {action_index}",
                         "detail": f"{action_type} -> {selector}",
-                        "data": {
-                            "action_index": action_index,
-                            "action_type": action_type,
-                            "selector": selector,
-                            "value_preview": excerpt(value, limit=80) if action_type == "fill" else "",
-                            "url": interaction_capture["url"],
-                            "title": interaction_capture["title"],
-                            "elapsed_ms": _elapsed_ms(),
-                            **page_metrics(page=page),
-                        },
+                        "data": _website_payload(
+                            {
+                                "action_index": action_index,
+                                "action_type": action_type,
+                                "selector": selector,
+                                "value_preview": excerpt(value, limit=80) if action_type == "fill" else "",
+                                "url": interaction_capture["url"],
+                                "title": interaction_capture["title"],
+                                "elapsed_ms": _elapsed_ms(),
+                                **interaction_cursor,
+                                **page_metrics(page=page),
+                            }
+                        ),
                         "snapshot_ref": interaction_capture["screenshot_path"],
                     }
+                    if action_type == "click":
+                        yield {
+                            "event_type": "browser_click",
+                            "title": f"Click page element {action_index}",
+                            "detail": selector,
+                            "data": _website_payload(
+                                {
+                                    "action_index": action_index,
+                                    "selector": selector,
+                                    "url": interaction_capture["url"],
+                                    "title": interaction_capture["title"],
+                                    "elapsed_ms": _elapsed_ms(),
+                                    **interaction_cursor,
+                                    **page_metrics(page=page),
+                                }
+                            ),
+                            "snapshot_ref": interaction_capture["screenshot_path"],
+                        }
                 except Exception as exc:
                     yield {
                         "event_type": "browser_interaction_failed",
                         "title": f"Browser action {action_index} failed",
                         "detail": str(exc)[:180],
-                        "data": {
-                            "action_index": action_index,
-                            "action_type": action_type,
-                            "selector": selector,
-                            "elapsed_ms": _elapsed_ms(),
-                        },
+                        "data": _website_payload(
+                            {
+                                "action_index": action_index,
+                                "action_type": action_type,
+                                "selector": selector,
+                                "elapsed_ms": _elapsed_ms(),
+                            }
+                        ),
                     }
 
             current_url = str(open_capture["url"] or url)
             targets = [current_url]
+            final_cursor: dict[str, float] = dict(open_cursor)
             if follow_same_domain_links:
                 targets.extend(
                     extract_same_origin_links(
@@ -472,7 +604,89 @@ class BrowserConnector(BaseConnector):
 
             for page_index, target_url in enumerate(targets, start=1):
                 last_cursor = dict(open_cursor)
+                final_cursor = dict(last_cursor)
                 if page_index > 1:
+                    target_path = ""
+                    target_match = re.match(r"^https?://[^/]+(?P<path>/[^?#]*)?", str(target_url or ""))
+                    if target_match:
+                        target_path = str(target_match.group("path") or "").strip()
+                    target_url_selector = str(target_url or "").replace("'", "\\'")
+                    selector_candidates = [
+                        _safe_selector(f"a[href='{target_url_selector}']"),
+                    ]
+                    if target_path and target_path not in {"/", ""}:
+                        target_path_selector = target_path.replace("'", "\\'")
+                        selector_candidates.append(
+                            _safe_selector(f"a[href*='{target_path_selector}']")
+                        )
+                    for selector in selector_candidates:
+                        if not selector:
+                            continue
+                        try:
+                            locator = page.locator(selector).first
+                            locator.wait_for(timeout=min(timeout_ms, 2600), state="visible")
+                            click_cursor: dict[str, float] = {}
+                            try:
+                                box = locator.bounding_box()
+                            except Exception:
+                                box = None
+                            if isinstance(box, dict):
+                                center_x = float(box.get("x", 0.0)) + (float(box.get("width", 0.0)) / 2.0)
+                                center_y = float(box.get("y", 0.0)) + min(14.0, float(box.get("height", 0.0)) / 2.0)
+                                center_x, center_y = _jitter_target(center_x, center_y, spread=14.0)
+                                click_cursor = move_cursor(page=page, x=center_x, y=center_y)
+                            if not click_cursor:
+                                fallback_x, fallback_y = _jitter_target(188.0, 142.0, spread=20.0)
+                                click_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
+                            click_capture = capture_page_state(
+                                page=page,
+                                output_dir=output_dir,
+                                stamp_prefix=stamp_prefix,
+                                label=f"same-domain-link-{page_index}",
+                            )
+                            yield {
+                                "event_type": "browser_hover",
+                                "title": f"Hover same-domain link {page_index}",
+                                "detail": selector,
+                                "data": _website_payload(
+                                    {
+                                        "url": click_capture["url"],
+                                        "title": click_capture["title"],
+                                        "page_index": page_index - 1,
+                                        "selector": selector,
+                                        "target_url": target_url,
+                                        "extract_stage": "same_domain_followup",
+                                        "elapsed_ms": _elapsed_ms(),
+                                        **click_cursor,
+                                        **page_metrics(page=page),
+                                    }
+                                ),
+                                "snapshot_ref": click_capture["screenshot_path"],
+                            }
+                            yield {
+                                "event_type": "browser_click",
+                                "title": f"Open same-domain link {page_index}",
+                                "detail": target_url,
+                                "data": _website_payload(
+                                    {
+                                        "url": click_capture["url"],
+                                        "title": click_capture["title"],
+                                        "page_index": page_index - 1,
+                                        "selector": selector,
+                                        "target_url": target_url,
+                                        "extract_stage": "same_domain_followup",
+                                        "elapsed_ms": _elapsed_ms(),
+                                        **click_cursor,
+                                        **page_metrics(page=page),
+                                    }
+                                ),
+                                "snapshot_ref": click_capture["screenshot_path"],
+                            }
+                            last_cursor = dict(click_cursor)
+                            final_cursor = dict(click_cursor)
+                            break
+                        except Exception:
+                            continue
                     try:
                         page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                         page.wait_for_timeout(max(200, wait_ms))
@@ -480,6 +694,7 @@ class BrowserConnector(BaseConnector):
                         continue
                     nav_x, nav_y = _jitter_target(138, 106, spread=16.0)
                     last_cursor = move_cursor(page=page, x=nav_x, y=nav_y)
+                    final_cursor = dict(last_cursor)
                     nav_capture = capture_page_state(
                         page=page,
                         output_dir=output_dir,
@@ -491,15 +706,17 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_navigate",
                         "title": f"Navigate to page {page_index}",
                         "detail": nav_capture["url"],
-                        "data": {
-                            "url": nav_capture["url"],
-                            "title": nav_capture["title"],
-                            "page_index": page_index,
-                            "extract_stage": "same_domain_followup",
-                            "elapsed_ms": _elapsed_ms(),
-                            **last_cursor,
-                            **nav_metrics,
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": nav_capture["url"],
+                                "title": nav_capture["title"],
+                                "page_index": page_index,
+                                "extract_stage": "same_domain_followup",
+                                "elapsed_ms": _elapsed_ms(),
+                                **last_cursor,
+                                **nav_metrics,
+                            }
+                        ),
                         "snapshot_ref": nav_capture["screenshot_path"],
                     }
                     if auto_accept_cookies:
@@ -510,17 +727,25 @@ class BrowserConnector(BaseConnector):
                             stamp_prefix=stamp_prefix,
                             label=f"cookie-accept-{page_index}",
                         )
+                        consent_cursor = {
+                            key: float(consent.get(key))
+                            for key in ("cursor_x", "cursor_y")
+                            if isinstance(consent.get(key), (int, float))
+                        }
                         if consent.get("accepted"):
                             yield {
                                 "event_type": "browser_cookie_accept",
                                 "title": f"Accept website cookies (page {page_index})",
                                 "detail": str(consent.get("label") or "Accepted cookie consent banner"),
-                                "data": {
-                                    "url": consent_capture["url"],
-                                    "title": consent_capture["title"],
-                                    "page_index": page_index,
-                                    **last_cursor,
-                                },
+                                "data": _website_payload(
+                                    {
+                                        "url": consent_capture["url"],
+                                        "title": consent_capture["title"],
+                                        "page_index": page_index,
+                                        **last_cursor,
+                                        **consent_cursor,
+                                    }
+                                ),
                                 "snapshot_ref": consent_capture["screenshot_path"],
                             }
                         else:
@@ -528,12 +753,14 @@ class BrowserConnector(BaseConnector):
                                 "event_type": "browser_cookie_check",
                                 "title": f"Check website cookies (page {page_index})",
                                 "detail": "No cookie banner detected or consent already stored.",
-                                "data": {
-                                    "url": consent_capture["url"],
-                                    "title": consent_capture["title"],
-                                    "page_index": page_index,
-                                    **last_cursor,
-                                },
+                                "data": _website_payload(
+                                    {
+                                        "url": consent_capture["url"],
+                                        "title": consent_capture["title"],
+                                        "page_index": page_index,
+                                        **last_cursor,
+                                    }
+                                ),
                                 "snapshot_ref": consent_capture["screenshot_path"],
                             }
 
@@ -549,6 +776,7 @@ class BrowserConnector(BaseConnector):
                     )
                     cursor_x_px, cursor_y_px = _jitter_target(cursor_x_px, cursor_y_px, spread=24.0)
                     last_cursor = move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
+                    final_cursor = dict(last_cursor)
                     scroll_delta = smart_scroll_delta(
                         metrics_before=metrics_before,
                         pass_index=scroll_index,
@@ -559,7 +787,12 @@ class BrowserConnector(BaseConnector):
                         max_delta = max(320.0, float(viewport_height) * 1.14)
                         scroll_delta = max(-max_delta, min(max_delta, scroll_delta))
                     if abs(scroll_delta) < 1:
-                        continue
+                        if scroll_index == 0:
+                            scroll_delta = max(140.0, float(viewport_height) * 0.36)
+                        elif scroll_index == 1:
+                            scroll_delta = -max(120.0, float(viewport_height) * 0.28)
+                        else:
+                            continue
                     page.mouse.wheel(0, scroll_delta)
                     pause_ms = max(180, wait_ms // 2) + movement_rng.randint(0, 220)
                     page.wait_for_timeout(pause_ms)
@@ -574,18 +807,20 @@ class BrowserConnector(BaseConnector):
                         "event_type": "browser_scroll",
                         "title": f"Scroll page {page_index}",
                         "detail": f"Viewport pass {scroll_index + 1} ({'down' if scroll_delta >= 0 else 'up'})",
-                        "data": {
-                            "url": scroll_capture["url"],
-                            "title": scroll_capture["title"],
-                            "page_index": page_index,
-                            "scroll_pass": scroll_index + 1,
-                            "scroll_delta": round(float(scroll_delta), 2),
-                            "scroll_direction": "down" if scroll_delta >= 0 else "up",
-                            "extract_stage": "lazy_load_scroll",
-                            "elapsed_ms": _elapsed_ms(),
-                            **last_cursor,
-                            **metrics_after,
-                        },
+                        "data": _website_payload(
+                            {
+                                "url": scroll_capture["url"],
+                                "title": scroll_capture["title"],
+                                "page_index": page_index,
+                                "scroll_pass": scroll_index + 1,
+                                "scroll_delta": round(float(scroll_delta), 2),
+                                "scroll_direction": "down" if scroll_delta >= 0 else "up",
+                                "extract_stage": "lazy_load_scroll",
+                                "elapsed_ms": _elapsed_ms(),
+                                **last_cursor,
+                                **metrics_after,
+                            }
+                        ),
                         "snapshot_ref": scroll_capture["screenshot_path"],
                     }
 
@@ -609,21 +844,23 @@ class BrowserConnector(BaseConnector):
                     "event_type": "browser_extract",
                     "title": f"Extract web evidence (page {page_index})",
                     "detail": extract_capture["title"] or extract_capture["url"],
-                    "data": {
-                        "url": extract_capture["url"],
-                        "title": extract_capture["title"],
-                        "page_index": page_index,
-                        "characters": len(str(extract_capture["text_excerpt"] or "")),
-                        "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
-                        "extract_stage": "post_scroll_capture",
-                        "render_quality": extract_quality["render_quality"],
-                        "content_density": extract_quality["content_density"],
-                        "blocked_signal": extract_quality["blocked_signal"],
-                        "blocked_reason": extract_quality["blocked_reason"],
-                        "elapsed_ms": _elapsed_ms(),
-                        **last_cursor,
-                        **page_metrics(page=page),
-                    },
+                    "data": _website_payload(
+                        {
+                            "url": extract_capture["url"],
+                            "title": extract_capture["title"],
+                            "page_index": page_index,
+                            "characters": len(str(extract_capture["text_excerpt"] or "")),
+                            "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
+                            "extract_stage": "post_scroll_capture",
+                            "render_quality": extract_quality["render_quality"],
+                            "content_density": extract_quality["content_density"],
+                            "blocked_signal": extract_quality["blocked_signal"],
+                            "blocked_reason": extract_quality["blocked_reason"],
+                            "elapsed_ms": _elapsed_ms(),
+                            **last_cursor,
+                            **page_metrics(page=page),
+                        }
+                    ),
                     "snapshot_ref": extract_capture["screenshot_path"],
                 }
                 for side_event in _emit_extract_side_events(
@@ -633,6 +870,7 @@ class BrowserConnector(BaseConnector):
                 ):
                     yield side_event
 
+            browser_context.close()
             browser.close()
 
         if not visited_pages:
@@ -641,6 +879,8 @@ class BrowserConnector(BaseConnector):
                 "title": str(open_capture.get("title") or ""),
                 "text_excerpt": str(open_capture.get("text_excerpt") or ""),
                 "screenshot_path": str(open_capture.get("screenshot_path") or ""),
+                "cursor_x": float(final_cursor.get("cursor_x") or 0.0),
+                "cursor_y": float(final_cursor.get("cursor_y") or 0.0),
                 "pages": [],
             }
 
@@ -674,6 +914,8 @@ class BrowserConnector(BaseConnector):
             "title": str(primary.get("title") or final_page.get("title") or current_url),
             "text_excerpt": combined_excerpt,
             "screenshot_path": str(final_page.get("screenshot_path") or ""),
+            "cursor_x": float(final_cursor.get("cursor_x") or 0.0),
+            "cursor_y": float(final_cursor.get("cursor_y") or 0.0),
             "pages": visited_pages,
             "render_quality": final_quality,
             "content_density": average_density,

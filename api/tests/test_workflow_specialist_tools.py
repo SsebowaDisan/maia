@@ -93,6 +93,16 @@ def test_document_highlight_extract_tool_stashes_copied_entries(monkeypatch) -> 
     assert "pdf_page_change" in event_types
     assert "pdf_scan_region" in event_types
     assert "pdf_evidence_linked" in event_types
+    pdf_events = [
+        event
+        for event in result.events
+        if event.event_type in {"pdf_open", "pdf_page_change", "pdf_scan_region", "pdf_evidence_linked"}
+    ]
+    assert pdf_events
+    for event in pdf_events:
+        assert event.data.get("scene_surface") == "document"
+        assert isinstance(event.data.get("cursor_x"), float)
+        assert isinstance(event.data.get("cursor_y"), float)
 
 
 def test_document_highlight_extract_supports_large_pdf_group_budget(monkeypatch) -> None:

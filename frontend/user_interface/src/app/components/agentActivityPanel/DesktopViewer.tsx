@@ -106,6 +106,8 @@ function DesktopViewer({
   const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-160px)]" : "h-[74vh]";
   const viewerHeightClass = fullscreen ? fullscreenViewerHeightClass : inlineViewerHeightClass;
   const suppressOverlayDetail = isPlannerNarrativeEventType(activeEventType) && !isBrowserScene;
+  const hasInteractiveSurface = isBrowserScene || isDocumentScene || isEmailScene || isDocsScene || isSheetsScene;
+  const shouldRenderCursor = Boolean(eventCursor || hasInteractiveSurface);
 
   return (
     <div
@@ -176,20 +178,20 @@ function DesktopViewer({
             onSnapshotError={onSnapshotError}
           />
         </div>
-        {sceneTransitionLabel && !(fullscreen && isFocusMode) ? (
+        {sceneTransitionLabel ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/20 bg-black/58 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/85 backdrop-blur-sm">
             {sceneTransitionLabel}
           </div>
         ) : null}
 
-        {eventCursor && !(fullscreen && isFocusMode) ? (
+        {shouldRenderCursor ? (
           <>
             <div
               className="pointer-events-none absolute left-0 right-0 h-px bg-white/25"
               style={{ top: `${cursorPoint.y}%` }}
             />
             <div
-              className="pointer-events-none absolute z-20 transition-all duration-300"
+              className="pointer-events-none absolute z-20 transition-all duration-500 ease-out"
               style={{ left: `${cursorPoint.x}%`, top: `${cursorPoint.y}%` }}
             >
               <div className="relative">

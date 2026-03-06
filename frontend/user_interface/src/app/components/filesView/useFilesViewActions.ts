@@ -1,4 +1,4 @@
-import type { ChangeEvent, Dispatch, DragEvent, RefObject, SetStateAction } from "react";
+import type { ChangeEvent, Dispatch, DragEvent, SetStateAction } from "react";
 import type { FileGroupRecord, FileRecord, IngestionJob } from "../../../api/client";
 import { extractSuccessfulFileIds } from "./helpers";
 import type { DeleteConfirmationState, PendingDeleteJob } from "./types";
@@ -69,7 +69,7 @@ interface UseFilesViewActionsParams {
   forceReindex: boolean;
   selectedPdfPreviewUrl: string | null;
   isDeletingSelection: boolean;
-  pdfPreviewRef: RefObject<HTMLDivElement | null>;
+  onOpenPdfPreview: () => void;
   setActionMessage: Dispatch<SetStateAction<string>>;
   setIsDeletingSelection: Dispatch<SetStateAction<boolean>>;
   setPendingDelete: Dispatch<SetStateAction<PendingDeleteJob | null>>;
@@ -117,7 +117,7 @@ function useFilesViewActions({
   forceReindex,
   selectedPdfPreviewUrl,
   isDeletingSelection,
-  pdfPreviewRef,
+  onOpenPdfPreview,
   setActionMessage,
   setIsDeletingSelection,
   setPendingDelete,
@@ -144,7 +144,7 @@ function useFilesViewActions({
       window.setTimeout(() => setActionMessage(""), 2200);
       return;
     }
-    pdfPreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    onOpenPdfPreview();
   };
 
   const clearPendingDelete = () => {

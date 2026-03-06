@@ -106,6 +106,25 @@ function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
   return byType;
 }
 
+function cursorFromEvent(event: AgentActivityEvent | null): { x: number; y: number } | null {
+  if (!event) {
+    return null;
+  }
+  const dataX = readNumberField(event.data?.["cursor_x"]);
+  const dataY = readNumberField(event.data?.["cursor_y"]);
+  const metaX = readNumberField(event.metadata?.["cursor_x"]);
+  const metaY = readNumberField(event.metadata?.["cursor_y"]);
+  const x = dataX ?? metaX;
+  const y = dataY ?? metaY;
+  if (x === null || y === null) {
+    return null;
+  }
+  return {
+    x: Math.max(2, Math.min(98, x)),
+    y: Math.max(2, Math.min(98, y)),
+  };
+}
+
 function useAgentActivityDerived({
   events,
   cursor,
@@ -337,6 +356,14 @@ function useAgentActivityDerived({
   const browserUrl = useMemo(() => {
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const event = visibleEvents[idx];
+      const eventType = String(event.event_type || "").toLowerCase();
+      const browserLike =
+        tabForEvent(event) === "browser" ||
+        eventType.startsWith("browser_") ||
+        eventType.startsWith("web_");
+      if (!browserLike) {
+        continue;
+      }
       const meta = event.metadata || {};
       const data = event.data || {};
       const fromMeta =
@@ -357,10 +384,12 @@ function useAgentActivityDerived({
       if (fromData.startsWith("http://") || fromData.startsWith("https://")) {
         return fromData;
       }
-      const mergedText = `${event.title} ${event.detail}`.trim();
-      const match = mergedText.match(URL_PATTERN);
-      if (match?.[1]) {
-        return match[1];
+      if (eventType.startsWith("browser_") || eventType.startsWith("web_")) {
+        const mergedText = `${event.title} ${event.detail}`.trim();
+        const match = mergedText.match(URL_PATTERN);
+        if (match?.[1]) {
+          return match[1];
+        }
       }
     }
     return "";
@@ -483,23 +512,33 @@ function useAgentActivityDerived({
   );
 
   const eventCursor = useMemo(() => {
-    if (!activeEvent) {
-      return null;
+    const activeCursor = cursorFromEvent(activeEvent);
+    if (activeCursor) {
+      return activeCursor;
     }
-    const dataX = readNumberField(activeEvent.data?.["cursor_x"]);
-    const dataY = readNumberField(activeEvent.data?.["cursor_y"]);
-    const metaX = readNumberField(activeEvent.metadata?.["cursor_x"]);
-    const metaY = readNumberField(activeEvent.metadata?.["cursor_y"]);
-    const x = dataX ?? metaX;
-    const y = dataY ?? metaY;
-    if (x === null || y === null) {
-      return null;
+    const sceneCursor = cursorFromEvent(sceneEvent);
+    if (sceneCursor) {
+      return sceneCursor;
     }
-    return {
-      x: Math.max(2, Math.min(98, x)),
-      y: Math.max(2, Math.min(98, y)),
-    };
-  }, [activeEvent]);
+    const preferredTab = previewTab;
+    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+      const candidate = visibleEvents[idx];
+      if (preferredTab !== "system" && tabForEvent(candidate) !== preferredTab) {
+        continue;
+      }
+      const cursor = cursorFromEvent(candidate);
+      if (cursor) {
+        return cursor;
+      }
+    }
+    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+      const cursor = cursorFromEvent(visibleEvents[idx]);
+      if (cursor) {
+        return cursor;
+      }
+    }
+    return null;
+  }, [activeEvent, previewTab, sceneEvent, visibleEvents]);
 
   return {
     activeEvent,

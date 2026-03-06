@@ -176,6 +176,8 @@ class ResearchToolTests(unittest.TestCase):
         event_types = [event.event_type for event in result.events]
         self.assertIn("browser_navigate", event_types)
         self.assertIn("browser_scroll", event_types)
+        self.assertIn("browser_hover", event_types)
+        self.assertIn("browser_click", event_types)
         self.assertIn("web_result_opened", event_types)
 
         search_navigate_events = [
@@ -193,6 +195,27 @@ class ResearchToolTests(unittest.TestCase):
             and str(event.data.get("url") or "").startswith("https://axongroup.com/")
         ]
         self.assertTrue(opened_source_events)
+
+        cursor_events = [
+            event
+            for event in result.events
+            if event.event_type
+            in {
+                "browser_navigate",
+                "browser_hover",
+                "browser_scroll",
+                "browser_click",
+                "web_result_opened",
+            }
+        ]
+        self.assertTrue(cursor_events)
+        for event in cursor_events:
+            self.assertIn("scene_surface", event.data)
+            self.assertEqual(str(event.data.get("scene_surface")), "website")
+            self.assertIsInstance(event.data.get("cursor_x"), float)
+            self.assertIsInstance(event.data.get("cursor_y"), float)
+            self.assertGreaterEqual(float(event.data.get("cursor_x") or 0.0), 0.0)
+            self.assertGreaterEqual(float(event.data.get("cursor_y") or 0.0), 0.0)
 
 
 if __name__ == "__main__":

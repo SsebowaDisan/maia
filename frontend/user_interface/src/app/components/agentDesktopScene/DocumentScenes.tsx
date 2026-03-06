@@ -6,6 +6,7 @@ function highlightBackground(color: "yellow" | "green") {
 
 type DocumentPdfSceneProps = {
   activeDetail: string;
+  activeEventType: string;
   documentHighlights: DocumentHighlight[];
   pdfPage: number;
   pdfPageTotal: number;
@@ -39,6 +40,7 @@ function PdfScrollRail({
 
 function DocumentPdfScene({
   activeDetail,
+  activeEventType,
   documentHighlights,
   pdfPage,
   pdfPageTotal,
@@ -51,6 +53,9 @@ function DocumentPdfScene({
   const page = Math.max(1, Math.round(pdfPage));
   const totalPages = Math.max(page, Math.round(pdfPageTotal));
   const frameUrl = `${stageFileUrl}#page=${page}&zoom=page-width&toolbar=0&navpanes=0&scrollbar=0`;
+  const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
+  const showScanFocus = normalizedEventType === "pdf_scan_region" || normalizedEventType === "pdf_evidence_linked";
+  const showPageTurnBadge = normalizedEventType === "pdf_page_change";
   return (
     <div className="absolute inset-0">
       <iframe
@@ -79,6 +84,14 @@ function DocumentPdfScene({
           </p>
         ) : null}
       </div>
+      {showScanFocus ? (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[24%] w-[62%] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[#f8cd6f]/85 bg-[#f8cd6f]/12 shadow-[0_0_0_1px_rgba(248,205,111,0.4)]" />
+      ) : null}
+      {showPageTurnBadge ? (
+        <div className="pointer-events-none absolute right-4 top-16 z-20 rounded-full border border-black/15 bg-white/92 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#2d2d31]">
+          Page turn
+        </div>
+      ) : null}
       {documentHighlights.length ? (
         <div className="pointer-events-none absolute left-3 right-3 bottom-3 rounded-xl border border-black/15 bg-white/85 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
           <p className="text-[11px] font-semibold">Copied highlights</p>
