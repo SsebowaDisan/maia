@@ -150,6 +150,11 @@ const integrationEventStyles: Record<string, EventStyle> = {
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
+  "llm.research_depth_profile": {
+    label: "Depth Profile",
+    icon: Sparkles,
+    accent: "text-[#4c4c50]",
+  },
   "llm.task_rewrite_started": {
     label: "Rewrite Task",
     icon: Sparkles,

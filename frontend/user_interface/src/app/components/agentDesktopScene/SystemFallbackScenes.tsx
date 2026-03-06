@@ -1,10 +1,34 @@
 type SystemSceneProps = {
+  activeEventType: string;
   activeDetail: string;
   activeTitle: string;
   sceneText: string;
 };
 
-function SystemScene({ activeDetail, activeTitle, sceneText }: SystemSceneProps) {
+function isPlannerNarrativeEventType(eventType: string): boolean {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "planning_started" ||
+    normalized.startsWith("plan_") ||
+    normalized.startsWith("planning_") ||
+    normalized.startsWith("task_understanding_") ||
+    normalized.startsWith("preflight_") ||
+    normalized.startsWith("llm.task_") ||
+    normalized.startsWith("llm.plan_") ||
+    normalized === "llm.web_routing_decision" ||
+    normalized === "llm.intent_tags"
+  );
+}
+
+function SystemScene({ activeEventType, activeDetail, activeTitle, sceneText }: SystemSceneProps) {
+  const suppressPlannerNarrative = isPlannerNarrativeEventType(activeEventType);
+  const narrativeText = suppressPlannerNarrative
+    ? "Coordinating plan and execution handoff..."
+    : sceneText || activeDetail || "Finalizing run events and preparing delivery output.";
+
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.08),rgba(7,9,12,0.96)_62%)] px-6">
       <div className="w-full max-w-[680px] rounded-2xl border border-white/15 bg-black/45 p-5 backdrop-blur-sm">
@@ -13,7 +37,7 @@ function SystemScene({ activeDetail, activeTitle, sceneText }: SystemSceneProps)
           {activeTitle || "Processing secure agent workflow"}
         </p>
         <p className="mt-2 text-[13px] text-white/80">
-          {sceneText || activeDetail || "Finalizing run events and preparing delivery output."}
+          {narrativeText}
         </p>
         <div className="mt-4 space-y-2">
           <div className="h-2 w-[92%] rounded-full bg-white/25" />

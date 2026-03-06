@@ -36,6 +36,7 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "llm.clarification_requested": "plan",
     "llm.clarification_resolved": "plan",
     "llm.context_memory": "plan",
+    "llm.research_depth_profile": "plan",
     "llm.plan_decompose_started": "plan",
     "llm.plan_decompose_completed": "plan",
     "llm.capability_plan": "plan",
@@ -163,6 +164,10 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Post-submit confirmation evaluated",
         "user_visible": True,
     },
+    "browser_human_verification_required": {
+        "description": "Website requires human verification before automation can continue",
+        "user_visible": True,
+    },
     "document_opened": {"description": "Document opened from indexed files", "user_visible": True},
     "document_scanned": {"description": "Document sections scanned", "user_visible": True},
     "highlights_detected": {"description": "Relevant highlights detected", "user_visible": True},
@@ -212,6 +217,10 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "llm.context_summary": {"description": "LLM conversation context summary generated", "user_visible": True},
     "llm.context_memory": {"description": "Memory context snippets loaded for planning", "user_visible": True},
+    "llm.research_depth_profile": {
+        "description": "Adaptive research depth profile selected for this request",
+        "user_visible": True,
+    },
     "llm.intent_tags": {"description": "LLM intent tags generated", "user_visible": True},
     "llm.step_summary": {"description": "LLM step summary generated", "user_visible": True},
     "synthesis_started": {"description": "Answer synthesis started", "user_visible": True},
@@ -256,6 +265,8 @@ def infer_stage(event_type: str) -> EventStage:
 
 
 def infer_status(event_type: str) -> EventStatus:
+    if event_type in {"approval_required", "email_auth_required", "browser_human_verification_required"}:
+        return "waiting"
     if event_type.endswith("_started") or event_type in {
         "desktop_starting",
         "response_writing",

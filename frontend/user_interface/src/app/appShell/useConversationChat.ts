@@ -15,7 +15,7 @@ import { buildConversationTurns, extractAgentEvents } from "./eventHelpers";
 import type { SidebarProject } from "./types";
 import type { AgentActivityEvent, ChatAttachment, ChatTurn, CitationFocus } from "../types";
 
-type AgentMode = "ask" | "company_agent";
+type AgentMode = "ask" | "company_agent" | "deep_search";
 type AccessMode = "restricted" | "full_access";
 const MINDMAP_SETTINGS_STORAGE_KEY = "maia.conversation-mindmap-settings";
 type ConversationMindmapSettings = {
@@ -24,12 +24,32 @@ type ConversationMindmapSettings = {
   includeReasoningMap: boolean;
   mapType: "structure" | "evidence";
 };
+const DEEP_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
+  __deep_search_enabled: true,
+  __llm_only_keyword_generation: true,
+  __llm_only_keyword_generation_strict: true,
+  __deep_search_max_source_ids: 350,
+  __research_depth_tier: "deep_research",
+  __research_web_search_budget: 350,
+  __research_max_query_variants: 14,
+  __research_results_per_query: 25,
+  __research_fused_top_k: 220,
+  __research_min_unique_sources: 80,
+  __research_source_budget_min: 80,
+  __research_source_budget_max: 200,
+  __file_research_source_budget_min: 120,
+  __file_research_source_budget_max: 220,
+  __file_research_max_sources: 220,
+  __file_research_max_chunks: 1800,
+  __file_research_max_scan_pages: 200,
+};
 
 type SendMessageOptions = {
   citationMode?: string;
   useMindmap?: boolean;
   mindmapSettings?: Record<string, unknown>;
   mindmapFocus?: Record<string, unknown>;
+  settingOverrides?: Record<string, unknown>;
   agentMode?: AgentMode;
   accessMode?: AccessMode;
 };
@@ -281,8 +301,21 @@ export function useConversationChat({
 
       const effectiveMode = options?.agentMode ?? composerMode;
       const effectiveAccessMode = options?.accessMode ?? accessMode;
-      const delayedPendingAssistantMessage =
-        effectiveMode === "company_agent" ? "Starting my desktop..." : "Thinking....";
+      const orchestratorMode = effectiveMode === "company_agent" || effectiveMode === "deep_search";
+      const webOnlyResearchRequested =
+        effectiveMode === "deep_search" &&
+        Boolean(options?.settingOverrides?.["__research_web_only"]);
+      const requestedTurnMode: ChatTurn["mode"] =
+        effectiveMode === "deep_search" && webOnlyResearchRequested
+          ? "web_search"
+          : effectiveMode;
+      const delayedPendingAssistantMessage = orchestratorMode
+        ? effectiveMode === "deep_search"
+          ? webOnlyResearchRequested
+            ? "Running web search..."
+            : "Running deep search..."
+          : "Starting my desktop..."
+        : "Thinking....";
       const firstAttachedFile = (attachments || []).find((item) => Boolean(item.fileId));
       if (firstAttachedFile?.fileId) {
         setCitationFocus({
@@ -298,9 +331,16 @@ export function useConversationChat({
         .filter((item): item is string => Boolean(item));
 
       const pendingTurnIndex = chatTurns.length;
+      const mergedSettingOverrides: Record<string, unknown> =
+        effectiveMode === "deep_search"
+          ? {
+              ...DEEP_SEARCH_SETTING_OVERRIDES,
+              ...(options?.settingOverrides || {}),
+            }
+          : (options?.settingOverrides || {});
 
       setIsSending(true);
-      setIsActivityStreaming(effectiveMode === "company_agent");
+      setIsActivityStreaming(orchestratorMode);
       setInfoText("");
       setActivityEvents([]);
       setSelectedTurnIndex(pendingTurnIndex);
@@ -312,7 +352,7 @@ export function useConversationChat({
           plot: null,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           info: "",
-          mode: effectiveMode,
+          mode: requestedTurnMode,
           activityEvents: [],
           needsHumanReview: false,
           humanReviewNotes: null,
@@ -365,12 +405,13 @@ export function useConversationChat({
             map_type: mindmapMapType,
           },
           mindmapFocus: options?.mindmapFocus ?? {},
+          settingOverrides: mergedSettingOverrides,
           agentMode: effectiveMode,
           accessMode: effectiveAccessMode,
         };
 
         let response;
-        if (effectiveMode === "company_agent") {
+        if (orchestratorMode) {
           let streamedInfo = "";
           const streamedEvents: AgentActivityEvent[] = [];
           try {
@@ -449,7 +490,7 @@ export function useConversationChat({
                 ? `${previous}\n\n[Notice] Live activity stream timed out. Used direct response fallback.`
                 : "[Notice] Live activity stream timed out. Used direct response fallback.",
             );
-            console.warn("Company agent stream fallback triggered:", streamError);
+            console.warn("Orchestrator stream fallback triggered:", streamError);
           }
         } else {
           response = await sendChat(message, selectedConversationId, sharedPayload);
@@ -490,17 +531,21 @@ export function useConversationChat({
           const last = next[next.length - 1];
           const effectiveReturnedMode =
             (response.mode as AgentMode | undefined) || effectiveMode;
+          const resolvedTurnMode: ChatTurn["mode"] =
+            effectiveReturnedMode === "deep_search" && webOnlyResearchRequested
+              ? "web_search"
+              : effectiveReturnedMode;
           const backendModeMismatch =
-            effectiveMode === "company_agent" && effectiveReturnedMode !== "company_agent";
+            orchestratorMode && effectiveReturnedMode === "ask";
           next[next.length - 1] = {
             ...(last || {}),
             user: message,
             assistant: backendModeMismatch
-              ? `${response.answer || ""}\n\n[Notice] Backend is not running Agent mode. Restart the API server and try again.`
+              ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
               : response.answer || "",
             info: response.info || "",
             plot: response.plot || null,
-            mode: effectiveReturnedMode,
+            mode: resolvedTurnMode,
             actionsTaken: response.actions_taken || [],
             sourcesUsed: response.sources_used || [],
             sourceUsage: response.source_usage || [],
@@ -543,7 +588,7 @@ export function useConversationChat({
             assistant: `Error: ${errorMessage}`,
             info: "",
             plot: null,
-            mode: effectiveMode,
+            mode: requestedTurnMode,
             needsHumanReview: false,
             humanReviewNotes: null,
             infoPanel: {},

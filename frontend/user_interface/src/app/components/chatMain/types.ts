@@ -18,7 +18,8 @@ type ChatMainProps = {
       useMindmap?: boolean;
       mindmapSettings?: Record<string, unknown>;
       mindmapFocus?: Record<string, unknown>;
-      agentMode?: "ask" | "company_agent";
+      settingOverrides?: Record<string, unknown>;
+      agentMode?: "ask" | "company_agent" | "deep_search";
       accessMode?: "restricted" | "full_access";
     },
   ) => Promise<void>;
@@ -60,8 +61,8 @@ type ChatMainProps = {
   mindmapMapType: "structure" | "evidence";
   onMindmapMapTypeChange: (mapType: "structure" | "evidence") => void;
   onCitationClick: (citation: CitationFocus) => void;
-  agentMode: "ask" | "company_agent";
-  onAgentModeChange: (mode: "ask" | "company_agent") => void;
+  agentMode: "ask" | "company_agent" | "deep_search";
+  onAgentModeChange: (mode: "ask" | "company_agent" | "deep_search") => void;
   accessMode: "restricted" | "full_access";
   onAccessModeChange: (mode: "restricted" | "full_access") => void;
   activityEvents: AgentActivityEvent[];

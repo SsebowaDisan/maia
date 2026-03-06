@@ -13,6 +13,7 @@ import { buildRawFileUrl } from "../../../api/client";
 import type { FileGroupRecord, FileRecord } from "../../../api/client";
 import type { SidebarProject } from "../../appShell/types";
 import { AccessModeDropdown } from "../AccessModeDropdown";
+import { ComposerModeSelector } from "../ComposerModeSelector";
 import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import type { ComposerAttachment } from "./types";
 
@@ -66,11 +67,14 @@ function resolveCommandQuery(text: string, caret: number): CommandQueryState | n
 type ComposerPanelProps = {
   accessMode: "restricted" | "full_access";
   agentControlsVisible: boolean;
-  agentMode: "ask" | "company_agent";
+  agentMode: "ask" | "company_agent" | "deep_search";
+  composerMode: "ask" | "company_agent" | "deep_search" | "web_search";
   attachments: ComposerAttachment[];
   clearAttachments: () => void;
   removeAttachment: (attachmentId: string) => void;
+  enableAskMode: () => void;
   enableAgentMode: () => void;
+  enableWebSearch: () => void;
   enableDeepResearch: () => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   isSending: boolean;
@@ -95,10 +99,13 @@ function ComposerPanel({
   accessMode,
   agentControlsVisible,
   agentMode,
+  composerMode,
   attachments,
   clearAttachments,
   removeAttachment,
+  enableAskMode,
   enableAgentMode,
+  enableWebSearch,
   enableDeepResearch,
   fileInputRef,
   isSending,
@@ -367,7 +374,7 @@ function ComposerPanel({
                 onInput={resizeComposerTextarea}
                 placeholder="What would you like to do next?"
                 aria-label="Message"
-                className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent text-[15px] text-[#1d1d1f] placeholder:text-[#8b8b92] focus:outline-none"
+                className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent focus:outline-none"
                 onKeyDown={handleComposerKeyDown}
                 onKeyUp={syncCommandQueryFromTextarea}
                 onClick={syncCommandQueryFromTextarea}
@@ -422,12 +429,28 @@ function ComposerPanel({
               />
               <ComposerQuickActionsCard
                 onUploadFile={() => fileInputRef.current?.click()}
-                onSelectAgent={enableAgentMode}
-                onSelectDeepResearch={enableDeepResearch}
                 onPasteHighlights={pasteHighlightsToComposer}
                 canPasteHighlights={latestHighlightSnippets.length > 0}
                 disableUpload={isUploading || isSending}
                 triggerClassName="composerAttachButton inline-flex items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f] disabled:opacity-40"
+              />
+              <ComposerModeSelector
+                value={composerMode}
+                onChange={(value) => {
+                  if (value === "ask") {
+                    enableAskMode();
+                    return;
+                  }
+                  if (value === "company_agent") {
+                    enableAgentMode();
+                    return;
+                  }
+                  if (value === "web_search") {
+                    enableWebSearch();
+                    return;
+                  }
+                  enableDeepResearch();
+                }}
               />
 
               {attachments.length > 0 ? (

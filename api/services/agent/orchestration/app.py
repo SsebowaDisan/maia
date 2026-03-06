@@ -10,6 +10,7 @@ from api.services.agent.events import CORE_EVENT_TYPES, RunEventEmitter
 from api.services.agent.memory import get_memory_service
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
+from api.services.agent.planner_helpers import intent_signals
 from api.services.agent.policy import ACCESS_MODE_FULL, build_access_context
 from api.services.agent.tools.base import ToolExecutionContext
 from api.services.agent.tools.registry import get_tool_registry
@@ -84,9 +85,8 @@ class AgentOrchestrator:
         request: ChatRequest,
     ) -> list[str]:
         expected: list[str] = list(CORE_EVENT_TYPES)
-        has_docs = any(
-            token in request.message.lower() for token in ("pdf", "document", "file", "page")
-        )
+        inferred_signals = intent_signals(request)
+        has_docs = bool(self._selected_file_ids(request)) or bool(inferred_signals.get("wants_file_scope"))
         has_web_steps = False
         for step in steps:
             expected.append("tool_started")
@@ -326,11 +326,12 @@ class AgentOrchestrator:
                     "__agent_run_id": run_id,
                     "__selected_file_ids": self._selected_file_ids(request),
                     "__selected_index_id": self._selected_index_id(request),
-                    "__research_search_terms": plan_prep.planned_search_terms[:6],
+                    "__research_search_terms": plan_prep.planned_search_terms[:20],
                     "__research_keywords": plan_prep.planned_keywords[:16],
                     "__highlight_color": plan_prep.highlight_color,
                     "__copied_highlights": [],
                     "__user_preferences": task_prep.user_preferences,
+                    "__research_depth_profile": task_prep.research_depth_profile,
                     "__task_preferred_tone": task_prep.task_intelligence.preferred_tone,
                     "__task_preferred_format": task_prep.task_intelligence.preferred_format,
                     "__intent_tags": list(task_prep.task_intelligence.intent_tags),
@@ -358,11 +359,21 @@ class AgentOrchestrator:
                     "__memory_context_snippets": list(task_prep.memory_context_snippets[:6]),
                 },
             )
+            steps = list(plan_prep.steps)
+            docs_logging_requested = any(
+                step.tool_id in ("workspace.docs.research_notes", "workspace.docs.fill_template", "docs.create")
+                for step in steps
+            )
+            sheets_logging_requested = any(
+                step.tool_id in ("workspace.sheets.track_step", "workspace.sheets.append")
+                for step in steps
+            ) or bool(plan_prep.deep_workspace_logging_enabled)
             state = ExecutionState(
                 execution_context=execution_context,
                 deep_workspace_logging_enabled=plan_prep.deep_workspace_logging_enabled,
+                deep_workspace_docs_logging_enabled=docs_logging_requested,
+                deep_workspace_sheets_logging_enabled=sheets_logging_requested,
             )
-            steps = list(plan_prep.steps)
             if task_prep.clarification_blocked and steps:
                 clarification_block_event = activity_event_factory(
                     event_type="policy_blocked",

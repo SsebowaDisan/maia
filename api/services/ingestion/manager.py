@@ -16,12 +16,6 @@ from sqlmodel import SQLModel, Session, select
 
 from api.context import get_context
 from api.services.settings_service import load_user_settings
-from api.services.upload_service import (
-    delete_indexed_files,
-    index_files,
-    index_urls,
-    move_files_to_group,
-)
 from ktem.db.engine import engine
 
 from .config import (
@@ -39,13 +33,104 @@ from .config import (
 )
 from .models import IngestionJob
 from .serialization import as_json_safe, job_to_payload
-from api.services.upload.indexing import IndexingCanceledError
 
 logger = logging.getLogger(__name__)
 
 
 class IngestionJobCanceledError(RuntimeError):
     pass
+
+
+def _delete_indexed_files_api(*, context: Any, user_id: str, index_id: int | None, file_ids: list[str]) -> None:
+    from api.services.upload_service import delete_indexed_files
+
+    delete_indexed_files(
+        context=context,
+        user_id=user_id,
+        index_id=index_id,
+        file_ids=file_ids,
+    )
+
+
+def _index_files_api(
+    *,
+    context: Any,
+    user_id: str,
+    file_paths: list[Path],
+    index_id: int | None,
+    reindex: bool,
+    settings: dict[str, Any],
+    scope: str,
+    uploaded_file_meta: dict[str, dict[str, Any]],
+    should_cancel: Any,
+) -> dict[str, Any]:
+    from api.services.upload_service import index_files
+
+    return index_files(
+        context=context,
+        user_id=user_id,
+        file_paths=file_paths,
+        index_id=index_id,
+        reindex=reindex,
+        settings=settings,
+        scope=scope,
+        uploaded_file_meta=uploaded_file_meta,
+        should_cancel=should_cancel,
+    )
+
+
+def _index_urls_api(
+    *,
+    context: Any,
+    user_id: str,
+    urls: list[str],
+    index_id: int | None,
+    reindex: bool,
+    settings: dict[str, Any],
+    web_crawl_depth: int,
+    web_crawl_max_pages: int,
+    web_crawl_same_domain_only: bool,
+    include_pdfs: bool,
+    include_images: bool,
+    should_cancel: Any,
+) -> dict[str, Any]:
+    from api.services.upload_service import index_urls
+
+    return index_urls(
+        context=context,
+        user_id=user_id,
+        urls=urls,
+        index_id=index_id,
+        reindex=reindex,
+        settings=settings,
+        web_crawl_depth=web_crawl_depth,
+        web_crawl_max_pages=web_crawl_max_pages,
+        web_crawl_same_domain_only=web_crawl_same_domain_only,
+        include_pdfs=include_pdfs,
+        include_images=include_images,
+        should_cancel=should_cancel,
+    )
+
+
+def _move_files_to_group_api(
+    *,
+    context: Any,
+    user_id: str,
+    index_id: int | None,
+    file_ids: list[str],
+    group_id: str,
+) -> dict[str, Any]:
+    from api.services.upload_service import move_files_to_group
+
+    return move_files_to_group(
+        context=context,
+        user_id=user_id,
+        index_id=index_id,
+        file_ids=file_ids,
+        group_id=group_id,
+        group_name=None,
+        mode="append",
+    )
 
 
 class IngestionJobManager:
@@ -362,7 +447,7 @@ class IngestionJobManager:
         if not dedup_ids:
             return
         try:
-            delete_indexed_files(
+            _delete_indexed_files_api(
                 context=get_context(),
                 user_id=user_id,
                 index_id=index_id,
@@ -506,7 +591,7 @@ class IngestionJobManager:
                     continue
 
                 try:
-                    response = index_files(
+                    response = _index_files_api(
                         context=context,
                         user_id=user_id,
                         file_paths=batch_paths,
@@ -517,16 +602,23 @@ class IngestionJobManager:
                         uploaded_file_meta=batch_meta,
                         should_cancel=cancel_checker,
                     )
-                except IndexingCanceledError as canceled:
-                    if canceled.items:
-                        all_items.extend([dict(item) for item in canceled.items])
-                    if canceled.errors:
-                        all_errors.extend([str(err) for err in canceled.errors])
-                    if canceled.file_ids:
-                        all_file_ids.extend([str(fid) for fid in canceled.file_ids if fid])
-                    if canceled.debug:
-                        all_debug.extend([str(msg) for msg in canceled.debug])
-                    raise IngestionJobCanceledError(str(canceled)) from canceled
+                except Exception as exc:
+                    if exc.__class__.__name__ == "IndexingCanceledError":
+                        canceled = exc
+                        canceled_items = getattr(canceled, "items", None)
+                        canceled_errors = getattr(canceled, "errors", None)
+                        canceled_file_ids = getattr(canceled, "file_ids", None)
+                        canceled_debug = getattr(canceled, "debug", None)
+                        if isinstance(canceled_items, list) and canceled_items:
+                            all_items.extend([dict(item) for item in canceled_items])
+                        if isinstance(canceled_errors, list) and canceled_errors:
+                            all_errors.extend([str(err) for err in canceled_errors])
+                        if isinstance(canceled_file_ids, list) and canceled_file_ids:
+                            all_file_ids.extend([str(fid) for fid in canceled_file_ids if fid])
+                        if isinstance(canceled_debug, list) and canceled_debug:
+                            all_debug.extend([str(msg) for msg in canceled_debug])
+                        raise IngestionJobCanceledError(str(canceled)) from canceled
+                    raise
 
                 batch_items = list(response.get("items") or [])
                 batch_errors = [str(err) for err in list(response.get("errors") or [])]
@@ -566,14 +658,12 @@ class IngestionJobManager:
             self._assert_job_not_canceled(job_id)
             if target_group_id and all_file_ids:
                 try:
-                    move_result = move_files_to_group(
+                    move_result = _move_files_to_group_api(
                         context=context,
                         user_id=user_id,
                         index_id=index_id,
                         file_ids=all_file_ids,
                         group_id=target_group_id,
-                        group_name=None,
-                        mode="append",
                     )
                     moved_ids = list(move_result.get("moved_ids") or [])
                     self._inc_metric("files_moved_to_group", amount=len(moved_ids))
@@ -654,7 +744,7 @@ class IngestionJobManager:
             for batch in self._iterate_batches(urls, INGEST_URL_BATCH_SIZE):
                 self._assert_job_not_canceled(job_id)
                 try:
-                    response = index_urls(
+                    response = _index_urls_api(
                         context=context,
                         user_id=user_id,
                         urls=batch,
@@ -668,16 +758,23 @@ class IngestionJobManager:
                         include_images=include_images,
                         should_cancel=cancel_checker,
                     )
-                except IndexingCanceledError as canceled:
-                    if canceled.items:
-                        all_items.extend([dict(item) for item in canceled.items])
-                    if canceled.errors:
-                        all_errors.extend([str(err) for err in canceled.errors])
-                    if canceled.file_ids:
-                        all_file_ids.extend([str(fid) for fid in canceled.file_ids if fid])
-                    if canceled.debug:
-                        all_debug.extend([str(msg) for msg in canceled.debug])
-                    raise IngestionJobCanceledError(str(canceled)) from canceled
+                except Exception as exc:
+                    if exc.__class__.__name__ == "IndexingCanceledError":
+                        canceled = exc
+                        canceled_items = getattr(canceled, "items", None)
+                        canceled_errors = getattr(canceled, "errors", None)
+                        canceled_file_ids = getattr(canceled, "file_ids", None)
+                        canceled_debug = getattr(canceled, "debug", None)
+                        if isinstance(canceled_items, list) and canceled_items:
+                            all_items.extend([dict(item) for item in canceled_items])
+                        if isinstance(canceled_errors, list) and canceled_errors:
+                            all_errors.extend([str(err) for err in canceled_errors])
+                        if isinstance(canceled_file_ids, list) and canceled_file_ids:
+                            all_file_ids.extend([str(fid) for fid in canceled_file_ids if fid])
+                        if isinstance(canceled_debug, list) and canceled_debug:
+                            all_debug.extend([str(msg) for msg in canceled_debug])
+                        raise IngestionJobCanceledError(str(canceled)) from canceled
+                    raise
 
                 batch_items = list(response.get("items") or [])
                 batch_errors = [str(err) for err in list(response.get("errors") or [])]

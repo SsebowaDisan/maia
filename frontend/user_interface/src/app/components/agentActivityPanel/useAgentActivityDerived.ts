@@ -266,7 +266,17 @@ function useAgentActivityDerived({
     !isSheetsScene &&
     !hasDocumentUrlSignal &&
     (hasPdfEventSignal || hasPdfDataSignal || !sceneSpreadsheetUrl);
-  const isDocsScene = isDocumentScene && !isSheetsScene && !isPdfScene;
+  const sceneToolId = String(sceneEvent?.metadata?.["tool_id"] || sceneEvent?.data?.["tool_id"] || "")
+    .trim()
+    .toLowerCase();
+  const hasDocsEventSignal =
+    sceneEventType.startsWith("doc_") ||
+    sceneEventType.startsWith("docs.") ||
+    sceneEventType === "drive.go_to_doc" ||
+    hasDocumentUrlSignal ||
+    sceneToolId.startsWith("workspace.docs.") ||
+    sceneToolId === "docs.create";
+  const isDocsScene = isDocumentScene && !isSheetsScene && !isPdfScene && hasDocsEventSignal;
   const sceneSurfaceKey = isBrowserScene
     ? "website"
     : isSheetsScene

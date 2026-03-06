@@ -77,13 +77,22 @@ def enrich_task_intelligence(
         '  "requires_web_inspection": true,\n'
         '  "requires_contact_form_submission": true,\n'
         '  "requested_report": true,\n'
+        '  "wants_docs_output": true,\n'
+        '  "wants_sheets_output": true,\n'
+        '  "wants_highlight_extract": true,\n'
+        '  "wants_location_lookup": true,\n'
+        '  "wants_file_scope": true,\n'
+        '  "requires_attachment_delivery": true,\n'
+        '  "routing_mode": "online_research|url_scrape|none",\n'
+        '  "intent_tags": ["allowed_tag_1"],\n'
         '  "preferred_tone": "string",\n'
         '  "preferred_format": "string"\n'
         "}\n"
         "Rules:\n"
         "- Preserve facts from the input; do not invent URLs or emails.\n"
         "- Keep objective concise and actionable.\n"
-        "- Include intent_tags only from allowed tags if strongly applicable.\n"
+        f"- Use routing_mode only from: {', '.join(ALLOWED_WEB_ROUTING_MODES)}.\n"
+        f"- Include intent_tags only from: {', '.join(ALLOWED_INTENT_TAGS)}.\n"
         "- Use empty string when unknown for string fields.\n\n"
         f"Input:\n{json.dumps(input_payload, ensure_ascii=True)}"
     )
@@ -108,6 +117,12 @@ def enrich_task_intelligence(
         "requires_web_inspection",
         "requires_contact_form_submission",
         "requested_report",
+        "wants_docs_output",
+        "wants_sheets_output",
+        "wants_highlight_extract",
+        "wants_location_lookup",
+        "wants_file_scope",
+        "requires_attachment_delivery",
     )
     for key in bool_keys:
         coerced = _coerce_bool(enriched.get(key))
@@ -120,6 +135,11 @@ def enrich_task_intelligence(
         if key not in enriched:
             continue
         enriched[key] = str(enriched.get(key) or "").strip()[:320]
+    mode = str(enriched.get("routing_mode") or "").strip().lower()
+    if mode in ALLOWED_WEB_ROUTING_MODES:
+        enriched["routing_mode"] = mode
+    elif "routing_mode" in enriched:
+        enriched.pop("routing_mode", None)
     tags = _normalize_intent_tags(enriched.get("intent_tags"))
     if tags:
         enriched["intent_tags"] = tags

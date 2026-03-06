@@ -9,7 +9,7 @@ export type ChatTurn = {
   attachments?: ChatAttachment[];
   info?: string;
   plot?: Record<string, unknown> | null;
-  mode?: "ask" | "company_agent";
+  mode?: "ask" | "company_agent" | "deep_search" | "web_search";
   actionsTaken?: AgentActionRecord[];
   sourcesUsed?: AgentSourceRecord[];
   sourceUsage?: SourceUsageRecord[];

@@ -1,3 +1,6 @@
+import html as html_lib
+import re
+
 from api.services.chat.citations import (
     assign_fast_source_refs,
     append_required_citation_suffix,
@@ -678,6 +681,49 @@ def test_enforce_required_citations_cites_each_claim_sentence() -> None:
     assert "href='#evidence-2'" in answer
 
 
+def test_enforce_required_citations_maps_command_style_claims_to_matching_evidence() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='3' open>"
+        "<summary><i>Evidence [1] - page 3</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> n3 app.ai check verifies the app compiles before smoke tests</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-2' data-file-id='file-1' data-page='8'>"
+        "<summary><i>Evidence [2] - page 8</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> start_conversation adds a system message and initializes a new thread</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer=(
+            "Use n3 app.ai check before running smoke tests. "
+            "Use start_conversation to initialize the conversation thread."
+        ),
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "href='#evidence-1'" in answer
+    assert "href='#evidence-2'" in answer
+
+
+def test_enforce_required_citations_does_not_force_unrelated_inline_ref_for_multi_source() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
+        "<summary><i>Evidence [1] - page 1</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> trees absorb water from roots</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-2' data-file-id='file-1' data-page='2'>"
+        "<summary><i>Evidence [2] - page 2</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> chlorophyll supports photosynthesis</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer="This line has no overlap with any evidence phrase.",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "This line has no overlap with any evidence phrase. <a " not in answer
+    assert "Evidence: <a " in answer
+
+
 def test_enforce_required_citations_normalizes_visible_numbers_and_preserves_claim_level_repeats() -> None:
     info_html = (
         "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
@@ -782,3 +828,26 @@ def test_build_fast_info_html_ignores_artifact_source_urls() -> None:
     )
     assert "data-source-url=" not in info_html
     assert "<b>Link:</b>" not in info_html
+
+
+def test_build_fast_info_html_compacts_extract_for_highlight_panel() -> None:
+    info_html = build_fast_info_html(
+        [
+            {
+                "ref_id": 1,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "4",
+                "text": ("command output details " * 90).strip(),
+            }
+        ]
+    )
+    extract_match = re.search(
+        r"<div class='evidence-content'><b>Extract:</b>\s*([\s\S]*?)</div>",
+        info_html,
+        flags=re.IGNORECASE,
+    )
+    assert extract_match is not None
+    extract = html_lib.unescape(extract_match.group(1).strip())
+    assert len(extract) <= 523
+    assert extract.endswith("...")

@@ -3,7 +3,7 @@ import { DEFAULT_PROJECT_ID, STORAGE_KEYS } from "./constants";
 import { readStoredJson, readStoredText } from "./storage";
 import type { SidebarProject } from "./types";
 
-type ConversationMode = "ask" | "company_agent";
+type ConversationMode = "ask" | "company_agent" | "deep_search";
 
 function createProjectId() {
   return `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;

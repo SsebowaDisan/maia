@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+from dataclasses import replace
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -12,9 +13,123 @@ from api.services.agent.llm_personalization import infer_user_preferences
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.preferences import get_user_preference_store
 from api.services.agent.preflight import run_preflight_checks
+from api.services.agent.research_depth_profile import (
+    ResearchDepthProfile,
+    derive_research_depth_profile,
+)
 
 from .models import TaskPreparation
 from .text_helpers import compact, truthy
+
+
+def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(low, min(high, parsed))
+
+
+def _force_deep_search_profile(
+    *,
+    request: ChatRequest,
+    settings: dict[str, Any],
+    depth_profile: ResearchDepthProfile,
+) -> ResearchDepthProfile:
+    deep_search_requested = str(request.agent_mode or "").strip().lower() == "deep_search" or truthy(
+        settings.get("__deep_search_enabled"),
+        default=False,
+    )
+    if not deep_search_requested:
+        return depth_profile
+
+    complexity = " ".join(str(settings.get("__deep_search_complexity") or "").split()).strip().lower()
+    complex_mode = complexity == "complex"
+
+    max_query_variants = _bounded_int(
+        settings.get("__research_max_query_variants"),
+        default=max(18 if complex_mode else 12, depth_profile.max_query_variants),
+        low=8,
+        high=20,
+    )
+    results_per_query = _bounded_int(
+        settings.get("__research_results_per_query"),
+        default=max(12 if complex_mode else 10, depth_profile.results_per_query),
+        low=8,
+        high=25,
+    )
+    source_budget_min = _bounded_int(
+        settings.get("__research_source_budget_min"),
+        default=max(80 if complex_mode else 50, depth_profile.source_budget_min),
+        low=20,
+        high=200,
+    )
+    source_budget_max = _bounded_int(
+        settings.get("__research_source_budget_max"),
+        default=max(180 if complex_mode else 100, depth_profile.source_budget_max),
+        low=source_budget_min,
+        high=220,
+    )
+    min_unique_sources = _bounded_int(
+        settings.get("__research_min_unique_sources"),
+        default=max(source_budget_min, 50, depth_profile.min_unique_sources),
+        low=source_budget_min,
+        high=200,
+    )
+    file_source_budget_min = _bounded_int(
+        settings.get("__file_research_source_budget_min"),
+        default=max(140 if complex_mode else 100, depth_profile.file_source_budget_min),
+        low=24,
+        high=220,
+    )
+    file_source_budget_max = _bounded_int(
+        settings.get("__file_research_source_budget_max"),
+        default=max(220 if complex_mode else 180, depth_profile.file_source_budget_max),
+        low=file_source_budget_min,
+        high=240,
+    )
+    max_file_sources = _bounded_int(
+        settings.get("__file_research_max_sources"),
+        default=max(file_source_budget_min, depth_profile.max_file_sources),
+        low=file_source_budget_min,
+        high=240,
+    )
+    max_file_chunks = _bounded_int(
+        settings.get("__file_research_max_chunks"),
+        default=max(1800 if complex_mode else 1400, depth_profile.max_file_chunks),
+        low=200,
+        high=3000,
+    )
+    max_file_scan_pages = _bounded_int(
+        settings.get("__file_research_max_scan_pages"),
+        default=max(220 if complex_mode else 180, depth_profile.max_file_scan_pages),
+        low=20,
+        high=300,
+    )
+
+    return replace(
+        depth_profile,
+        tier="deep_research",
+        rationale=(
+            "Deep Search mode requested; using complex high-coverage profile."
+            if complex_mode
+            else "Deep Search mode requested; using broad standard deep-research profile."
+        ),
+        max_query_variants=max_query_variants,
+        results_per_query=results_per_query,
+        fused_top_k=max(source_budget_max, depth_profile.fused_top_k),
+        max_live_inspections=max(18, depth_profile.max_live_inspections),
+        min_unique_sources=min_unique_sources,
+        source_budget_min=source_budget_min,
+        source_budget_max=source_budget_max,
+        min_keywords=max(16, depth_profile.min_keywords),
+        file_source_budget_min=file_source_budget_min,
+        file_source_budget_max=file_source_budget_max,
+        max_file_sources=max_file_sources,
+        max_file_chunks=max_file_chunks,
+        max_file_scan_pages=max_file_scan_pages,
+        include_execution_why=True,
+    )
 
 
 def prepare_task_context(
@@ -50,6 +165,52 @@ def prepare_task_context(
         if inferred_preferences
         else saved_preferences
     )
+    depth_profile = derive_research_depth_profile(
+        message=request.message,
+        agent_goal=request.agent_goal,
+        user_preferences=user_preferences,
+        agent_mode=request.agent_mode,
+    )
+    depth_profile = _force_deep_search_profile(
+        request=request,
+        settings=settings,
+        depth_profile=depth_profile,
+    )
+    settings["__deep_search_enabled"] = bool(
+        truthy(settings.get("__deep_search_enabled"), default=False)
+        or str(request.agent_mode or "").strip().lower() == "deep_search"
+    )
+    settings["__research_depth_profile"] = depth_profile.as_dict()
+    settings["__research_depth_tier"] = depth_profile.tier
+    settings["__research_max_query_variants"] = depth_profile.max_query_variants
+    settings["__research_results_per_query"] = depth_profile.results_per_query
+    settings["__research_fused_top_k"] = depth_profile.fused_top_k
+    settings["__research_max_live_inspections"] = depth_profile.max_live_inspections
+    settings["__research_min_unique_sources"] = depth_profile.min_unique_sources
+    settings["__research_source_budget_min"] = depth_profile.source_budget_min
+    settings["__research_source_budget_max"] = depth_profile.source_budget_max
+    settings["__research_web_search_budget"] = _bounded_int(
+        settings.get("__research_web_search_budget"),
+        default=depth_profile.max_query_variants * depth_profile.results_per_query,
+        low=20,
+        high=350,
+    )
+    settings["__research_min_keywords"] = depth_profile.min_keywords
+    settings["__file_research_source_budget_min"] = depth_profile.file_source_budget_min
+    settings["__file_research_source_budget_max"] = depth_profile.file_source_budget_max
+    settings["__file_research_max_sources"] = depth_profile.max_file_sources
+    settings["__file_research_max_chunks"] = depth_profile.max_file_chunks
+    settings["__file_research_max_scan_pages"] = depth_profile.max_file_scan_pages
+    settings["__file_research_prefer_pdf"] = True
+    settings["__simple_explanation_required"] = depth_profile.simple_explanation_required
+    settings["__include_execution_why"] = depth_profile.include_execution_why
+    depth_event = activity_event_factory(
+        event_type="llm.research_depth_profile",
+        title="Adaptive research depth profile selected",
+        detail=f"Tier `{depth_profile.tier}` with target {depth_profile.source_budget_min}-{depth_profile.source_budget_max} sources.",
+        metadata=depth_profile.as_dict(),
+    )
+    yield emit_event(depth_event)
 
     task_understanding_ready = activity_event_factory(
         event_type="task_understanding_ready",
@@ -58,6 +219,7 @@ def prepare_task_context(
         metadata={
             **task_intelligence.to_dict(),
             "preferences": user_preferences,
+            "research_depth_profile": depth_profile.as_dict(),
             "conversation_context_summary": str(
                 settings.get("__conversation_summary") or ""
             ).strip()[:480],
@@ -279,7 +441,15 @@ def prepare_task_context(
         settings.get("agent.clarification_gate_enabled"),
         default=True,
     )
+    deep_research_requested = bool(
+        str(request.agent_mode or "").strip().lower() == "deep_search"
+        or truthy(settings.get("__deep_search_enabled"), default=False)
+        or str(settings.get("__research_depth_tier") or "").strip().lower()
+        in {"deep_research", "deep_analytics"}
+    )
     clarification_blocked = clarification_gate_enabled and bool(contract_missing_requirements)
+    if clarification_blocked and deep_research_requested:
+        clarification_blocked = False
     clarification_questions = [
         f"Please provide: {item}" for item in contract_missing_requirements[:6]
     ]
@@ -295,17 +465,28 @@ def prepare_task_context(
         )
         yield emit_event(clarification_event)
     else:
+        clarification_detail = "Execution can proceed with current contract inputs."
+        clarification_metadata: dict[str, Any] = {"missing_requirements": []}
+        if contract_missing_requirements and deep_research_requested:
+            clarification_detail = (
+                "Deep research mode: proceeding with best-effort assumptions for missing optional requirements."
+            )
+            clarification_metadata = {
+                "missing_requirements": contract_missing_requirements[:6],
+                "clarification_bypassed_for_deep_research": True,
+            }
         clarification_resolved_event = activity_event_factory(
             event_type="llm.clarification_resolved",
             title="Clarification requirements satisfied",
-            detail="Execution can proceed with current contract inputs.",
-            metadata={"missing_requirements": []},
+            detail=clarification_detail,
+            metadata=clarification_metadata,
         )
         yield emit_event(clarification_resolved_event)
 
     return TaskPreparation(
         task_intelligence=task_intelligence,
         user_preferences=user_preferences,
+        research_depth_profile=depth_profile.as_dict(),
         conversation_summary=conversation_summary,
         rewritten_task=rewritten_task,
         planned_deliverables=planned_deliverables,

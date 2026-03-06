@@ -374,7 +374,7 @@ function TurnsPanel({
       {chatTurns.map((turn, index) => {
         const isLatestTurn = index === chatTurns.length - 1;
         const turnActivityEvents =
-          turn.mode === "company_agent"
+          turn.mode === "company_agent" || turn.mode === "deep_search" || turn.mode === "web_search"
             ? isLatestTurn && activityEvents.length > 0
               ? activityEvents
               : turn.activityEvents || []
@@ -403,7 +403,13 @@ function TurnsPanel({
               <div className="max-w-[80%] space-y-2 group">
                 <div className="flex justify-end">
                   <span className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] text-[#6e6e73]">
-                    {turn.mode === "company_agent" ? "Agent" : "Ask"}
+                    {turn.mode === "web_search"
+                      ? "Web Search"
+                      : turn.mode === "deep_search"
+                      ? "Deep Search"
+                      : turn.mode === "company_agent"
+                        ? "Agent"
+                        : "Ask"}
                   </span>
                 </div>
                 {turn.attachments && turn.attachments.length > 0 ? (
@@ -557,9 +563,9 @@ function TurnsPanel({
               <div className="flex justify-start">
                 <div className="max-w-[90%] space-y-1.5 group">
                   {hasAssistantText ? (
-                    <div className="rounded-2xl border border-black/[0.06] bg-white px-4 py-3 text-[15px] leading-[1.72] text-[#1d1d1f] shadow-[0_10px_28px_-22px_rgba(0,0,0,0.35)]">
+                    <div className="assistantAnswerCard">
                       <div
-                        className="chat-answer-html [&_p]:mb-3.5 [&_p]:leading-[1.78] [&_p:last-child]:mb-0 [&_ul]:mb-3.5 [&_ul]:list-disc [&_ul]:pl-6 [&_ul>li]:mb-1.5 [&_ol]:mb-3.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol>li]:mb-1.5 [&_h1]:mb-3 [&_h1]:text-[22px] [&_h1]:font-semibold [&_h1]:tracking-[-0.01em] [&_h2]:mt-5 [&_h2]:mb-2.5 [&_h2]:text-[18px] [&_h2]:font-semibold [&_h2]:tracking-[-0.01em] [&_h2]:text-[#141518] [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-[16px] [&_h3]:font-semibold [&_h3]:text-[#1a2430] [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:border [&_pre]:border-black/[0.08] [&_pre]:bg-[#f7f7f9] [&_pre]:p-3 [&_code]:font-mono [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-black/[0.08] [&_th]:bg-[#f7f7f9] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-black/[0.08] [&_td]:px-2 [&_td]:py-1 [&_blockquote]:border-l-4 [&_blockquote]:border-[#d2d2d7] [&_blockquote]:pl-3 [&_blockquote]:text-[#515154] [&_details]:my-2 [&_summary]:cursor-pointer [&_img]:max-w-full [&_img]:rounded-lg"
+                        className="chat-answer-html assistantAnswerBody"
                         dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
                       />
                     </div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 import re
 from typing import Any, Generator
+from urllib.parse import urlparse
 
 from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.models import AgentSource
@@ -54,6 +55,16 @@ STOPWORDS = {
     "www",
 }
 
+CHALLENGE_BLOCK_REASONS = {
+    "captcha",
+    "bot_challenge",
+    "access_denied",
+    "request_blocked",
+    "forbidden",
+    "javascript_required",
+    "temporarily_unavailable",
+}
+
 
 def _truthy(value: Any, *, default: bool) -> bool:
     if value is None:
@@ -88,6 +99,31 @@ def _normalize_highlight_color(value: Any) -> str:
     if text == "green":
         return "green"
     return "yellow"
+
+
+def _root_url(raw_url: str) -> str:
+    text = " ".join(str(raw_url or "").split()).strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/"
+
+
+def _is_challenge_block_reason(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in CHALLENGE_BLOCK_REASONS
+
+
+def _human_handoff_message(*, url: str, blocked_reason: str) -> str:
+    reason_text = str(blocked_reason or "").strip().replace("_", " ") or "site challenge detected"
+    return (
+        "Automated access is blocked by website verification. "
+        f"Open {url}, complete the human verification step ({reason_text}), then retry the task."
+    )
 
 
 class PlaywrightInspectTool(AgentTool):
@@ -134,6 +170,12 @@ class PlaywrightInspectTool(AgentTool):
             blocked_retry_attempts = max(0, min(2, int(blocked_retry_attempts_raw)))
         except Exception:
             blocked_retry_attempts = 1
+        blocked_root_retry_raw = params.get("blocked_root_retry_attempts")
+        try:
+            blocked_root_retry_attempts = max(0, min(1, int(blocked_root_retry_raw)))
+        except Exception:
+            blocked_root_retry_attempts = 1
+        human_handoff_on_blocked = _truthy(params.get("human_handoff_on_blocked"), default=True)
         raw_actions = params.get("interaction_actions")
         interaction_actions = (
             [dict(item) for item in raw_actions[:8] if isinstance(item, dict)]
@@ -200,14 +242,18 @@ class PlaywrightInspectTool(AgentTool):
         highlighted_keywords: list[str] = []
         blocked_retry_used = 0
         blocked_retry_improved = False
+        blocked_root_retry_used = 0
+        blocked_root_retry_improved = False
+        inspected_url = url
 
         def _run_capture(
             *,
+            capture_url: str,
             follow_links: bool,
             actions: list[dict[str, Any]],
         ) -> dict[str, Any]:
             stream = connector.browse_live_stream(
-                url=url,
+                url=capture_url,
                 auto_accept_cookies=auto_accept_cookies,
                 highlight_color=highlight_color,
                 follow_same_domain_links=follow_links,
@@ -242,6 +288,7 @@ class PlaywrightInspectTool(AgentTool):
 
         pending_events: list[ToolTraceEvent] = []
         capture = _run_capture(
+            capture_url=inspected_url,
             follow_links=follow_same_domain_links,
             actions=allowed_interaction_actions,
         )
@@ -264,6 +311,7 @@ class PlaywrightInspectTool(AgentTool):
             trace_events.append(retry_event)
             yield retry_event
             retry_capture = _run_capture(
+                capture_url=inspected_url,
                 follow_links=False,
                 actions=[],
             )
@@ -275,6 +323,42 @@ class PlaywrightInspectTool(AgentTool):
             if (not retry_blocked and bool(capture.get("blocked_signal"))) or (retry_chars >= (previous_chars + 200)):
                 capture = retry_capture
                 blocked_retry_improved = True
+
+        if bool(capture.get("blocked_signal")) and blocked_root_retry_attempts > 0:
+            root_candidate = _root_url(inspected_url)
+            if root_candidate and root_candidate.rstrip("/") != inspected_url.rstrip("/"):
+                for _attempt in range(blocked_root_retry_attempts):
+                    blocked_root_retry_used += 1
+                    root_retry_event = ToolTraceEvent(
+                        event_type="tool_progress",
+                        title=f"Blocked-page recovery attempt {blocked_retry_used + blocked_root_retry_used}",
+                        detail="Retrying capture from site root URL",
+                        data={
+                            "web_provider": web_provider,
+                            "blocked_root_retry_attempt": blocked_root_retry_used,
+                            "target_url": root_candidate,
+                        },
+                    )
+                    trace_events.append(root_retry_event)
+                    yield root_retry_event
+                    retry_capture = _run_capture(
+                        capture_url=root_candidate,
+                        follow_links=False,
+                        actions=[],
+                    )
+                    while pending_events:
+                        yield pending_events.pop(0)
+                    previous_chars = len(str(capture.get("text_excerpt") or ""))
+                    retry_chars = len(str(retry_capture.get("text_excerpt") or ""))
+                    retry_blocked = bool(retry_capture.get("blocked_signal"))
+                    if (not retry_blocked and bool(capture.get("blocked_signal"))) or (
+                        retry_chars >= (previous_chars + 200)
+                    ):
+                        capture = retry_capture
+                        inspected_url = root_candidate
+                        blocked_root_retry_improved = True
+                        if not retry_blocked:
+                            break
 
         title = str(capture.get("title") or url)
         final_url = str(capture.get("url") or url)
@@ -382,6 +466,33 @@ class PlaywrightInspectTool(AgentTool):
                 },
             )
         ]
+        human_handoff_required = bool(
+            blocked_signal and human_handoff_on_blocked and _is_challenge_block_reason(blocked_reason)
+        )
+        human_handoff_note = (
+            _human_handoff_message(url=final_url or inspected_url or url, blocked_reason=blocked_reason)
+            if human_handoff_required
+            else ""
+        )
+        if human_handoff_required:
+            context.settings["__barrier_handoff_required"] = True
+            context.settings["__barrier_handoff_note"] = human_handoff_note
+            context.settings["__barrier_handoff_url"] = final_url or inspected_url or url
+            context.settings["__barrier_handoff_reason"] = blocked_reason
+            handoff_event = ToolTraceEvent(
+                event_type="browser_human_verification_required",
+                title="Human verification required",
+                detail=human_handoff_note,
+                data={
+                    "url": final_url or inspected_url or url,
+                    "blocked_reason": blocked_reason,
+                    "human_handoff_required": True,
+                    "scene_surface": "website",
+                },
+                snapshot_ref=screenshot_path or None,
+            )
+            trace_events.append(handoff_event)
+            yield handoff_event
         next_steps: list[str] = []
         next_steps.extend(
             quality_remediation(
@@ -389,6 +500,8 @@ class PlaywrightInspectTool(AgentTool):
                 blocked_signal=blocked_signal,
             )
         )
+        if human_handoff_note and human_handoff_note not in next_steps:
+            next_steps.insert(0, human_handoff_note)
         if blocked_interaction_actions:
             next_steps.append(
                 "Some interaction actions were blocked by policy review; adjust the requested actions and retry."
@@ -422,6 +535,11 @@ class PlaywrightInspectTool(AgentTool):
                 "blocked_retry_attempts": blocked_retry_attempts,
                 "blocked_retry_used": blocked_retry_used,
                 "blocked_retry_improved": blocked_retry_improved,
+                "blocked_root_retry_attempts": blocked_root_retry_attempts,
+                "blocked_root_retry_used": blocked_root_retry_used,
+                "blocked_root_retry_improved": blocked_root_retry_improved,
+                "human_handoff_required": human_handoff_required,
+                "human_handoff_note": human_handoff_note,
                 "stages": stages,
             },
             sources=sources,

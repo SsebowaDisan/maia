@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import re
 from typing import Any
+from urllib.parse import quote_plus, urlparse
 
 from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.models import AgentSource
@@ -23,6 +24,35 @@ from api.services.agent.tools.research_helpers import (
 )
 
 
+def _as_bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(low, min(high, parsed))
+
+
+def _search_results_url(provider: str, query: str) -> str:
+    normalized = " ".join(str(query or "").split()).strip()
+    if not normalized:
+        return ""
+    if provider == "brave_search":
+        return f"https://search.brave.com/search?q={quote_plus(normalized)}"
+    if provider == "bing_search":
+        return f"https://www.bing.com/search?q={quote_plus(normalized)}"
+    return ""
+
+
+def _hostname_label(url: str) -> str:
+    try:
+        host = str(urlparse(url).netloc or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 class WebResearchTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="marketing.web_research",
@@ -41,7 +71,88 @@ class WebResearchTool(AgentTool):
         params: dict[str, Any],
     ):
         query = str(params.get("query") or prompt).strip() or "company market research"
-        query_variants = _extract_search_variants(query=query, prompt=prompt)
+        configured_max_variants = context.settings.get("__research_max_query_variants")
+        max_query_variants = _as_bounded_int(
+            params.get("max_query_variants"),
+            default=_as_bounded_int(configured_max_variants, default=4, low=2, high=20),
+            low=2,
+            high=20,
+        )
+        configured_results_per_query = context.settings.get("__research_results_per_query")
+        results_per_query = _as_bounded_int(
+            params.get("results_per_query"),
+            default=_as_bounded_int(configured_results_per_query, default=8, low=4, high=25),
+            low=4,
+            high=25,
+        )
+        configured_fused_top_k = context.settings.get("__research_fused_top_k")
+        fused_top_k = _as_bounded_int(
+            params.get("fused_top_k"),
+            default=_as_bounded_int(configured_fused_top_k, default=24, low=8, high=220),
+            low=8,
+            high=220,
+        )
+        configured_min_sources = context.settings.get("__research_min_unique_sources")
+        min_unique_sources = _as_bounded_int(
+            params.get("min_unique_sources"),
+            default=_as_bounded_int(configured_min_sources, default=8, low=3, high=200),
+            low=3,
+            high=200,
+        )
+        configured_search_budget = context.settings.get("__research_web_search_budget")
+        requested_search_budget = _as_bounded_int(
+            params.get("search_budget"),
+            default=_as_bounded_int(
+                configured_search_budget,
+                default=max_query_variants * results_per_query,
+                low=20,
+                high=350,
+            ),
+            low=20,
+            high=350,
+        )
+        depth_tier = " ".join(str(params.get("research_depth_tier") or context.settings.get("__research_depth_tier") or "standard").split()).strip().lower() or "standard"
+        max_live_queries = _as_bounded_int(
+            context.settings.get("__research_theater_max_live_queries"),
+            default=10,
+            low=1,
+            high=30,
+        )
+        max_live_clicks_per_query = _as_bounded_int(
+            context.settings.get("__research_theater_clicks_per_query"),
+            default=2,
+            low=1,
+            high=5,
+        )
+        requested_variants_raw = params.get("query_variants")
+        requested_variants = (
+            [
+                " ".join(str(item).split()).strip()
+                for item in requested_variants_raw
+                if " ".join(str(item).split()).strip()
+            ][:24]
+            if isinstance(requested_variants_raw, list)
+            else []
+        )
+        query_variants = _extract_search_variants(
+            query=query,
+            prompt=prompt,
+            requested_variants=requested_variants,
+            max_variants=max_query_variants,
+        )
+        if not query_variants:
+            query_variants = [query]
+        search_plan: list[tuple[str, int]] = []
+        remaining_budget = requested_search_budget
+        for idx, query_variant in enumerate(query_variants):
+            variants_left = max(1, len(query_variants) - idx)
+            allocated = remaining_budget // variants_left
+            if remaining_budget % variants_left:
+                allocated += 1
+            per_query_limit = max(1, min(results_per_query, allocated))
+            search_plan.append((query_variant, per_query_limit))
+            remaining_budget = max(0, remaining_budget - per_query_limit)
+        planned_result_budget = max(1, sum(limit for _query, limit in search_plan))
         requested_provider = _normalize_search_provider(
             params.get("provider") or params.get("search_provider")
         )
@@ -60,6 +171,13 @@ class WebResearchTool(AgentTool):
                 "query": query,
                 "query_variants": query_variants,
                 "provider_requested": requested_provider,
+                "research_depth_tier": depth_tier,
+                "max_query_variants": max_query_variants,
+                "results_per_query": results_per_query,
+                "search_budget_requested": requested_search_budget,
+                "search_budget_effective": planned_result_budget,
+                "fused_top_k": fused_top_k,
+                "min_unique_sources": min_unique_sources,
             },
         )
         trace_events.append(started_event)
@@ -71,6 +189,7 @@ class WebResearchTool(AgentTool):
             data={
                 "provider_requested": requested_provider,
                 "provider_fallback_enabled": allow_provider_fallback,
+                "research_depth_tier": depth_tier,
             },
         )
         trace_events.append(provider_event)
@@ -106,25 +225,56 @@ class WebResearchTool(AgentTool):
                     ToolTraceEvent(
                         event_type="api_call_started",
                         title="Call Brave Search API",
-                        detail=f"Running {len(query_variants)} query variant(s)",
-                        data={"provider": "brave_search"},
+                        detail=(
+                            f"Running {len(search_plan)} query variant(s) "
+                            f"with {planned_result_budget} total result slots"
+                        ),
+                        data={
+                            "provider": "brave_search",
+                            "search_budget_requested": requested_search_budget,
+                            "search_budget_effective": planned_result_budget,
+                        },
                     )
                 )
                 yield trace_events[-1]
                 brave = get_connector_registry().build("brave_search", settings=context.settings)
-                for idx, query_variant in enumerate(query_variants, start=1):
+                for idx, (query_variant, per_query_limit) in enumerate(search_plan, start=1):
+                    search_url = _search_results_url("brave_search", query_variant)
+                    if idx <= max_live_queries and search_url:
+                        live_navigate_event = ToolTraceEvent(
+                            event_type="browser_navigate",
+                            title=f"Open Brave results {idx}/{len(query_variants)}",
+                            detail=_safe_snippet(query_variant, 140),
+                            data={
+                                "provider": "brave_search",
+                                "query": query_variant,
+                                "variant_index": idx,
+                                "url": search_url,
+                                "source_url": search_url,
+                                "scene_surface": "website",
+                                "render_quality": "live",
+                            },
+                        )
+                        trace_events.append(live_navigate_event)
+                        yield live_navigate_event
                     query_event = ToolTraceEvent(
                         event_type="brave.search.query",
                         title=f"Run Brave query {idx}/{len(query_variants)}",
                         detail=_safe_snippet(query_variant, 140),
-                        data={"query": query_variant, "variant_index": idx, "provider": "brave_search"},
+                        data={
+                            "query": query_variant,
+                            "variant_index": idx,
+                            "provider": "brave_search",
+                            "result_limit": per_query_limit,
+                        },
                     )
                     trace_events.append(query_event)
                     yield query_event
-                    run_payload = brave.web_search(query=query_variant, count=6)
+                    run_payload = brave.web_search(query=query_variant, count=per_query_limit)
                     if not isinstance(run_payload, dict):
                         continue
                     run_payload["query_variant"] = query_variant
+                    run_payload["result_limit"] = per_query_limit
                     search_runs.append(run_payload)
                     run_rows = run_payload.get("results") if isinstance(run_payload.get("results"), list) else []
                     run_urls = [
@@ -135,13 +285,100 @@ class WebResearchTool(AgentTool):
                     result_event = ToolTraceEvent(
                         event_type="brave.search.results",
                         title=f"Brave results for query {idx}",
-                        detail=f"Captured {len(run_urls)} URL(s)",
-                        data={"query": query_variant, "top_urls": run_urls, "provider": "brave_search"},
+                        detail=f"Captured {len(run_urls)} URL(s) from limit {per_query_limit}",
+                        data={
+                            "query": query_variant,
+                            "top_urls": run_urls,
+                            "provider": "brave_search",
+                            "result_limit": per_query_limit,
+                        },
                     )
                     trace_events.append(result_event)
                     yield result_event
+                    if idx <= max_live_queries and search_url:
+                        scroll_targets = [14.0, 36.0, 62.0]
+                        if len(run_rows) >= 8:
+                            scroll_count = 3
+                        elif len(run_rows) >= 4:
+                            scroll_count = 2
+                        else:
+                            scroll_count = 1
+                        for scroll_step, scroll_percent in enumerate(scroll_targets[:scroll_count], start=1):
+                            scroll_event = ToolTraceEvent(
+                                event_type="browser_scroll",
+                                title=f"Scroll Brave results {scroll_step}/{scroll_count}",
+                                detail=f"Reviewing result cards ({int(round(scroll_percent))}%)",
+                                data={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "url": search_url,
+                                    "source_url": search_url,
+                                    "scroll_percent": float(scroll_percent),
+                                    "scroll_direction": "down",
+                                    "scene_surface": "website",
+                                },
+                            )
+                            trace_events.append(scroll_event)
+                            yield scroll_event
+                        for rank, clicked_url in enumerate(run_urls[:max_live_clicks_per_query], start=1):
+                            if not clicked_url:
+                                continue
+                            host_label = _hostname_label(clicked_url)
+                            click_event = ToolTraceEvent(
+                                event_type="web_result_opened",
+                                title=f"Open result {rank}",
+                                detail=(f"Opening {host_label}" if host_label else f"Opening result {rank}"),
+                                data={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "result_rank": rank,
+                                    "url": clicked_url,
+                                    "source_url": clicked_url,
+                                    "scene_surface": "website",
+                                },
+                            )
+                            trace_events.append(click_event)
+                            yield click_event
+                            open_event = ToolTraceEvent(
+                                event_type="browser_navigate",
+                                title=f"Open source page {rank}",
+                                detail=_safe_snippet(clicked_url, 140),
+                                data={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "result_rank": rank,
+                                    "url": clicked_url,
+                                    "source_url": clicked_url,
+                                    "scene_surface": "website",
+                                    "render_quality": "live",
+                                },
+                            )
+                            trace_events.append(open_event)
+                            yield open_event
+                            source_scroll_percent = min(92.0, 24.0 + (rank * 22.0))
+                            source_scroll_event = ToolTraceEvent(
+                                event_type="browser_scroll",
+                                title=f"Scroll source page {rank}",
+                                detail=f"Scanning source evidence ({int(round(source_scroll_percent))}%)",
+                                data={
+                                    "provider": "brave_search",
+                                    "query": query_variant,
+                                    "variant_index": idx,
+                                    "result_rank": rank,
+                                    "url": clicked_url,
+                                    "source_url": clicked_url,
+                                    "scroll_percent": float(source_scroll_percent),
+                                    "scroll_direction": "down",
+                                    "scene_surface": "website",
+                                },
+                            )
+                            trace_events.append(source_scroll_event)
+                            yield source_scroll_event
 
-                fused_results = _fuse_search_results(search_runs, top_k=8)
+                fused_results = _fuse_search_results(search_runs, top_k=fused_top_k)
                 payload = {"results": fused_results, "query": query, "provider": "brave_fused"}
                 used_provider = "brave_search"
                 ok = True
@@ -149,7 +386,14 @@ class WebResearchTool(AgentTool):
                     event_type="retrieval_fused",
                     title="Fuse search runs",
                     detail=f"Reduced {sum(len(run.get('results') or []) for run in search_runs)} raw rows to {len(fused_results)} fused results",
-                    data={"query_variants": query_variants, "result_count": len(fused_results)},
+                    data={
+                        "query_variants": query_variants,
+                        "result_count": len(fused_results),
+                        "target_source_count": min_unique_sources,
+                        "fused_top_k": fused_top_k,
+                        "search_budget_requested": requested_search_budget,
+                        "search_budget_effective": planned_result_budget,
+                    },
                 )
                 trace_events.append(fused_event)
                 yield fused_event
@@ -195,7 +439,8 @@ class WebResearchTool(AgentTool):
                 )
                 yield trace_events[-1]
                 connector = get_connector_registry().build("bing_search", settings=context.settings)
-                payload = connector.search_web(query=query_variants[0], count=8)
+                fallback_count = max(4, min(results_per_query, planned_result_budget))
+                payload = connector.search_web(query=query_variants[0], count=fallback_count)
                 used_provider = "bing_search"
                 trace_events.append(
                     ToolTraceEvent(
@@ -210,7 +455,11 @@ class WebResearchTool(AgentTool):
                             if requested_provider == "bing_search"
                             else "Using Bing as secondary provider"
                         ),
-                        data={"query": query_variants[0], "provider": "bing_search"},
+                        data={
+                            "query": query_variants[0],
+                            "provider": "bing_search",
+                            "result_limit": fallback_count,
+                        },
                     )
                 )
                 yield trace_events[-1]
@@ -280,32 +529,44 @@ class WebResearchTool(AgentTool):
             if used_provider == "brave_search":
                 rows = payload.get("results") if isinstance(payload, dict) else []
                 results = rows if isinstance(rows, list) else []
-                for item in results[:6]:
+                max_source_rows = max(8, min(fused_top_k, 220))
+                for item in results[:max_source_rows]:
                     if not isinstance(item, dict):
                         continue
                     name = str(item.get("title") or item.get("url") or "Web result").strip()
-                    snippet = str(item.get("description") or "").strip()
+                    snippet = str(item.get("description") or item.get("snippet") or "").strip()
                     url = str(item.get("url") or "").strip()
-                    bullets.append(f"- {name}: {_safe_snippet(snippet)}")
+                    excerpt = _safe_snippet(snippet or name or url, 220)
+                    if len(bullets) < 24:
+                        bullets.append(f"- {name}: {_safe_snippet(snippet or name)}")
+                    try:
+                        rrf_score = float(item.get("rrf_score") or 0.0)
+                    except Exception:
+                        rrf_score = 0.0
                     sources.append(
                         AgentSource(
                             source_type="web",
                             label=name,
                             url=url or None,
-                            score=0.79,
+                            score=max(0.5, min(0.95, 0.68 + (rrf_score * 120))),
                             metadata={
                                 "provider": "brave_search",
-                                "excerpt": _safe_snippet(snippet, 220),
+                                "excerpt": excerpt,
+                                "extract": excerpt,
+                                "rrf_score": rrf_score,
                             },
                         )
                     )
                 quality_event = ToolTraceEvent(
                     event_type="retrieval_quality_assessed",
                     title="Assess retrieval quality",
-                    detail=f"Fused retrieval produced {len(results)} high-confidence result(s)",
+                    detail=f"Fused retrieval produced {len(results)} result(s); {len(sources)} source(s) selected",
                     data={
                         "provider": "brave_search",
                         "result_count": len(results),
+                        "source_count": len(sources),
+                        "target_source_count": min_unique_sources,
+                        "coverage_ok": len(sources) >= min_unique_sources,
                         "query_variants": query_variants,
                     },
                 )
@@ -314,13 +575,16 @@ class WebResearchTool(AgentTool):
             elif used_provider == "bing_search":
                 web_pages = payload.get("webPages") if isinstance(payload, dict) else None
                 results = web_pages.get("value") if isinstance(web_pages, dict) else []
-                for item in (results or [])[:6]:
+                max_source_rows = max(8, min(fused_top_k, 140))
+                for item in (results or [])[:max_source_rows]:
                     if not isinstance(item, dict):
                         continue
                     name = str(item.get("name") or "Web result").strip()
                     snippet = str(item.get("snippet") or "").strip()
                     url = str(item.get("url") or "").strip()
-                    bullets.append(f"- {name}: {_safe_snippet(snippet)}")
+                    excerpt = _safe_snippet(snippet or name or url, 220)
+                    if len(bullets) < 24:
+                        bullets.append(f"- {name}: {_safe_snippet(snippet or name)}")
                     sources.append(
                         AgentSource(
                             source_type="web",
@@ -329,7 +593,8 @@ class WebResearchTool(AgentTool):
                             score=0.74,
                             metadata={
                                 "provider": "bing_search",
-                                "excerpt": _safe_snippet(snippet, 220),
+                                "excerpt": excerpt,
+                                "extract": excerpt,
                             },
                         )
                     )
@@ -371,30 +636,73 @@ class WebResearchTool(AgentTool):
                 trace_events.append(copy_event)
                 yield copy_event
 
+        unique_urls = list(
+            dict.fromkeys(
+                [str(source.url or "").strip() for source in sources if str(source.url or "").strip()]
+            )
+        )
+        if len(unique_urls) < min_unique_sources:
+            shortfall_event = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Research coverage shortfall detected",
+                detail=(
+                    f"Collected {len(unique_urls)} unique sources; target is {min_unique_sources}. "
+                    "Continue with additional targeted queries."
+                ),
+                data={
+                    "source_count": len(unique_urls),
+                    "target_source_count": min_unique_sources,
+                    "coverage_ok": False,
+                },
+            )
+            trace_events.append(shortfall_event)
+            yield shortfall_event
+
         content = "\n".join(bullets)
-        summary = f"Collected {len(sources)} web sources for query using {used_provider}: {query}"
+        summary = (
+            f"Collected {len(sources)} web sources ({len(unique_urls)} unique URLs) "
+            f"using {used_provider}: {query}"
+        )
         if sources:
             context.settings["__latest_web_sources"] = [
                 source.to_dict()
-                for source in sources[:12]
+                for source in sources[:200]
             ]
             context.settings["__latest_web_query"] = query
             context.settings["__latest_web_provider"] = used_provider
+            context.settings["__latest_web_source_count"] = len(unique_urls)
+            context.settings["__latest_web_source_target"] = min_unique_sources
+            context.settings["__latest_research_depth_tier"] = depth_tier
         next_steps = [
             "Validate top 2 sources against internal company data.",
             "Convert findings into a competitor/market briefing.",
         ]
+        if len(unique_urls) < min_unique_sources:
+            next_steps.insert(
+                0,
+                f"Run another research pass to reach at least {min_unique_sources} unique sources.",
+            )
         return ToolExecutionResult(
             summary=summary,
             content=content,
             data={
                 "query": query,
                 "query_variants": query_variants,
+                "max_query_variants": max_query_variants,
+                "results_per_query": results_per_query,
+                "search_budget_requested": requested_search_budget,
+                "search_budget_effective": planned_result_budget,
+                "fused_top_k": fused_top_k,
+                "research_depth_tier": depth_tier,
                 "provider": used_provider,
                 "provider_requested": requested_provider,
                 "provider_fallback_enabled": allow_provider_fallback,
                 "provider_attempted": provider_attempted[:4],
                 "provider_failures": provider_failures[:4],
+                "source_count": len(sources),
+                "unique_source_count": len(unique_urls),
+                "min_unique_sources": min_unique_sources,
+                "coverage_ok": len(unique_urls) >= min_unique_sources,
                 "items": [source.to_dict() for source in sources],
             },
             sources=sources,

@@ -228,7 +228,7 @@ class ChatRequest(BaseModel):
     setting_overrides: dict[str, Any] = Field(default_factory=dict)
     mindmap_focus: dict[str, Any] = Field(default_factory=dict)
     mindmap_settings: dict[str, Any] = Field(default_factory=dict)
-    agent_mode: Literal["ask", "company_agent"] = "ask"
+    agent_mode: Literal["ask", "company_agent", "deep_search"] = "ask"
     agent_goal: str | None = None
     access_mode: Literal["restricted", "full_access"] | None = None
 
@@ -271,7 +271,7 @@ class ChatResponse(BaseModel):
     info: str
     plot: dict[str, Any] | None = None
     state: dict[str, Any] = Field(default_factory=dict)
-    mode: Literal["ask", "company_agent"] = "ask"
+    mode: Literal["ask", "company_agent", "deep_search"] = "ask"
     actions_taken: list[AgentActionRecord] = Field(default_factory=list)
     sources_used: list[AgentSourceRecord] = Field(default_factory=list)
     source_usage: list[SourceUsageRecord] = Field(default_factory=list)

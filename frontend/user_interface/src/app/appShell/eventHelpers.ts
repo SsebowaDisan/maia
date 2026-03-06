@@ -2,7 +2,7 @@ import type { ConversationDetail } from "../../api/client";
 import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
-  mode?: "ask" | "company_agent";
+  mode?: "ask" | "company_agent" | "deep_search" | "web_search";
   actions_taken?: ChatTurn["actionsTaken"];
   sources_used?: ChatTurn["sourcesUsed"];
   source_usage?: ChatTurn["sourceUsage"];
@@ -71,27 +71,43 @@ export function buildConversationTurns(
   const retrievalMessages = detail.data_source?.retrieval_messages || [];
   const plotHistory = detail.data_source?.plot_history || [];
   const messageMeta = (detail.data_source?.message_meta || []) as ConversationMessageMeta[];
-  const turns: ChatTurn[] = messages.map((entry, index) => ({
-    user: entry[0] || "",
-    assistant: entry[1] || "",
-    attachments: mapMessageAttachments(messageMeta[index]?.attachments),
-    info: retrievalMessages[index] || "",
-    plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,
-    mode: messageMeta[index]?.mode || "ask",
-    actionsTaken: messageMeta[index]?.actions_taken || [],
-    sourcesUsed: messageMeta[index]?.sources_used || [],
-    sourceUsage: messageMeta[index]?.source_usage || [],
-    nextRecommendedSteps: messageMeta[index]?.next_recommended_steps || [],
-    needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
-    humanReviewNotes: messageMeta[index]?.human_review_notes || null,
-    webSummary: messageMeta[index]?.web_summary || {},
-    infoPanel: messageMeta[index]?.info_panel || {},
-    mindmap:
-      messageMeta[index]?.mindmap ||
-      ((messageMeta[index]?.info_panel as { mindmap?: Record<string, unknown> } | undefined)
-        ?.mindmap || {}),
-    activityRunId: messageMeta[index]?.activity_run_id || null,
-  }));
+  const turns: ChatTurn[] = messages.map((entry, index) => {
+    const rawMode = messageMeta[index]?.mode || "ask";
+    const modeVariant = String(
+      (
+        messageMeta[index]?.info_panel as {
+          mode_variant?: unknown;
+        } | undefined
+      )?.mode_variant || "",
+    )
+      .trim()
+      .toLowerCase();
+    const resolvedMode: ChatTurn["mode"] =
+      rawMode === "deep_search" && modeVariant === "web_search"
+        ? "web_search"
+        : rawMode;
+    return {
+      user: entry[0] || "",
+      assistant: entry[1] || "",
+      attachments: mapMessageAttachments(messageMeta[index]?.attachments),
+      info: retrievalMessages[index] || "",
+      plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,
+      mode: resolvedMode,
+      actionsTaken: messageMeta[index]?.actions_taken || [],
+      sourcesUsed: messageMeta[index]?.sources_used || [],
+      sourceUsage: messageMeta[index]?.source_usage || [],
+      nextRecommendedSteps: messageMeta[index]?.next_recommended_steps || [],
+      needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
+      humanReviewNotes: messageMeta[index]?.human_review_notes || null,
+      webSummary: messageMeta[index]?.web_summary || {},
+      infoPanel: messageMeta[index]?.info_panel || {},
+      mindmap:
+        messageMeta[index]?.mindmap ||
+        ((messageMeta[index]?.info_panel as { mindmap?: Record<string, unknown> } | undefined)
+          ?.mindmap || {}),
+      activityRunId: messageMeta[index]?.activity_run_id || null,
+    };
+  });
   const runIds = Array.from(
     new Set(
       turns

@@ -83,3 +83,47 @@ def test_research_blueprint_simple_question_has_no_placeholder_keywords(monkeypa
     keywords = payload.get("keywords")
     assert isinstance(keywords, list)
     assert not any(re.search(r"_[0-9]+$", item) for item in keywords)
+
+
+def test_research_blueprint_llm_strict_does_not_use_keyword_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESEARCH_BLUEPRINT_ENABLED", "0")
+    payload = build_research_blueprint(
+        message="what is machine learning",
+        agent_goal="what is machine learning",
+        min_keywords=10,
+        llm_only=True,
+        llm_strict=True,
+    )
+    assert payload.get("search_terms") == []
+    assert payload.get("keywords") == []
+
+
+def test_research_blueprint_expands_search_terms_to_requested_floor(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESEARCH_BLUEPRINT_ENABLED", "1")
+    monkeypatch.setattr(
+        blueprint_module,
+        "_request_blueprint_with_llm",
+        lambda **_: {
+            "search_terms": ["energy transition 2025"],
+            "keywords": ["energy", "transition", "renewable", "grid"],
+            "rationale": "Initial blueprint",
+        },
+    )
+    monkeypatch.setattr(
+        blueprint_module,
+        "_expand_search_terms_with_llm",
+        lambda **_: [
+            "renewable investment outlook 2025",
+            "grid modernization policy 2025",
+            "energy storage deployment trends 2025",
+        ],
+    )
+    payload = build_research_blueprint(
+        message="Deep research on energy transition.",
+        agent_goal="Cite broad market and policy evidence.",
+        min_keywords=10,
+        min_search_terms=4,
+        llm_only=True,
+        llm_strict=True,
+    )
+    assert len(payload.get("search_terms") or []) >= 4

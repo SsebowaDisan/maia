@@ -102,10 +102,13 @@ function ChatMain({
         accessMode={accessMode}
         agentControlsVisible={interactions.agentControlsVisible}
         agentMode={agentMode}
+        composerMode={interactions.composerMode}
         attachments={interactions.attachments}
         clearAttachments={interactions.clearAttachments}
         removeAttachment={interactions.removeAttachment}
+        enableAskMode={interactions.enableAskMode}
         enableAgentMode={interactions.enableAgentMode}
+        enableWebSearch={interactions.enableWebSearch}
         enableDeepResearch={interactions.enableDeepResearch}
         fileInputRef={interactions.fileInputRef}
         isSending={isSending}

@@ -373,6 +373,36 @@ def test_build_task_contract_ignores_target_url_when_not_required(monkeypatch) -
     assert "Target URL for research" not in row["missing_requirements"]
 
 
+def test_build_task_contract_ignores_email_recipient_requirement_for_website_outreach(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Analyze site and contact company",
+            "required_outputs": ["Website analysis summary"],
+            "required_facts": ["Services offered", "Office hours"],
+            "required_actions": ["send_email"],
+            "constraints": [],
+            "delivery_target": "",
+            "missing_requirements": ["Recipient email address for delivery"],
+            "success_checks": ["Message sent"],
+        },
+    )
+    row = build_task_contract(
+        message=(
+            "Analyze https://axongroup.com/ and send them a message asking about their services and office hours."
+        ),
+        agent_goal=None,
+        rewritten_task="Analyze the website and send a message to the company.",
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "contact_form_submission"],
+        conversation_summary="",
+    )
+    assert row["missing_requirements"] == []
+
+
 def test_verify_task_contract_disabled_returns_ready(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
     row = verify_task_contract_fulfillment(

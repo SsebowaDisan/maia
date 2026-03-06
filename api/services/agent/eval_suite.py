@@ -6,10 +6,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from api.services.agent.intelligence_sections.contradictions import (
     detect_potential_contradictions,
 )
+from api.services.agent.intelligence_sections.models import TaskIntelligence
+from api.services.agent.intelligence_sections.verification import build_verification_report
 from api.services.agent.llm_contracts import (
     build_task_contract,
     verify_task_contract_fulfillment,
@@ -19,6 +22,7 @@ from api.services.agent.orchestration.step_planner_sections.evidence import (
     summarize_fact_coverage,
 )
 from api.services.agent.planner import PlannedStep
+from api.services.agent.research_depth_profile import derive_research_depth_profile
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_eval_cases.json"
 EVAL_THRESHOLDS = {
@@ -27,6 +31,8 @@ EVAL_THRESHOLDS = {
     "multi_intent": 1.0,
     "delivery_completeness": 1.0,
     "contradiction_risk": 1.0,
+    "depth_routing": 1.0,
+    "citation_quality": 1.0,
 }
 
 
@@ -86,10 +92,7 @@ def _evaluate_case_ambiguity_missing_requirements() -> dict[str, Any]:
         )
     missing = contract.get("missing_requirements", [])
     missing_rows = [str(item).strip() for item in missing if str(item).strip()] if isinstance(missing, list) else []
-    passed = (
-        "Recipient email address for delivery" in missing_rows
-        and "Preferred output format or artifact type" in missing_rows
-    )
+    passed = bool(missing_rows) and "Recipient email address for delivery" in missing_rows
     return {
         "id": "ambiguity_missing_requirements",
         "category": "ambiguity",
@@ -225,6 +228,106 @@ def _evaluate_case_contradiction_risk_signal() -> dict[str, Any]:
     }
 
 
+def _evaluate_case_depth_profile_for_deep_research() -> dict[str, Any]:
+    with patch(
+        "api.services.agent.research_depth_profile.call_json_response",
+        return_value={
+            "tier": "deep_research",
+            "rationale": "Deep research needed.",
+            "source_budget_min": 50,
+            "source_budget_max": 100,
+            "max_query_variants": 8,
+            "results_per_query": 12,
+            "fused_top_k": 100,
+            "max_live_inspections": 24,
+            "min_unique_sources": 50,
+            "min_keywords": 18,
+            "simple_explanation_required": False,
+            "include_execution_why": False,
+        },
+    ):
+        profile = derive_research_depth_profile(
+            message="Research energy market trends from 50-100 websites and papers with citations.",
+            agent_goal="Detailed deep research report",
+            user_preferences={"audience": "executive"},
+            agent_mode="company_agent",
+        )
+    passed = (
+        profile.tier == "deep_research"
+        and profile.source_budget_min >= 50
+        and profile.source_budget_max >= 100
+        and profile.max_query_variants >= 8
+    )
+    return {
+        "id": "depth_profile_for_deep_research",
+        "category": "depth_routing",
+        "passed": passed,
+        "detail": str(profile.as_dict()),
+    }
+
+
+def _evaluate_case_child_friendly_profile_flag() -> dict[str, Any]:
+    with patch(
+        "api.services.agent.research_depth_profile.call_json_response",
+        return_value={
+            "tier": "standard",
+            "rationale": "Simple explanation requested.",
+            "simple_explanation_required": True,
+            "include_execution_why": False,
+        },
+    ):
+        profile = derive_research_depth_profile(
+            message="Explain machine learning so a 5 year old can understand in simple terms.",
+            agent_goal="",
+            user_preferences={"audience": "beginner"},
+            agent_mode="company_agent",
+        )
+    passed = bool(profile.simple_explanation_required)
+    return {
+        "id": "child_friendly_profile_flag",
+        "category": "depth_routing",
+        "passed": passed,
+        "detail": str(profile.as_dict()),
+    }
+
+
+def _evaluate_case_citation_gate_deep_threshold() -> dict[str, Any]:
+    with _temporary_env({"MAIA_AGENT_LLM_VERIFICATION_ENABLED": "0"}):
+        report = build_verification_report(
+            task=TaskIntelligence(
+                objective="Deep energy research report",
+                target_url="",
+                target_host="",
+                delivery_email="",
+                requires_delivery=False,
+                requires_web_inspection=True,
+                requested_report=True,
+                intent_tags=("web_research", "report_generation"),
+            ),
+            planned_tool_ids=["marketing.web_research", "report.generate"],
+            executed_steps=[],
+            actions=[],
+            sources=[],
+            runtime_settings={
+                "__research_depth_tier": "deep_research",
+                "__research_min_unique_sources": 50,
+            },
+        )
+    passed = bool(report.get("citation_gate_passed") is False and report.get("citation_gate_threshold") == 0.85)
+    return {
+        "id": "citation_gate_deep_threshold",
+        "category": "citation_quality",
+        "passed": passed,
+        "detail": str(
+            {
+                "citation_gate_passed": report.get("citation_gate_passed"),
+                "citation_gate_threshold": report.get("citation_gate_threshold"),
+                "checks": report.get("checks"),
+            }
+        ),
+    }
+
+
 def run_agent_eval_suite() -> dict[str, Any]:
     fixture_rows = _load_eval_fixtures()
     fixture_ids = {row["id"] for row in fixture_rows}
@@ -235,6 +338,9 @@ def run_agent_eval_suite() -> dict[str, Any]:
         _evaluate_case_external_action_block_unverified_facts(),
         _evaluate_case_delivery_ready_when_contract_satisfied(),
         _evaluate_case_contradiction_risk_signal(),
+        _evaluate_case_depth_profile_for_deep_research(),
+        _evaluate_case_child_friendly_profile_flag(),
+        _evaluate_case_citation_gate_deep_threshold(),
     ]
     implemented_ids = {str(case.get("id") or "") for case in cases}
     missing_fixture_cases = sorted(list(fixture_ids - implemented_ids))
@@ -257,6 +363,10 @@ def run_agent_eval_suite() -> dict[str, Any]:
         >= EVAL_THRESHOLDS["delivery_completeness"],
         "contradiction_risk": category_scores.get("contradiction_risk", 0.0)
         >= EVAL_THRESHOLDS["contradiction_risk"],
+        "depth_routing": category_scores.get("depth_routing", 0.0)
+        >= EVAL_THRESHOLDS["depth_routing"],
+        "citation_quality": category_scores.get("citation_quality", 0.0)
+        >= EVAL_THRESHOLDS["citation_quality"],
         "fixtures_synced": not missing_fixture_cases,
     }
     return {

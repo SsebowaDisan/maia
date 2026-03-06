@@ -19,6 +19,30 @@ from .guards import (
 from .success import handle_step_success
 
 
+def _should_retry_transient_browser_failure(
+    *,
+    step: PlannedStep,
+    params: dict[str, Any],
+    exc: Exception,
+) -> bool:
+    if step.tool_id != "browser.playwright.inspect":
+        return False
+    if bool(params.get("__retry_attempted")):
+        return False
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "net::err_http2_protocol_error",
+            "net::err_connection_reset",
+            "net::err_connection_closed",
+            "net::err_timed_out",
+            "net::err_name_not_resolved",
+            "navigation timeout",
+        )
+    )
+
+
 def execute_planned_steps(
     *,
     run_id: str,
@@ -122,6 +146,61 @@ def execute_planned_steps(
             )
         except Exception as exc:
             elapsed = time.perf_counter() - tool_started_clock
+            if _should_retry_transient_browser_failure(
+                step=step,
+                params=guard_outcome.params,
+                exc=exc,
+            ):
+                retry_event = activity_event_factory(
+                    event_type="tool_progress",
+                    title=step.title,
+                    detail="Transient browser error detected; retrying once with reduced scope.",
+                    metadata={
+                        "tool_id": step.tool_id,
+                        "step": index,
+                        "retry": True,
+                    },
+                )
+                yield emit_event(retry_event)
+                retry_params = dict(guard_outcome.params)
+                retry_params["__retry_attempted"] = True
+                retry_params.setdefault("follow_same_domain_links", False)
+                retry_started_clock = time.perf_counter()
+                try:
+                    retry_result = yield from run_tool_live(
+                        step=step,
+                        step_index=index,
+                        prompt=execution_prompt,
+                        params=retry_params,
+                    )
+                    retry_elapsed = time.perf_counter() - retry_started_clock
+                    get_agent_observability().observe_tool_execution(
+                        tool_id=step.tool_id,
+                        status="success",
+                        duration_seconds=retry_elapsed,
+                    )
+                    yield from handle_step_success(
+                        access_context=access_context,
+                        deep_research_mode=deep_research_mode,
+                        execution_prompt=execution_prompt,
+                        state=state,
+                        registry=registry,
+                        steps=steps,
+                        step_cursor=step_cursor,
+                        step=step,
+                        index=index,
+                        step_started=step_started,
+                        duration_seconds=retry_elapsed,
+                        result=retry_result,
+                        run_tool_live=run_tool_live,
+                        emit_event=emit_event,
+                        activity_event_factory=activity_event_factory,
+                    )
+                    step_cursor += 1
+                    continue
+                except Exception as retry_exc:
+                    exc = retry_exc
+                    elapsed = time.perf_counter() - retry_started_clock
             get_agent_observability().observe_tool_execution(
                 tool_id=step.tool_id,
                 status="failed",

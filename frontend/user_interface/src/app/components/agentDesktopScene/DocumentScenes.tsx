@@ -103,6 +103,7 @@ function DocumentPdfScene({
 }
 
 type DocumentFallbackSceneProps = {
+  activeEventType: string;
   activeDetail: string;
   clipboardPreview: string;
   documentHighlights: DocumentHighlight[];
@@ -110,13 +111,37 @@ type DocumentFallbackSceneProps = {
   stageFileName: string;
 };
 
+function isPlannerNarrativeEventType(eventType: string): boolean {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "planning_started" ||
+    normalized.startsWith("plan_") ||
+    normalized.startsWith("planning_") ||
+    normalized.startsWith("task_understanding_") ||
+    normalized.startsWith("preflight_") ||
+    normalized.startsWith("llm.task_") ||
+    normalized.startsWith("llm.plan_") ||
+    normalized === "llm.web_routing_decision" ||
+    normalized === "llm.intent_tags"
+  );
+}
+
 function DocumentFallbackScene({
+  activeEventType,
   activeDetail,
   clipboardPreview,
   documentHighlights,
   sceneText,
   stageFileName,
 }: DocumentFallbackSceneProps) {
+  const suppressPlannerNarrative = isPlannerNarrativeEventType(activeEventType);
+  const narrativeText = suppressPlannerNarrative
+    ? "Preparing execution roadmap..."
+    : sceneText || activeDetail || "Preparing and updating document blocks...";
+
   return (
     <div className="absolute inset-0 px-4 py-3 text-white/85">
       <div className="mb-2 flex items-center justify-between">
@@ -124,7 +149,7 @@ function DocumentFallbackScene({
         <span className="text-[10px] uppercase tracking-[0.08em] text-white/65">editing</span>
       </div>
       <p className="mb-3 text-[11px] text-white/85">
-        {sceneText || activeDetail || "Preparing and updating document blocks..."}
+        {narrativeText}
       </p>
       {documentHighlights.length ? (
         <div className="mb-3 space-y-1.5 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2">

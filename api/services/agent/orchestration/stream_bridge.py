@@ -93,8 +93,10 @@ class LiveRunStream:
                 return "google_docs"
             return "document"
 
-        if normalized_tool.startswith(("workspace.docs.", "docs.create", "documents.highlight.")):
+        if normalized_tool.startswith(("workspace.docs.", "docs.create")):
             return "google_docs"
+        if normalized_tool.startswith("documents.highlight."):
+            return "document"
         if normalized_tool.startswith("workspace.sheets."):
             return "google_sheets"
         if normalized_tool.startswith(("browser.", "marketing.web_research", "web.extract.", "web.dataset.")):

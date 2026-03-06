@@ -64,6 +64,14 @@ def _normalize_file_ids(raw: Any) -> list[str]:
     return list(dict.fromkeys(cleaned))
 
 
+def _as_bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    return max(low, min(high, parsed))
+
+
 def _safe_snippet(text: str, *, limit: int = 220) -> str:
     compact = " ".join(str(text or "").split())
     if len(compact) <= limit:
@@ -194,6 +202,10 @@ def _build_pdf_scan_steps(
     return output
 
 
+def _is_pdf_name(value: Any) -> bool:
+    return str(value or "").strip().lower().endswith(".pdf")
+
+
 def _extract_terms(prompt: str, params: dict[str, Any], chunks: list[dict[str, Any]]) -> list[str]:
     provided = params.get("words")
     words: list[str] = []
@@ -220,6 +232,7 @@ def _load_source_chunks(
     index_id: int | None,
     max_sources: int = 8,
     max_chunks: int = 28,
+    prefer_pdf: bool = True,
 ) -> list[dict[str, Any]]:
     context = get_context()
     index = context.get_index(index_id)
@@ -230,21 +243,37 @@ def _load_source_chunks(
 
     source_ids: list[str] = []
     source_names: dict[str, str] = {}
+    max_sources_bound = max(1, int(max_sources))
     with Session(engine) as session:
         if file_ids:
             stmt = select(Source.id, Source.name).where(Source.id.in_(file_ids))
         else:
             stmt = select(Source.id, Source.name).order_by(Source.date_created.desc())  # type: ignore[attr-defined]
-            stmt = stmt.limit(max(1, int(max_sources)))
+            stmt = stmt.limit(max(24, max_sources_bound * 3))
         if is_private:
             stmt = stmt.where(Source.user == user_id)
         rows = session.execute(stmt).all()
-        for row in rows:
+        candidates: list[tuple[str, str]] = []
+        for row in rows[: max(24, max_sources_bound * 4)]:
             source_id = str(row[0] or "").strip()
             if not source_id:
                 continue
+            source_name = str(row[1] or "Indexed file").strip() or "Indexed file"
+            candidates.append((source_id, source_name))
+
+        if prefer_pdf:
+            candidates.sort(
+                key=lambda row: (
+                    0 if _is_pdf_name(row[1]) else 1,
+                    str(row[1]).lower(),
+                )
+            )
+        else:
+            candidates.sort(key=lambda row: str(row[1]).lower())
+
+        for source_id, source_name in candidates[:max_sources_bound]:
             source_ids.append(source_id)
-            source_names[source_id] = str(row[1] or "Indexed file").strip() or "Indexed file"
+            source_names[source_id] = source_name
 
         if not source_ids:
             return []
@@ -282,16 +311,22 @@ def _load_source_chunks(
 
     chunks: list[dict[str, Any]] = []
     seen_text: set[str] = set()
+    per_source_counts: dict[str, int] = {}
+    per_source_cap = max(2, min(10, max(2, int(max_chunks // max(1, max_sources_bound)))))
     for doc in docs or []:
         doc_id = str(getattr(doc, "doc_id", "") or "").strip()
         source_id = target_to_source.get(doc_id, "")
         if not source_id:
+            continue
+        used = int(per_source_counts.get(source_id) or 0)
+        if used >= per_source_cap:
             continue
         metadata = getattr(doc, "metadata", {}) or {}
         text = _safe_snippet(str(getattr(doc, "text", "") or ""), limit=1200)
         if not text or text in seen_text:
             continue
         seen_text.add(text)
+        per_source_counts[source_id] = used + 1
         chunks.append(
             {
                 "source_id": source_id,
@@ -370,11 +405,43 @@ class DocumentHighlightExtractTool(AgentTool):
         index_id_raw = context.settings.get("__selected_index_id")
         index_id = int(index_id_raw) if isinstance(index_id_raw, int) or str(index_id_raw).isdigit() else None
         highlight_color = _normalize_color(params.get("highlight_color") or context.settings.get("__highlight_color"))
+        max_sources = _as_bounded_int(
+            params.get("max_sources") or context.settings.get("__file_research_max_sources"),
+            default=8,
+            low=1,
+            high=240,
+        )
+        max_chunks = _as_bounded_int(
+            params.get("max_chunks") or context.settings.get("__file_research_max_chunks"),
+            default=28,
+            low=20,
+            high=3000,
+        )
+        max_scan_pages = _as_bounded_int(
+            params.get("max_scan_pages") or context.settings.get("__file_research_max_scan_pages"),
+            default=8,
+            low=8,
+            high=300,
+        )
+        max_highlights = _as_bounded_int(
+            params.get("max_highlights"),
+            default=96 if max_sources >= 80 else 36,
+            low=12,
+            high=220,
+        )
+        prefer_pdf_only = bool(
+            params.get("prefer_pdf")
+            if params.get("prefer_pdf") is not None
+            else context.settings.get("__file_research_prefer_pdf", True)
+        )
 
         chunks = _load_source_chunks(
             user_id=context.user_id,
             file_ids=selected_file_ids,
             index_id=index_id,
+            max_sources=max_sources,
+            max_chunks=max_chunks,
+            prefer_pdf=prefer_pdf_only,
         )
         if not chunks:
             return ToolExecutionResult(
@@ -396,10 +463,20 @@ class DocumentHighlightExtractTool(AgentTool):
             )
 
         terms = _extract_terms(prompt, params, chunks)
-        highlights = _build_highlights(chunks=chunks, terms=terms, color=highlight_color)
+        highlights = _build_highlights(
+            chunks=chunks,
+            terms=terms,
+            color=highlight_color,
+            max_items=max_highlights,
+        )
         if not highlights and chunks:
             fallback_terms = _extract_terms("", {}, chunks)
-            highlights = _build_highlights(chunks=chunks, terms=fallback_terms, color=highlight_color)
+            highlights = _build_highlights(
+                chunks=chunks,
+                terms=fallback_terms,
+                color=highlight_color,
+                max_items=max_highlights,
+            )
             if fallback_terms:
                 terms = fallback_terms
 
@@ -407,7 +484,8 @@ class DocumentHighlightExtractTool(AgentTool):
         copied_bucket = context.settings.get("__copied_highlights")
         if not isinstance(copied_bucket, list):
             copied_bucket = []
-        for row in highlights[:24]:
+        copy_limit = min(max_highlights, 180)
+        for row in highlights[:copy_limit]:
             copied_bucket.append(
                 {
                     "source": "file",
@@ -418,25 +496,72 @@ class DocumentHighlightExtractTool(AgentTool):
                     "page_label": row.get("page_label") or "",
                 }
             )
-        context.settings["__copied_highlights"] = copied_bucket[-64:]
+        copied_cap = 400 if max_sources >= 80 else 120
+        context.settings["__copied_highlights"] = copied_bucket[-copied_cap:]
         context.settings["__highlight_color"] = highlight_color
 
-        source_by_id: dict[str, AgentSource] = {}
+        source_summary_by_id: dict[str, dict[str, Any]] = {}
         for row in highlights:
             source_id = str(row.get("source_id") or "")
-            if not source_id or source_id in source_by_id:
+            if not source_id:
                 continue
+            source_name = str(row.get("source_name") or "Indexed file")
+            page_label = str(row.get("page_label") or "")
+            snippet = _safe_snippet(str(row.get("snippet") or ""), limit=280)
+            keyword = str(row.get("word") or "").strip().lower()
+            summary = source_summary_by_id.setdefault(
+                source_id,
+                {
+                    "source_name": source_name,
+                    "page_label": page_label,
+                    "extract": snippet,
+                    "keywords": [],
+                    "highlight_count": 0,
+                },
+            )
+            if not summary.get("page_label") and page_label:
+                summary["page_label"] = page_label
+            if not summary.get("extract") and snippet:
+                summary["extract"] = snippet
+            if keyword:
+                keywords = summary.get("keywords")
+                if not isinstance(keywords, list):
+                    keywords = []
+                    summary["keywords"] = keywords
+                if keyword not in keywords and len(keywords) < 12:
+                    keywords.append(keyword)
+            summary["highlight_count"] = int(summary.get("highlight_count") or 0) + 1
+
+        source_by_id: dict[str, AgentSource] = {}
+        for source_id, summary in source_summary_by_id.items():
+            extract_text = str(summary.get("extract") or "").strip()
             source_by_id[source_id] = AgentSource(
                 source_type="file",
-                label=str(row.get("source_name") or "Indexed file"),
+                label=str(summary.get("source_name") or "Indexed file"),
                 file_id=source_id,
                 score=0.72,
-                metadata={"page_label": str(row.get("page_label") or "")},
+                metadata={
+                    "page_label": str(summary.get("page_label") or ""),
+                    "extract": extract_text,
+                    "excerpt": extract_text,
+                    "snippet": extract_text,
+                    "keywords": list(summary.get("keywords") or [])[:12],
+                    "highlight_count": int(summary.get("highlight_count") or 0),
+                },
             )
 
         highlighted_words = [row.get("word", "") for row in highlights if row.get("word")]
         unique_words = list(dict.fromkeys(highlighted_words))
-        pdf_scan_steps = _build_pdf_scan_steps(chunks=chunks, highlights=highlights)
+        pdf_scan_steps = _build_pdf_scan_steps(
+            chunks=chunks,
+            highlights=highlights,
+            max_pages=max_scan_pages,
+        )
+        unique_sources = {
+            str(row.get("source_id") or "").strip()
+            for row in chunks
+            if str(row.get("source_id") or "").strip()
+        }
         has_pdf_file = any(
             str(row.get("source_name") or "").strip().lower().endswith(".pdf")
             for row in chunks
@@ -454,6 +579,7 @@ class DocumentHighlightExtractTool(AgentTool):
                 detail=f"Scanning {len(chunks)} file excerpt(s)",
                 data={
                     "chunk_count": len(chunks),
+                    "source_count": len(unique_sources),
                     "scene_surface": "document",
                 },
             ),
@@ -533,6 +659,8 @@ class DocumentHighlightExtractTool(AgentTool):
                     "terms": terms[:10],
                     "highlight_color": highlight_color,
                     "scene_surface": "document",
+                    "max_sources": max_sources,
+                    "max_chunks": max_chunks,
                 },
             )
         )
@@ -544,7 +672,7 @@ class DocumentHighlightExtractTool(AgentTool):
                 data={
                     "keywords": unique_words[:12],
                     "highlight_color": highlight_color,
-                    "highlighted_words": highlights[:18],
+                    "highlighted_words": highlights[: min(max_highlights, 120)],
                     "copied_snippets": copied_snippets[:10],
                     "page_total": len(pdf_scan_steps) if pdf_scan_steps else 0,
                     "scene_surface": "document",
@@ -584,6 +712,7 @@ class DocumentHighlightExtractTool(AgentTool):
         lines = [
             "### File Highlights",
             f"- Highlight color: {highlight_color}",
+            f"- Source files scanned: {len(unique_sources)}",
             f"- Excerpts scanned: {len(chunks)}",
             f"- Highlighted words: {', '.join(unique_words[:12]) if unique_words else 'none'}",
         ]
@@ -602,9 +731,13 @@ class DocumentHighlightExtractTool(AgentTool):
             data={
                 "highlight_color": highlight_color,
                 "keywords": unique_words[:12],
-                "highlighted_words": highlights[:18],
+                "highlighted_words": highlights[: min(max_highlights, 120)],
                 "copied_snippets": copied_snippets[:10],
                 "chunk_count": len(chunks),
+                "source_count": len(unique_sources),
+                "max_sources": max_sources,
+                "max_chunks": max_chunks,
+                "max_scan_pages": max_scan_pages,
                 "scene_surface": "document",
                 "pdf_page": int(pdf_scan_steps[-1].get("page_number") or 1) if pdf_scan_steps else 1,
                 "page_index": int(pdf_scan_steps[-1].get("page_index") or 1) if pdf_scan_steps else 1,

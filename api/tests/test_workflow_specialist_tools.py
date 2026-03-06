@@ -84,11 +84,57 @@ def test_document_highlight_extract_tool_stashes_copied_entries(monkeypatch) -> 
     assert result.data.get("highlighted_words")
     assert context.settings.get("__copied_highlights")
     assert any(event.event_type == "highlights_detected" for event in result.events)
+    assert result.sources
+    first_source_metadata = result.sources[0].metadata if isinstance(result.sources[0].metadata, dict) else {}
+    assert str(first_source_metadata.get("extract") or "").strip()
+    assert str(first_source_metadata.get("excerpt") or "").strip()
     event_types = [event.event_type for event in result.events]
     assert "pdf_open" in event_types
     assert "pdf_page_change" in event_types
     assert "pdf_scan_region" in event_types
     assert "pdf_evidence_linked" in event_types
+
+
+def test_document_highlight_extract_supports_large_pdf_group_budget(monkeypatch) -> None:
+    context = _context()
+    context.settings["__file_research_max_sources"] = 200
+    context.settings["__file_research_max_chunks"] = 1200
+    context.settings["__file_research_max_scan_pages"] = 140
+
+    captured: dict[str, int] = {}
+
+    def _fake_load_source_chunks(**kwargs):
+        captured["max_sources"] = int(kwargs.get("max_sources") or 0)
+        captured["max_chunks"] = int(kwargs.get("max_chunks") or 0)
+        return [
+            {
+                "source_id": "file-1",
+                "source_name": "Doc-1.pdf",
+                "page_label": "1",
+                "text": "Energy systems and storage analysis with market outlook.",
+            },
+            {
+                "source_id": "file-2",
+                "source_name": "Doc-2.pdf",
+                "page_label": "2",
+                "text": "Grid modernization and renewables investment trends.",
+            },
+        ]
+
+    monkeypatch.setattr(
+        "api.services.agent.tools.document_highlight_tools._load_source_chunks",
+        _fake_load_source_chunks,
+    )
+    result = DocumentHighlightExtractTool().execute(
+        context=context,
+        prompt="Deep research in group files",
+        params={},
+    )
+    assert captured["max_sources"] == 200
+    assert captured["max_chunks"] == 1200
+    assert int(result.data.get("max_sources") or 0) == 200
+    assert int(result.data.get("max_chunks") or 0) == 1200
+    assert int(result.data.get("source_count") or 0) >= 2
 
 
 def test_invoice_create_tool_generates_pdf_artifact() -> None:
@@ -251,20 +297,24 @@ def test_document_create_tool_google_workspace_can_enable_public_link() -> None:
 
 def test_report_generation_respects_location_objective_without_hardcoded_phrase() -> None:
     context = _context()
-    context.settings["__latest_browser_findings"] = {
-        "title": "Axon Group | Industrial solutions square",
-        "url": "https://axongroup.com/products-and-solutions",
-        "keywords": ["axon", "solutions", "control"],
-        "excerpt": "About Axon Our solutions Fluids Air Powder Noise Heat exchange Control.",
-    }
-    result = ReportGenerationTool().execute(
-        context=context,
-        prompt="Analyze axon and tell where they are located",
-        params={
-            "title": "Website Analysis Report",
-            "summary": "Find where the company is located and report verified location evidence.",
-        },
-    )
+    with patch(
+        "api.services.agent.tools.data_tools._classify_report_intent_with_llm",
+        return_value={"location_objective": True},
+    ):
+        context.settings["__latest_browser_findings"] = {
+            "title": "Axon Group | Industrial solutions square",
+            "url": "https://axongroup.com/products-and-solutions",
+            "keywords": ["axon", "solutions", "control"],
+            "excerpt": "About Axon Our solutions Fluids Air Powder Noise Heat exchange Control.",
+        }
+        result = ReportGenerationTool().execute(
+            context=context,
+            prompt="Analyze axon and tell where they are located",
+            params={
+                "title": "Website Analysis Report",
+                "summary": "Find where the company is located and report verified location evidence.",
+            },
+        )
     report_text = str(result.content or "")
     assert "No explicit headquarters/address was confirmed" in report_text
     assert "appears to focus on industrial solutions and related services" not in report_text

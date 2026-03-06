@@ -69,7 +69,6 @@ type PdfPlaybackState = {
 type SceneAnimationState = {
   copyPulseText: string;
   copyPulseVisible: boolean;
-  docBodyScrollRef: RefObject<HTMLDivElement | null>;
   emailBodyScrollRef: RefObject<HTMLDivElement | null>;
   typedDocBodyPreview: string;
   typedSheetBodyPreview: string;

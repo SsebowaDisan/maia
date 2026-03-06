@@ -37,6 +37,7 @@ def _task_prep(
     return TaskPreparation(
         task_intelligence=task_intelligence,
         user_preferences={},
+        research_depth_profile={},
         conversation_summary="",
         rewritten_task=contract_objective,
         planned_deliverables=[],

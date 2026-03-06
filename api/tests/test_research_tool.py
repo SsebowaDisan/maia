@@ -8,8 +8,11 @@ from api.services.agent.tools.research_tools import WebResearchTool
 
 
 class _BraveConnectorStub:
+    def __init__(self) -> None:
+        self.counts: list[int] = []
+
     def web_search(self, *, query: str, count: int = 8) -> dict[str, object]:
-        del count
+        self.counts.append(int(count))
         return {
             "results": [
                 {
@@ -129,6 +132,67 @@ class ResearchToolTests(unittest.TestCase):
         self.assertEqual(result.data.get("provider"), "brave_search")
         attempts = result.data.get("provider_attempted") or []
         self.assertEqual(attempts, ["brave_search"])
+
+    def test_search_budget_caps_total_requested_result_slots(self) -> None:
+        brave = _BraveConnectorStub()
+        registry = _RegistryStub(brave=brave, bing=_BingConnectorStub())
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="research axon group",
+                params={
+                    "query": "axon group",
+                    "max_query_variants": 20,
+                    "results_per_query": 25,
+                    "search_budget": 60,
+                    "query_variants": [
+                        "axon group market overview",
+                        "axon group products",
+                        "axon group competitors",
+                        "axon group news",
+                        "axon group pricing",
+                        "axon group strategy",
+                    ],
+                },
+            )
+        self.assertLessEqual(sum(brave.counts), 60)
+        self.assertEqual(int(result.data.get("search_budget_requested") or 0), 60)
+        self.assertLessEqual(int(result.data.get("search_budget_effective") or 0), 60)
+
+    def test_brave_emits_live_browser_navigation_scroll_and_click_events(self) -> None:
+        registry = _RegistryStub(brave=_BraveConnectorStub(), bing=_BingConnectorStub())
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="research axon group",
+                params={
+                    "query": "axon group",
+                    "query_variants": ["axon group"],
+                    "max_query_variants": 2,
+                    "results_per_query": 8,
+                },
+            )
+
+        event_types = [event.event_type for event in result.events]
+        self.assertIn("browser_navigate", event_types)
+        self.assertIn("browser_scroll", event_types)
+        self.assertIn("web_result_opened", event_types)
+
+        search_navigate_events = [
+            event
+            for event in result.events
+            if event.event_type == "browser_navigate"
+            and str(event.data.get("url") or "").startswith("https://search.brave.com/search?")
+        ]
+        self.assertTrue(search_navigate_events)
+
+        opened_source_events = [
+            event
+            for event in result.events
+            if event.event_type == "web_result_opened"
+            and str(event.data.get("url") or "").startswith("https://axongroup.com/")
+        ]
+        self.assertTrue(opened_source_events)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,8 @@ def test_derive_task_intelligence_extracts_url_and_email() -> None:
     assert task.delivery_email == "ops@example.com"
     assert task.requires_delivery is True
     assert task.requires_web_inspection is True
-    assert task.requested_report is True
+    # LLM-disabled baseline should not infer "report" from lexical phrases.
+    assert task.requested_report is False
 
 
 def test_derive_task_intelligence_treats_sent_as_delivery_intent() -> None:
@@ -44,7 +45,19 @@ def test_derive_task_intelligence_treats_sent_as_delivery_intent() -> None:
     assert task.requires_delivery is True
 
 
-def test_derive_task_intelligence_detects_docs_sheets_and_web_intents() -> None:
+def test_derive_task_intelligence_detects_docs_sheets_and_web_intents(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.intelligence_sections.task_understanding.classify_intent_tags",
+        lambda **kwargs: ["web_research", "docs_write", "sheets_update", "report_generation"],
+    )
+    monkeypatch.setattr(
+        "api.services.agent.intelligence_sections.task_understanding.enrich_task_intelligence",
+        lambda **kwargs: {
+            "requires_web_inspection": True,
+            "requested_report": True,
+            "intent_tags": ["web_research", "docs_write", "sheets_update", "report_generation"],
+        },
+    )
     task = derive_task_intelligence(
         message=(
             "Research online agent architectures, write findings in Google Docs, "

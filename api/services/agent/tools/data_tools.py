@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 from statistics import mean
 from typing import Any
 
-from api.services.agent.llm_runtime import call_text_response, env_bool
+from api.services.agent.llm_runtime import call_json_response, call_text_response, env_bool
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -43,61 +42,100 @@ def _first_sentence(text: str, max_len: int = 220) -> str:
     return f"{clean[: max_len - 1].rstrip()}..."
 
 
-def _has_location_prompt(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(
-        token in lowered
-        for token in (
-            "where",
-            "location",
-            "located",
-            "headquarter",
-            "headquarters",
-            "address",
-            "office",
-            "based in",
-            "found in",
-            "city",
-            "country",
-        )
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "1"}:
+            return True
+        if lowered in {"false", "no", "0"}:
+            return False
+    return None
+
+
+def _classify_report_intent_with_llm(
+    *,
+    prompt: str,
+    summary: str,
+    title: str,
+    settings: dict[str, Any],
+) -> dict[str, bool]:
+    if not env_bool("MAIA_AGENT_LLM_REPORT_INTENT_ENABLED", default=True):
+        return {}
+    payload = {
+        "prompt": " ".join(str(prompt or "").split()).strip()[:520],
+        "summary": " ".join(str(summary or "").split()).strip()[:520],
+        "title": " ".join(str(title or "").split()).strip()[:200],
+        "preferences": settings.get("__user_preferences") if isinstance(settings.get("__user_preferences"), dict) else {},
+    }
+    response = call_json_response(
+        system_prompt=(
+            "You classify report-generation intent flags for an agent. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            "Return JSON only in this schema:\n"
+            "{\n"
+            '  "location_objective": false,\n'
+            '  "direct_question": false,\n'
+            '  "simple_explanation_required": false\n'
+            "}\n"
+            "Rules:\n"
+            "- Infer only from provided input.\n"
+            "- Do not fabricate facts.\n\n"
+            f"Input:\n{payload}"
+        ),
+        temperature=0.0,
+        timeout_seconds=9,
+        max_tokens=120,
     )
+    if not isinstance(response, dict):
+        return {}
+    location_objective = _coerce_bool(response.get("location_objective"))
+    direct_question = _coerce_bool(response.get("direct_question"))
+    simple_explanation = _coerce_bool(response.get("simple_explanation_required"))
+    output: dict[str, bool] = {}
+    if location_objective is not None:
+        output["location_objective"] = location_objective
+    if direct_question is not None:
+        output["direct_question"] = direct_question
+    if simple_explanation is not None:
+        output["simple_explanation_required"] = simple_explanation
+    return output
 
 
-def _extract_location_signal(text: str) -> str:
-    clean = " ".join(str(text or "").split())
+def _extract_location_signal_with_llm(text: str) -> str:
+    clean = " ".join(str(text or "").split()).strip()
     if not clean:
         return ""
-    patterns = (
-        r"\b(?:headquartered|based|located)\s+in\s+([A-Za-z0-9 ,.'()-]{4,80})",
-        r"\baddress(?:es)?[:\s]+([A-Za-z0-9 ,.'()#/-]{6,120})",
-        r"\b(?:offices?|locations?)\s+(?:in|across)\s+([A-Za-z0-9 ,.'()-]{4,100})",
+    if not env_bool("MAIA_AGENT_LLM_LOCATION_SIGNAL_ENABLED", default=True):
+        return ""
+    response = call_json_response(
+        system_prompt=(
+            "Extract concrete location evidence from text. Return strict JSON only."
+        ),
+        user_prompt=(
+            "Return JSON only in this schema:\n"
+            '{ "location_signal": "string", "has_location_signal": false }\n'
+            "Rules:\n"
+            "- Keep location_signal empty when no explicit location evidence exists.\n"
+            "- Do not infer or guess.\n\n"
+            f"Input text:\n{clean[:1200]}"
+        ),
+        temperature=0.0,
+        timeout_seconds=8,
+        max_tokens=120,
     )
-    for pattern in patterns:
-        match = re.search(pattern, clean, flags=re.IGNORECASE)
-        if not match:
-            continue
-        value = " ".join(str(match.group(1) or "").split()).strip(" .,:;")
-        if value:
-            return value
-    return ""
-
-
-def _looks_like_direct_question(text: str) -> bool:
-    clean = " ".join(str(text or "").split()).strip().lower()
-    if not clean:
-        return False
-    if "?" in clean:
-        return True
-    question_starts = (
-        "what is ",
-        "what are ",
-        "how does ",
-        "how do ",
-        "why ",
-        "define ",
-        "explain ",
-    )
-    return any(clean.startswith(prefix) for prefix in question_starts)
+    if not isinstance(response, dict):
+        return ""
+    has_location = _coerce_bool(response.get("has_location_signal"))
+    signal = " ".join(str(response.get("location_signal") or "").split()).strip(" .,:;")
+    if has_location is False:
+        return ""
+    return signal[:160]
 
 
 def _draft_direct_answer(question: str) -> str:
@@ -128,6 +166,33 @@ def _draft_direct_answer(question: str) -> str:
     return clean
 
 
+def _prefers_simple_explanation(
+    *,
+    prompt: str,
+    summary: str,
+    title: str,
+    settings: dict[str, Any],
+    llm_intent_flags: dict[str, bool] | None = None,
+) -> bool:
+    if bool(settings.get("__simple_explanation_required")):
+        return True
+    if isinstance(llm_intent_flags, dict) and bool(llm_intent_flags.get("simple_explanation_required")):
+        return True
+    prefs = settings.get("__user_preferences")
+    if not isinstance(prefs, dict):
+        prefs = {}
+    explicit_pref = _coerce_bool(prefs.get("simple_explanation_required"))
+    if explicit_pref is not None:
+        return explicit_pref
+    inferred = _classify_report_intent_with_llm(
+        prompt=prompt,
+        summary=summary,
+        title=title,
+        settings=settings,
+    )
+    return bool(inferred.get("simple_explanation_required"))
+
+
 def _normalize_source_rows(raw: Any, *, limit: int = 12) -> list[dict[str, str]]:
     if not isinstance(raw, list):
         return []
@@ -155,57 +220,53 @@ def _normalize_source_rows(raw: Any, *, limit: int = 12) -> list[dict[str, str]]
     return normalized
 
 
-def _detect_report_topic(*parts: str) -> str:
-    combined = " ".join(str(part or "").lower() for part in parts)
-    if "machine learning" in combined or "ml " in combined or "ml," in combined:
-        return "machine_learning"
-    if "headquarter" in combined or "located" in combined or "address" in combined:
-        return "location"
-    return "general"
+def _analysis_paragraphs_with_llm(
+    *,
+    title: str,
+    summary: str,
+    prompt: str,
+    source_rows: list[dict[str, str]],
+    depth_tier: str,
+) -> list[str]:
+    if not env_bool("MAIA_AGENT_LLM_REPORT_ANALYSIS_ENABLED", default=True):
+        return []
+    payload = {
+        "title": " ".join(str(title or "").split()).strip()[:220],
+        "summary": " ".join(str(summary or "").split()).strip()[:1200],
+        "prompt": " ".join(str(prompt or "").split()).strip()[:520],
+        "depth_tier": depth_tier,
+        "sources_preview": source_rows[:8],
+    }
+    response = call_json_response(
+        system_prompt=(
+            "Write concise professional report analysis paragraphs. Return strict JSON only."
+        ),
+        user_prompt=(
+            "Return JSON only in this schema:\n"
+            '{ "analysis_paragraphs": ["paragraph one", "paragraph two"] }\n'
+            "Rules:\n"
+            "- Provide 2-6 clear paragraphs.\n"
+            "- Use only provided context; avoid fabrications.\n"
+            "- Keep each paragraph between 1-4 sentences.\n\n"
+            f"Input:\n{payload}"
+        ),
+        temperature=0.2,
+        timeout_seconds=12,
+        max_tokens=700,
+    )
+    rows = response.get("analysis_paragraphs") if isinstance(response, dict) else None
+    if not isinstance(rows, list):
+        return []
+    cleaned: list[str] = []
+    for item in rows[:6]:
+        line = " ".join(str(item or "").split()).strip()
+        if not line:
+            continue
+        cleaned.append(line[:1200])
+    return cleaned
 
 
-def _topic_analysis_paragraphs(*, topic: str, summary: str) -> list[str]:
-    if topic == "machine_learning":
-        return [
-            (
-                "Machine learning (ML) is a data-driven approach where statistical models learn "
-                "patterns from historical examples and generalize to new inputs. A typical ML "
-                "lifecycle includes problem framing, data collection, feature engineering, model "
-                "training, validation, deployment, and continuous monitoring."
-            ),
-            (
-                "Core ML paradigms include supervised learning (classification/regression with "
-                "labeled data), unsupervised learning (clustering, dimensionality reduction, and "
-                "anomaly detection), and reinforcement learning (policy optimization through "
-                "reward signals). Teams usually start with simpler baseline models before adopting "
-                "higher-complexity architectures."
-            ),
-            (
-                "Common business applications include demand forecasting, fraud detection, "
-                "recommendation systems, customer segmentation, predictive maintenance, and "
-                "document intelligence. Success depends on clearly defined evaluation metrics "
-                "(for example precision/recall, F1, AUC, or RMSE) that match operational outcomes."
-            ),
-            (
-                "Operational risks include data drift, concept drift, bias, limited explainability, "
-                "and governance/compliance gaps. Strong production practice includes model versioning, "
-                "feature/data quality checks, guardrails for high-risk decisions, and periodic "
-                "retraining with post-deployment performance audits."
-            ),
-        ]
-    if topic == "location":
-        return [
-            (
-                "This report focuses on validating location-specific evidence from captured sources. "
-                "When location claims are present, they should be grounded in direct, attributable "
-                "evidence such as official company pages, filings, or verified profile records."
-            ),
-            (
-                "If location evidence is ambiguous, the recommended path is to collect supporting "
-                "signals from contact/about pages and corroborate findings using authoritative external "
-                "sources before finalizing any headquarters or address claim."
-            ),
-        ]
+def _fallback_analysis_paragraphs(*, summary: str) -> list[str]:
     return [
         (
             "This report expands the initial summary with structured analysis, actionable takeaways, "
@@ -246,6 +307,81 @@ def _reference_lines(rows: list[dict[str, str]], *, limit: int = 8) -> list[str]
         if snippet:
             line = f"{line} - {snippet}"
         lines.append(line)
+    return lines
+
+
+def _analytics_section_lines(settings: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    profile = settings.get("__latest_data_profile")
+    if isinstance(profile, dict):
+        lines.extend(
+            [
+                "### Data Profile Snapshot",
+                "| Metric | Value |",
+                "|---|---|",
+                f"| Rows | {int(profile.get('row_count') or 0)} |",
+                f"| Columns | {int(profile.get('column_count') or 0)} |",
+                f"| Numeric columns | {len(profile.get('numeric_columns') or [])} |",
+            ]
+        )
+        correlations = profile.get("top_correlations")
+        if isinstance(correlations, list) and correlations:
+            lines.extend(["", "| Strong correlation | Value |", "|---|---|"])
+            for item in correlations[:6]:
+                if not isinstance(item, dict):
+                    continue
+                left = " ".join(str(item.get("left") or "").split()).strip()
+                right = " ".join(str(item.get("right") or "").split()).strip()
+                value = item.get("correlation")
+                if not left or not right:
+                    continue
+                lines.append(f"| {left} vs {right} | {value} |")
+
+    visualization = settings.get("__latest_data_visualization")
+    if isinstance(visualization, dict):
+        lines.extend(
+            [
+                "",
+                "### Visualization Snapshot",
+                "| Field | Value |",
+                "|---|---|",
+                f"| Chart type | {str(visualization.get('chart_type') or 'n/a')} |",
+                f"| Rows plotted | {int(visualization.get('row_count') or 0)} |",
+                f"| X axis | {str(visualization.get('x') or 'n/a')} |",
+                f"| Y axis | {str(visualization.get('y') or 'n/a')} |",
+                f"| Artifact path | {str(visualization.get('path') or 'n/a')} |",
+            ]
+        )
+
+    ga4_report = settings.get("__latest_analytics_report")
+    if isinstance(ga4_report, dict):
+        dimensions = ga4_report.get("dimensions")
+        metrics = ga4_report.get("metrics")
+        lines.extend(
+            [
+                "",
+                "### Analytics API Snapshot",
+                "| Metric | Value |",
+                "|---|---|",
+                f"| Property ID | {str(ga4_report.get('property_id') or 'n/a')} |",
+                f"| Rows returned | {int(ga4_report.get('row_count') or 0)} |",
+                f"| Dimensions | {', '.join(str(item) for item in (dimensions or [])[:8]) or 'n/a'} |",
+                f"| Metrics | {', '.join(str(item) for item in (metrics or [])[:8]) or 'n/a'} |",
+            ]
+        )
+    return lines
+
+
+def _simple_explanation_lines(*, summary: str, title: str) -> list[str]:
+    topic = " ".join(str(title or "").split()).strip() or "this topic"
+    first = _first_sentence(summary, max_len=220)
+    lines = [
+        "### Simple Explanation (For a 5-Year-Old)",
+        f"- Imagine **{topic}** is a puzzle. We looked at many pieces and kept the ones that really fit.",
+    ]
+    if first:
+        lines.append(f"- Big idea: {first}")
+    lines.append("- Why this helps: when facts fit together, we can make safer and smarter decisions.")
     return lines
 
 
@@ -423,11 +559,23 @@ class ReportGenerationTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> ToolExecutionResult:
+        depth_tier = (
+            " ".join(str(context.settings.get("__research_depth_tier") or "standard").split())
+            .strip()
+            .lower()
+            or "standard"
+        )
         title = str(params.get("title") or "Executive Report").strip()
         summary = str(params.get("summary") or prompt).strip() or "No summary provided."
         summary = " ".join(summary.split())
         if len(summary) > 560:
             summary = f"{summary[:559].rstrip()}..."
+        report_intent_flags = _classify_report_intent_with_llm(
+            prompt=prompt,
+            summary=summary,
+            title=title,
+            settings=context.settings,
+        )
         inferred_findings = context.settings.get("__latest_browser_findings")
         if isinstance(inferred_findings, dict):
             finding_title = str(inferred_findings.get("title") or "the website").strip()
@@ -440,8 +588,8 @@ class ReportGenerationTool(AgentTool):
                 else ""
             )
             requested_focus = _first_sentence(str(params.get("summary") or prompt), max_len=260)
-            location_requested = _has_location_prompt(requested_focus)
-            location_signal = _extract_location_signal(finding_excerpt)
+            location_requested = bool(report_intent_flags.get("location_objective"))
+            location_signal = _extract_location_signal_with_llm(finding_excerpt)
             summary_parts: list[str] = []
             if requested_focus:
                 summary_parts.append(requested_focus)
@@ -461,7 +609,7 @@ class ReportGenerationTool(AgentTool):
             if finding_excerpt:
                 summary_parts.append(f"Evidence note: {finding_excerpt}")
             summary = " ".join(summary_parts)
-        elif _looks_like_direct_question(summary):
+        elif bool(report_intent_flags.get("direct_question")) or ("?" in summary):
             direct_answer = _draft_direct_answer(summary)
             if direct_answer:
                 summary = direct_answer
@@ -470,7 +618,8 @@ class ReportGenerationTool(AgentTool):
         raw_sources = params.get("sources")
         if not isinstance(raw_sources, list):
             raw_sources = context.settings.get("__latest_web_sources")
-        source_rows = _normalize_source_rows(raw_sources, limit=12)
+        source_limit = 80 if depth_tier in {"deep_research", "deep_analytics"} else 24
+        source_rows = _normalize_source_rows(raw_sources, limit=source_limit)
 
         highlights = params.get("highlights")
         if not isinstance(highlights, list):
@@ -485,6 +634,13 @@ class ReportGenerationTool(AgentTool):
             highlight_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=8)]
         if not highlight_lines:
             highlight_lines = ["- Key findings will appear here once evidence is synthesized."]
+        if depth_tier in {"deep_research", "deep_analytics"} and len(highlight_lines) < 10:
+            auto_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=14)]
+            for line in auto_lines:
+                if line not in highlight_lines:
+                    highlight_lines.append(line)
+                if len(highlight_lines) >= 14:
+                    break
 
         action_lines = [f"- {str(item).strip()}" for item in actions if str(item).strip()]
         if not action_lines:
@@ -494,11 +650,34 @@ class ReportGenerationTool(AgentTool):
                 "- Capture assumptions, risks, and open questions in the final review note.",
             ]
 
-        topic = _detect_report_topic(title, summary, prompt)
-        analysis_paragraphs = _topic_analysis_paragraphs(topic=topic, summary=summary)
-        reference_lines = _reference_lines(source_rows, limit=8)
+        analysis_paragraphs = _analysis_paragraphs_with_llm(
+            title=title,
+            summary=summary,
+            prompt=prompt,
+            source_rows=source_rows,
+            depth_tier=depth_tier,
+        )
+        if not analysis_paragraphs:
+            analysis_paragraphs = _fallback_analysis_paragraphs(summary=summary)
+        reference_lines = _reference_lines(
+            source_rows,
+            limit=40 if depth_tier in {"deep_research", "deep_analytics"} else 12,
+        )
         if not reference_lines:
             reference_lines = ["- No external links were captured for this run."]
+        analytics_lines = _analytics_section_lines(context.settings)
+        simple_explanation_requested = _prefers_simple_explanation(
+            prompt=prompt,
+            summary=summary,
+            title=title,
+            settings=context.settings,
+            llm_intent_flags=report_intent_flags,
+        )
+        simple_lines = (
+            _simple_explanation_lines(summary=summary, title=title)
+            if simple_explanation_requested
+            else []
+        )
 
         content = "\n".join(
             [
@@ -507,12 +686,15 @@ class ReportGenerationTool(AgentTool):
                 "### Executive Summary",
                 summary,
                 "",
+                *simple_lines,
+                *([""] if simple_lines else []),
                 "### Detailed Analysis",
                 "",
                 *analysis_paragraphs[:8],
+                *([""] + analytics_lines if analytics_lines else []),
                 "",
                 "### Highlights",
-                *highlight_lines[:8],
+                *highlight_lines[:14],
                 "",
                 "### Recommended Next Steps",
                 *action_lines[:8],
@@ -528,7 +710,13 @@ class ReportGenerationTool(AgentTool):
         return ToolExecutionResult(
             summary=f"Generated report draft: {title}",
             content=content,
-            data={"title": title, "source_count": len(source_rows)},
+            data={
+                "title": title,
+                "source_count": len(source_rows),
+                "research_depth_tier": depth_tier,
+                "simple_explanation_included": simple_explanation_requested,
+                "analytics_sections_included": bool(analytics_lines),
+            },
             sources=[],
             next_steps=[
                 "Attach owner/timeline for each action.",

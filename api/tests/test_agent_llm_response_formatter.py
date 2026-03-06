@@ -73,3 +73,32 @@ def test_polish_final_response_includes_language_rule_from_user_message(monkeypa
     assert "Language rule: respond in Spanish" in observed["blueprint_system"]
     assert "Language rule: respond in Spanish" in observed["polish_prompt"]
     assert "Language rule: respond in Spanish" in observed["polish_system"]
+
+
+def test_polish_final_response_reverts_when_language_drifts(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_json_response",
+        lambda **kwargs: {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Answer", "purpose": "Respond", "format": "paragraphs"}],
+        },
+    )
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_text_response",
+        lambda **kwargs: (
+            "## Analise\n"
+            "Nao foi possivel confirmar os servicos ofertados.\n"
+            "Tambem nao foi possivel validar os horarios de funcionamento sem evidencias adicionais.\n"
+        ),
+    )
+    original = "## Key Findings\n- Website evidence was captured from the provided URL."
+    polished = polish_final_response(
+        request_message="Analyze the website and provide findings in English.",
+        answer_text=original,
+    )
+    assert polished == original

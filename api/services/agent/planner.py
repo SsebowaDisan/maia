@@ -10,6 +10,7 @@ from api.services.agent.llm_planner import plan_with_llm
 from api.services.agent.llm_plan_optimizer import optimize_plan_rows, rewrite_search_query
 from api.services.agent.llm_runtime import env_bool
 from api.services.agent.planner_helpers import intent_signals, sanitize_search_query
+from api.services.agent.research_depth_profile import derive_research_depth_profile
 LLM_ALLOWED_TOOL_IDS = {
     "ads.google.performance",
     "analytics.chart.generate",
@@ -87,29 +88,51 @@ def resolve_web_routing(request: ChatRequest) -> dict[str, Any]:
     return routing if isinstance(routing, dict) else {}
 
 
-def is_deep_research_request(request: ChatRequest) -> bool:
-    return request.agent_mode == "company_agent" and bool(str(request.agent_goal or "").strip())
-
-
-def _explicit_web_research_requested(request: ChatRequest) -> bool:
-    combined = " ".join(
-        [str(request.message or "").strip(), str(request.agent_goal or "").strip()]
-    ).lower()
-    if not combined:
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
         return False
-    cues = (
-        "search online",
-        "web research",
-        "online research",
-        "online sources",
-        "internet",
-        "browse",
-        "latest",
-        "recent",
-        "news",
-        "look up",
+    return default
+
+
+def _has_deep_research_override(request: ChatRequest) -> bool:
+    overrides = (
+        dict(request.setting_overrides)
+        if isinstance(request.setting_overrides, dict)
+        else {}
     )
-    return any(cue in combined for cue in cues)
+    if _truthy(overrides.get("__deep_search_enabled"), default=False):
+        return True
+
+    depth_tier = " ".join(str(overrides.get("__research_depth_tier") or "").split()).strip().lower()
+    if depth_tier in {"deep_research", "deep_analytics"}:
+        return True
+
+    profile_raw = overrides.get("__research_depth_profile")
+    profile = profile_raw if isinstance(profile_raw, dict) else {}
+    profile_tier = " ".join(str(profile.get("tier") or "").split()).strip().lower()
+    return profile_tier in {"deep_research", "deep_analytics"}
+
+
+def is_deep_research_request(request: ChatRequest) -> bool:
+    agent_mode = str(request.agent_mode or "").strip().lower()
+    if agent_mode == "deep_search":
+        return True
+    if _has_deep_research_override(request):
+        return True
+    profile = derive_research_depth_profile(
+        message=request.message,
+        agent_goal=request.agent_goal,
+        user_preferences={},
+        agent_mode=request.agent_mode,
+    )
+    return profile.tier in {"deep_research", "deep_analytics"}
 
 
 def _request_has_selected_files(request: ChatRequest) -> bool:
@@ -182,23 +205,7 @@ def _normalize_steps(
     signals = intent_signals(request)
     url = str(signals.get("url") or "")
     recipient = str(signals.get("recipient_email") or "")
-    combined_text = " ".join(
-        [
-            str(request.message or "").strip(),
-            str(request.agent_goal or "").strip(),
-        ]
-    ).lower()
-    attachment_delivery_requested = any(
-        token in combined_text
-        for token in (
-            "attach",
-            "attachment",
-            "attached",
-            "pdf",
-            "file",
-            "download",
-        )
-    )
+    attachment_delivery_requested = bool(signals.get("wants_attachment_delivery"))
     highlight_color = str(signals.get("highlight_color") or "yellow")
     routing = web_routing if isinstance(web_routing, dict) else detect_web_routing_mode(
         message=request.message,
@@ -209,6 +216,7 @@ def _normalize_steps(
     scrape_url_requested = routing_mode == "url_scrape"
     online_research_requested = routing_mode == "online_research"
     company_agent_mode = request.agent_mode == "company_agent"
+    deep_research_mode = is_deep_research_request(request)
     has_highlight_extract = any(step.tool_id == "documents.highlight.extract" for step in steps)
     has_selected_files = _request_has_selected_files(request)
 
@@ -295,7 +303,8 @@ def _normalize_steps(
         )
 
     if scrape_url_requested and url:
-        normalized = [step for step in normalized if step.tool_id != "marketing.web_research"]
+        if not deep_research_mode:
+            normalized = [step for step in normalized if step.tool_id != "marketing.web_research"]
         has_browser = any(step.tool_id == "browser.playwright.inspect" for step in normalized)
         if not has_browser:
             normalized.insert(
@@ -307,6 +316,21 @@ def _normalize_steps(
                         "url": url,
                         "web_provider": DEFAULT_WEB_PROVIDER,
                         "highlight_color": highlight_color,
+                    },
+                ),
+            )
+        if deep_research_mode and not any(
+            row.tool_id == "marketing.web_research" for row in normalized
+        ):
+            normalized.insert(
+                1 if normalized and normalized[0].tool_id == "browser.playwright.inspect" else 0,
+                PlannedStep(
+                    tool_id="marketing.web_research",
+                    title="Search online sources",
+                    params={
+                        "query": sanitize_search_query(request.message, fallback_url=url),
+                        "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
+                        "allow_provider_fallback": False,
                     },
                 ),
             )
@@ -325,11 +349,7 @@ def _normalize_steps(
                     },
                 ),
             )
-    elif (
-        routing_mode == "none"
-        and not url
-        and not _explicit_web_research_requested(request)
-    ):
+    elif routing_mode == "none" and not url and not deep_research_mode:
         pruned: list[PlannedStep] = []
         for step in normalized:
             if step.tool_id not in (
@@ -344,6 +364,22 @@ def _normalize_steps(
             if step_url.startswith(("http://", "https://")):
                 pruned.append(step)
         normalized = pruned
+
+    # File-scoped company-agent tasks should stay file-first unless deep-search mode
+    # is explicitly active. This prevents noisy web drift when users attach/select
+    # documents and ask for highlights/summaries.
+    if has_selected_files and not url and not deep_research_mode:
+        normalized = [
+            step
+            for step in normalized
+            if step.tool_id
+            not in (
+                "marketing.web_research",
+                "browser.playwright.inspect",
+                "web.extract.structured",
+                "web.dataset.adapter",
+            )
+        ]
 
     if company_agent_mode:
         normalized = [
@@ -397,7 +433,7 @@ def _augment_for_deep_research(
     direct_url = str(intent.get("url") or "")
 
     has_web = any(step.tool_id == "marketing.web_research" for step in enriched)
-    if not has_web and not direct_url:
+    if not has_web:
         enriched.insert(
             0,
             PlannedStep(

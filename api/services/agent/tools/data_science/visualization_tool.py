@@ -345,6 +345,15 @@ class DataScienceVisualizationTool(AgentTool):
                     data={"renderer": "fallback-text"},
                 )
             )
+            context.settings["__latest_data_visualization"] = {
+                "chart_type": chart_type,
+                "row_count": row_count,
+                "path": str(fallback.resolve()),
+                "renderer": "fallback-text",
+                "x": x_col,
+                "y": y_col,
+                "y_series": series_columns[:6],
+            }
             return ToolExecutionResult(
                 summary="Visualization fallback file generated.",
                 content=(
@@ -473,6 +482,17 @@ class DataScienceVisualizationTool(AgentTool):
             content_lines.append(f"- Y series: {', '.join(series_columns[:4])}")
         if notes:
             content_lines.extend(["", "### Notes", *notes])
+
+        context.settings["__latest_data_visualization"] = {
+            "chart_type": chart_type,
+            "row_count": row_count,
+            "path": str(out_path.resolve()),
+            "renderer": "matplotlib",
+            "x": x_col,
+            "y": y_col,
+            "y_series": series_columns[:6],
+            "quality_issues": quality_issues[:10],
+        }
 
         return ToolExecutionResult(
             summary=f"Generated {chart_type} chart artifact.",

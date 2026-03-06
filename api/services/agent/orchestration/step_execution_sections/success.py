@@ -109,22 +109,84 @@ def handle_step_success(
     yield emit_event(completed_event)
 
     if step.tool_id == "marketing.web_research" and not state.dynamic_inspection_inserted:
+        configured_max_urls = state.execution_context.settings.get("__research_max_live_inspections")
+        try:
+            max_urls = int(configured_max_urls)
+        except Exception:
+            max_urls = 0
+        if max_urls <= 0:
+            max_urls = 4 if deep_research_mode else 2
+        max_urls = max(1, min(max_urls, 40))
+        def _safe_int_setting(name: str, default: int) -> int:
+            try:
+                return int(state.execution_context.settings.get(name) or default)
+            except Exception:
+                return int(default)
+
+        inserted_steps: list[PlannedStep] = []
+        coverage_ok = bool(result.data.get("coverage_ok", True)) if isinstance(result.data, dict) else True
+        if not coverage_ok and not state.research_retry_inserted:
+            query = " ".join(str((result.data or {}).get("query") or execution_prompt).split()).strip()[:240]
+            max_query_variants = _safe_int_setting("__research_max_query_variants", 12)
+            raw_variants = (result.data or {}).get("query_variants") if isinstance(result.data, dict) else []
+            query_variants = (
+                [
+                    " ".join(str(item).split()).strip()
+                    for item in raw_variants
+                    if " ".join(str(item).split()).strip()
+                ][: max(2, min(max_query_variants, 20))]
+                if isinstance(raw_variants, list)
+                else []
+            )
+            if not query_variants:
+                planned_terms = state.execution_context.settings.get("__research_search_terms")
+                if isinstance(planned_terms, list):
+                    query_variants = [
+                        " ".join(str(item).split()).strip()
+                        for item in planned_terms
+                        if " ".join(str(item).split()).strip()
+                    ][: max(2, min(max_query_variants, 20))]
+            if query:
+                inserted_steps.append(
+                    PlannedStep(
+                        tool_id="marketing.web_research",
+                        title="Expand source coverage with additional targeted research",
+                        params={
+                            "query": f"{query} official report filetype:pdf",
+                            "query_variants": query_variants,
+                            "provider": "brave_search",
+                            "allow_provider_fallback": True,
+                            "max_query_variants": max_query_variants,
+                            "results_per_query": _safe_int_setting("__research_results_per_query", 10),
+                            "fused_top_k": _safe_int_setting("__research_fused_top_k", 80),
+                            "min_unique_sources": _safe_int_setting("__research_min_unique_sources", 20),
+                            "search_budget": _safe_int_setting("__research_web_search_budget", 120),
+                            "research_depth_tier": str(
+                                state.execution_context.settings.get("__research_depth_tier") or "standard"
+                            ),
+                        },
+                    )
+                )
+                state.research_retry_inserted = True
         followup_steps = build_browser_followup_steps(
             result.data,
-            max_urls=4 if deep_research_mode else 2,
+            max_urls=max_urls,
         )
         if followup_steps:
-            insertion_point = step_cursor + 1
-            steps[insertion_point:insertion_point] = followup_steps
             state.dynamic_inspection_inserted = True
+            inserted_steps.extend(followup_steps)
+        if inserted_steps:
+            insertion_point = step_cursor + 1
+            steps[insertion_point:insertion_point] = inserted_steps
             refined_event = activity_event_factory(
                 event_type="plan_refined",
                 title="Expanded research plan with live source inspections",
-                detail=f"Inserted {len(followup_steps)} source inspection step(s)",
+                detail=f"Inserted {len(inserted_steps)} adaptive follow-up step(s)",
                 metadata={
-                    "inserted": len(followup_steps),
+                    "inserted": len(inserted_steps),
                     "total_steps": len(steps),
                     "step_ids": [item.tool_id for item in steps],
+                    "coverage_ok": coverage_ok,
                 },
             )
             yield emit_event(refined_event)

@@ -9,10 +9,58 @@ import { clamp, readStoredText, readStoredWidth } from "./storage";
 import type { ResizeSide, WorkspaceTab } from "./types";
 
 const WORKSPACE_TABS: WorkspaceTab[] = ["Chat", "Files", "Resources", "Settings", "Help"];
+const SETTINGS_TABS = new Set(["general", "integrations", "models", "apis"]);
+const WORKSPACE_VIEW_PARAM = "view";
+const WORKSPACE_TAB_BY_QUERY: Record<string, WorkspaceTab> = {
+  chat: "Chat",
+  files: "Files",
+  resources: "Resources",
+  settings: "Settings",
+  help: "Help",
+};
+
+function readWorkspaceTabFromUrl(): WorkspaceTab | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const viewValue = String(params.get(WORKSPACE_VIEW_PARAM) || "")
+    .trim()
+    .toLowerCase();
+  if (viewValue && WORKSPACE_TAB_BY_QUERY[viewValue]) {
+    return WORKSPACE_TAB_BY_QUERY[viewValue];
+  }
+  const settingsTab = String(params.get("tab") || "")
+    .trim()
+    .toLowerCase();
+  if (SETTINGS_TABS.has(settingsTab)) {
+    return "Settings";
+  }
+  return null;
+}
 
 function readStoredActiveTab(): WorkspaceTab {
+  const tabFromUrl = readWorkspaceTabFromUrl();
+  if (tabFromUrl) {
+    return tabFromUrl;
+  }
   const raw = readStoredText(STORAGE_KEYS.activeTab, "Chat");
   return WORKSPACE_TABS.includes(raw as WorkspaceTab) ? (raw as WorkspaceTab) : "Chat";
+}
+
+function syncWorkspaceTabInUrl(activeTab: WorkspaceTab) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const nextValue = activeTab.toLowerCase();
+  if (params.get(WORKSPACE_VIEW_PARAM) === nextValue) {
+    return;
+  }
+  params.set(WORKSPACE_VIEW_PARAM, nextValue);
+  const nextSearch = params.toString();
+  const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}`;
+  window.history.replaceState({}, "", nextUrl);
 }
 
 export function useLayoutState() {
@@ -33,6 +81,7 @@ export function useLayoutState() {
       return;
     }
     window.localStorage.setItem(STORAGE_KEYS.activeTab, activeTab);
+    syncWorkspaceTabInUrl(activeTab);
   }, [activeTab]);
 
   useEffect(() => {

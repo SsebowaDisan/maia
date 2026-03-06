@@ -47,13 +47,25 @@ def truthy(value: Any, *, default: bool) -> bool:
     return default
 
 
-def extract_search_variants(query: str, prompt: str) -> list[str]:
+def extract_search_variants(
+    query: str,
+    prompt: str,
+    *,
+    requested_variants: list[str] | None = None,
+    max_variants: int = 4,
+) -> list[str]:
+    variant_cap = max(1, min(int(max_variants or 4), 20))
     base = clean_query(query) or clean_query(prompt) or "web research request"
     url = extract_first_url(prompt) or extract_first_url(query)
     host = (urlparse(url).hostname or "").strip().lower() if url else ""
     host_no_www = host[4:] if host.startswith("www.") else host
 
     candidates: list[str] = [base]
+    if isinstance(requested_variants, list):
+        for row in requested_variants:
+            text = clean_query(row)
+            if text:
+                candidates.append(text)
     if host_no_www:
         candidates.append(f"site:{host_no_www} {base}".strip())
 
@@ -62,7 +74,7 @@ def extract_search_variants(query: str, prompt: str) -> list[str]:
             "query": base,
             "request_prompt": " ".join(str(prompt or "").split())[:500],
             "target_url": url,
-            "max_variants": 4,
+            "max_variants": variant_cap,
         }
         response = call_json_response(
             system_prompt=(
@@ -75,17 +87,17 @@ def extract_search_variants(query: str, prompt: str) -> list[str]:
                 "Rules:\n"
                 "- Keep variants factual and grounded in input.\n"
                 "- Do not invent company names, URLs, or facts.\n"
-                "- Return 1-4 concise variants.\n\n"
+                f"- Return 1-{variant_cap} concise variants.\n\n"
                 f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
             ),
             temperature=0.0,
             timeout_seconds=10,
-            max_tokens=220,
+            max_tokens=420,
         )
         normalized = sanitize_json_value(response) if isinstance(response, dict) else {}
         llm_rows = normalized.get("query_variants") if isinstance(normalized, dict) else []
         if isinstance(llm_rows, list):
-            for row in llm_rows[:4]:
+            for row in llm_rows[:variant_cap]:
                 text = clean_query(row)
                 if text:
                     candidates.append(text)
@@ -101,7 +113,7 @@ def extract_search_variants(query: str, prompt: str) -> list[str]:
             continue
         seen.add(key)
         deduped.append(cleaned)
-        if len(deduped) >= 4:
+        if len(deduped) >= variant_cap:
             break
     return deduped or ["web research request"]
 

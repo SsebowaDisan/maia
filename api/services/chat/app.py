@@ -54,6 +54,19 @@ _HTTP_URL_RE = re.compile(r"https?://[^\s\])>\"']+", flags=re.IGNORECASE)
 _AUTO_URL_INDEX_MARKER = "__auto_url_indexed"
 _AUTO_URL_CACHE_LOCK = threading.Lock()
 _AUTO_URL_INDEX_CACHE: dict[str, tuple[float, list[str]]] = {}
+_DEEP_SEARCH_MODE = "deep_search"
+_ORCHESTRATOR_MODES = {"company_agent", _DEEP_SEARCH_MODE}
+_DEEP_SEARCH_DEFAULT_WEB_SEARCH_BUDGET = 100
+_DEEP_SEARCH_DEFAULT_SOURCE_LIMIT = 350
+_DEEP_SEARCH_NORMAL_WEB_BUDGET = 100
+_DEEP_SEARCH_COMPLEX_WEB_BUDGET = 180
+_DEEP_SEARCH_NORMAL_MAX_QUERY_VARIANTS = 12
+_DEEP_SEARCH_COMPLEX_MAX_QUERY_VARIANTS = 18
+_DEEP_SEARCH_NORMAL_RESULTS_PER_QUERY = 10
+_DEEP_SEARCH_COMPLEX_RESULTS_PER_QUERY = 12
+_DEEP_SEARCH_NORMAL_MIN_UNIQUE_SOURCES = 50
+_DEEP_SEARCH_COMPLEX_MIN_UNIQUE_SOURCES = 80
+_DEEP_SEARCH_COMPLEXITY_VALUES = {"normal", "complex"}
 
 
 def _default_model_looks_local_ollama() -> bool:
@@ -88,6 +101,260 @@ def _int_or_default(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _is_orchestrator_mode(mode: str) -> bool:
+    return str(mode or "").strip().lower() in _ORCHESTRATOR_MODES
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _normalize_scope_phrase(value: Any) -> str:
+    compact = " ".join(str(value or "").split()).strip().lower()
+    if not compact:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", compact).strip()
+    return normalized
+
+
+def _prompt_mentions_phrase(prompt: str, phrase: str) -> bool:
+    prompt_norm = _normalize_scope_phrase(prompt)
+    phrase_norm = _normalize_scope_phrase(phrase)
+    if not prompt_norm or not phrase_norm:
+        return False
+    if len(phrase_norm) < 3:
+        return False
+    if prompt_norm == phrase_norm:
+        return True
+    return f" {phrase_norm} " in f" {prompt_norm} "
+
+
+def _source_row_looks_pdf(*, name: str, path: str, note: dict[str, Any]) -> bool:
+    name_text = str(name or "").strip().lower()
+    path_text = str(path or "").strip().lower()
+    if name_text.endswith(".pdf") or path_text.endswith(".pdf"):
+        return True
+    loader = " ".join(str(note.get("loader") or "").split()).strip().lower()
+    mime_type = " ".join(str(note.get("mime_type") or "").split()).strip().lower()
+    return "pdf" in loader or mime_type == "application/pdf"
+
+
+def _list_index_pdf_source_ids(
+    *,
+    context: ApiContext,
+    user_id: str,
+    index_id: int,
+    limit: int,
+    candidate_ids: list[str] | None = None,
+) -> list[str]:
+    try:
+        index = context.get_index(index_id)
+    except Exception:
+        return []
+    Source = index._resources.get("Source")
+    if Source is None:
+        return []
+    bounded_limit = max(1, min(int(limit or 1), 1500))
+    filtered_candidates = (
+        list(dict.fromkeys([str(item).strip() for item in candidate_ids if str(item).strip()]))
+        if isinstance(candidate_ids, list)
+        else []
+    )
+    with Session(engine) as session:
+        statement = select(Source)
+        if filtered_candidates:
+            statement = statement.where(Source.id.in_(filtered_candidates))
+        if index.config.get("private", False):
+            statement = statement.where(Source.user == user_id)
+        rows = session.execute(statement).all()
+    pdf_ids: list[str] = []
+    for row in rows:
+        source = row[0]
+        source_id = str(getattr(source, "id", "") or "").strip()
+        if not source_id:
+            continue
+        if not _source_row_looks_pdf(
+            name=str(getattr(source, "name", "") or ""),
+            path=str(getattr(source, "path", "") or ""),
+            note=(getattr(source, "note", {}) if isinstance(getattr(source, "note", {}), dict) else {}),
+        ):
+            continue
+        pdf_ids.append(source_id)
+        if len(pdf_ids) >= bounded_limit:
+            break
+    return list(dict.fromkeys(pdf_ids))
+
+
+def _list_named_group_file_ids(
+    *,
+    context: ApiContext,
+    user_id: str,
+    index_id: int,
+    prompt: str,
+    limit: int,
+) -> tuple[bool, list[str]]:
+    try:
+        index = context.get_index(index_id)
+    except Exception:
+        return False, []
+    FileGroup = index._resources.get("FileGroup")
+    if FileGroup is None:
+        return False, []
+    bounded_limit = max(1, min(int(limit or 1), 1500))
+    with Session(engine) as session:
+        rows = session.execute(select(FileGroup).where(FileGroup.user == user_id)).all()
+    matched_ids: list[str] = []
+    matched_any_group = False
+    for row in rows:
+        group = row[0]
+        group_name = str(getattr(group, "name", "") or "").strip()
+        if not _prompt_mentions_phrase(prompt, group_name):
+            continue
+        matched_any_group = True
+        group_data = getattr(group, "data", {})
+        group_payload = group_data if isinstance(group_data, dict) else {}
+        group_file_ids = [
+            str(item).strip()
+            for item in (group_payload.get("files") if isinstance(group_payload.get("files"), list) else [])
+            if str(item).strip()
+        ]
+        for file_id in group_file_ids:
+            matched_ids.append(file_id)
+            if len(matched_ids) >= bounded_limit:
+                break
+        if len(matched_ids) >= bounded_limit:
+            break
+    return matched_any_group, list(dict.fromkeys(matched_ids))
+
+
+def _mentioned_index_ids_in_prompt(
+    *,
+    context: ApiContext,
+    prompt: str,
+) -> list[int]:
+    mentioned: list[int] = []
+    indices = getattr(getattr(context, "app", None), "index_manager", None)
+    raw_indices = getattr(indices, "indices", []) if indices is not None else []
+    for index in raw_indices:
+        index_id_raw = getattr(index, "id", None)
+        try:
+            index_id = int(index_id_raw)
+        except Exception:
+            continue
+        candidates = [
+            str(getattr(index, "name", "") or "").strip(),
+            str((getattr(index, "config", {}) or {}).get("name") or "").strip(),
+        ]
+        if any(_prompt_mentions_phrase(prompt, candidate) for candidate in candidates if candidate):
+            mentioned.append(index_id)
+    return list(dict.fromkeys(mentioned))
+
+
+def _resolve_prompt_scoped_pdf_ids(
+    *,
+    context: ApiContext,
+    user_id: str,
+    request: ChatRequest,
+    limit: int,
+) -> dict[int, list[str]]:
+    prompt = str(request.message or "").strip()
+    if not prompt:
+        return {}
+    selected_index_ids = _selected_index_ids_for_deep_search(request=request, context=context)
+    mentioned_index_ids = _mentioned_index_ids_in_prompt(context=context, prompt=prompt)
+    index_manager = getattr(getattr(context, "app", None), "index_manager", None)
+    all_index_ids: list[int] = []
+    for index in (getattr(index_manager, "indices", []) if index_manager is not None else []):
+        try:
+            all_index_ids.append(int(getattr(index, "id", 0)))
+        except Exception:
+            continue
+    candidate_index_ids = list(
+        dict.fromkeys(
+            [
+                *all_index_ids,
+                *selected_index_ids,
+                *mentioned_index_ids,
+            ]
+        )
+    )
+    scoped_ids: dict[int, list[str]] = {}
+    for index_id in candidate_index_ids:
+        matched_group, group_file_ids = _list_named_group_file_ids(
+            context=context,
+            user_id=user_id,
+            index_id=index_id,
+            prompt=prompt,
+            limit=limit,
+        )
+        if matched_group:
+            pdf_ids = _list_index_pdf_source_ids(
+                context=context,
+                user_id=user_id,
+                index_id=index_id,
+                candidate_ids=group_file_ids,
+                limit=limit,
+            )
+            scoped_ids[index_id] = pdf_ids or group_file_ids[:limit]
+            continue
+        if index_id in mentioned_index_ids:
+            pdf_ids = _list_index_pdf_source_ids(
+                context=context,
+                user_id=user_id,
+                index_id=index_id,
+                candidate_ids=None,
+                limit=limit,
+            )
+            if pdf_ids:
+                scoped_ids[index_id] = pdf_ids
+    return scoped_ids
+
+
+def _classify_deep_search_complexity(message: str) -> str:
+    prompt = " ".join(str(message or "").split()).strip()
+    if not prompt:
+        return "normal"
+    response = call_json_response(
+        system_prompt=(
+            "Classify deep-research request complexity. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            "Return JSON only in this schema:\n"
+            '{ "complexity": "normal|complex", "reason": "short reason" }\n'
+            "Rules:\n"
+            "- Use `complex` when the request likely needs broad multi-angle coverage.\n"
+            "- Otherwise use `normal`.\n\n"
+            f"Request:\n{prompt}"
+        ),
+        temperature=0.0,
+        timeout_seconds=8,
+        max_tokens=140,
+    )
+    if isinstance(response, dict):
+        complexity = " ".join(str(response.get("complexity") or "").split()).strip().lower()
+        if complexity in _DEEP_SEARCH_COMPLEXITY_VALUES:
+            return complexity
+    # Deterministic fallback when LLM classification is unavailable.
+    return "complex" if len(prompt) >= 260 else "normal"
+
+
+def _mode_variant_from_request(*, request: ChatRequest, requested_mode: str) -> str:
+    if str(requested_mode or "").strip().lower() != _DEEP_SEARCH_MODE:
+        return ""
+    setting_overrides = (
+        dict(request.setting_overrides)
+        if isinstance(request.setting_overrides, dict)
+        else {}
+    )
+    if _truthy_flag(setting_overrides.get("__research_web_only")):
+        return "web_search"
+    return ""
 
 
 def _normalize_http_url(raw_value: Any) -> str:
@@ -492,6 +759,223 @@ def _auto_url_cache_put(
             return
         for cache_key in list(_AUTO_URL_INDEX_CACHE.keys())[:overflow]:
             _AUTO_URL_INDEX_CACHE.pop(cache_key, None)
+
+
+def _normalized_request_selection(request: ChatRequest) -> dict[str, IndexSelection]:
+    normalized: dict[str, IndexSelection] = {}
+    existing_selection = request.index_selection if isinstance(request.index_selection, dict) else {}
+    for key, selected in existing_selection.items():
+        mode = str(getattr(selected, "mode", "all") or "all").strip().lower() or "all"
+        if mode not in {"all", "select", "disabled"}:
+            mode = "all"
+        selected_ids_raw = getattr(selected, "file_ids", [])
+        selected_ids = [
+            str(item).strip()
+            for item in (selected_ids_raw if isinstance(selected_ids_raw, list) else [])
+            if str(item).strip()
+        ]
+        normalized[str(key)] = IndexSelection(mode=mode, file_ids=selected_ids)
+    return normalized
+
+
+def _selected_index_ids_for_deep_search(
+    *,
+    request: ChatRequest,
+    context: ApiContext,
+) -> list[int]:
+    selected_ids: list[int] = []
+    for raw_key, selection in _normalized_request_selection(request).items():
+        mode = str(getattr(selection, "mode", "all") or "all").strip().lower()
+        if mode == "disabled":
+            continue
+        try:
+            selected_ids.append(int(str(raw_key)))
+        except Exception:
+            continue
+    if selected_ids:
+        return list(dict.fromkeys(selected_ids))
+    fallback_index = _first_available_index_id(context)
+    return [fallback_index] if fallback_index is not None else []
+
+
+def _list_index_source_ids(
+    *,
+    context: ApiContext,
+    user_id: str,
+    index_id: int,
+    limit: int,
+) -> list[str]:
+    try:
+        index = context.get_index(index_id)
+    except Exception:
+        return []
+    Source = index._resources["Source"]
+    bounded_limit = max(1, min(int(limit or 1), 1500))
+    with Session(engine) as session:
+        statement = select(Source.id).limit(bounded_limit)
+        if index.config.get("private", False):
+            statement = statement.where(Source.user == user_id)
+        rows = session.execute(statement).all()
+    source_ids = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
+    return list(dict.fromkeys(source_ids))
+
+
+def _apply_deep_search_defaults(
+    *,
+    context: ApiContext,
+    user_id: str,
+    request: ChatRequest,
+) -> ChatRequest:
+    if str(request.agent_mode or "").strip().lower() != _DEEP_SEARCH_MODE:
+        return request
+
+    existing_overrides = (
+        dict(request.setting_overrides)
+        if isinstance(request.setting_overrides, dict)
+        else {}
+    )
+    max_source_ids = max(
+        40,
+        min(
+            _int_or_default(
+                existing_overrides.get("__deep_search_max_source_ids"),
+                _DEEP_SEARCH_DEFAULT_SOURCE_LIMIT,
+            ),
+            1200,
+        ),
+    )
+    requested_complexity = " ".join(
+        str(existing_overrides.get("__deep_search_complexity") or "").split()
+    ).strip().lower()
+    complexity = (
+        requested_complexity
+        if requested_complexity in _DEEP_SEARCH_COMPLEXITY_VALUES
+        else _classify_deep_search_complexity(request.message)
+    )
+    normal_mode = complexity != "complex"
+    budget_floor = 60 if normal_mode else 120
+    budget_default = (
+        _DEEP_SEARCH_NORMAL_WEB_BUDGET if normal_mode else _DEEP_SEARCH_COMPLEX_WEB_BUDGET
+    )
+    requested_web_budget = max(
+        budget_floor,
+        min(
+            _int_or_default(
+                existing_overrides.get("__research_web_search_budget"),
+                budget_default,
+            ),
+            350,
+        ),
+    )
+    existing_overrides.setdefault("__deep_search_enabled", True)
+    existing_overrides.setdefault("__llm_only_keyword_generation", True)
+    existing_overrides.setdefault("__llm_only_keyword_generation_strict", True)
+    existing_overrides.setdefault("__deep_search_complexity", complexity)
+    existing_overrides.setdefault("__deep_search_max_source_ids", max_source_ids)
+    existing_overrides.setdefault("__research_depth_tier", "deep_research")
+    existing_overrides.setdefault("__research_web_search_budget", requested_web_budget)
+    existing_overrides.setdefault(
+        "__research_max_query_variants",
+        (
+            _DEEP_SEARCH_NORMAL_MAX_QUERY_VARIANTS
+            if normal_mode
+            else _DEEP_SEARCH_COMPLEX_MAX_QUERY_VARIANTS
+        ),
+    )
+    existing_overrides.setdefault(
+        "__research_results_per_query",
+        (
+            _DEEP_SEARCH_NORMAL_RESULTS_PER_QUERY
+            if normal_mode
+            else _DEEP_SEARCH_COMPLEX_RESULTS_PER_QUERY
+        ),
+    )
+    existing_overrides.setdefault("__research_fused_top_k", 220)
+    existing_overrides.setdefault(
+        "__research_min_unique_sources",
+        (
+            _DEEP_SEARCH_NORMAL_MIN_UNIQUE_SOURCES
+            if normal_mode
+            else _DEEP_SEARCH_COMPLEX_MIN_UNIQUE_SOURCES
+        ),
+    )
+    existing_overrides.setdefault(
+        "__research_source_budget_min",
+        60 if normal_mode else 120,
+    )
+    existing_overrides.setdefault(
+        "__research_source_budget_max",
+        100 if normal_mode else 180,
+    )
+    existing_overrides.setdefault("__file_research_source_budget_min", 120)
+    existing_overrides.setdefault("__file_research_source_budget_max", 220)
+    existing_overrides.setdefault("__file_research_max_sources", 220)
+    existing_overrides.setdefault("__file_research_max_chunks", 1800)
+    existing_overrides.setdefault("__file_research_max_scan_pages", 200)
+
+    merged_selection = _normalized_request_selection(request)
+    user_selected_files = any(
+        str(getattr(selection, "mode", "") or "").strip().lower() == "select"
+        and any(str(item).strip() for item in (getattr(selection, "file_ids", []) or []))
+        for selection in merged_selection.values()
+    )
+    prompt_scoped_pdf_ids = _resolve_prompt_scoped_pdf_ids(
+        context=context,
+        user_id=user_id,
+        request=request,
+        limit=max_source_ids,
+    )
+    existing_overrides["__deep_search_prompt_scoped_pdfs"] = bool(prompt_scoped_pdf_ids)
+    existing_overrides["__deep_search_user_selected_files"] = bool(user_selected_files)
+    selected_index_ids = _selected_index_ids_for_deep_search(request=request, context=context)
+    selected_index_ids = list(dict.fromkeys([*selected_index_ids, *prompt_scoped_pdf_ids.keys()]))
+    for index_id in selected_index_ids:
+        key = str(index_id)
+        existing_selection = merged_selection.get(key)
+        existing_ids = (
+            [
+                str(item).strip()
+                for item in getattr(existing_selection, "file_ids", [])
+                if str(item).strip()
+            ]
+            if existing_selection
+            else []
+        )
+        scoped_ids = prompt_scoped_pdf_ids.get(index_id, [])
+        auto_ids = (
+            [
+                str(item).strip()
+                for item in scoped_ids
+                if str(item).strip()
+            ]
+            if scoped_ids
+            else _list_index_source_ids(
+                context=context,
+                user_id=user_id,
+                index_id=index_id,
+                limit=max_source_ids,
+            )
+        )
+        merged_ids: list[str] = []
+        seen: set[str] = set()
+        for source_id in [*existing_ids, *auto_ids]:
+            normalized = str(source_id).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged_ids.append(normalized)
+            if len(merged_ids) >= max_source_ids:
+                break
+        if merged_ids:
+            merged_selection[key] = IndexSelection(mode="select", file_ids=merged_ids)
+
+    return _request_with_updates(
+        request,
+        {
+            "index_selection": merged_selection,
+            "setting_overrides": existing_overrides,
+        },
+    )
 
 
 def _auto_index_urls_for_request(
@@ -973,6 +1457,11 @@ def stream_chat_turn(
         request=request,
         settings=settings,
     )
+    request = _apply_deep_search_defaults(
+        context=context,
+        user_id=user_id,
+        request=request,
+    )
     message = request.message.strip()
     conversation_id, conversation_name, data_source, conversation_icon_key = get_or_create_conversation(
         user_id=user_id,
@@ -999,7 +1488,9 @@ def stream_chat_turn(
     )
     turn_attachments = _normalize_request_attachments(request)
 
-    if request.agent_mode == "company_agent":
+    requested_mode = str(request.agent_mode or "").strip().lower() or "ask"
+    mode_variant = _mode_variant_from_request(request=request, requested_mode=requested_mode)
+    if _is_orchestrator_mode(requested_mode):
         orchestrator = get_orchestrator()
         agent_result = None
         last_activity_seq = 0
@@ -1016,14 +1507,20 @@ def stream_chat_turn(
             agent_goal_parts.append(f"Conversation context: {context_summary}")
         contextual_goal = " ".join(agent_goal_parts).strip()[:900]
         agent_request = request
+        if requested_mode == _DEEP_SEARCH_MODE:
+            agent_request = _request_with_updates(agent_request, {"agent_mode": "company_agent"})
         if contextual_goal and contextual_goal != existing_goal:
             try:
-                agent_request = request.model_copy(update={"agent_goal": contextual_goal})
+                agent_request = agent_request.model_copy(update={"agent_goal": contextual_goal})
             except Exception:
-                request_payload = request.model_dump()
+                request_payload = agent_request.model_dump()
                 request_payload["agent_goal"] = contextual_goal
                 agent_request = ChatRequest(**request_payload)
         agent_settings = dict(settings)
+        if isinstance(request.setting_overrides, dict):
+            agent_settings.update(request.setting_overrides)
+        if requested_mode == _DEEP_SEARCH_MODE:
+            agent_settings["__deep_search_enabled"] = True
         if context_snippets:
             agent_settings["__conversation_snippets"] = context_snippets
         if context_summary:
@@ -1060,7 +1557,7 @@ def stream_chat_turn(
         except StopIteration as stop:
             agent_result = stop.value
         except Exception as exc:
-            logger.exception("Company agent execution failed: %s", exc)
+            logger.exception("Orchestrator execution failed: %s", exc)
             fallback = fallback_answer_from_exception(exc)
             agent_result = type(
                 "_FallbackAgentResult",
@@ -1136,10 +1633,12 @@ def stream_chat_turn(
             request_message=message,
             answer_text=answer_text,
             info_html=normalized_agent_info_html,
-            mode="company_agent",
+            mode=requested_mode,
             next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
             web_summary=agent_web_summary,
         )
+        if mode_variant:
+            info_panel["mode_variant"] = mode_variant
         if mindmap_payload:
             info_panel["mindmap"] = mindmap_payload
 
@@ -1163,7 +1662,7 @@ def stream_chat_turn(
         message_meta = deepcopy(data_source.get("message_meta", []))
         message_meta.append(
             {
-                "mode": "company_agent",
+                "mode": requested_mode,
                 "activity_run_id": agent_result.run_id or None,
                 "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
                 "sources_used": [item.to_dict() for item in agent_result.sources_used],
@@ -1214,7 +1713,7 @@ def stream_chat_turn(
             "info": normalized_agent_info_html,
             "plot": plot_data,
             "state": chat_state,
-            "mode": "company_agent",
+            "mode": requested_mode,
             "actions_taken": [item.to_dict() for item in agent_result.actions_taken],
             "sources_used": [item.to_dict() for item in agent_result.sources_used],
             "source_usage": [],
@@ -1403,6 +1902,30 @@ def stream_chat_turn(
     }
 
 
+def _resolve_chat_timeout_seconds(*, requested_mode: str) -> int:
+    timeout_seconds = max(
+        10,
+        int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45),
+    )
+    mode = str(requested_mode or "").strip().lower()
+    if mode == _DEEP_SEARCH_MODE:
+        timeout_seconds = max(
+            timeout_seconds,
+            int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS_DEEP_SEARCH", 600) or 600),
+        )
+    elif mode == "company_agent":
+        timeout_seconds = max(
+            timeout_seconds,
+            int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS_COMPANY_AGENT", 300) or 300),
+        )
+    if _default_model_looks_local_ollama():
+        local_timeout = int(
+            getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA", 180) or 180
+        )
+        timeout_seconds = max(timeout_seconds, local_timeout)
+    return timeout_seconds
+
+
 def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> dict[str, Any]:
     request = _auto_index_urls_for_request(
         context=context,
@@ -1410,7 +1933,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         request=request,
         settings=None,
     )
-    if API_CHAT_FAST_PATH and request.agent_mode != "company_agent":
+    requested_mode = str(request.agent_mode or "").strip().lower() or "ask"
+    if API_CHAT_FAST_PATH and not _is_orchestrator_mode(requested_mode):
         try:
             fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
             if fast_result is not None:
@@ -1431,17 +1955,12 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             logger.warning("chat_path_fallback reason=fast_qa_returned_none")
         except Exception as exc:
             logger.exception("Fast ask path failed; falling back to streaming pipeline: %s", exc)
-    elif request.agent_mode == "company_agent":
-        logger.warning("chat_path_selected path=company_agent")
+    elif _is_orchestrator_mode(requested_mode):
+        logger.warning("chat_path_selected path=%s", requested_mode)
     elif not API_CHAT_FAST_PATH:
         logger.warning("chat_path_fallback reason=fast_path_disabled")
 
-    timeout_seconds = int(getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45) or 45)
-    if _default_model_looks_local_ollama():
-        local_timeout = int(
-            getattr(flowsettings, "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA", 180) or 180
-        )
-        timeout_seconds = max(timeout_seconds, local_timeout)
+    timeout_seconds = _resolve_chat_timeout_seconds(requested_mode=requested_mode)
 
     def consume_stream() -> dict[str, Any]:
         iterator = stream_chat_turn(context=context, user_id=user_id, request=request)
@@ -1457,6 +1976,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         return future.result(timeout=timeout_seconds)
     except FutureTimeoutError:
         message = request.message.strip()
+        timeout_mode = requested_mode if _is_orchestrator_mode(requested_mode) else "ask"
+        timeout_mode_variant = _mode_variant_from_request(request=request, requested_mode=timeout_mode)
         turn_attachments = _normalize_request_attachments(request)
         conversation_id, conversation_name, data_source, conversation_icon_key = get_or_create_conversation(
             user_id=user_id,
@@ -1485,10 +2006,12 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             request_message=message,
             answer_text=timeout_answer,
             info_html=timeout_info,
-            mode="ask",
+            mode=timeout_mode,
             next_steps=[],
             web_summary={},
         )
+        if timeout_mode_variant:
+            timeout_info_panel["mode_variant"] = timeout_mode_variant
 
         messages = deepcopy(data_source.get("messages", []))
         if message:
@@ -1500,7 +2023,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         message_meta = deepcopy(data_source.get("message_meta", []))
         message_meta.append(
             {
-                "mode": "ask",
+                "mode": timeout_mode,
                 "activity_run_id": None,
                 "actions_taken": [],
                 "sources_used": [],
@@ -1534,7 +2057,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "info": timeout_info,
             "plot": None,
             "state": deepcopy(data_source.get("state", STATE)),
-            "mode": "ask",
+            "mode": timeout_mode,
             "actions_taken": [],
             "sources_used": [],
             "source_usage": [],

@@ -44,7 +44,13 @@ def handle_step_failure(
         step.tool_id in ("workspace.docs.research_notes", "workspace.sheets.track_step")
         and any(
             marker in str(exc).lower()
-            for marker in ("google_tokens_missing", "oauth", "refresh_token")
+            for marker in (
+                "google_tokens_missing",
+                "oauth",
+                "refresh_token",
+                "unauthenticated",
+                "invalid authentication",
+            )
         )
     )
     is_workspace_logging_step = bool(step.params.get("__workspace_logging_step"))
@@ -66,6 +72,38 @@ def handle_step_failure(
                 },
             )
             yield emit_event(warning_event)
+        skipped_summary = (
+            "Workspace logging skipped because Google Docs/Sheets authentication is unavailable. "
+            "Execution continued without roadmap sync."
+        )
+        skipped_action = registry.get(step.tool_id).to_action(
+            status="skipped",
+            summary=skipped_summary,
+            started_at=step_started,
+            metadata={"step": index, "workspace_logging": True},
+        )
+        state.all_actions.append(skipped_action)
+        state.executed_steps.append(
+            {
+                "step": index,
+                "tool_id": step.tool_id,
+                "title": step.title,
+                "status": "skipped",
+                "summary": skipped_summary,
+            }
+        )
+        skipped_event = activity_event_factory(
+            event_type="tool_skipped",
+            title=step.title,
+            detail=skipped_summary,
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "workspace_logging": True,
+            },
+        )
+        yield emit_event(skipped_event)
+        return
     action = registry.get(step.tool_id).to_action(
         status="failed",
         summary=str(exc),

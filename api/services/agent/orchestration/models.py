@@ -12,6 +12,7 @@ from api.services.agent.tools.base import ToolExecutionContext
 class TaskPreparation:
     task_intelligence: Any
     user_preferences: dict[str, Any]
+    research_depth_profile: dict[str, Any]
     conversation_summary: str
     rewritten_task: str
     planned_deliverables: list[str]
@@ -61,5 +62,8 @@ class ExecutionState:
     max_remediation_attempts: int = 2
     remediation_signatures: set[str] = field(default_factory=set)
     deep_workspace_logging_enabled: bool = False
+    deep_workspace_docs_logging_enabled: bool = False
+    deep_workspace_sheets_logging_enabled: bool = False
     deep_workspace_warning_emitted: bool = False
     dynamic_inspection_inserted: bool = False
+    research_retry_inserted: bool = False

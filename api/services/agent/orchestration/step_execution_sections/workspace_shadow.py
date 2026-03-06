@@ -54,26 +54,33 @@ def run_workspace_shadow_logging(
     if evidence_url:
         note_lines.append(f"Evidence URL: {evidence_url}")
 
-    log_steps = [
-        PlannedStep(
-            tool_id="workspace.docs.research_notes",
-            title=f"Capture step notes: {step.title}",
-            params={
-                "note": "\n".join(note_lines),
-                "include_copied_highlights": False,
-            },
-        ),
-        PlannedStep(
-            tool_id="workspace.sheets.track_step",
-            title=f"Track completion: {step.title}",
-            params={
-                "step_name": f"{index}. {step.title}",
-                "status": "DONE",
-                "detail": completion_detail,
-                "source_url": evidence_url,
-            },
-        ),
-    ]
+    log_steps: list[PlannedStep] = []
+    if state.deep_workspace_docs_logging_enabled:
+        log_steps.append(
+            PlannedStep(
+                tool_id="workspace.docs.research_notes",
+                title=f"Capture step notes: {step.title}",
+                params={
+                    "note": "\n".join(note_lines),
+                    "include_copied_highlights": False,
+                },
+            )
+        )
+    if state.deep_workspace_sheets_logging_enabled:
+        log_steps.append(
+            PlannedStep(
+                tool_id="workspace.sheets.track_step",
+                title=f"Track completion: {step.title}",
+                params={
+                    "step_name": f"{index}. {step.title}",
+                    "status": "DONE",
+                    "detail": completion_detail,
+                    "source_url": evidence_url,
+                },
+            )
+        )
+    if not log_steps:
+        return
     for shadow_step in log_steps:
         shadow_started_at = utc_now().isoformat()
         shadow_params = dict(shadow_step.params)

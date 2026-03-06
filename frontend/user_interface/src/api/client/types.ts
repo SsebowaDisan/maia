@@ -83,7 +83,7 @@ type ChatResponse = {
   info: string;
   plot: Record<string, unknown> | null;
   state: Record<string, unknown>;
-  mode: "ask" | "company_agent";
+  mode: "ask" | "company_agent" | "deep_search";
   actions_taken: AgentActionRecord[];
   sources_used: AgentSourceRecord[];
   source_usage: SourceUsageRecord[];

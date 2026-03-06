@@ -6,6 +6,21 @@ import type { ChatMainProps, ComposerAttachment } from "./types";
 
 const CHAT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
 const CHAT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+const WEB_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
+  __deep_search_enabled: true,
+  __research_web_only: true,
+  __llm_only_keyword_generation: true,
+  __llm_only_keyword_generation_strict: true,
+  __research_depth_tier: "deep_research",
+  __research_web_search_budget: 200,
+  __research_max_query_variants: 12,
+  __research_results_per_query: 20,
+  __research_fused_top_k: 200,
+  __research_min_unique_sources: 60,
+  __research_max_live_inspections: 12,
+  __deep_search_max_source_ids: 200,
+};
+type ComposerMode = "ask" | "company_agent" | "deep_search" | "web_search";
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
   | "accessMode"
@@ -54,6 +69,7 @@ function useChatMainInteractions({
   const [isUploading, setIsUploading] = useState(false);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [agentControlsVisible, setAgentControlsVisible] = useState(false);
+  const [deepSearchProfile, setDeepSearchProfile] = useState<"default" | "web_search">("default");
   const [messageActionStatus, setMessageActionStatus] = useState("");
   const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -272,6 +288,10 @@ function useChatMainInteractions({
     if (!payload || isSending) {
       return;
     }
+    const modeSettingOverrides =
+      agentMode === "deep_search" && deepSearchProfile === "web_search"
+        ? WEB_SEARCH_SETTING_OVERRIDES
+        : undefined;
     const turnAttachments: ChatAttachment[] = attachments
       .filter((item) => item.status !== "error")
       .map((item) => ({ name: item.name, fileId: item.fileId }));
@@ -284,6 +304,7 @@ function useChatMainInteractions({
         include_reasoning_map: mindmapIncludeReasoning,
         map_type: mindmapMapType,
       },
+      settingOverrides: modeSettingOverrides,
       agentMode,
       accessMode,
     });
@@ -346,6 +367,10 @@ function useChatMainInteractions({
     setEditingTurnIndex(null);
     setEditingText("");
     showActionStatus("Message updated. Generating response...");
+    const modeSettingOverrides =
+      agentMode === "deep_search" && deepSearchProfile === "web_search"
+        ? WEB_SEARCH_SETTING_OVERRIDES
+        : undefined;
     await onSendMessage(value, editedTurn?.attachments, {
       citationMode,
       useMindmap: mindmapEnabled,
@@ -354,6 +379,7 @@ function useChatMainInteractions({
         include_reasoning_map: mindmapIncludeReasoning,
         map_type: mindmapMapType,
       },
+      settingOverrides: modeSettingOverrides,
       agentMode,
       accessMode,
     });
@@ -370,16 +396,38 @@ function useChatMainInteractions({
 
   const enableAgentMode = () => {
     setAgentControlsVisible(true);
+    setDeepSearchProfile("default");
     onAgentModeChange("company_agent");
     showActionStatus("Agent mode enabled.");
   };
 
+  const enableAskMode = () => {
+    setAgentControlsVisible(false);
+    setDeepSearchProfile("default");
+    onAgentModeChange("ask");
+    showActionStatus("Standard mode enabled.");
+  };
+
   const enableDeepResearch = () => {
     setAgentControlsVisible(false);
-    onAgentModeChange("ask");
+    setDeepSearchProfile("default");
+    onAgentModeChange("deep_search");
     onAccessModeChange("restricted");
-    showActionStatus("Deep research enabled in Ask mode.");
+    showActionStatus("Deep search mode enabled.");
   };
+
+  const enableWebSearch = () => {
+    setAgentControlsVisible(false);
+    setDeepSearchProfile("web_search");
+    onAgentModeChange("deep_search");
+    onAccessModeChange("restricted");
+    showActionStatus("Web search mode enabled (target: 200 online sources).");
+  };
+
+  const composerMode: ComposerMode =
+    agentMode === "deep_search" && deepSearchProfile === "web_search"
+      ? "web_search"
+      : agentMode;
 
   const pasteHighlightsToComposer = () => {
     if (!latestHighlightSnippets.length) {
@@ -626,13 +674,16 @@ function useChatMainInteractions({
     copyPlainText,
     editingText,
     editingTurnIndex,
+    enableAskMode,
     enableAgentMode,
+    enableWebSearch,
     enableDeepResearch,
     fileInputRef,
     isUploading,
     latestHighlightSnippets,
     message,
     messageActionStatus,
+    composerMode,
     onFileChange,
     pasteHighlightsToComposer,
     quoteAssistant,

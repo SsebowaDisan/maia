@@ -42,6 +42,24 @@ interface DesktopViewerProps {
   onSnapshotError: () => void;
 }
 
+function isPlannerNarrativeEventType(eventType: string): boolean {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "planning_started" ||
+    normalized.startsWith("plan_") ||
+    normalized.startsWith("planning_") ||
+    normalized.startsWith("task_understanding_") ||
+    normalized.startsWith("preflight_") ||
+    normalized.startsWith("llm.task_") ||
+    normalized.startsWith("llm.plan_") ||
+    normalized === "llm.web_routing_decision" ||
+    normalized === "llm.intent_tags"
+  );
+}
+
 function DesktopViewer({
   fullscreen = false,
   streaming,
@@ -87,6 +105,7 @@ function DesktopViewer({
     : "h-[220px] md:h-[280px]";
   const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-160px)]" : "h-[74vh]";
   const viewerHeightClass = fullscreen ? fullscreenViewerHeightClass : inlineViewerHeightClass;
+  const suppressOverlayDetail = isPlannerNarrativeEventType(activeEventType) && !isBrowserScene;
 
   return (
     <div
@@ -183,7 +202,7 @@ function DesktopViewer({
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
         ) : null}
 
-        {activeTitle && !(fullscreen && isFocusMode) ? (
+        {activeTitle && !(fullscreen && isFocusMode) && !isDocsScene ? (
           <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30">
             <div className="rounded-xl border border-white/20 bg-black/55 px-3 py-2 backdrop-blur-md">
               <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.08em] text-white/70">
@@ -194,9 +213,11 @@ function DesktopViewer({
                 </span>
               </div>
               <p className="truncate text-[13px] font-semibold text-white">{activeTitle}</p>
-              <p className="mt-0.5 line-clamp-2 text-[11px] text-white/85">
-                {sceneText || activeDetail || "Processing..."}
-              </p>
+              {!suppressOverlayDetail ? (
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-white/85">
+                  {sceneText || activeDetail || "Processing..."}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}

@@ -259,3 +259,164 @@ def test_auto_index_urls_for_request_skips_when_marker_present(monkeypatch) -> N
 
     assert called["index_urls"] is False
     assert updated.setting_overrides.get("__auto_url_indexed") is True
+
+
+def test_apply_deep_search_defaults_expands_selected_sources(monkeypatch) -> None:
+    class _DummyContext:
+        app = SimpleNamespace(index_manager=SimpleNamespace(indices=[SimpleNamespace(id=7)]))
+
+    monkeypatch.setattr(chat_app, "_classify_deep_search_complexity", lambda *_: "normal")
+    monkeypatch.setattr(
+        chat_app,
+        "_list_index_source_ids",
+        lambda **_: ["file-a", "file-b", "file-c"],
+    )
+
+    request = ChatRequest(
+        message="Deep search on energy trends",
+        agent_mode="deep_search",
+    )
+    updated = chat_app._apply_deep_search_defaults(
+        context=_DummyContext(),  # type: ignore[arg-type]
+        user_id="u1",
+        request=request,
+    )
+
+    assert updated.setting_overrides.get("__deep_search_enabled") is True
+    assert updated.setting_overrides.get("__deep_search_prompt_scoped_pdfs") is False
+    assert updated.setting_overrides.get("__deep_search_user_selected_files") is False
+    assert int(updated.setting_overrides.get("__research_web_search_budget") or 0) == 100
+    assert "7" in updated.index_selection
+    assert updated.index_selection["7"].mode == "select"
+    assert updated.index_selection["7"].file_ids == ["file-a", "file-b", "file-c"]
+
+
+def test_apply_deep_search_defaults_complex_profile_uses_higher_budget(monkeypatch) -> None:
+    class _DummyContext:
+        app = SimpleNamespace(index_manager=SimpleNamespace(indices=[SimpleNamespace(id=7)]))
+
+    monkeypatch.setattr(chat_app, "_classify_deep_search_complexity", lambda *_: "complex")
+    monkeypatch.setattr(chat_app, "_list_index_source_ids", lambda **_: ["file-a", "file-b"])
+
+    request = ChatRequest(
+        message="Deep research with broad evidence and comparative analysis.",
+        agent_mode="deep_search",
+    )
+    updated = chat_app._apply_deep_search_defaults(
+        context=_DummyContext(),  # type: ignore[arg-type]
+        user_id="u1",
+        request=request,
+    )
+
+    assert int(updated.setting_overrides.get("__research_web_search_budget") or 0) == 180
+    assert int(updated.setting_overrides.get("__research_source_budget_min") or 0) == 120
+    assert int(updated.setting_overrides.get("__research_source_budget_max") or 0) == 180
+    assert int(updated.setting_overrides.get("__research_min_unique_sources") or 0) >= 50
+
+
+def test_apply_deep_search_defaults_prefers_prompt_scoped_pdf_ids(monkeypatch) -> None:
+    class _DummyContext:
+        app = SimpleNamespace(
+            index_manager=SimpleNamespace(indices=[SimpleNamespace(id=7), SimpleNamespace(id=8)])
+        )
+
+    monkeypatch.setattr(chat_app, "_classify_deep_search_complexity", lambda *_: "normal")
+    monkeypatch.setattr(
+        chat_app,
+        "_resolve_prompt_scoped_pdf_ids",
+        lambda **_: {8: ["pdf-1", "pdf-2"]},
+    )
+    monkeypatch.setattr(chat_app, "_list_index_source_ids", lambda **_: ["fallback-a", "fallback-b"])
+
+    request = ChatRequest(
+        message="Deep search the Alpha group PDFs.",
+        agent_mode="deep_search",
+        index_selection={"7": {"mode": "select", "file_ids": ["existing"]}},
+    )
+    updated = chat_app._apply_deep_search_defaults(
+        context=_DummyContext(),  # type: ignore[arg-type]
+        user_id="u1",
+        request=request,
+    )
+
+    assert updated.index_selection["7"].file_ids[0] == "existing"
+    assert updated.index_selection["8"].mode == "select"
+    assert updated.index_selection["8"].file_ids == ["pdf-1", "pdf-2"]
+    assert updated.setting_overrides.get("__deep_search_prompt_scoped_pdfs") is True
+    assert updated.setting_overrides.get("__deep_search_user_selected_files") is True
+
+
+def test_run_chat_turn_skips_fast_path_for_deep_search(monkeypatch) -> None:
+    class _DummyIterator:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration(
+                {
+                    "conversation_id": "c1",
+                    "conversation_name": "Conversation",
+                    "message": "deep",
+                    "answer": "ok",
+                    "info": "",
+                    "plot": None,
+                    "state": {},
+                    "mode": "deep_search",
+                    "actions_taken": [],
+                    "sources_used": [],
+                    "source_usage": [],
+                    "next_recommended_steps": [],
+                    "needs_human_review": False,
+                    "human_review_notes": None,
+                    "web_summary": {},
+                    "activity_run_id": None,
+                    "info_panel": {},
+                    "mindmap": {},
+                }
+            )
+
+    called = {"fast_path": False}
+    monkeypatch.setattr(chat_app, "API_CHAT_FAST_PATH", True)
+    monkeypatch.setattr(
+        chat_app,
+        "run_fast_chat_turn",
+        lambda **_: called.__setitem__("fast_path", True),
+    )
+    monkeypatch.setattr(chat_app, "_apply_deep_search_defaults", lambda **kwargs: kwargs["request"])
+    monkeypatch.setattr(chat_app, "_auto_index_urls_for_request", lambda **kwargs: kwargs["request"])
+    monkeypatch.setattr(chat_app, "stream_chat_turn", lambda **_: _DummyIterator())
+
+    result = chat_app.run_chat_turn(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u1",
+        request=ChatRequest(message="run deep search", agent_mode="deep_search"),
+    )
+
+    assert called["fast_path"] is False
+    assert result.get("mode") == "deep_search"
+
+
+def test_resolve_chat_timeout_seconds_uses_deep_search_budget(monkeypatch) -> None:
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45, raising=False)
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS_COMPANY_AGENT", 120, raising=False)
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS_DEEP_SEARCH", 240, raising=False)
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA", 180, raising=False)
+    monkeypatch.setattr(chat_app, "_default_model_looks_local_ollama", lambda: False)
+
+    ask_timeout = chat_app._resolve_chat_timeout_seconds(requested_mode="ask")
+    agent_timeout = chat_app._resolve_chat_timeout_seconds(requested_mode="company_agent")
+    deep_timeout = chat_app._resolve_chat_timeout_seconds(requested_mode="deep_search")
+
+    assert ask_timeout == 45
+    assert agent_timeout == 120
+    assert deep_timeout == 240
+
+
+def test_resolve_chat_timeout_seconds_respects_local_ollama_floor(monkeypatch) -> None:
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS", 45, raising=False)
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS_DEEP_SEARCH", 240, raising=False)
+    monkeypatch.setattr(chat_app.flowsettings, "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA", 300, raising=False)
+    monkeypatch.setattr(chat_app, "_default_model_looks_local_ollama", lambda: True)
+
+    deep_timeout = chat_app._resolve_chat_timeout_seconds(requested_mode="deep_search")
+    assert deep_timeout == 300

@@ -31,6 +31,8 @@ from .events import (
 from .intent_enrichment import apply_intent_enrichment
 from .research import (
     build_research_plan,
+    enforce_deep_file_scope_policy,
+    enforce_web_only_research_path,
     ensure_company_agent_highlight_step,
     normalize_step_parameters,
 )
@@ -97,22 +99,47 @@ def build_execution_steps(
 
     steps = apply_intent_enrichment(
         request=request,
+        settings=settings,
         task_prep=task_prep,
         steps=steps,
     )
 
     research_plan = build_research_plan(request=request, settings=settings)
+    settings["__research_depth_tier"] = research_plan.depth_tier
+    settings["__research_max_query_variants"] = research_plan.max_query_variants
+    settings["__research_results_per_query"] = research_plan.results_per_query
+    settings["__research_fused_top_k"] = research_plan.fused_top_k
+    settings["__research_max_live_inspections"] = research_plan.max_live_inspections
+    settings["__research_min_unique_sources"] = research_plan.min_unique_sources
+    settings["__research_web_search_budget"] = research_plan.web_search_budget
+    settings["__file_research_max_sources"] = research_plan.max_file_sources
+    settings["__file_research_max_chunks"] = research_plan.max_file_chunks
+    settings["__file_research_max_scan_pages"] = research_plan.max_file_scan_pages
+    settings["__simple_explanation_required"] = research_plan.simple_explanation_required
     steps = normalize_step_parameters(
         steps=steps,
         planned_search_terms=research_plan.planned_search_terms,
         planned_keywords=research_plan.planned_keywords,
         highlight_color=research_plan.highlight_color,
+        research_plan=research_plan,
+    )
+    steps = enforce_web_only_research_path(
+        request=request,
+        settings=settings,
+        steps=steps,
+        research_plan=research_plan,
     )
     steps = ensure_company_agent_highlight_step(
         request=request,
+        settings=settings,
         steps=steps,
         highlight_color=research_plan.highlight_color,
         planned_keywords=research_plan.planned_keywords,
+    )
+    steps = enforce_deep_file_scope_policy(
+        request=request,
+        settings=settings,
+        steps=steps,
     )
 
     probe_allowed_tool_ids = collect_probe_allowed_tool_ids(registry)
@@ -177,6 +204,19 @@ def build_execution_steps(
             workspace_logging_requested=workspace_logging_plan.workspace_logging_requested,
             planned_search_terms=research_plan.planned_search_terms,
             planned_keywords=research_plan.planned_keywords,
+            research_depth_profile={
+                "tier": research_plan.depth_tier,
+                "max_query_variants": research_plan.max_query_variants,
+                "results_per_query": research_plan.results_per_query,
+                "fused_top_k": research_plan.fused_top_k,
+                "max_live_inspections": research_plan.max_live_inspections,
+                "min_unique_sources": research_plan.min_unique_sources,
+                "web_search_budget": research_plan.web_search_budget,
+                "max_file_sources": research_plan.max_file_sources,
+                "max_file_chunks": research_plan.max_file_chunks,
+                "max_file_scan_pages": research_plan.max_file_scan_pages,
+                "simple_explanation_required": research_plan.simple_explanation_required,
+            },
         )
     )
     yield emit_event(
@@ -185,6 +225,19 @@ def build_execution_steps(
             steps=steps,
             planned_search_terms=research_plan.planned_search_terms,
             planned_keywords=research_plan.planned_keywords,
+            research_depth_profile={
+                "tier": research_plan.depth_tier,
+                "max_query_variants": research_plan.max_query_variants,
+                "results_per_query": research_plan.results_per_query,
+                "fused_top_k": research_plan.fused_top_k,
+                "max_live_inspections": research_plan.max_live_inspections,
+                "min_unique_sources": research_plan.min_unique_sources,
+                "web_search_budget": research_plan.web_search_budget,
+                "max_file_sources": research_plan.max_file_sources,
+                "max_file_chunks": research_plan.max_file_chunks,
+                "max_file_scan_pages": research_plan.max_file_scan_pages,
+                "simple_explanation_required": research_plan.simple_explanation_required,
+            },
             fact_coverage=fact_coverage,
         )
     )

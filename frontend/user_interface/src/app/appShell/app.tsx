@@ -326,7 +326,7 @@ export default function App() {
               onMoveConversationToProject={projectState.handleMoveConversationToProject}
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
-              onOpenWorkspaceTab={(tab) => setWorkspaceModalTab(tab)}
+              onOpenWorkspaceTab={(tab) => layout.setActiveTab(tab)}
             />
 
             {!layout.isSidebarCollapsed ? (

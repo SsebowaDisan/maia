@@ -105,6 +105,10 @@ def test_workspace_logging_failure_disables_only_optional_logging_steps() -> Non
 
     assert state.deep_workspace_logging_enabled is False
     assert any("Workspace logging disabled" in event.title for event in captured)
+    assert any(str(event.event_type) == "tool_skipped" for event in captured)
+    assert state.all_actions
+    assert state.all_actions[-1].status == "skipped"
+    assert state.executed_steps[-1].get("status") == "skipped"
 
 
 def test_explicit_workspace_step_failure_keeps_logging_flag_enabled() -> None:

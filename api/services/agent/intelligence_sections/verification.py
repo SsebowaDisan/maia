@@ -19,6 +19,7 @@ def build_verification_report(
     executed_steps: list[dict[str, Any]],
     actions: list[AgentAction],
     sources: list[AgentSource],
+    runtime_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     executed_success = [row for row in executed_steps if str(row.get("status")) == "success"]
@@ -44,7 +45,15 @@ def build_verification_report(
         for claim in claim_candidates
     ]
     supported_claims = [item for item in claim_assessments if item.get("supported")]
+    unsupported_claims = [item for item in claim_assessments if not item.get("supported")]
     contradictions = detect_potential_contradictions(evidence_units)
+    settings = runtime_settings if isinstance(runtime_settings, dict) else {}
+    depth_tier = " ".join(str(settings.get("__research_depth_tier") or "").split()).strip().lower()
+    citation_gate_threshold = 0.85 if depth_tier in {"deep_research", "deep_analytics"} else 0.6
+    try:
+        source_target = max(1, int(settings.get("__research_min_unique_sources") or 1))
+    except Exception:
+        source_target = 1
 
     def add_check(name: str, passed: bool, detail: str) -> None:
         checks.append(
@@ -71,6 +80,12 @@ def build_verification_report(
         len(unique_source_urls) > 0,
         f"{len(unique_source_urls)} unique source URL(s) linked to this run.",
     )
+    if depth_tier in {"deep_research", "deep_analytics"}:
+        add_check(
+            "Source coverage target",
+            len(unique_source_urls) >= source_target,
+            f"{len(unique_source_urls)}/{source_target} unique source URL(s) captured for deep research.",
+        )
     if task.requested_report:
         add_check(
             "Report generated",
@@ -84,12 +99,22 @@ def build_verification_report(
             claim_support_ratio >= 0.6,
             f"{len(supported_claims)}/{len(claim_assessments)} extracted claim(s) have direct evidence support.",
         )
+        citation_gate_passed = claim_support_ratio >= citation_gate_threshold and len(contradictions) == 0
+        add_check(
+            "Citation support gate",
+            citation_gate_passed,
+            (
+                f"Support ratio {claim_support_ratio:.2f} (threshold {citation_gate_threshold:.2f}) "
+                f"with {len(contradictions)} contradiction signal(s)."
+            ),
+        )
     else:
         add_check(
             "Claim support coverage",
             False,
             "No claim candidates were extracted from tool outputs.",
         )
+        citation_gate_passed = False
     add_check(
         "Contradiction scan",
         len(contradictions) == 0,
@@ -157,7 +182,17 @@ def build_verification_report(
         "grade": grade,
         "checks": checks,
         "planned_tools": planned_tool_ids,
+        "research_depth_tier": depth_tier or "standard",
+        "source_target": source_target,
+        "source_count": len(unique_source_urls),
+        "citation_gate_threshold": citation_gate_threshold,
+        "citation_gate_passed": citation_gate_passed,
         "claim_assessments": claim_assessments[:10],
+        "unsupported_claims": [
+            " ".join(str(item.get("claim") or "").split()).strip()
+            for item in unsupported_claims[:8]
+            if " ".join(str(item.get("claim") or "").split()).strip()
+        ],
         "contradictions": contradictions[:6],
         "evidence_units": evidence_units[:12],
     }

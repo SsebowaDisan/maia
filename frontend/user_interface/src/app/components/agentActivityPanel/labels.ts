@@ -34,6 +34,7 @@ function cursorLabelForEventType(type: string): string {
   if (type === "llm.form_field_mapping") return "Resolving fields with LLM";
   if (type === "browser_contact_submit") return "Submitting form";
   if (type === "browser_contact_confirmation") return "Checking confirmation";
+  if (type === "browser_human_verification_required") return "Waiting for human verification";
   if (type === "browser_keyword_highlight") return "Highlighting keywords";
   if (type === "browser_find_in_page") return "Searching within page";
   if (type === "browser_copy_selection") return "Copying excerpt";
@@ -73,7 +74,7 @@ function cursorLabelForEventType(type: string): string {
   if (type === "email_click_send") return "Clicking send";
   if (type === "email_sent") return "Send complete";
   if (type === "web_result_opened") return "Opening source";
-  return "Agent cursor";
+  return "Empowered by Axon Group";
 }
 
 export { cursorLabelForEventType, desktopStatusForEventType };

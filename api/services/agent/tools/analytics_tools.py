@@ -93,6 +93,12 @@ class GA4ReportTool(AgentTool):
             "Compare this report against previous period and flag anomalies.",
             "Push key KPI rows to Sheets or executive document.",
         ]
+        context.settings["__latest_analytics_report"] = {
+            "property_id": property_id or "",
+            "row_count": len(rows),
+            "dimensions": dim_names[:12],
+            "metrics": metric_names[:12],
+        }
 
         return ToolExecutionResult(
             summary=f"GA4 report executed with {len(rows)} row(s).",

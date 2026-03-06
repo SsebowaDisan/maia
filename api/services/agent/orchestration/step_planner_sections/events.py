@@ -122,6 +122,7 @@ def plan_candidate_event(
     workspace_logging_requested: bool,
     planned_search_terms: list[str],
     planned_keywords: list[str],
+    research_depth_profile: dict[str, Any],
 ) -> AgentActivityEvent:
     return activity_event_factory(
         event_type="plan_candidate",
@@ -146,6 +147,7 @@ def plan_candidate_event(
                 "contract_success_checks": task_prep.contract_success_checks[:8],
                 "planned_search_terms": planned_search_terms[:6],
                 "planned_keywords": planned_keywords[:12],
+                "research_depth_profile": research_depth_profile if isinstance(research_depth_profile, dict) else {},
             },
         },
     )
@@ -157,6 +159,7 @@ def plan_refined_event(
     steps: list[PlannedStep],
     planned_search_terms: list[str],
     planned_keywords: list[str],
+    research_depth_profile: dict[str, Any],
     fact_coverage: dict[str, object] | None = None,
 ) -> AgentActivityEvent:
     return activity_event_factory(
@@ -167,6 +170,7 @@ def plan_refined_event(
             "step_ids": [step.tool_id for step in steps],
             "search_terms": planned_search_terms[:6],
             "keywords": planned_keywords[:12],
+            "research_depth_profile": research_depth_profile if isinstance(research_depth_profile, dict) else {},
             "fact_coverage": fact_coverage if isinstance(fact_coverage, dict) else {},
         },
     )

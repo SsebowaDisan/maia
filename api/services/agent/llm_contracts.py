@@ -109,24 +109,6 @@ def _normalize_url_candidate(raw_url: str) -> str:
     return text
 
 
-def _merge_text_rows(*rows: list[str], limit: int) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for row_list in rows:
-        for item in row_list:
-            text = " ".join(str(item or "").split()).strip()
-            if not text:
-                continue
-            key = text.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(text)
-            if len(merged) >= max(1, int(limit)):
-                return merged
-    return merged
-
-
 def _derive_required_actions(*, intent_tags: list[str], delivery_target: str) -> list[str]:
     action_map = {
         "email_delivery": "send_email",
@@ -187,7 +169,8 @@ def _classify_missing_requirements(
     missing: list[str] = []
 
     needs_delivery_target = "send_email" in actions or "email_delivery" in tags
-    if needs_delivery_target and not delivery_target:
+    has_delivery_email = bool(EMAIL_RE.search(delivery_target))
+    if needs_delivery_target and not has_delivery_email:
         missing.append("Recipient email address for delivery")
 
     needs_target_url = (
@@ -230,20 +213,11 @@ def _derive_required_facts(
     rewritten_task: str,
     intent_tags: list[str],
 ) -> list[str]:
-    joined = " ".join([message, agent_goal, rewritten_task]).lower()
+    _ = (message, agent_goal, rewritten_task)
     tags = {str(item).strip().lower() for item in intent_tags if str(item).strip()}
     facts: list[str] = []
 
-    location_hint = (
-        "location_lookup" in tags
-        or "location" in joined
-        or "located" in joined
-        or "where is" in joined
-        or "headquarter" in joined
-        or "headquarters" in joined
-        or "address" in joined
-    )
-    if location_hint:
+    if "location_lookup" in tags:
         facts.append("Company location details (city/country and address if available)")
 
     if ("web_research" in tags or "report_generation" in tags) and not facts:
@@ -263,89 +237,29 @@ def _sanitize_missing_requirements(
     output_format_optional: bool = False,
 ) -> list[str]:
     cleaned = _clean_text_list(items, limit=12)
-    fact_rows = [str(item).strip().lower() for item in required_facts if str(item).strip()]
+    fact_rows = {
+        _normalize_for_match(str(item))
+        for item in required_facts
+        if str(item).strip()
+    }
     normalized_context = _normalize_for_match(context_text)
-    has_live_thread_context = any(
-        marker in normalized_context
-        for marker in ("live thread", "in thread", "in-thread", "chat thread", "this thread")
-    )
-    has_workspace_format_context = any(
-        marker in normalized_context
-        for marker in ("google sheet", "google sheets", "google doc", "google docs")
-    )
     filtered: list[str] = []
     for row in cleaned:
-        lowered = row.lower()
         normalized_row = _normalize_for_match(row)
+        if not normalized_row:
+            continue
 
         # The requirement is already explicitly present in user/context text.
-        if normalized_context and normalized_row and normalized_row in normalized_context:
+        if normalized_context and normalized_row in normalized_context:
             continue
-
-        if delivery_target and "recipient" in lowered:
-            # Keep explicit email-recipient requirements only when target is non-email.
-            if "email" in lowered and not EMAIL_RE.search(delivery_target):
-                pass
-            else:
-                continue
-        if (
-            normalized_context
-            and ("recipient" in lowered)
-            and ("email" not in lowered)
-            and (
-                "recipient:" in normalized_context
-                or "recipient for the findings:" in normalized_context
-                or "delivery target:" in normalized_context
-            )
-        ):
-            continue
-        if has_live_thread_context and "recipient" in lowered and ("thread" in lowered or "live" in lowered):
-            continue
-        if (
-            has_workspace_format_context
-            and "recipient" in lowered
-            and "email" not in lowered
-            and ("google doc" in lowered or "google sheet" in lowered or ("google" in lowered and "doc" in lowered))
-        ):
-            continue
-        if (
-            normalized_context
-            and ("format" in lowered or "artifact type" in lowered)
-            and (
-                "format:" in normalized_context
-                or "target format:" in normalized_context
-                or "markdown" in normalized_context
-            )
-        ):
-            continue
-        if output_format_optional and ("format" in lowered or "artifact type" in lowered or "specif" in lowered):
-            continue
-        if (
-            has_workspace_format_context
-            and ("format" in lowered or "artifact type" in lowered or "specif" in lowered)
-            and ("google" in lowered or "sheet" in lowered or "doc" in lowered)
-        ):
-            continue
-        if (
-            ("target website url" in lowered or "target url" in lowered or "website url" in lowered)
-            and not requires_target_url
-        ):
-            continue
-        if target_url and (
-            "target website url" in lowered
-            or "target url" in lowered
-            or "website url" in lowered
-        ):
-            continue
-        if fact_rows and ("from analysis" in lowered or "from the analysis" in lowered):
-            continue
-        if fact_rows and any(fact and (fact in lowered or lowered in fact) for fact in fact_rows):
+        if normalized_row in fact_rows:
             continue
         if row in filtered:
             continue
         filtered.append(row)
         if len(filtered) >= 6:
             break
+    _ = (delivery_target, target_url, requires_target_url, output_format_optional)
     return filtered
 
 
@@ -514,7 +428,6 @@ def build_task_contract(
         target_url=target_url,
     )
     required_action_set = {str(item).strip().lower() for item in required_actions if str(item).strip()}
-    response_missing_requirements = _clean_text_list(response.get("missing_requirements"), limit=6)
     classifier_missing_requirements = _classify_missing_requirements(
         required_actions=required_actions,
         required_outputs=required_outputs,
@@ -523,11 +436,7 @@ def build_task_contract(
         target_url=target_url,
         intent_tags=clean_intent_tags,
     )
-    merged_missing_requirements = _merge_text_rows(
-        response_missing_requirements,
-        classifier_missing_requirements,
-        limit=6,
-    )
+    merged_missing_requirements = list(classifier_missing_requirements)
     cleaned_missing_requirements = _sanitize_missing_requirements(
         items=merged_missing_requirements,
         delivery_target=clean_target,

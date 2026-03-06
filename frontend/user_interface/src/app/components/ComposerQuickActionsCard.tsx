@@ -1,12 +1,10 @@
-import { Bot, ClipboardPaste, FileUp, Plus, Search } from "lucide-react";
+import { ClipboardPaste, FileUp, Plus } from "lucide-react";
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { cn } from "./ui/utils";
 
 type ComposerQuickActionsCardProps = {
   onUploadFile: () => void;
-  onSelectAgent: () => void;
-  onSelectDeepResearch: () => void;
   onPasteHighlights?: () => void;
   canPasteHighlights?: boolean;
   disableUpload?: boolean;
@@ -15,8 +13,6 @@ type ComposerQuickActionsCardProps = {
 
 export function ComposerQuickActionsCard({
   onUploadFile,
-  onSelectAgent,
-  onSelectDeepResearch,
   onPasteHighlights,
   canPasteHighlights = false,
   disableUpload = false,
@@ -55,22 +51,6 @@ export function ComposerQuickActionsCard({
           >
             <FileUp className="h-4 w-4 text-[#6e6e73]" />
             <span>Upload file</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => runAction(onSelectAgent)}
-            className="inline-flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[12px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7]"
-          >
-            <Bot className="h-4 w-4 text-[#6e6e73]" />
-            <span>Agent</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => runAction(onSelectDeepResearch)}
-            className="inline-flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[12px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7]"
-          >
-            <Search className="h-4 w-4 text-[#6e6e73]" />
-            <span>Deep research</span>
           </button>
           <button
             type="button"

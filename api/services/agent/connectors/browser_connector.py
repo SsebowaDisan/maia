@@ -104,6 +104,14 @@ class BrowserConnector(BaseConnector):
             density = round(min(1.0, float(words) / 420.0), 4)
             blocked_patterns = (
                 ("captcha", "captcha"),
+                ("cloudflare", "bot_challenge"),
+                ("security verification", "bot_challenge"),
+                ("performing security verification", "bot_challenge"),
+                ("checking your browser", "bot_challenge"),
+                ("attention required", "bot_challenge"),
+                ("i'm not a robot", "captcha"),
+                ("recaptcha", "captcha"),
+                ("turnstile", "captcha"),
                 ("access denied", "access_denied"),
                 ("verify you are human", "bot_challenge"),
                 ("unusual traffic", "bot_challenge"),
@@ -677,5 +685,4 @@ class BrowserConnector(BaseConnector):
                 "same_domain_followup": max(0, len(targets) - 1),
             },
         }
-
 

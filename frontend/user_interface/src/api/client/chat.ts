@@ -118,7 +118,7 @@ function sendChat(
     mindmapSettings?: Record<string, unknown>;
     mindmapFocus?: Record<string, unknown>;
     settingOverrides?: Record<string, unknown>;
-    agentMode?: "ask" | "company_agent";
+    agentMode?: "ask" | "company_agent" | "deep_search";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
     attachments?: Array<{ name: string; fileId?: string }>;
@@ -187,7 +187,7 @@ async function sendChatStream(
     mindmapSettings?: Record<string, unknown>;
     mindmapFocus?: Record<string, unknown>;
     settingOverrides?: Record<string, unknown>;
-    agentMode?: "ask" | "company_agent";
+    agentMode?: "ask" | "company_agent" | "deep_search";
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
     attachments?: Array<{ name: string; fileId?: string }>;

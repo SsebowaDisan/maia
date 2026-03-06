@@ -30,6 +30,16 @@ KH_ENABLE_FIRST_SETUP = config("KH_ENABLE_FIRST_SETUP", default=True, cast=bool)
 KH_DEMO_MODE = config("KH_DEMO_MODE", default=False, cast=bool)
 KH_OLLAMA_URL = config("KH_OLLAMA_URL", default="http://localhost:11434/v1/")
 KH_CHAT_TIMEOUT_SECONDS = config("KH_CHAT_TIMEOUT_SECONDS", default=45, cast=int)
+KH_CHAT_TIMEOUT_SECONDS_COMPANY_AGENT = config(
+    "KH_CHAT_TIMEOUT_SECONDS_COMPANY_AGENT",
+    default=300,
+    cast=int,
+)
+KH_CHAT_TIMEOUT_SECONDS_DEEP_SEARCH = config(
+    "KH_CHAT_TIMEOUT_SECONDS_DEEP_SEARCH",
+    default=600,
+    cast=int,
+)
 KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA = config(
     "KH_CHAT_TIMEOUT_SECONDS_LOCAL_OLLAMA",
     default=180,

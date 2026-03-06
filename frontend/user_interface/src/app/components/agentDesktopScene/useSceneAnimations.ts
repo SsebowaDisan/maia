@@ -185,7 +185,6 @@ function useSceneAnimations({
   rawSheetBodyPreview,
 }: UseSceneAnimationsParams): SceneAnimationState {
   const emailBodyScrollRef = useRef<HTMLDivElement | null>(null);
-  const docBodyScrollRef = useRef<HTMLDivElement | null>(null);
   const docTypingTimerRef = useRef<number | null>(null);
   const sheetTypingTimerRef = useRef<number | null>(null);
   const copyPulseTimerRef = useRef<number | null>(null);
@@ -196,8 +195,6 @@ function useSceneAnimations({
   const [typedSheetBodyPreview, setTypedSheetBodyPreview] = useState("");
   const [copyPulseText, setCopyPulseText] = useState("");
   const [copyPulseVisible, setCopyPulseVisible] = useState(false);
-
-  const docBodyPreview = typedDocBodyPreview || rawDocBodyPreview;
 
   useEffect(() => {
     if (!isEmailScene) {
@@ -248,17 +245,6 @@ function useSceneAnimations({
       copyPulseTimerRef.current = null;
     }, 1900);
   }, [activeEventType, clipboardPreview, liveCopiedWordsKey]);
-
-  useEffect(() => {
-    if (!isDocsScene) {
-      return;
-    }
-    const node = docBodyScrollRef.current;
-    if (!node) {
-      return;
-    }
-    node.scrollTop = node.scrollHeight;
-  }, [docBodyPreview, isDocsScene]);
 
   useEffect(() => {
     if (!isDocsScene) {
@@ -319,7 +305,6 @@ function useSceneAnimations({
   return {
     copyPulseText,
     copyPulseVisible,
-    docBodyScrollRef,
     emailBodyScrollRef,
     typedDocBodyPreview,
     typedSheetBodyPreview,

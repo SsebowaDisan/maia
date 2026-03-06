@@ -1,10 +1,19 @@
 import type { DragEvent } from "react";
-import { CheckSquare, LayoutGrid, List, Square } from "lucide-react";
+import { ArrowUpDown, CheckSquare, LayoutGrid, List, Search, Square } from "lucide-react";
 import type { FileRecord } from "../../../api/client";
 import { formatDate, formatSize, loaderText, tokenText } from "./helpers";
-import type { GridMode } from "./types";
+import { NeutralSelect } from "./NeutralSelect";
+import type { FileKind, GridMode, SortField } from "./types";
 
 interface FilesSectionProps {
+  filterText: string;
+  setFilterText: (value: string) => void;
+  sortField: SortField;
+  setSortField: (value: SortField) => void;
+  sortDir: "asc" | "desc";
+  setSortDir: (value: "asc" | "desc") => void;
+  kindFilter: FileKind;
+  setKindFilter: (value: FileKind) => void;
   viewMode: GridMode;
   setViewMode: (mode: GridMode) => void;
   visibleFiles: FileRecord[];
@@ -20,6 +29,14 @@ interface FilesSectionProps {
 }
 
 function FilesSection({
+  filterText,
+  setFilterText,
+  sortField,
+  setSortField,
+  sortDir,
+  setSortDir,
+  kindFilter,
+  setKindFilter,
   viewMode,
   setViewMode,
   visibleFiles,
@@ -62,6 +79,51 @@ function FilesSection({
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[280px] flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#8d8d93]" />
+          <input
+            value={filterText}
+            onChange={(event) => setFilterText(event.target.value)}
+            placeholder="Search files"
+            className="h-11 w-full rounded-xl border border-black/[0.08] bg-white pl-9 pr-3 text-[13px] text-[#1d1d1f] placeholder:text-[#8d8d93] focus:outline-none focus:ring-2 focus:ring-black/10"
+          />
+        </div>
+        <NeutralSelect
+          value={sortField}
+          placeholder="Sort"
+          options={[
+            { value: "date", label: "Sort: Date" },
+            { value: "name", label: "Sort: Name" },
+            { value: "size", label: "Sort: Size" },
+            { value: "token", label: "Sort: Token" },
+          ]}
+          onChange={(nextValue) => setSortField(nextValue as SortField)}
+          buttonClassName="h-11 min-w-[140px] rounded-xl border border-black/[0.08] bg-white px-3 text-[13px] text-[#1d1d1f]"
+        />
+        <button
+          onClick={() => setSortDir(sortDir === "asc" ? "desc" : "asc")}
+          className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-black/[0.08] px-3 text-[13px] text-[#1d1d1f]"
+        >
+          <ArrowUpDown className="h-4 w-4" />
+          {sortDir === "asc" ? "Asc" : "Desc"}
+        </button>
+      </div>
+
+      <div className="mt-6 flex flex-wrap items-center gap-5 border-b border-[#f2f2f5] pb-4">
+        {(["all", "pdf", "office", "text", "image", "other"] as FileKind[]).map((kind) => (
+          <button
+            key={kind}
+            onClick={() => setKindFilter(kind)}
+            className={`rounded-md px-2 py-1 text-[12px] uppercase tracking-[0.04em] transition-colors ${
+              kindFilter === kind ? "bg-[#f3f3f6] text-[#1d1d1f] font-semibold" : "text-[#8d8d93]"
+            }`}
+          >
+            {kind}
+          </button>
+        ))}
       </div>
 
       {viewMode === "table" ? (

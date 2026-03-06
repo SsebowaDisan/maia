@@ -52,7 +52,7 @@ _DETAILS_MATCH_QUALITY_RE = re.compile(r"data-match-quality=['\"]([^'\"]+)['\"]"
 _DETAILS_CHAR_START_RE = re.compile(r"data-char-start=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _DETAILS_CHAR_END_RE = re.compile(r"data-char-end=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _DETAILS_SOURCE_URL_RE = re.compile(r"data-source-url=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
-_TOKEN_RE = re.compile(r"[a-zA-Z0-9]{3,}")
+_TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/-]{1,}")
 _ARTIFACT_URL_PATH_SEGMENTS = {
     "extract",
     "source",
@@ -67,9 +67,53 @@ _ARTIFACT_URL_PATH_SEGMENTS = {
     "url",
 }
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
-_INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})")
+_INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|】|ã€‘|\})")
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
 _URL_TOKEN_RE = re.compile(r"https?://", flags=re.IGNORECASE)
+_CONTEXT_TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "was",
+    "were",
+    "will",
+    "with",
+    "claim",
+    "evidence",
+    "sentence",
+    "source",
+    "summary",
+    "note",
+    "section",
+    "page",
+    "phrase",
+    "line",
+    "you",
+    "your",
+}
+_MIN_CONTEXT_MATCH_SCORE = 0.2
 
 
 def _upsert_html_attr(tag: str, attr_name: str, attr_value: str) -> str:
@@ -328,7 +372,30 @@ def _source_type_from_name(source_name: str) -> str:
 
 def _tokens(text: str) -> set[str]:
     normalized = _clean_text(text).lower()
-    return {token for token in _TOKEN_RE.findall(normalized) if len(token) >= 3}
+    if not normalized:
+        return set()
+    values: set[str] = set()
+    for raw_token in _TOKEN_RE.findall(normalized):
+        token = raw_token.strip("._/-")
+        if len(token) < 2:
+            continue
+        if token in _CONTEXT_TOKEN_STOPWORDS:
+            continue
+        if token.isdigit() and len(token) < 4:
+            continue
+        values.add(token)
+    return values
+
+
+def _is_informative_token(token: str) -> bool:
+    candidate = str(token or "").strip().lower()
+    if not candidate or candidate in _CONTEXT_TOKEN_STOPWORDS:
+        return False
+    if any(char.isdigit() for char in candidate):
+        return True
+    if any(char in "._/-" for char in candidate):
+        return True
+    return len(candidate) >= 6
 
 
 def _context_window(text: str, pivot_index: int, *, radius: int = 220) -> str:
@@ -383,16 +450,30 @@ def _best_ref_for_context(
         ref_tokens = _tokens(f"{phrase} {label} {source_name}")
         if not ref_tokens:
             continue
-        overlap = len(context_tokens & ref_tokens)
+        overlap_tokens = context_tokens & ref_tokens
+        overlap = len(overlap_tokens)
         if overlap <= 0:
             continue
+        informative_overlap = sum(1 for token in overlap_tokens if _is_informative_token(token))
+        if overlap < 2 and informative_overlap <= 0:
+            short_context_match = (
+                len(context_tokens) <= 2
+                and len(ref_tokens) <= 8
+                and any(len(token) >= 4 for token in overlap_tokens)
+            )
+            if not short_context_match:
+                continue
         precision = overlap / max(1, len(context_tokens))
         recall = overlap / max(1, len(ref_tokens))
         # Favor excerpts that cover the local claim with minimal noise.
-        score = (precision * 0.65) + (recall * 0.35)
+        score = (precision * 0.6) + (recall * 0.3)
+        if informative_overlap > 0:
+            score += 0.1 * min(1.0, informative_overlap / max(1, overlap))
         if score > best_score:
             best_score = score
             best_ref_id = ref_id
+    if best_score < _MIN_CONTEXT_MATCH_SCORE:
+        return None, best_score
     return best_ref_id, best_score
 
 
@@ -432,33 +513,42 @@ def _inject_claim_citations_in_line(
     }
     if not ref_by_id:
         return line
-    fallback_ref_id = min(ref_by_id.keys())
-    line_already_cited = bool(
-        re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", line)
-        or "class='citation'" in line
-        or 'class="citation"' in line
-    )
-    if line_already_cited:
-        return line
 
     # URL/link lines should receive citation markers only at the end so markdown
     # links remain valid (no split at dots inside URLs).
     if _URL_TOKEN_RE.search(line) or _MARKDOWN_LINK_RE.search(line):
+        url_line_already_cited = bool(
+            re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", line)
+            or "class='citation'" in line
+            or 'class="citation"' in line
+        )
+        if url_line_already_cited:
+            return line
         cleaned_line = _clean_text(line)
         if not _is_claim_like_fragment(line) or not cleaned_line:
             return line
         best_ref_id, _score = _best_ref_for_context(cleaned_line, refs)
-        ref_id = best_ref_id if best_ref_id in ref_by_id else fallback_ref_id
+        if best_ref_id is None or best_ref_id not in ref_by_id:
+            return line
+        ref_id = best_ref_id
         marker = f"[{ref_id}]"
         line_stripped = line.rstrip()
         return f"{line_stripped} {marker}{line[len(line_stripped):]}"
 
+    original_line = line
+    had_inline_markers = bool(_INLINE_REF_TOKEN_RE.search(line))
+    had_anchor_markers = "class='citation'" in line or 'class="citation"' in line
+    working_line = line
+    if had_inline_markers and not had_anchor_markers:
+        working_line = _INLINE_REF_TOKEN_RE.sub("", line)
+
     rebuilt: list[str] = []
     cursor = 0
-    for match in _SENTENCE_SEGMENT_RE.finditer(line):
+    inserted_markers = 0
+    for match in _SENTENCE_SEGMENT_RE.finditer(working_line):
         start, end = match.span()
-        rebuilt.append(line[cursor:start])
-        segment = line[start:end]
+        rebuilt.append(working_line[cursor:start])
+        segment = working_line[start:end]
         cleaned = _clean_text(segment)
         should_cite = _is_claim_like_fragment(segment)
         segment_already_cited = bool(
@@ -468,14 +558,22 @@ def _inject_claim_citations_in_line(
         )
         if should_cite and not segment_already_cited and cleaned:
             best_ref_id, _score = _best_ref_for_context(cleaned, refs)
-            ref_id = best_ref_id if best_ref_id in ref_by_id else fallback_ref_id
+            if best_ref_id is None or best_ref_id not in ref_by_id:
+                rebuilt.append(segment)
+                cursor = end
+                continue
+            ref_id = best_ref_id
             marker = f"[{ref_id}]"
             segment_stripped = segment.rstrip()
             segment = f"{segment_stripped} {marker}{segment[len(segment_stripped):]}"
+            inserted_markers += 1
         rebuilt.append(segment)
         cursor = end
-    rebuilt.append(line[cursor:])
-    return "".join(rebuilt)
+    rebuilt.append(working_line[cursor:])
+    rewritten_line = "".join(rebuilt)
+    if had_inline_markers and inserted_markers <= 0:
+        return original_line
+    return rewritten_line
 
 
 def _inject_claim_level_bracket_citations(answer: str, refs: list[dict[str, Any]]) -> str:
@@ -534,6 +632,10 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
         return text
     max_ref = valid_ref_ids[-1]
     min_ref = valid_ref_ids[0]
+    has_in_range_marker = any(
+        min_ref <= int(marker.group(1)) <= max_ref
+        for marker in _INLINE_REF_TOKEN_RE.finditer(body)
+    )
 
     def nearest_valid_ref_id(value: int) -> int:
         return min(valid_ref_ids, key=lambda ref_id: (abs(ref_id - value), ref_id))
@@ -543,6 +645,8 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
         context = _context_window(body, match.start())
         best_ref_id, score = _best_ref_for_context(context, refs)
         if original_ref < 1 or original_ref > max_ref:
+            if has_in_range_marker:
+                return ""
             if best_ref_id is not None and score >= 0.08:
                 return f"[{best_ref_id}]"
             if original_ref >= 1:
@@ -743,6 +847,10 @@ def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
     lines = body.splitlines()
     ref_limit = max(1, min(len(refs), 2))
     injected = 0
+    ref_by_id: dict[int, dict[str, Any]] = {
+        int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
+    }
+    injected_ref_ids: set[int] = set()
 
     for index, row in enumerate(lines):
         stripped = row.strip()
@@ -756,20 +864,29 @@ def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
             continue
         if len(stripped) < 18:
             continue
-        anchor = _citation_anchor(refs[injected % len(refs)])
+        best_ref_id, _score = _best_ref_for_context(stripped, refs)
+        if best_ref_id is None:
+            continue
+        if best_ref_id in injected_ref_ids and len(ref_by_id) > 1:
+            continue
+        ref = ref_by_id.get(best_ref_id)
+        if not ref:
+            continue
+        anchor = _citation_anchor(ref)
         if not anchor:
             continue
         lines[index] = f"{row.rstrip()} {anchor}"
         injected += 1
+        injected_ref_ids.add(best_ref_id)
         if injected >= ref_limit:
             break
 
-    if injected == 0 and body.strip():
+    if injected > 0:
+        body = "\n".join(lines)
+    elif body.strip() and len(refs) == 1:
         first_anchor = _citation_anchor(refs[0])
         if first_anchor:
             body = f"{body.rstrip()} {first_anchor}"
-    else:
-        body = "\n".join(lines)
 
     if tail:
         return f"{body.rstrip()}\n\n{tail.lstrip()}"
@@ -1003,12 +1120,12 @@ def _normalize_visible_inline_citations(answer: str) -> str:
     cursor = 0
     for match in _CITATION_ANCHOR_RE.finditer(normalized):
         outside = normalized[cursor : match.start()]
-        outside = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", outside)
+        outside = re.sub(r"(?:\[|【|ã€|\{)\s*\d{1,4}\s*(?:\]|】|ã€‘|\})", "", outside)
         rebuilt.append(outside)
         rebuilt.append(match.group(0))
         cursor = match.end()
     tail = normalized[cursor:]
-    tail = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", tail)
+    tail = re.sub(r"(?:\[|【|ã€|\{)\s*\d{1,4}\s*(?:\]|】|ã€‘|\})", "", tail)
     rebuilt.append(tail)
     normalized = "".join(rebuilt)
 
@@ -1053,7 +1170,7 @@ def _remove_inline_marker_tokens_with_index_map(
     cursor = 0
     while cursor < len(plain_text):
         marker_match = re.match(
-            r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})",
+            r"(?:\[|【|ã€|\{)\s*\d{1,4}\s*(?:\]|】|ã€‘|\})",
             plain_text[cursor:],
         )
         if marker_match:
@@ -1105,6 +1222,19 @@ def _dedupe_duplicate_answer_passes(answer: str) -> str:
     prefix_anchor_count = _count_citation_anchors(prefix_html)
     suffix_anchor_count = _count_citation_anchors(suffix_html)
     if prefix_anchor_count == suffix_anchor_count:
+        prefix_plain = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(_HTML_TAG_RE.sub(" ", prefix_html)).strip().lower(),
+        )
+        suffix_plain = re.sub(
+            r"\s+",
+            " ",
+            _clean_text(_HTML_TAG_RE.sub(" ", suffix_html)).strip().lower(),
+        )
+        if prefix_plain and prefix_plain == suffix_plain:
+            trimmed = prefix_html.rstrip()
+            return trimmed if trimmed else text
         return text
     if suffix_anchor_count > prefix_anchor_count:
         trimmed = suffix_html.lstrip()
@@ -1495,7 +1625,7 @@ def build_claim_signal_summary(
         if not ref_ids:
             ref_ids = {
                 int(match)
-                for match in re.findall(r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})", segment)
+                for match in re.findall(r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|】|ã€‘|\})", segment)
                 if int(match) in ref_by_id
             }
         if not ref_ids:
@@ -1503,7 +1633,7 @@ def build_claim_signal_summary(
 
         cleaned_claim = _clean_text(
             re.sub(
-                r"(?:\[|ã€|\{)\s*(\d{1,4})\s*(?:\]|ã€‘|\})",
+                r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|】|ã€‘|\})",
                 "",
                 _CITATION_ANCHOR_RE.sub("", segment),
             )
@@ -1859,7 +1989,7 @@ def normalize_fast_answer(answer: str) -> str:
     for block in blocks:
         if not block:
             continue
-        signature = re.sub(r"(?:\[|ã€|\{)\s*\d{1,4}\s*(?:\]|ã€‘|\})", "", block)
+        signature = re.sub(r"(?:\[|【|ã€|\{)\s*\d{1,4}\s*(?:\]|】|ã€‘|\})", "", block)
         signature = re.sub(r"\s+", " ", signature).strip().lower()
         if len(signature) >= 120 and signature in seen_signatures:
             continue
@@ -1869,6 +1999,18 @@ def normalize_fast_answer(answer: str) -> str:
 
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _compact_evidence_extract(text: str, *, max_chars: int = 520) -> str:
+    cleaned = _clean_text(text)
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    clipped = cleaned[:max_chars]
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return f"{clipped.strip()}..."
 
 
 def build_fast_info_html(
@@ -1894,7 +2036,9 @@ def build_fast_info_html(
             or (raw_source_name if raw_source_name.lower().startswith(("http://", "https://")) else "")
         )
         page_label = html.escape(str(snippet.get("page_label", "") or ""))
-        excerpt = html.escape(str(snippet.get("text", "") or "")[:1400])
+        excerpt = html.escape(
+            _compact_evidence_extract(str(snippet.get("text", "") or ""))
+        )
         image_origin = snippet.get("image_origin")
         summary_label = f"Evidence [{ref_id}]" if ref_id > 0 else "Evidence"
         if page_label:
@@ -1977,4 +2121,3 @@ def build_fast_info_html(
         if len(info_blocks) >= max_blocks:
             break
     return "".join(info_blocks)
-

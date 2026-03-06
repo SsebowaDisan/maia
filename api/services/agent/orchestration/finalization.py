@@ -42,6 +42,9 @@ def _source_extract(source: Any) -> str:
         value = " ".join(str(metadata.get(key) or "").split()).strip()
         if value:
             return value[:1200]
+    source_label = " ".join(str(getattr(source, "label", "") or "").split()).strip()
+    if source_label and str(getattr(source, "source_type", "") or "").strip().lower() == "web":
+        return source_label[:300]
     return ""
 
 
@@ -129,6 +132,7 @@ def finalize_run(
         executed_steps=state.executed_steps,
         actions=state.all_actions,
         sources=state.all_sources,
+        runtime_settings=state.execution_context.settings,
     )
     verification_started_event = activity_event_factory(
         event_type="verification_started",
@@ -307,6 +311,13 @@ def finalize_run(
             **(task_prep.user_preferences if isinstance(task_prep.user_preferences, dict) else {}),
             "task_preferred_tone": task_prep.task_intelligence.preferred_tone,
             "task_preferred_format": task_prep.task_intelligence.preferred_format,
+            "simple_explanation_required": bool(
+                state.execution_context.settings.get("__simple_explanation_required")
+            ),
+            "include_execution_why": bool(state.execution_context.settings.get("__include_execution_why")),
+            "research_depth_tier": str(
+                state.execution_context.settings.get("__research_depth_tier") or "standard"
+            ),
         },
     )
     source_urls = [
@@ -319,16 +330,34 @@ def finalize_run(
         answer_text=answer,
         source_urls=source_urls,
     )
-    needs_human_review = bool(critic_result.get("needs_human_review"))
-    human_review_notes = " ".join(
+    critic_needs_human_review = bool(critic_result.get("needs_human_review"))
+    critic_review_notes = " ".join(
         str(critic_result.get("critic_note") or "").split()
     ).strip()[:420]
+    barrier_handoff_required = bool(
+        state.execution_context.settings.get("__barrier_handoff_required")
+    )
+    barrier_handoff_note = " ".join(
+        str(state.execution_context.settings.get("__barrier_handoff_note") or "").split()
+    ).strip()[:420]
+    needs_human_review = bool(critic_needs_human_review or barrier_handoff_required)
+    human_review_notes = critic_review_notes
+    if barrier_handoff_required and barrier_handoff_note:
+        if human_review_notes:
+            if barrier_handoff_note not in human_review_notes:
+                human_review_notes = f"{barrier_handoff_note} | {human_review_notes}"[:420]
+        else:
+            human_review_notes = barrier_handoff_note
+
     if needs_human_review and human_review_notes:
         critic_event = activity_event_factory(
             event_type="verification_check",
-            title="Critic review flagged issues",
+            title="Human review required" if barrier_handoff_required else "Critic review flagged issues",
             detail=human_review_notes,
-            metadata={"needs_human_review": True},
+            metadata={
+                "needs_human_review": True,
+                "barrier_handoff_required": barrier_handoff_required,
+            },
         )
         yield emit_event(critic_event)
         if human_review_notes not in unique_next_steps:

@@ -80,7 +80,6 @@ function AgentDesktopScene({
   const {
     copyPulseText,
     copyPulseVisible,
-    docBodyScrollRef,
     emailBodyScrollRef,
     typedDocBodyPreview,
     typedSheetBodyPreview,
@@ -201,7 +200,6 @@ function AgentDesktopScene({
         activeTitle={activeTitle}
         docBodyHtml={docBodyHtml}
         docBodyPreview={docBodyPreview}
-        docBodyScrollRef={docBodyScrollRef}
         docsFrameUrl={docsFrameUrl}
         sceneText={sceneText}
       />
@@ -211,6 +209,7 @@ function AgentDesktopScene({
   if (isDocumentScene) {
     return (
       <DocumentFallbackScene
+        activeEventType={activeEventType}
         activeDetail={activeDetail}
         clipboardPreview={clipboardPreview}
         documentHighlights={documentHighlights}
@@ -221,7 +220,14 @@ function AgentDesktopScene({
   }
 
   if (isSystemScene) {
-    return <SystemScene activeDetail={activeDetail} activeTitle={activeTitle} sceneText={sceneText} />;
+    return (
+      <SystemScene
+        activeEventType={activeEventType}
+        activeDetail={activeDetail}
+        activeTitle={activeTitle}
+        sceneText={sceneText}
+      />
+    );
   }
 
   return <DefaultScene isSystemScene={isSystemScene} stageFileName={stageFileName} />;

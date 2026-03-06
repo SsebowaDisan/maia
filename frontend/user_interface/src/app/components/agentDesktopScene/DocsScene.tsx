@@ -3,7 +3,6 @@ type DocsSceneProps = {
   activeTitle: string;
   docBodyHtml: string;
   docBodyPreview: string;
-  docBodyScrollRef: React.RefObject<HTMLDivElement | null>;
   docsFrameUrl: string;
   sceneText: string;
 };
@@ -13,7 +12,6 @@ function DocsScene({
   activeTitle,
   docBodyHtml,
   docBodyPreview,
-  docBodyScrollRef,
   docsFrameUrl,
   sceneText,
 }: DocsSceneProps) {
@@ -45,13 +43,15 @@ function DocsScene({
           ) : (
             <div className="h-full p-5">
               <div className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white px-8 py-6">
-                <p className="text-[18px] font-semibold text-[#202024]">
-                  {activeTitle || "Execution Plan & Notes"}
-                </p>
-                <p className="mt-1 text-[12px] text-[#6e6e73]">
-                  {sceneText || activeDetail || "Writing planning blueprint and findings to Google Docs."}
-                </p>
-                <div className="mt-4 space-y-3">
+                <div className="mb-4 border-b border-black/[0.06] pb-3">
+                  <p className="text-[18px] font-semibold text-[#202024]">
+                    {activeTitle || "Research Notes"}
+                  </p>
+                  <p className="mt-1 text-[12px] text-[#6e6e73]">
+                    {sceneText || activeDetail || "Preparing and writing structured document content."}
+                  </p>
+                </div>
+                <div className="h-[calc(100%-68px)] overflow-y-auto pr-1">
                   {docBodyPreview ? (
                     <div
                       className="[&_h1]:mb-2 [&_h1]:text-[22px] [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:text-[18px] [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:text-[15px] [&_h3]:font-semibold [&_p]:mb-1.5 [&_ul]:mb-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-1.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 text-[13px] leading-[1.65] text-[#232327]"
@@ -65,23 +65,6 @@ function DocsScene({
               </div>
             </div>
           )}
-          {docBodyPreview ? (
-            <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,460px)] rounded-lg border border-black/[0.08] bg-white/88 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
-                Live docs typing
-              </p>
-              <div
-                ref={docBodyScrollRef}
-                className="mt-1.5 max-h-[124px] overflow-y-auto rounded-md border border-black/[0.06] bg-white px-2.5 py-2 text-[12px] leading-[1.55] text-[#1f1f22]"
-              >
-                <div
-                  className="[&_h1]:mb-2 [&_h1]:text-[17px] [&_h1]:font-semibold [&_h2]:mb-1.5 [&_h2]:text-[15px] [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:text-[13px] [&_h3]:font-semibold [&_p]:mb-1.5 [&_ul]:mb-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5"
-                  dangerouslySetInnerHTML={{ __html: docBodyHtml }}
-                />
-                <span className="inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
-              </div>
-            </div>
-          ) : null}
         </div>
       </div>
     </div>

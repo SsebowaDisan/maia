@@ -262,6 +262,71 @@ def test_llm_routing_url_scrape_removes_web_research(monkeypatch) -> None:
     assert browser_step.params.get("web_provider") == "playwright_browser"
 
 
+def test_deep_search_url_scrape_keeps_web_research(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "url_scrape", "llm_used": True},
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Inspect site",
+                "params": {"url": "https://axongroup.com"},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": "check site"},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Please deeply research https://axongroup.com and include external corroboration.",
+        agent_mode="deep_search",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "browser.playwright.inspect" in tool_ids
+    assert "marketing.web_research" in tool_ids
+    web_step = next(step for step in steps if step.tool_id == "marketing.web_research")
+    assert web_step.params.get("provider") == "brave_search"
+    assert web_step.params.get("allow_provider_fallback") is False
+
+
+def test_company_agent_with_deep_search_override_keeps_web_research(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "none", "llm_used": False},
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "report.generate",
+                "title": "Create concise executive output",
+                "params": {"summary": kwargs["request"].message},
+            }
+        ],
+    )
+    request = ChatRequest(
+        message="Do deep research on renewable energy trends with citations.",
+        agent_mode="company_agent",
+        setting_overrides={"__deep_search_enabled": True, "__research_depth_tier": "deep_research"},
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "marketing.web_research" in tool_ids
+    assert "report.generate" in tool_ids
+
+
 def test_contact_form_request_adds_contact_form_send_step(monkeypatch) -> None:
     monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
     monkeypatch.setattr(planner_module, "enrich_task_intelligence", lambda **kwargs: {
@@ -588,6 +653,11 @@ def test_simple_definition_request_avoids_web_research_when_routing_is_none(monk
 
 def test_explicit_online_search_request_keeps_web_research_step(monkeypatch) -> None:
     monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
     request = ChatRequest(
         message="search online for the latest machine learning trends and summarize",
         agent_mode="company_agent",
@@ -596,6 +666,68 @@ def test_explicit_online_search_request_keeps_web_research_step(monkeypatch) -> 
     tool_ids = [step.tool_id for step in steps]
 
     assert "marketing.web_research" in tool_ids
+
+
+def test_attachment_scoped_company_agent_prunes_web_steps(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Search online sources",
+                "params": {"query": "attached pdf summary"},
+            },
+            {
+                "tool_id": "documents.highlight.extract",
+                "title": "Highlight words in selected files",
+                "params": {},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Create concise executive output",
+                "params": {"summary": kwargs["request"].message},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Read the attached PDF and summarize it with citations.",
+        agent_mode="company_agent",
+        attachments=[{"name": "notes.pdf", "file_id": "file-123"}],
+        index_selection={"1": {"mode": "select", "file_ids": ["file-123"]}},
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "documents.highlight.extract" in tool_ids
+    assert "report.generate" in tool_ids
+    assert "marketing.web_research" not in tool_ids
+    assert "browser.playwright.inspect" not in tool_ids
+
+
+def test_attachment_scoped_deep_search_keeps_web_steps(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    request = ChatRequest(
+        message="Deeply research this attached PDF and compare with online trends.",
+        agent_mode="deep_search",
+        attachments=[{"name": "notes.pdf", "file_id": "file-123"}],
+        index_selection={"1": {"mode": "select", "file_ids": ["file-123"]}},
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "marketing.web_research" in tool_ids
+    assert "report.generate" in tool_ids
 
 
 def test_generic_prompt_does_not_force_pdf_highlight_step(monkeypatch) -> None:
@@ -643,6 +775,17 @@ def test_attachment_intent_enables_doc_export_and_gmail_attachment(monkeypatch) 
         ]
 
     monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    monkeypatch.setattr(
+        planner_module,
+        "intent_signals",
+        lambda request: {
+            "url": "",
+            "recipient_email": "ops@example.com",
+            "wants_attachment_delivery": True,
+            "wants_file_scope": False,
+            "highlight_color": "yellow",
+        },
+    )
     request = ChatRequest(
         message="Research AI agents, write report, download pdf and send attached to ops@example.com",
         agent_mode="ask",
@@ -674,6 +817,17 @@ def test_no_attachment_intent_does_not_force_doc_export_or_email_attachment(monk
         ]
 
     monkeypatch.setattr(planner_module, "plan_with_llm", _fake_plan_with_llm)
+    monkeypatch.setattr(
+        planner_module,
+        "intent_signals",
+        lambda request: {
+            "url": "",
+            "recipient_email": "ops@example.com",
+            "wants_attachment_delivery": False,
+            "wants_file_scope": False,
+            "highlight_color": "yellow",
+        },
+    )
     request = ChatRequest(
         message="Research AI agents and send the summary to ops@example.com",
         agent_mode="ask",

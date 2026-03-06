@@ -59,7 +59,6 @@ def _normalize_url_candidate(raw_url: str) -> str:
 
 def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> TaskIntelligence:
     raw = f"{message} {agent_goal or ''}".strip()
-    lowered_raw = raw.lower()
     lexical_signals = infer_intent_signals_from_text(
         message=message,
         agent_goal=agent_goal,
@@ -69,10 +68,7 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
     delivery_email = str(lexical_signals.get("recipient_email") or "").strip() or _extract_first_email(raw)
     requires_delivery = bool(delivery_email) or bool(lexical_signals.get("wants_send"))
     requires_web_inspection = bool(target_url) or bool(lexical_signals.get("explicit_web_discovery"))
-    requested_report = bool(lexical_signals.get("wants_report")) or any(
-        phrase in lowered_raw
-        for phrase in (" report", " summary", " writeup", " findings")
-    )
+    requested_report = bool(lexical_signals.get("wants_report"))
     heuristic = {
         "objective": compact(message, 280),
         "target_url": target_url,

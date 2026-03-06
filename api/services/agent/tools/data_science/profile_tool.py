@@ -207,6 +207,15 @@ class DataScienceProfileTool(AgentTool):
         if notes:
             content_lines.extend(["", "### Notes", *notes])
 
+        context.settings["__latest_data_profile"] = {
+            "source": source_label,
+            "row_count": row_count,
+            "column_count": col_count,
+            "numeric_columns": numeric_columns[:24],
+            "top_correlations": top_correlations[:8],
+            "quality_issues": quality_issues[:10],
+        }
+
         return ToolExecutionResult(
             summary=f"Profiled dataset with {row_count} rows and {col_count} columns.",
             content="\n".join(content_lines),

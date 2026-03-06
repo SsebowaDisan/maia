@@ -143,35 +143,11 @@ def normalize_conversation_icon_key(value: Any) -> str | None:
 
 
 def _fallback_icon_key_from_text(text: str, *, agent_mode: str = "ask") -> str:
-    normalized = _clean_text(text).lower()
+    normalized = _clean_text(text)
     if not normalized and str(agent_mode).strip().lower() == "company_agent":
         return "briefcase"
-    if any(token in normalized for token in ["revenue", "sales", "forecast", "kpi", "analytics", "metric"]):
-        return "bar-chart-3"
-    if any(token in normalized for token in ["gmail", "email", "mail", "inbox", "outreach"]):
-        return "mail"
-    if any(token in normalized for token in ["calendar", "schedule", "timeline", "roadmap", "meeting"]):
-        return "calendar"
-    if any(token in normalized for token in ["security", "compliance", "risk", "audit", "privacy"]):
-        return "shield"
-    if any(token in normalized for token in ["website", "url", "news", "internet", "market research"]):
-        return "globe"
-    if any(token in normalized for token in ["search", "investigate", "lookup", "find"]):
-        return "search"
-    if any(token in normalized for token in ["document", "doc", "pdf", "file", "report"]):
-        return "file-text"
-    if any(token in normalized for token in ["project", "task", "todo", "checklist", "plan"]):
-        return "list-checks"
-    if any(token in normalized for token in ["code", "api", "bug", "debug", "python", "typescript"]):
-        return "code-2"
-    if any(token in normalized for token in ["tool", "setup", "config", "integration", "connect"]):
-        return "wrench"
-    if any(token in normalized for token in ["launch", "growth", "strategy", "initiative"]):
-        return "rocket"
-    if any(token in normalized for token in ["company", "client", "business", "customer"]):
+    if str(agent_mode).strip().lower() == "company_agent":
         return "briefcase"
-    if any(token in normalized for token in ["idea", "brainstorm", "concept", "creative"]):
-        return "lightbulb"
     return DEFAULT_CONVERSATION_ICON_KEY
 
 
@@ -280,6 +256,10 @@ def infer_conversation_icon_key(value: str, *, agent_mode: str = "ask") -> str:
     normalized = normalize_conversation_icon_key(value)
     if normalized:
         return normalized
+    llm_icon_key, _title = _llm_icon_and_title(_clean_text(value), agent_mode=agent_mode)
+    llm_normalized = normalize_conversation_icon_key(llm_icon_key)
+    if llm_normalized:
+        return llm_normalized
     return _fallback_icon_key_from_text(value, agent_mode=agent_mode)
 
 
@@ -305,4 +285,3 @@ def generate_conversation_identity(
 
 def is_legacy_fallback_icon(icon: str | None) -> bool:
     return str(icon or "").strip() == LEGACY_FALLBACK_CONVERSATION_ICON
-
