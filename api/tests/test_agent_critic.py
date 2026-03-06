@@ -88,3 +88,36 @@ def test_critic_suppresses_attempt_vs_completion_contradiction_when_attempt_fail
     )
     assert row["needs_human_review"] is False
     assert row["critic_note"] == ""
+
+
+def test_critic_suppresses_failed_action_execution_phrase_when_attempt_failed(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_CRITIC_ENABLED", "1")
+    monkeypatch.setattr(
+        critic,
+        "call_text_response",
+        lambda **kwargs: (
+            "Claim of Failed Action Execution: answer says execution failed while 8/10 actions succeeded."
+        ),
+    )
+    row = review_final_answer(
+        request_message="Analyze https://axongroup.com and send report by email.",
+        answer_text=(
+            "The report delivery was not completed. The send action was attempted but failed due to contract gate."
+        ),
+        source_urls=["https://axongroup.com/"],
+        actions=[
+            {
+                "tool_id": "mailer.report_send",
+                "status": "failed",
+                "action_class": "execute",
+                "summary": "contract_gate_blocked: Unverified required fact",
+            }
+        ],
+        contract_check={
+            "ready_for_final_response": False,
+            "ready_for_external_actions": False,
+            "missing_items": ["Required action not completed: send_email"],
+        },
+    )
+    assert row["needs_human_review"] is False
+    assert row["critic_note"] == ""

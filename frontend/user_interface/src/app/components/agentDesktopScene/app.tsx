@@ -64,6 +64,20 @@ function AgentDesktopScene({
   const scrollDirection = compactValue(activeSceneData["scroll_direction"]).toLowerCase();
   const densityRaw = Number(activeSceneData["content_density"]);
   const contentDensityLabel = Number.isFinite(densityRaw) ? densityRaw.toFixed(2) : "";
+  const action = compactValue(activeSceneData["action"]).toLowerCase();
+  const actionPhase = compactValue(activeSceneData["action_phase"]).toLowerCase();
+  const actionStatus = compactValue(activeSceneData["action_status"]).toLowerCase();
+  const actionTarget =
+    activeSceneData["action_target"] && typeof activeSceneData["action_target"] === "object"
+      ? (activeSceneData["action_target"] as Record<string, unknown>)
+      : {};
+  const actionTargetLabel =
+    compactValue(actionTarget["field_label"]) ||
+    compactValue(actionTarget["field"]) ||
+    compactValue(actionTarget["selector"]) ||
+    compactValue(actionTarget["title"]) ||
+    compactValue(actionTarget["url"]) ||
+    compactValue(actionTarget["source_name"]);
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
@@ -114,6 +128,10 @@ function AgentDesktopScene({
         activeDetail={activeDetail}
         activeEventType={activeEventType}
         activeTitle={activeTitle}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         browserUrl={browserUrl}
         blockedSignal={blockedSignal}
         canRenderLiveUrl={canRenderLiveUrl}
@@ -185,6 +203,9 @@ function AgentDesktopScene({
       <DocumentPdfScene
         activeDetail={activeDetail}
         activeEventType={activeEventType}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
         documentHighlights={documentHighlights}
         pdfPage={pdfPage}
         pdfPageTotal={pdfPageTotal}

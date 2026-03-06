@@ -147,6 +147,81 @@ def _llm_submission_status(
     return status, confidence, reason
 
 
+def _heuristic_human_verification_barrier(
+    *,
+    before_state: dict[str, Any],
+    after_state: dict[str, Any],
+) -> tuple[bool, float, str, str]:
+    before_required = int(before_state.get("required_empty_count") or 0)
+    after_required = int(after_state.get("required_empty_count") or 0)
+    form_visible_after = bool(after_state.get("form_visible", True))
+    enabled_controls_after = int(after_state.get("enabled_controls") or 0)
+    if before_required > after_required and after_required == 0 and form_visible_after and enabled_controls_after > 0:
+        return (
+            True,
+            0.56,
+            "Submission is still awaiting an interactive verification step.",
+            "verification_challenge",
+        )
+    return False, 0.0, "", ""
+
+
+def _detect_human_verification_barrier(
+    *,
+    before_state: dict[str, Any],
+    after_state: dict[str, Any],
+) -> tuple[bool, float, str, str]:
+    fallback = _heuristic_human_verification_barrier(
+        before_state=before_state,
+        after_state=after_state,
+    )
+    if not has_openai_credentials():
+        return fallback
+    payload = {
+        "before_state": before_state,
+        "after_state": after_state,
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You detect whether a web form requires human verification after submit interaction. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only in this schema:\n"
+                '{ "human_verification_required": true, "confidence": 0.0, '
+                '"barrier_type":"captcha|consent|verification_challenge|none", "reason":"..." }\n'
+                "Rules:\n"
+                "- Use semantic understanding of the page state.\n"
+                "- Never rely on hardcoded keyword matching.\n"
+                "- If a human challenge is present, set human_verification_required=true.\n"
+                "- Keep confidence within [0,1].\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=10,
+            max_tokens=280,
+        )
+    except Exception:
+        return fallback
+    if not isinstance(response, dict):
+        return fallback
+    required = bool(response.get("human_verification_required"))
+    try:
+        confidence = max(0.0, min(1.0, float(response.get("confidence"))))
+    except Exception:
+        confidence = 0.0
+    barrier_type = _safe_text(response.get("barrier_type"), max_len=64).lower()
+    if barrier_type not in {"captcha", "consent", "verification_challenge", "none"}:
+        barrier_type = "verification_challenge" if required else "none"
+    reason = _safe_text(response.get("reason"), max_len=220)
+    if not required and confidence < 0.6 and fallback[0]:
+        return fallback
+    if required and not reason:
+        reason = "Human verification is required before the contact form can be submitted."
+    return required, confidence, reason, barrier_type
+
+
 def submit_and_confirm(
     *,
     page: Any,
@@ -177,7 +252,7 @@ def submit_and_confirm(
         stamp_prefix=stamp_prefix,
     )
     submit_event = {
-        "event_type": "browser_click",
+        "event_type": "browser_contact_submit",
         "title": "Submit contact form",
         "detail": "Click submit control",
         "data": {
@@ -201,15 +276,25 @@ def submit_and_confirm(
         before_state=before_state,
         after_state=after_state,
     )
+    human_verification_required, barrier_confidence, barrier_reason, barrier_type = _detect_human_verification_barrier(
+        before_state=before_state,
+        after_state=after_state,
+    )
+    if human_verification_required:
+        status = "human_verification_required"
+        confidence = max(confidence, barrier_confidence)
+        reason = barrier_reason or reason or "Human verification is required."
     confirm_capture = capture_page_state(
         page=page,
         label="contact-confirm",
         output_dir=output_dir,
         stamp_prefix=stamp_prefix,
     )
+    confirm_event_type = "browser_contact_human_verification_required" if human_verification_required else "browser_contact_confirmation"
+    confirm_event_title = "Human verification required" if human_verification_required else "Verify contact form confirmation"
     confirm_event = {
-        "event_type": "browser_verify",
-        "title": "Verify contact form confirmation",
+        "event_type": confirm_event_type,
+        "title": confirm_event_title,
         "detail": reason,
         "data": {
             "url": confirm_capture["url"],
@@ -220,10 +305,13 @@ def submit_and_confirm(
             "required_empty_before": before_state.get("required_empty_count"),
             "required_empty_after": after_state.get("required_empty_count"),
             "form_visible_after": after_state.get("form_visible"),
+            "human_verification_required": human_verification_required,
+            "barrier_type": barrier_type if human_verification_required else "",
+            "barrier_confidence": round(barrier_confidence, 3) if human_verification_required else 0.0,
         },
         "snapshot_ref": confirm_capture["screenshot_path"],
     }
-    submitted = status in {"submitted", "submitted_unconfirmed"}
+    submitted = status in {"submitted", "submitted_unconfirmed"} and not human_verification_required
     return submit_event, confirm_event, {
         "submitted": submitted,
         "status": status,
@@ -233,5 +321,7 @@ def submit_and_confirm(
         "title": confirm_capture["title"],
         "screenshot_path": confirm_capture["screenshot_path"],
         "fields_filled": fields_filled,
+        "human_handoff_required": human_verification_required,
+        "handoff_reason": reason if human_verification_required else "",
+        "handoff_type": barrier_type if human_verification_required else "",
     }
-

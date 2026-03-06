@@ -24,6 +24,8 @@ from api.services.agent.tools.research_helpers import (
 )
 from api.services.agent.tools.theater_cursor import with_scene
 
+SITE_TOKEN_RE = re.compile(r"\bsite:([A-Za-z0-9.-]+)", re.IGNORECASE)
+
 
 def _as_bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
     try:
@@ -52,6 +54,109 @@ def _hostname_label(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def _normalize_host(value: str) -> str:
+    raw = " ".join(str(value or "").split()).strip().lower()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = str(parsed.hostname or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _url_matches_domain_scope(url: str, hosts: list[str]) -> bool:
+    if not hosts:
+        return True
+    candidate_host = _normalize_host(url)
+    if not candidate_host:
+        return False
+    for allowed in hosts:
+        if not allowed:
+            continue
+        if candidate_host == allowed or candidate_host.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+def _clean_domain_scope_hosts(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        rows = [raw]
+    elif isinstance(raw, list):
+        rows = [str(item or "") for item in raw]
+    else:
+        rows = []
+    hosts: list[str] = []
+    for row in rows:
+        normalized = _normalize_host(row)
+        if not normalized or normalized in hosts:
+            continue
+        hosts.append(normalized)
+        if len(hosts) >= 6:
+            break
+    return hosts
+
+
+def _resolve_domain_scope_hosts(
+    *,
+    params: dict[str, Any],
+    context_settings: dict[str, Any],
+    query: str,
+    query_variants: list[str],
+) -> list[str]:
+    explicit_scope = _clean_domain_scope_hosts(params.get("domain_scope"))
+    if explicit_scope:
+        return explicit_scope
+
+    target_url = str(params.get("target_url") or context_settings.get("__task_target_url") or "").strip()
+    target_host = _normalize_host(target_url)
+    if target_host:
+        return [target_host]
+
+    derived: list[str] = []
+    for text in [query, *query_variants[:6]]:
+        for match in SITE_TOKEN_RE.findall(str(text or "")):
+            host = _normalize_host(match)
+            if not host or host in derived:
+                continue
+            derived.append(host)
+            if len(derived) >= 4:
+                break
+        if len(derived) >= 4:
+            break
+    return derived
+
+
+def _resolve_domain_scope_mode(*, params: dict[str, Any], domain_scope_hosts: list[str]) -> str:
+    raw_mode = " ".join(str(params.get("domain_scope_mode") or "").split()).strip().lower()
+    if raw_mode in {"strict", "prefer", "off"}:
+        return raw_mode
+    if domain_scope_hosts and _truthy(params.get("enforce_domain_scope"), default=False):
+        return "strict"
+    return "off"
+
+
+def _apply_domain_scope(
+    *,
+    rows: list[dict[str, Any]],
+    domain_scope_hosts: list[str],
+    domain_scope_mode: str,
+) -> tuple[list[dict[str, Any]], int]:
+    if domain_scope_mode == "off" or not domain_scope_hosts:
+        return rows, 0
+    filtered = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and _url_matches_domain_scope(str(row.get("url") or ""), domain_scope_hosts)
+    ]
+    if filtered:
+        return filtered, max(0, len(rows) - len(filtered))
+    if domain_scope_mode == "prefer":
+        return rows, 0
+    return [], len(rows)
 
 
 def _website_scene_payload(
@@ -159,6 +264,17 @@ class WebResearchTool(AgentTool):
         )
         if not query_variants:
             query_variants = [query]
+        domain_scope_hosts = _resolve_domain_scope_hosts(
+            params=params,
+            context_settings=context.settings if isinstance(context.settings, dict) else {},
+            query=query,
+            query_variants=query_variants,
+        )
+        domain_scope_mode = _resolve_domain_scope_mode(
+            params=params,
+            domain_scope_hosts=domain_scope_hosts,
+        )
+        domain_scope_filtered_out = 0
         search_plan: list[tuple[str, int]] = []
         remaining_budget = requested_search_budget
         for idx, query_variant in enumerate(query_variants):
@@ -195,10 +311,24 @@ class WebResearchTool(AgentTool):
                 "search_budget_effective": planned_result_budget,
                 "fused_top_k": fused_top_k,
                 "min_unique_sources": min_unique_sources,
+                "domain_scope_hosts": domain_scope_hosts[:6],
+                "domain_scope_mode": domain_scope_mode,
             },
         )
         trace_events.append(started_event)
         yield started_event
+        if domain_scope_mode != "off" and domain_scope_hosts:
+            scope_event = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Apply domain scope to web research",
+                detail=f"{domain_scope_mode} scope: {', '.join(domain_scope_hosts[:3])}",
+                data={
+                    "domain_scope_hosts": domain_scope_hosts[:6],
+                    "domain_scope_mode": domain_scope_mode,
+                },
+            )
+            trace_events.append(scope_event)
+            yield scope_event
         provider_event = ToolTraceEvent(
             event_type="tool_progress",
             title="Select web research provider",
@@ -303,11 +433,19 @@ class WebResearchTool(AgentTool):
                         continue
                     run_payload["query_variant"] = query_variant
                     run_payload["result_limit"] = per_query_limit
-                    search_runs.append(run_payload)
                     run_rows = run_payload.get("results") if isinstance(run_payload.get("results"), list) else []
+                    scoped_rows, dropped_count = _apply_domain_scope(
+                        rows=[row for row in run_rows if isinstance(row, dict)],
+                        domain_scope_hosts=domain_scope_hosts,
+                        domain_scope_mode=domain_scope_mode,
+                    )
+                    domain_scope_filtered_out += int(dropped_count)
+                    scoped_payload = dict(run_payload)
+                    scoped_payload["results"] = scoped_rows
+                    search_runs.append(scoped_payload)
                     run_urls = [
                         str(item.get("url") or "")
-                        for item in run_rows
+                        for item in scoped_rows
                         if isinstance(item, dict)
                     ][:5]
                     result_event = ToolTraceEvent(
@@ -319,6 +457,7 @@ class WebResearchTool(AgentTool):
                             "top_urls": run_urls,
                             "provider": "brave_search",
                             "result_limit": per_query_limit,
+                            "domain_scope_filtered_out": int(dropped_count),
                         },
                     )
                     trace_events.append(result_event)
@@ -343,9 +482,9 @@ class WebResearchTool(AgentTool):
                         trace_events.append(hover_event)
                         yield hover_event
                         scroll_targets = [14.0, 36.0, 62.0]
-                        if len(run_rows) >= 8:
+                        if len(scoped_rows) >= 8:
                             scroll_count = 3
-                        elif len(run_rows) >= 4:
+                        elif len(scoped_rows) >= 4:
                             scroll_count = 2
                         else:
                             scroll_count = 1
@@ -462,10 +601,10 @@ class WebResearchTool(AgentTool):
                             trace_events.append(source_scroll_event)
                             yield source_scroll_event
                             source_preview = ""
-                            if rank - 1 < len(run_rows) and isinstance(run_rows[rank - 1], dict):
+                            if rank - 1 < len(scoped_rows) and isinstance(scoped_rows[rank - 1], dict):
                                 source_preview = str(
-                                    run_rows[rank - 1].get("description")
-                                    or run_rows[rank - 1].get("snippet")
+                                    scoped_rows[rank - 1].get("description")
+                                    or scoped_rows[rank - 1].get("snippet")
                                     or ""
                                 ).strip()
                             extract_event = ToolTraceEvent(
@@ -505,6 +644,9 @@ class WebResearchTool(AgentTool):
                         "fused_top_k": fused_top_k,
                         "search_budget_requested": requested_search_budget,
                         "search_budget_effective": planned_result_budget,
+                        "domain_scope_hosts": domain_scope_hosts[:6],
+                        "domain_scope_mode": domain_scope_mode,
+                        "domain_scope_filtered_out": int(domain_scope_filtered_out),
                     },
                 )
                 trace_events.append(fused_event)
@@ -579,6 +721,17 @@ class WebResearchTool(AgentTool):
                 if isinstance(payload, dict):
                     web_pages = payload.get("webPages")
                     rows = web_pages.get("value") if isinstance(web_pages, dict) else []
+                scoped_rows, dropped_count = _apply_domain_scope(
+                    rows=[row for row in rows if isinstance(row, dict)],
+                    domain_scope_hosts=domain_scope_hosts,
+                    domain_scope_mode=domain_scope_mode,
+                )
+                domain_scope_filtered_out += int(dropped_count)
+                rows = scoped_rows
+                if isinstance(payload, dict):
+                    web_pages = payload.get("webPages")
+                    if isinstance(web_pages, dict):
+                        web_pages["value"] = rows
                 bing_query = str(query_variants[0] if query_variants else query).strip() or query
                 bing_search_url = _search_results_url("bing_search", bing_query)
                 if bing_search_url:
@@ -798,6 +951,9 @@ class WebResearchTool(AgentTool):
                         "target_source_count": min_unique_sources,
                         "coverage_ok": len(sources) >= min_unique_sources,
                         "query_variants": query_variants,
+                        "domain_scope_hosts": domain_scope_hosts[:6],
+                        "domain_scope_mode": domain_scope_mode,
+                        "domain_scope_filtered_out": int(domain_scope_filtered_out),
                     },
                 )
                 trace_events.append(quality_event)
@@ -883,6 +1039,8 @@ class WebResearchTool(AgentTool):
                     "source_count": len(unique_urls),
                     "target_source_count": min_unique_sources,
                     "coverage_ok": False,
+                    "domain_scope_hosts": domain_scope_hosts[:6],
+                    "domain_scope_mode": domain_scope_mode,
                 },
             )
             trace_events.append(shortfall_event)
@@ -903,6 +1061,9 @@ class WebResearchTool(AgentTool):
             context.settings["__latest_web_source_count"] = len(unique_urls)
             context.settings["__latest_web_source_target"] = min_unique_sources
             context.settings["__latest_research_depth_tier"] = depth_tier
+            context.settings["__latest_web_domain_scope_hosts"] = domain_scope_hosts[:6]
+            context.settings["__latest_web_domain_scope_mode"] = domain_scope_mode
+            context.settings["__latest_web_domain_scope_filtered_out"] = int(domain_scope_filtered_out)
         next_steps = [
             "Validate top 2 sources against internal company data.",
             "Convert findings into a competitor/market briefing.",
@@ -934,6 +1095,9 @@ class WebResearchTool(AgentTool):
                 "min_unique_sources": min_unique_sources,
                 "coverage_ok": len(unique_urls) >= min_unique_sources,
                 "items": [source.to_dict() for source in sources],
+                "domain_scope_hosts": domain_scope_hosts[:6],
+                "domain_scope_mode": domain_scope_mode,
+                "domain_scope_filtered_out": int(domain_scope_filtered_out),
             },
             sources=sources,
             next_steps=next_steps,

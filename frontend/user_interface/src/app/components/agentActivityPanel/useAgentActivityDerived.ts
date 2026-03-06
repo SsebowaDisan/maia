@@ -517,28 +517,8 @@ function useAgentActivityDerived({
       return activeCursor;
     }
     const sceneCursor = cursorFromEvent(sceneEvent);
-    if (sceneCursor) {
-      return sceneCursor;
-    }
-    const preferredTab = previewTab;
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const candidate = visibleEvents[idx];
-      if (preferredTab !== "system" && tabForEvent(candidate) !== preferredTab) {
-        continue;
-      }
-      const cursor = cursorFromEvent(candidate);
-      if (cursor) {
-        return cursor;
-      }
-    }
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const cursor = cursorFromEvent(visibleEvents[idx]);
-      if (cursor) {
-        return cursor;
-      }
-    }
-    return null;
-  }, [activeEvent, previewTab, sceneEvent, visibleEvents]);
+    return sceneCursor || null;
+  }, [activeEvent, sceneEvent]);
 
   return {
     activeEvent,

@@ -7,6 +7,9 @@ function highlightBackground(color: "yellow" | "green") {
 type DocumentPdfSceneProps = {
   activeDetail: string;
   activeEventType: string;
+  action: string;
+  actionPhase: string;
+  actionStatus: string;
   documentHighlights: DocumentHighlight[];
   pdfPage: number;
   pdfPageTotal: number;
@@ -41,6 +44,9 @@ function PdfScrollRail({
 function DocumentPdfScene({
   activeDetail,
   activeEventType,
+  action,
+  actionPhase,
+  actionStatus,
   documentHighlights,
   pdfPage,
   pdfPageTotal,
@@ -54,8 +60,17 @@ function DocumentPdfScene({
   const totalPages = Math.max(page, Math.round(pdfPageTotal));
   const frameUrl = `${stageFileUrl}#page=${page}&zoom=page-width&toolbar=0&navpanes=0&scrollbar=0`;
   const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
-  const showScanFocus = normalizedEventType === "pdf_scan_region" || normalizedEventType === "pdf_evidence_linked";
-  const showPageTurnBadge = normalizedEventType === "pdf_page_change";
+  const normalizedAction = String(action || "").trim().toLowerCase();
+  const normalizedActionPhase = String(actionPhase || "").trim().toLowerCase();
+  const normalizedStatus = String(actionStatus || "").trim().toLowerCase();
+  const showScanFocus =
+    normalizedAction === "extract" &&
+    normalizedStatus !== "failed" &&
+    (Boolean(pdfScanRegion) || normalizedEventType.startsWith("pdf_"));
+  const showPageTurnBadge =
+    normalizedAction === "navigate" &&
+    normalizedActionPhase !== "failed" &&
+    totalPages > 1;
   return (
     <div className="absolute inset-0">
       <iframe

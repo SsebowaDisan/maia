@@ -27,6 +27,8 @@ _SCOPE_CACHE_LOCK = threading.Lock()
 _HIGHLIGHT_SCOPE_CACHE: dict[str, tuple[float, str]] = {}
 _ALLOWED_HIGHLIGHT_SCOPES = {"tight", "sentence", "context", "block"}
 _DEFAULT_HIGHLIGHT_SCOPE = "sentence"
+_ALLOWED_PREVIEW_VIEWPORTS = {"desktop", "mobile"}
+_DEFAULT_PREVIEW_VIEWPORT = "desktop"
 _ARTIFACT_URL_PATH_SEGMENTS = {
     "extract",
     "source",
@@ -125,6 +127,13 @@ def _normalize_highlight_scope(raw_value: Any) -> str:
     if value in _ALLOWED_HIGHLIGHT_SCOPES:
         return value
     return _DEFAULT_HIGHLIGHT_SCOPE
+
+
+def _normalize_preview_viewport(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip().lower()
+    if value in _ALLOWED_PREVIEW_VIEWPORTS:
+        return value
+    return _DEFAULT_PREVIEW_VIEWPORT
 
 
 def _normalize_scope_text(raw_value: Any, *, max_chars: int = 260) -> str:
@@ -429,6 +438,7 @@ def _sanitize_and_inject_preview_html(
     source_url: str,
     highlight_phrases: list[str],
     highlight_scope: str = _DEFAULT_HIGHLIGHT_SCOPE,
+    preview_viewport: str = _DEFAULT_PREVIEW_VIEWPORT,
 ) -> str:
     text = str(html_text or "")
     lower = text.lower()
@@ -464,6 +474,12 @@ def _sanitize_and_inject_preview_html(
     )
     text = re.sub(
         r"<meta\b[^>]*http-equiv\s*=\s*['\"]?refresh['\"]?[^>]*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"<meta\b[^>]*\bname\s*=\s*(?:['\"]viewport['\"]|viewport)(?:\s[^>]*)?>",
         "",
         text,
         flags=re.IGNORECASE,
@@ -521,6 +537,12 @@ def _sanitize_and_inject_preview_html(
         flags=re.IGNORECASE,
     )
     scope = _normalize_highlight_scope(highlight_scope)
+    viewport_mode = _normalize_preview_viewport(preview_viewport)
+    viewport_meta = (
+        "<meta name='viewport' content='width=1280,initial-scale=1'/>"
+        if viewport_mode == "desktop"
+        else "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
+    )
 
     style_block = (
         "<style>"
@@ -641,7 +663,7 @@ def _sanitize_and_inject_preview_html(
         "})();"
         "</script>"
     )
-    head_injection = f"<base href='{html.escape(source_url, quote=True)}'/>{style_block}"
+    head_injection = f"{viewport_meta}<base href='{html.escape(source_url, quote=True)}'/>{style_block}"
     if re.search(r"</head>", text, flags=re.IGNORECASE):
         text = re.sub(
             r"</head>",
@@ -671,6 +693,7 @@ def website_preview(
     highlight: str | None = Query(default=None, description="Citation text to highlight"),
     claim: str | None = Query(default=None, description="Claim text fallback for highlighting"),
     question: str | None = Query(default=None, description="User question used to adapt highlight scope"),
+    viewport: str | None = Query(default=None, description="Preview viewport mode: desktop or mobile"),
 ) -> HTMLResponse:
     normalized_url = _normalize_target_url(url)
     if not normalized_url:
@@ -701,5 +724,6 @@ def website_preview(
         source_url=_normalize_target_url(final_url) or normalized_url,
         highlight_phrases=phrases,
         highlight_scope=scope,
+        preview_viewport=_normalize_preview_viewport(viewport),
     )
     return HTMLResponse(content=rendered, status_code=200)

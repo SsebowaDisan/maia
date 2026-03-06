@@ -167,6 +167,10 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": "Post-submit confirmation evaluated",
         "user_visible": True,
     },
+    "browser_contact_human_verification_required": {
+        "description": "Contact form submission requires human verification before continuation",
+        "user_visible": True,
+    },
     "browser_human_verification_required": {
         "description": "Website requires human verification before automation can continue",
         "user_visible": True,

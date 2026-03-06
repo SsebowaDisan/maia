@@ -24,6 +24,25 @@ class _BraveConnectorStub:
         }
 
 
+class _BraveMixedConnectorStub:
+    def web_search(self, *, query: str, count: int = 8) -> dict[str, object]:
+        del count
+        return {
+            "results": [
+                {
+                    "title": "Axon Group - Industrial solutions",
+                    "description": f"Overview for {query}",
+                    "url": "https://axongroup.com/",
+                },
+                {
+                    "title": "AXON stock quote",
+                    "description": "NASDAQ:AXON coverage",
+                    "url": "https://www.cnn.com/markets/stocks/AXON",
+                },
+            ]
+        }
+
+
 class _BingConnectorStub:
     def search_web(self, *, query: str, count: int = 8) -> dict[str, object]:
         del count
@@ -216,6 +235,32 @@ class ResearchToolTests(unittest.TestCase):
             self.assertIsInstance(event.data.get("cursor_y"), float)
             self.assertGreaterEqual(float(event.data.get("cursor_x") or 0.0), 0.0)
             self.assertGreaterEqual(float(event.data.get("cursor_y") or 0.0), 0.0)
+
+    def test_strict_domain_scope_filters_off_domain_sources(self) -> None:
+        registry = _RegistryStub(brave=_BraveMixedConnectorStub(), bing=_BingConnectorStub())
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="analyze axongroup",
+                params={
+                    "query": "axon group overview",
+                    "domain_scope": ["axongroup.com"],
+                    "domain_scope_mode": "strict",
+                    "target_url": "https://axongroup.com/",
+                    "query_variants": ["axon group overview"],
+                    "max_query_variants": 2,
+                    "results_per_query": 8,
+                },
+            )
+
+        urls = [
+            str(item.get("url") or "")
+            for item in (result.data.get("items") or [])
+            if isinstance(item, dict)
+        ]
+        self.assertTrue(urls)
+        self.assertTrue(all("axongroup.com" in url for url in urls))
+        self.assertGreater(int(result.data.get("domain_scope_filtered_out") or 0), 0)
 
 
 if __name__ == "__main__":

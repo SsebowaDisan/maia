@@ -296,6 +296,8 @@ def test_deep_search_url_scrape_keeps_web_research(monkeypatch) -> None:
     web_step = next(step for step in steps if step.tool_id == "marketing.web_research")
     assert web_step.params.get("provider") == "brave_search"
     assert web_step.params.get("allow_provider_fallback") is False
+    assert web_step.params.get("domain_scope_mode") == "strict"
+    assert web_step.params.get("domain_scope") == ["axongroup.com"]
 
 
 def test_company_agent_with_deep_search_override_keeps_web_research(monkeypatch) -> None:

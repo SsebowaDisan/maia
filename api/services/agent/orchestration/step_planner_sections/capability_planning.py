@@ -13,6 +13,7 @@ from ..models import TaskPreparation
 _INTENT_TAG_DOMAIN_MAP: dict[str, tuple[str, ...]] = {
     "web_research": ("marketing_research",),
     "location_lookup": ("marketing_research",),
+    "goal_page_navigation": ("marketing_research",),
     "report_generation": ("reporting",),
     "docs_write": ("document_ops",),
     "sheets_update": ("document_ops",),

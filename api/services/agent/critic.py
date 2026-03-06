@@ -14,11 +14,11 @@ EXTERNAL_ACTION_TOOL_IDS = {
     "slack.post_message",
 }
 ACTION_GAP_HINT_RE = re.compile(
-    r"(lack of action|missing action|not completed|not sent|no .*requested|not delivered|not executed)",
+    r"(lack of action|missing action|not completed|not sent|no .*requested|not delivered|not executed|failed action execution)",
     re.IGNORECASE,
 )
 ACTION_ATTEMPT_CONTRADICTION_RE = re.compile(
-    r"(contradict|implies an attempt|tool .*used|attempt was made)",
+    r"(contradict|implies an attempt|tool .*used|attempt was made|claim of (a )?failed action)",
     re.IGNORECASE,
 )
 INCOMPLETE_ACK_RE = re.compile(

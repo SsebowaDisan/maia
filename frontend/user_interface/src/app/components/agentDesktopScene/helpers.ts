@@ -169,7 +169,7 @@ function parseSheetState(sheetBodyPreview: string): { sheetPreviewRows: string[]
 
 function parsePdfPlaybackState(
   activeSceneData: Record<string, unknown>,
-  activeEventType: string,
+  _activeEventType: string,
 ): PdfPlaybackState {
   const parsePositiveInt = (value: unknown, fallback: number) => {
     const parsed = typeof value === "number" ? value : Number(value);
@@ -211,9 +211,7 @@ function parsePdfPlaybackState(
   const pdfScrollDirection: "up" | "down" | "" =
     normalizedDirection === "up" || normalizedDirection === "down"
       ? (normalizedDirection as "up" | "down")
-      : activeEventType === "pdf_page_change"
-        ? "down"
-        : "";
+      : "";
   const pdfScanRegion = compactValue(activeSceneData["scan_region"]);
 
   return {

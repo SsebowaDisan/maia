@@ -60,6 +60,23 @@ class BrowserContactConnector(BaseConnector):
             )
         return ConnectorHealth(self.connector_id, True, "configured")
 
+    def _goal_page_discovery_enabled(self) -> bool:
+        enabled = _coerce_bool(
+            self.settings.get("agent.capabilities.goal_page_discovery_enabled")
+            or self.settings.get("MAIA_AGENT_GOAL_PAGE_DISCOVERY_ENABLED")
+            or os.getenv("MAIA_AGENT_GOAL_PAGE_DISCOVERY_ENABLED"),
+            default=False,
+        )
+        if not enabled:
+            return False
+        raw_tags = self.settings.get("__intent_tags")
+        tags = {
+            " ".join(str(item or "").split()).strip().lower()
+            for item in (raw_tags if isinstance(raw_tags, list) else [])
+            if " ".join(str(item or "").split()).strip()
+        }
+        return bool({"goal_page_navigation", "contact_form_submission"}.intersection(tags))
+
     def submit_contact_form_live_stream(
         self,
         *,
@@ -151,6 +168,7 @@ class BrowserContactConnector(BaseConnector):
                 page,
                 wait_ms=wait_ms,
                 timeout_ms=timeout_ms,
+                goal_page_discovery_enabled=self._goal_page_discovery_enabled(),
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
             )

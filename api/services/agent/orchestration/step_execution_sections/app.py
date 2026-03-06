@@ -9,6 +9,7 @@ from api.services.agent.models import AgentActivityEvent, utc_now
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
 
+from ..handoff_state import is_handoff_paused, read_handoff_state
 from ..models import ExecutionState, TaskPreparation
 from .failure import handle_step_failure
 from .guards import (
@@ -61,6 +62,27 @@ def execute_planned_steps(
     step_cursor = 0
     display_step_index = 0
     while step_cursor < len(steps):
+        if is_handoff_paused(settings=state.execution_context.settings):
+            if not bool(state.execution_context.settings.get("__handoff_pause_emitted")):
+                handoff = read_handoff_state(settings=state.execution_context.settings)
+                pause_note = " ".join(str(handoff.get("note") or "").split()).strip()
+                pause_reason = " ".join(str(handoff.get("pause_reason") or "").split()).strip()
+                pause_event = activity_event_factory(
+                    event_type="policy_blocked",
+                    title="Execution paused for human verification",
+                    detail=(
+                        pause_note
+                        or pause_reason
+                        or "Human verification is required before execution can continue."
+                    )[:200],
+                    metadata={
+                        "handoff_state": handoff,
+                        "pause_reason": pause_reason,
+                    },
+                )
+                yield emit_event(pause_event)
+                state.execution_context.settings["__handoff_pause_emitted"] = True
+            break
         step = steps[step_cursor]
         if should_skip_step_for_workspace_logging(state=state, step=step):
             step_cursor += 1

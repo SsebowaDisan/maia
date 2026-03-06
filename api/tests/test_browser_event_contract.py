@@ -62,3 +62,48 @@ def test_normalize_browser_event_preserves_scroll_fields() -> None:
     assert data.get("cursor_x") == 30.0
     assert data.get("cursor_y") == 70.0
 
+
+def test_normalize_browser_event_maps_contact_fill_variants() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_contact_fill_email",
+            "title": "Fill email",
+            "detail": "contact email",
+            "data": {
+                "field": "email",
+                "field_label": "Work email",
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("action") == "type"
+    assert data.get("action_target", {}).get("field") == "email"
+    assert data.get("action_target", {}).get("field_label") == "Work email"
+
+
+def test_normalize_browser_event_maps_open_to_navigate_action() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_open",
+            "title": "Open site",
+            "detail": "https://example.com",
+            "data": {"url": "https://example.com"},
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("action") == "navigate"
+    assert data.get("action_target", {}).get("url") == "https://example.com"
+
+
+def test_normalize_browser_event_maps_contact_handoff_event_to_verify() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_contact_human_verification_required",
+            "title": "Human verification required",
+            "detail": "Challenge detected",
+            "data": {"url": "https://example.com/contact"},
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("action") == "verify"
+    assert data.get("action_status") == "ok"

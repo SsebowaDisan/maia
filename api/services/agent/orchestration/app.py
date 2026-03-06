@@ -17,6 +17,7 @@ from api.services.agent.tools.registry import get_tool_registry
 
 from .delivery import maybe_send_server_delivery
 from .finalization import finalize_run
+from .handoff_state import is_handoff_paused, maybe_resume_handoff_from_settings, read_handoff_state
 from .models import ExecutionState
 from .step_execution import execute_planned_steps
 from .step_planner import build_execution_steps
@@ -361,6 +362,20 @@ class AgentOrchestrator:
                     "__memory_context_snippets": list(task_prep.memory_context_snippets[:6]),
                 },
             )
+            resumed_handoff = maybe_resume_handoff_from_settings(
+                settings=execution_context.settings,
+            )
+            if isinstance(resumed_handoff, dict):
+                resume_event = activity_event_factory(
+                    event_type="tool_progress",
+                    title="Resumed after human verification",
+                    detail="Human handoff marked complete. Continuing autonomous execution.",
+                    metadata={
+                        "handoff_state": str(resumed_handoff.get("state") or ""),
+                        "resume_status": str(resumed_handoff.get("resume_status") or ""),
+                    },
+                )
+                yield stream.emit(resume_event)
             steps = list(plan_prep.steps)
             docs_logging_requested = any(
                 step.tool_id in ("workspace.docs.research_notes", "workspace.docs.fill_template", "docs.create")
@@ -389,6 +404,26 @@ class AgentOrchestrator:
                 )
                 yield stream.emit(clarification_block_event)
                 state.next_steps.extend(task_prep.clarification_questions[:6])
+                steps = []
+            if is_handoff_paused(settings=state.execution_context.settings) and steps:
+                handoff = read_handoff_state(settings=state.execution_context.settings)
+                pause_note = " ".join(str(handoff.get("note") or "").split()).strip()
+                pause_reason = " ".join(str(handoff.get("pause_reason") or "").split()).strip()
+                pause_event = activity_event_factory(
+                    event_type="policy_blocked",
+                    title="Execution paused for human verification",
+                    detail=compact(
+                        pause_note or pause_reason or "Human verification is required before execution can continue.",
+                        200,
+                    ),
+                    metadata={
+                        "handoff_state": handoff,
+                        "pause_reason": pause_reason,
+                    },
+                )
+                yield stream.emit(pause_event)
+                if pause_note:
+                    state.next_steps.append(pause_note)
                 steps = []
             execution_prompt = self._build_execution_prompt(request=request, settings=settings)
 

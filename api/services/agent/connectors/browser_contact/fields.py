@@ -84,6 +84,7 @@ def _apply_field_mappings(
     event_title: str,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    canonical_intents = {"name", "email", "company", "phone", "subject", "message"}
     for mapped in mappings:
         field_index = int(mapped.get("field_index") or -1)
         if field_index < 0 or field_index >= len(schema_rows):
@@ -108,7 +109,11 @@ def _apply_field_mappings(
         )
         events.append(
             {
-                "event_type": "browser_type",
+                "event_type": (
+                    f"browser_contact_fill_{intent}"
+                    if intent in canonical_intents
+                    else "browser_contact_llm_fill"
+                ),
                 "title": event_title,
                 "detail": f"{_safe_field_label(field_meta)} -> {intent}",
                 "data": {
@@ -269,4 +274,3 @@ def fill_contact_fields(
         }
     )
     return fields_filled, pending_events
-

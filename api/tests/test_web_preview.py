@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import HTTPException
 
 from api.routers import web_preview
@@ -46,6 +48,31 @@ def test_sanitize_and_inject_preview_html_reveals_cloaked_media_in_static_mode()
     assert "x-cloak class='bg-transparent fixed'" in rendered
     assert ".opacity-0{opacity:1 !important;}" in rendered
     assert "img.js-image,img[class*='js-image'],picture img{" in rendered
+
+
+def test_sanitize_and_inject_preview_html_forces_desktop_viewport_by_default() -> None:
+    rendered = web_preview._sanitize_and_inject_preview_html(
+        html_text=(
+            "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+            "<body><p>Axon Group</p></body></html>"
+        ),
+        source_url="https://axongroup.com/",
+        highlight_phrases=[],
+    )
+    assert "name='viewport' content='width=1280,initial-scale=1'" in rendered
+    assert len(re.findall(r"name=['\"]viewport['\"]", rendered, flags=re.IGNORECASE)) == 1
+
+
+def test_website_preview_supports_mobile_viewport_query(monkeypatch) -> None:
+    monkeypatch.setattr(
+        web_preview,
+        "_fetch_html",
+        lambda _url: ("<html><head></head><body><p>Preview body</p></body></html>", "https://axongroup.com/"),
+    )
+    response = web_preview.website_preview(url="https://axongroup.com/", viewport="mobile")
+    body = response.body.decode("utf-8", errors="ignore")
+    assert response.status_code == 200
+    assert "name='viewport' content='width=device-width,initial-scale=1'" in body
 
 
 def test_heuristic_highlight_scope_adapts_to_question_intent() -> None:

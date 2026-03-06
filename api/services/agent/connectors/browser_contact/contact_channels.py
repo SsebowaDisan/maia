@@ -27,18 +27,10 @@ def page_title(page: Any) -> str:
 
 
 def cursor_payload(page: Any) -> dict[str, float]:
-    try:
-        viewport = page.evaluate(
-            "() => ({ width: Number(window.innerWidth || 1366), height: Number(window.innerHeight || 768) })"
-        )
-        width = float(viewport.get("width") or 1366.0)
-        height = float(viewport.get("height") or 768.0)
-    except Exception:
-        width = 1366.0
-        height = 768.0
     return {
-        "cursor_x": max(24.0, min(width - 24.0, width * 0.52)),
-        "cursor_y": max(24.0, min(height - 24.0, height * 0.22)),
+        # Cursor payload uses normalized percentages for theatre overlays.
+        "cursor_x": 52.0,
+        "cursor_y": 22.0,
     }
 
 
@@ -111,4 +103,3 @@ def collect_contact_channels(page: Any) -> dict[str, list[str]]:
         "emails": deduped_emails,
         "phones": deduped_phones,
     }
-

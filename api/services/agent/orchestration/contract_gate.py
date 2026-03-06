@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Generator
 from typing import Any
+from urllib.parse import urlparse
 
 from api.services.agent.llm_contracts import verify_task_contract_fulfillment
 from api.services.agent.models import AgentAction, AgentActivityEvent, AgentSource
@@ -38,6 +39,36 @@ def source_rows_for_contract_check(sources: list[AgentSource]) -> list[dict[str,
     return rows
 
 
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _filter_sources_for_contract_scope(
+    *,
+    sources: list[AgentSource],
+    target_url: str,
+) -> list[AgentSource]:
+    target_host = _host_from_url(target_url)
+    if not target_host:
+        return sources
+    scoped = [
+        source
+        for source in sources
+        if not str(source.url or "").strip()
+        or (
+            _host_from_url(str(source.url or "").strip()) == target_host
+            or _host_from_url(str(source.url or "").strip()).endswith(f".{target_host}")
+        )
+    ]
+    return scoped if scoped else sources
+
+
 def run_contract_check_live(
     *,
     run_id: str,
@@ -60,13 +91,18 @@ def run_contract_check_live(
     )
     yield emit_event(check_started)
     report_body = str(execution_context.settings.get("__latest_report_content") or "").strip()
+    target_url = " ".join(str(execution_context.settings.get("__task_target_url") or "").split()).strip()
+    scoped_sources = _filter_sources_for_contract_scope(
+        sources=sources,
+        target_url=target_url,
+    )
     check = verify_task_contract_fulfillment(
         contract=task_contract,
         request_message=request_message,
         executed_steps=executed_steps,
         actions=action_rows_for_contract_check(actions),
         report_body=report_body,
-        sources=source_rows_for_contract_check(sources),
+        sources=source_rows_for_contract_check(scoped_sources),
         allowed_tool_ids=sorted(list(LLM_ALLOWED_TOOL_IDS)),
         pending_action_tool_id=pending_action_tool_id,
     )

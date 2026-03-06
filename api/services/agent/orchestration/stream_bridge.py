@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator
 from typing import Any
 
+from api.services.agent.execution.interaction_event_contract import normalize_interaction_event
 from api.services.agent.live_events import get_live_event_broker
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
@@ -207,9 +208,21 @@ class LiveRunStream:
         activity_event_factory: Callable[..., AgentActivityEvent],
     ) -> Generator[dict[str, Any], None, None]:
         for trace in list(traces or []):
-            payload = self._trace_payload(trace)
-            if not isinstance(payload, dict):
+            payload_raw = self._trace_payload(trace)
+            if not isinstance(payload_raw, dict):
                 continue
+            raw_event_type = str(payload_raw.get("event_type") or "tool_progress").strip()
+            raw_data = payload_raw.get("data")
+            raw_data_dict = dict(raw_data) if isinstance(raw_data, dict) else {}
+            default_surface = self._infer_scene_surface(
+                event_type=raw_event_type,
+                tool_id=step.tool_id,
+                payload=raw_data_dict,
+            )
+            payload = normalize_interaction_event(
+                payload_raw,
+                default_scene_surface=default_surface,
+            )
             trace_event_type = str(payload.get("event_type") or "tool_progress").strip()
             trace_title = str(payload.get("title") or step.title).strip() or step.title
             trace_detail = str(payload.get("detail") or "").strip()

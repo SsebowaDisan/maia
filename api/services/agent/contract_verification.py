@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
+
+from api.services.agent.llm_runtime import call_json_response, env_bool
 
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 STOPWORDS = {
     "about",
@@ -56,6 +60,16 @@ def _extract_first_url(*chunks: str) -> str:
     joined = " ".join(str(chunk or "").strip() for chunk in chunks if str(chunk or "").strip())
     match = URL_RE.search(joined)
     return match.group(0).strip().rstrip(".,;)") if match else ""
+
+
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 def _tokenize(text: str) -> set[str]:
@@ -120,6 +134,91 @@ def _collect_evidence_texts(
     return deduped[:64]
 
 
+def _filter_required_facts_for_coverage(
+    *,
+    required_facts: list[str],
+    required_actions: list[str],
+    delivery_target: str,
+    request_message: str,
+) -> list[str]:
+    rows = _clean_text_list(required_facts, limit=6)
+    if not rows:
+        return []
+
+    action_set = {
+        str(item).strip().lower()
+        for item in required_actions
+        if str(item).strip()
+    }
+    normalized_delivery = " ".join(str(delivery_target or "").split()).strip().lower()
+
+    def _fallback() -> list[str]:
+        filtered: list[str] = []
+        for row in rows:
+            normalized_row = " ".join(str(row or "").split()).strip().lower()
+            if not normalized_row:
+                continue
+            if normalized_delivery and normalized_delivery in normalized_row:
+                continue
+            if "send_email" in action_set and EMAIL_RE.search(row):
+                continue
+            filtered.append(row)
+            if len(filtered) >= 6:
+                break
+        return filtered
+
+    if not env_bool("MAIA_AGENT_LLM_FACT_SLOT_FILTER_ENABLED", default=True):
+        return _fallback()
+    payload = {
+        "required_facts": rows,
+        "required_actions": _clean_text_list(required_actions, limit=6, max_item_len=64),
+        "delivery_target": " ".join(str(delivery_target or "").split()).strip()[:180],
+        "request_message": " ".join(str(request_message or "").split()).strip()[:420],
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You classify required-fact rows for contract coverage checks. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only:\n"
+                '{ "keep_indexes":[0,1], "reason":"..." }\n'
+                "Rules:\n"
+                "- Keep only rows that are evidence-bearing factual outcomes.\n"
+                "- Remove rows that are delivery/routing/action-precondition slots.\n"
+                "- Never rely on hardcoded keyword matching.\n"
+                "- Use only indexes from required_facts.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=220,
+        )
+    except Exception:
+        return _fallback()
+    if not isinstance(response, dict):
+        return _fallback()
+    raw_indexes = response.get("keep_indexes")
+    if not isinstance(raw_indexes, list):
+        return _fallback()
+    kept: list[str] = []
+    for raw in raw_indexes[:12]:
+        try:
+            index = int(raw)
+        except Exception:
+            continue
+        if index < 0 or index >= len(rows):
+            continue
+        value = rows[index]
+        if value in kept:
+            continue
+        kept.append(value)
+        if len(kept) >= 6:
+            break
+    return kept
+
+
 def _fact_missing(*, fact: str, evidence_rows: list[str]) -> bool:
     fact_tokens = _tokenize(fact)
     if not fact_tokens:
@@ -130,6 +229,63 @@ def _fact_missing(*, fact: str, evidence_rows: list[str]) -> bool:
         if overlap >= threshold:
             return False
     return True
+
+
+def _semantic_missing_required_facts(
+    *,
+    required_facts: list[str],
+    evidence_rows: list[str],
+) -> list[str] | None:
+    if not required_facts:
+        return []
+    if not env_bool("MAIA_AGENT_LLM_FACT_COVERAGE_CHECK_ENABLED", default=True):
+        return None
+    payload = {
+        "required_facts": required_facts[:8],
+        "evidence_rows": evidence_rows[:32],
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You verify whether required facts are covered by available execution evidence. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only:\n"
+                '{ "missing_fact_indexes":[0,1], "reason":"..." }\n'
+                "Rules:\n"
+                "- Use semantic reasoning across all evidence rows.\n"
+                "- Never rely on hardcoded keyword matching.\n"
+                "- Keep only indexes from required_facts that are still missing.\n"
+                "- Do not invent new facts.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=10,
+            max_tokens=320,
+        )
+    except Exception:
+        return None
+    if not isinstance(response, dict):
+        return None
+    raw_indexes = response.get("missing_fact_indexes")
+    if not isinstance(raw_indexes, list):
+        return None
+    missing: list[str] = []
+    for raw in raw_indexes[:12]:
+        try:
+            index = int(raw)
+        except Exception:
+            continue
+        if index < 0 or index >= len(required_facts):
+            continue
+        fact = required_facts[index]
+        if fact in missing:
+            continue
+        missing.append(fact)
+        if len(missing) >= 8:
+            break
+    return missing
 
 
 def _successful_action_tool_ids(actions: list[dict[str, Any]]) -> set[str]:
@@ -190,13 +346,19 @@ def build_deterministic_contract_check(
     allowed_tool_ids: list[str],
     pending_action_tool_id: str = "",
 ) -> dict[str, Any]:
-    required_facts = _clean_text_list(contract.get("required_facts"), limit=6)
     required_actions = _clean_text_list(contract.get("required_actions"), limit=6, max_item_len=64)
     delivery_target = " ".join(str(contract.get("delivery_target") or "").split()).strip()
+    required_facts = _filter_required_facts_for_coverage(
+        required_facts=_clean_text_list(contract.get("required_facts"), limit=6),
+        required_actions=required_actions,
+        delivery_target=delivery_target,
+        request_message=request_message,
+    )
     target_url = _extract_first_url(
         request_message,
         " ".join(str(source.get("url") or "").strip() for source in sources[:8]),
     )
+    target_host = _host_from_url(target_url)
     allowed_set = {str(item).strip() for item in allowed_tool_ids if str(item).strip()}
     missing_items: list[str] = []
     reason_parts: list[str] = []
@@ -209,10 +371,18 @@ def build_deterministic_contract_check(
         sources=sources,
     )
 
-    missing_facts: list[str] = []
-    for fact in required_facts:
-        if _fact_missing(fact=fact, evidence_rows=evidence_rows):
-            missing_facts.append(fact)
+    semantic_missing_facts = _semantic_missing_required_facts(
+        required_facts=required_facts,
+        evidence_rows=evidence_rows,
+    )
+    missing_facts: list[str]
+    if isinstance(semantic_missing_facts, list):
+        missing_facts = semantic_missing_facts[:6]
+    else:
+        missing_facts = []
+        for fact in required_facts:
+            if _fact_missing(fact=fact, evidence_rows=evidence_rows):
+                missing_facts.append(fact)
     for fact in missing_facts[:6]:
         missing_items.append(f"Unverified required fact: {fact}")
     if missing_facts:
@@ -229,7 +399,16 @@ def build_deterministic_contract_check(
             target=remediation,
             tool_id="marketing.web_research",
             title="Research missing required facts",
-            params={"query": "; ".join(missing_facts[:3]) or request_message},
+            params={
+                "query": (
+                    f"site:{target_host} " + ("; ".join(missing_facts[:3]) or request_message)
+                    if target_host
+                    else ("; ".join(missing_facts[:3]) or request_message)
+                ),
+                "domain_scope": [target_host] if target_host else [],
+                "domain_scope_mode": "strict" if target_host else "off",
+                "target_url": target_url,
+            },
             allowed_tool_ids=allowed_set,
         )
 

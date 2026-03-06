@@ -106,8 +106,7 @@ function DesktopViewer({
   const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-160px)]" : "h-[74vh]";
   const viewerHeightClass = fullscreen ? fullscreenViewerHeightClass : inlineViewerHeightClass;
   const suppressOverlayDetail = isPlannerNarrativeEventType(activeEventType) && !isBrowserScene;
-  const hasInteractiveSurface = isBrowserScene || isDocumentScene || isEmailScene || isDocsScene || isSheetsScene;
-  const shouldRenderCursor = Boolean(eventCursor || hasInteractiveSurface);
+  const shouldRenderCursor = Boolean(eventCursor);
 
   return (
     <div

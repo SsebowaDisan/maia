@@ -22,6 +22,7 @@ from .contract_slots import classify_missing_requirement_slots
 from .discovery_gate import (
     blocking_requirements_from_slots,
     clarification_questions_from_slots,
+    with_slot_lifecycle_defaults,
 )
 from .models import TaskPreparation
 from .text_helpers import compact, truthy
@@ -433,6 +434,9 @@ def prepare_task_context(
         rewritten_task=rewritten_task,
         intent_tags=list(task_intelligence.intent_tags),
         conversation_summary=conversation_summary,
+    )
+    contract_missing_slots = with_slot_lifecycle_defaults(
+        slots=contract_missing_slots,
     )
     if isinstance(task_contract, dict):
         task_contract["missing_requirement_slots"] = contract_missing_slots[:8]

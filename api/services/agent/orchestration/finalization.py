@@ -5,6 +5,7 @@ import json
 import time
 from collections.abc import Callable, Generator
 from typing import Any
+from urllib.parse import urlparse
 
 from api.schemas import ChatRequest
 from api.services.agent.critic import review_final_answer
@@ -17,6 +18,7 @@ from api.services.agent.observability import get_agent_observability
 
 from .answer_builder import compose_professional_answer
 from .contract_gate import action_rows_for_contract_check, run_contract_check_live
+from .handoff_state import is_handoff_paused, read_handoff_state
 from .models import ExecutionState, TaskPreparation
 from .web_evidence import summarize_web_evidence
 from .web_kpi import evaluate_web_kpi_gate, summarize_web_kpi
@@ -105,6 +107,37 @@ def _source_highlight_boxes(source: Any) -> list[dict[str, float]]:
     return normalized
 
 
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _filter_sources_for_response_scope(
+    *,
+    sources: list[Any],
+    settings: dict[str, Any],
+) -> list[Any]:
+    target_url = " ".join(str(settings.get("__task_target_url") or "").split()).strip()
+    target_host = _host_from_url(target_url)
+    if not target_host:
+        return sources
+    scoped = [
+        source
+        for source in sources
+        if not str(getattr(source, "url", "") or "").strip()
+        or (
+            _host_from_url(str(getattr(source, "url", "") or "").strip()) == target_host
+            or _host_from_url(str(getattr(source, "url", "") or "").strip()).endswith(f".{target_host}")
+        )
+    ]
+    return scoped if scoped else sources
+
+
 def finalize_run(
     *,
     run_id: str,
@@ -126,12 +159,16 @@ def finalize_run(
     activity_event_factory: Callable[..., AgentActivityEvent],
     expected_event_types_resolver: Callable[..., list[str]],
 ) -> Generator[dict[str, Any], None, AgentRunResult]:
+    response_sources = _filter_sources_for_response_scope(
+        sources=state.all_sources,
+        settings=state.execution_context.settings,
+    )
     verification_report = build_verification_report(
         task=task_prep.task_intelligence,
         planned_tool_ids=[step.tool_id for step in steps],
         executed_steps=state.executed_steps,
         actions=state.all_actions,
-        sources=state.all_sources,
+        sources=response_sources,
         runtime_settings=state.execution_context.settings,
     )
     verification_started_event = activity_event_factory(
@@ -298,7 +335,7 @@ def finalize_run(
         planned_steps=steps,
         executed_steps=state.executed_steps,
         actions=state.all_actions,
-        sources=state.all_sources,
+        sources=response_sources,
         next_steps=unique_next_steps,
         runtime_settings=state.execution_context.settings,
         verification_report=verification_report,
@@ -322,7 +359,7 @@ def finalize_run(
     )
     source_urls = [
         str(source.url or "").strip()
-        for source in state.all_sources
+        for source in response_sources
         if str(source.url or "").strip()
     ]
     critic_result = review_final_answer(
@@ -336,11 +373,16 @@ def finalize_run(
     critic_review_notes = " ".join(
         str(critic_result.get("critic_note") or "").split()
     ).strip()[:420]
-    barrier_handoff_required = bool(
+    handoff_state = read_handoff_state(settings=state.execution_context.settings)
+    barrier_handoff_required = is_handoff_paused(settings=state.execution_context.settings) or bool(
         state.execution_context.settings.get("__barrier_handoff_required")
     )
     barrier_handoff_note = " ".join(
-        str(state.execution_context.settings.get("__barrier_handoff_note") or "").split()
+        str(
+            handoff_state.get("note")
+            or state.execution_context.settings.get("__barrier_handoff_note")
+            or ""
+        ).split()
     ).strip()[:420]
     needs_human_review = bool(critic_needs_human_review or barrier_handoff_required)
     human_review_notes = critic_review_notes
@@ -374,7 +416,7 @@ def finalize_run(
         yield emit_event(critic_ok_event)
 
     info_blocks: list[str] = []
-    for idx, source in enumerate(state.all_sources, start=1):
+    for idx, source in enumerate(response_sources, start=1):
         label = html.escape(source.label)
         raw_url = " ".join(str(source.url or "").split()).strip()
         url = html.escape(raw_url)
@@ -422,7 +464,7 @@ def finalize_run(
         answer=answer,
         info_html=info_html,
         actions_taken=state.all_actions,
-        sources_used=state.all_sources,
+        sources_used=response_sources,
         next_recommended_steps=unique_next_steps[:8],
         needs_human_review=needs_human_review,
         human_review_notes=human_review_notes,
@@ -437,7 +479,7 @@ def finalize_run(
         title="Final response ready",
         detail=(
             f"Generated {len(state.all_actions)} action result(s) with "
-            f"{len(state.all_sources)} source(s)"
+            f"{len(response_sources)} source(s)"
         ),
     )
     yield emit_event(synthesis_completed_event)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from typing import Any
+from urllib.parse import urlparse
 
 from api.services.agent.llm_execution_support import summarize_step_outcome
 from api.services.agent.models import AgentActivityEvent
@@ -12,6 +13,16 @@ from ..text_helpers import extract_action_artifact_metadata
 from ..web_evidence import record_web_evidence
 from ..web_kpi import is_web_tool, record_web_kpi
 from .workspace_shadow import run_workspace_shadow_logging
+
+
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 def handle_step_success(
@@ -129,6 +140,33 @@ def handle_step_success(
             query = " ".join(str((result.data or {}).get("query") or execution_prompt).split()).strip()[:240]
             max_query_variants = _safe_int_setting("__research_max_query_variants", 12)
             raw_variants = (result.data or {}).get("query_variants") if isinstance(result.data, dict) else []
+            scoped_hosts_raw = (
+                (result.data or {}).get("domain_scope_hosts")
+                if isinstance(result.data, dict)
+                else []
+            )
+            scoped_hosts = (
+                [
+                    " ".join(str(item).split()).strip().lower()
+                    for item in scoped_hosts_raw
+                    if " ".join(str(item).split()).strip()
+                ][:6]
+                if isinstance(scoped_hosts_raw, list)
+                else []
+            )
+            target_url = " ".join(
+                str(state.execution_context.settings.get("__task_target_url") or "").split()
+            ).strip()
+            target_host = _host_from_url(target_url)
+            if target_host and target_host not in scoped_hosts:
+                scoped_hosts.append(target_host)
+            scope_mode = (
+                " ".join(str((result.data or {}).get("domain_scope_mode") or "").split()).strip().lower()
+                if isinstance(result.data, dict)
+                else ""
+            )
+            if scope_mode not in {"strict", "prefer", "off"}:
+                scope_mode = "strict" if scoped_hosts else "off"
             query_variants = (
                 [
                     " ".join(str(item).split()).strip()
@@ -161,6 +199,9 @@ def handle_step_success(
                             "fused_top_k": _safe_int_setting("__research_fused_top_k", 80),
                             "min_unique_sources": _safe_int_setting("__research_min_unique_sources", 20),
                             "search_budget": _safe_int_setting("__research_web_search_budget", 120),
+                            "domain_scope": scoped_hosts[:6],
+                            "domain_scope_mode": scope_mode,
+                            "target_url": target_url,
                             "research_depth_tier": str(
                                 state.execution_context.settings.get("__research_depth_tier") or "standard"
                             ),

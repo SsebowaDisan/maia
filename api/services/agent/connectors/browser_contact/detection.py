@@ -27,6 +27,7 @@ def locate_contact_form(
     wait_ms: int,
     timeout_ms: int = 12000,
     max_hops: int = 5,
+    goal_page_discovery_enabled: bool = False,
     output_dir: Path | None = None,
     stamp_prefix: str = "",
 ) -> tuple[Any | None, bool, list[dict[str, Any]]]:
@@ -35,7 +36,7 @@ def locate_contact_form(
         wait_ms=wait_ms,
         timeout_ms=timeout_ms,
         max_hops=max_hops,
+        goal_page_discovery_enabled=goal_page_discovery_enabled,
         output_dir=output_dir,
         stamp_prefix=stamp_prefix,
     )
-

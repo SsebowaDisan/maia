@@ -143,6 +143,10 @@ function mergeLiveSceneData(
       "render_quality",
       "blocked_reason",
       "routing_mode",
+      "action",
+      "action_phase",
+      "action_status",
+      "event_schema_version",
       "scan_region",
       "page_label",
       "source_name",
@@ -221,6 +225,13 @@ function mergeLiveSceneData(
     const highlightedWords = readObjectListField(payload["highlighted_words"], 18);
     if (highlightedWords.length) {
       merged["highlighted_words"] = highlightedWords;
+    }
+
+    if (payload["action_target"] && typeof payload["action_target"] === "object") {
+      merged["action_target"] = payload["action_target"] as Record<string, unknown>;
+    }
+    if (payload["action_metadata"] && typeof payload["action_metadata"] === "object") {
+      merged["action_metadata"] = payload["action_metadata"] as Record<string, unknown>;
     }
 
     const highlightRegions = readObjectListField(payload["highlight_regions"], 12);

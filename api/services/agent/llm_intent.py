@@ -14,6 +14,7 @@ ALLOWED_INTENT_TAGS = (
     "highlight_extract",
     "email_delivery",
     "contact_form_submission",
+    "goal_page_navigation",
 )
 
 ALLOWED_WEB_ROUTING_MODES = (

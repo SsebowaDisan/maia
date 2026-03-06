@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from api.services.agent.connectors.browser_goal.goal_page_discovery import (
+    locate_goal_page_with_discovery,
+)
 from api.services.agent.llm_runtime import has_openai_credentials
 
 from .contact_channels import (
@@ -43,10 +46,31 @@ def locate_contact_form_with_discovery(
     wait_ms: int,
     timeout_ms: int = 12000,
     max_hops: int = 5,
+    goal_page_discovery_enabled: bool = False,
     output_dir: Path | None = None,
     stamp_prefix: str = "",
 ) -> tuple[Any | None, bool, list[dict[str, Any]]]:
     traces: list[dict[str, Any]] = []
+    if goal_page_discovery_enabled:
+        _, goal_traces, _ = locate_goal_page_with_discovery(
+            page,
+            goal_profile={
+                "goal": "Locate the page most likely to contain a live inquiry form.",
+                "success_criteria": [
+                    "Page likely supports direct inquiry submission workflow",
+                    "Page likely contains visible form controls and submit action",
+                ],
+                "constraints": [
+                    "Stay on same-origin website pages only",
+                ],
+            },
+            wait_ms=wait_ms,
+            timeout_ms=timeout_ms,
+            max_hops=max_hops,
+            output_dir=output_dir,
+            stamp_prefix=stamp_prefix,
+        )
+        traces.extend(goal_traces[:24])
     channels = collect_contact_channels(page)
     traces.append(
         {
@@ -150,4 +174,3 @@ def locate_contact_form_with_discovery(
         if form is not None:
             return form, True, traces
     return None, bool(traces), traces
-

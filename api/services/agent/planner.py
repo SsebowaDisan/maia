@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from api.services.agent.google_api_catalog import GOOGLE_API_TOOL_IDS
 from api.schemas import ChatRequest
@@ -67,6 +68,16 @@ _CORE_FLOW_TOOL_IDS = {
 
 DEFAULT_WEB_RESEARCH_PROVIDER = "brave_search"
 DEFAULT_WEB_PROVIDER = "playwright_browser"
+
+
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
 
 
 @dataclass(frozen=True)
@@ -250,6 +261,12 @@ def _normalize_steps(
             )
             params.setdefault("provider", DEFAULT_WEB_RESEARCH_PROVIDER)
             params.setdefault("allow_provider_fallback", False)
+            if url and routing_mode == "url_scrape":
+                scoped_host = _host_from_url(url)
+                if scoped_host:
+                    params.setdefault("domain_scope", [scoped_host])
+                    params.setdefault("domain_scope_mode", "strict")
+                    params.setdefault("target_url", url)
         if step.tool_id == "report.generate":
             params.setdefault("title", "Website Analysis Report")
             params.setdefault("summary", request.message)
@@ -322,6 +339,7 @@ def _normalize_steps(
         if deep_research_mode and not any(
             row.tool_id == "marketing.web_research" for row in normalized
         ):
+            scoped_host = _host_from_url(url)
             normalized.insert(
                 1 if normalized and normalized[0].tool_id == "browser.playwright.inspect" else 0,
                 PlannedStep(
@@ -331,6 +349,9 @@ def _normalize_steps(
                         "query": sanitize_search_query(request.message, fallback_url=url),
                         "provider": DEFAULT_WEB_RESEARCH_PROVIDER,
                         "allow_provider_fallback": False,
+                        "domain_scope": [scoped_host] if scoped_host else [],
+                        "domain_scope_mode": "strict" if scoped_host else "off",
+                        "target_url": url,
                     },
                 ),
             )

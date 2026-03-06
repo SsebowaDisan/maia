@@ -9,6 +9,7 @@ from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.connectors.trusted_site_policy import build_trusted_site_overrides
 from api.services.agent.execution.browser_event_contract import normalize_browser_event
 from api.services.agent.models import AgentSource
+from api.services.agent.orchestration.handoff_state import pause_for_handoff
 from api.services.agent.tools.browser_interaction_guard import assess_browser_interactions
 from api.services.agent.tools.base import (
     AgentTool,
@@ -497,10 +498,12 @@ class PlaywrightInspectTool(AgentTool):
                 for key in ("cursor_x", "cursor_y")
                 if isinstance(capture.get(key), (int, float))
             }
-            context.settings["__barrier_handoff_required"] = True
-            context.settings["__barrier_handoff_note"] = human_handoff_note
-            context.settings["__barrier_handoff_url"] = final_url or inspected_url or url
-            context.settings["__barrier_handoff_reason"] = blocked_reason
+            handoff_state = pause_for_handoff(
+                settings=context.settings,
+                pause_reason=blocked_reason or "human_verification_required",
+                handoff_url=final_url or inspected_url or url,
+                note=human_handoff_note,
+            )
             handoff_event = ToolTraceEvent(
                 event_type="browser_human_verification_required",
                 title="Human verification required",
@@ -509,6 +512,8 @@ class PlaywrightInspectTool(AgentTool):
                     "url": final_url or inspected_url or url,
                     "blocked_reason": blocked_reason,
                     "human_handoff_required": True,
+                    "handoff_resume_token": str(handoff_state.get("resume_token") or ""),
+                    "handoff_state": str(handoff_state.get("state") or ""),
                     "scene_surface": "website",
                     **handoff_cursor,
                 },
@@ -518,6 +523,15 @@ class PlaywrightInspectTool(AgentTool):
             yield handoff_event
         else:
             context.settings["__barrier_handoff_required"] = False
+            existing_handoff = context.settings.get("__handoff_state")
+            if isinstance(existing_handoff, dict):
+                normalized_state = " ".join(str(existing_handoff.get("state") or "").split()).strip().lower()
+                if normalized_state == "paused_for_human":
+                    context.settings["__handoff_state"] = {
+                        **existing_handoff,
+                        "state": "running",
+                        "resume_status": "not_required",
+                    }
         next_steps: list[str] = []
         next_steps.extend(
             quality_remediation(

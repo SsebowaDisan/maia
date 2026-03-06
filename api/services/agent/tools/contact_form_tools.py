@@ -7,6 +7,7 @@ from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.llm_execution_support import polish_contact_form_content
 from api.services.agent.llm_runtime import call_json_response
 from api.services.agent.models import AgentSource
+from api.services.agent.orchestration.handoff_state import pause_for_handoff
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -253,6 +254,16 @@ class BrowserContactFormSendTool(AgentTool):
         confirmation_text = str(result_payload.get("confirmation_text") or "").strip()
         final_url = str(result_payload.get("url") or url).strip()
         title = str(result_payload.get("title") or "Website Contact Form").strip() or "Website Contact Form"
+        human_handoff_required = bool(result_payload.get("human_handoff_required"))
+        handoff_reason = _safe_text(
+            result_payload.get("handoff_reason") or confirmation_text,
+            fallback="Human verification is required before contact form submission can continue.",
+            max_len=320,
+        )
+        handoff_type = _safe_text(result_payload.get("handoff_type"), fallback="", max_len=80).lower()
+        if human_handoff_required:
+            status = "human_verification_required"
+            submitted = False
         fields_filled = result_payload.get("fields_filled")
         if not isinstance(fields_filled, list):
             fields_filled = []
@@ -266,12 +277,46 @@ class BrowserContactFormSendTool(AgentTool):
             "subject": subject,
             "message_preview": message[:280],
             "confirmation_text": confirmation_text[:280],
+            "human_handoff_required": human_handoff_required,
+            "handoff_reason": handoff_reason[:320] if human_handoff_required else "",
+            "handoff_type": handoff_type if human_handoff_required else "",
         }
 
+        if human_handoff_required:
+            handoff_state = pause_for_handoff(
+                settings=context.settings,
+                pause_reason=handoff_type or "human_verification_required",
+                handoff_url=final_url or url,
+                note=handoff_reason,
+            )
+            handoff_event = ToolTraceEvent(
+                event_type="browser_human_verification_required",
+                title="Human verification required",
+                detail=handoff_reason,
+                data={
+                    "url": final_url or url,
+                    "contact_target_url": final_url or url,
+                    "contact_status": status,
+                    "human_handoff_required": True,
+                    "handoff_resume_token": str(handoff_state.get("resume_token") or ""),
+                    "handoff_state": str(handoff_state.get("state") or ""),
+                    "barrier_type": handoff_type,
+                    "scene_surface": "website",
+                },
+            )
+            trace_events.append(handoff_event)
+            yield handoff_event
+        else:
+            context.settings["__barrier_handoff_required"] = False
+
         summary = (
-            f"Submitted contact form on {final_url}."
-            if submitted
-            else f"Contact form submitted on {final_url} (confirmation not explicit)."
+            f"Paused for human verification on {final_url}."
+            if human_handoff_required
+            else (
+                f"Submitted contact form on {final_url}."
+                if submitted
+                else f"Contact form submitted on {final_url} (confirmation not explicit)."
+            )
         )
         content_lines = [
             "## Contact Form Submission",
@@ -285,10 +330,14 @@ class BrowserContactFormSendTool(AgentTool):
         ]
         if confirmation_text:
             content_lines.append(f"- Confirmation evidence: {confirmation_text}")
+        if human_handoff_required:
+            content_lines.append(f"- Human verification: required ({handoff_type or 'verification_challenge'})")
         next_steps = [
             "Review theatre replay to confirm field mapping and final confirmation text.",
             "If no clear confirmation appears, verify manually on the website inbox/contact channel.",
         ]
+        if human_handoff_required:
+            next_steps.insert(0, handoff_reason)
         if submitted:
             next_steps.insert(0, "Track outreach in Google Sheets and continue follow-up sequence.")
 
@@ -306,14 +355,21 @@ class BrowserContactFormSendTool(AgentTool):
                 "message_preview": message[:280],
                 "confirmation_text": confirmation_text,
                 "fields_filled": fields_filled,
+                "human_handoff_required": human_handoff_required,
+                "handoff_reason": handoff_reason if human_handoff_required else "",
+                "handoff_type": handoff_type if human_handoff_required else "",
             },
             sources=[
                 AgentSource(
                     source_type="web",
                     label=title,
                     url=final_url,
-                    score=0.78 if submitted else 0.6,
-                    metadata={"contact_form_submission": True, "status": status},
+                    score=0.78 if submitted else (0.52 if human_handoff_required else 0.6),
+                    metadata={
+                        "contact_form_submission": True,
+                        "status": status,
+                        "human_handoff_required": human_handoff_required,
+                    },
                 )
             ],
             next_steps=next_steps,

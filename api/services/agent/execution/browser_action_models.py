@@ -11,7 +11,6 @@ BrowserActionName = Literal[
     "scroll",
     "extract",
     "verify",
-    "open",
     "other",
 ]
 BrowserActionPhase = Literal["start", "active", "completed", "failed"]
@@ -50,4 +49,3 @@ class BrowserActionEvent:
         if isinstance(self.scroll_percent, (int, float)):
             payload["scroll_percent"] = max(0.0, min(100.0, float(self.scroll_percent)))
         return payload
-

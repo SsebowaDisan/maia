@@ -259,6 +259,70 @@ class ContactFormToolTests(unittest.TestCase):
         assert call["sender_email"] == ""
         assert call["sender_name"] == ""
 
+    def test_contact_form_tool_pauses_for_human_verification_barrier(self) -> None:
+        class _VerificationBarrierConnector(_ContactConnectorStub):
+            def submit_contact_form_live_stream(self, **kwargs):
+                _ = kwargs
+                yield {
+                    "event_type": "browser_open",
+                    "title": "Open target website for outreach",
+                    "detail": "https://example.com/contact",
+                    "data": {"url": "https://example.com/contact"},
+                    "snapshot_ref": ".maia_agent/browser_captures/test-open.png",
+                }
+                yield {
+                    "event_type": "browser_contact_human_verification_required",
+                    "title": "Human verification required",
+                    "detail": "Challenge detected",
+                    "data": {"url": "https://example.com/contact", "barrier_type": "captcha"},
+                    "snapshot_ref": ".maia_agent/browser_captures/test-challenge.png",
+                }
+                return {
+                    "submitted": False,
+                    "status": "human_verification_required",
+                    "confirmation_text": "Challenge requires user interaction",
+                    "url": "https://example.com/contact",
+                    "title": "Contact",
+                    "fields_filled": ["name", "email", "message"],
+                    "human_handoff_required": True,
+                    "handoff_reason": "Complete human verification challenge and resume.",
+                    "handoff_type": "captcha",
+                }
+
+        connector = _VerificationBarrierConnector()
+        registry = _RegistryStub(connector)
+        context = ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="r1",
+            mode="company_agent",
+            settings={"agent.contact_sender_email": "sender@example.com"},
+        )
+        with patch(
+            "api.services.agent.tools.contact_form_tools.get_connector_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.agent.tools.contact_form_tools.polish_contact_form_content",
+            return_value={
+                "subject": "Polished subject",
+                "message_text": "Polished message body",
+            },
+        ):
+            tool = BrowserContactFormSendTool()
+            result = tool.execute(
+                context=context,
+                prompt="Open https://example.com/contact and send a message.",
+                params={"confirmed": True},
+            )
+
+        assert result.data.get("human_handoff_required") is True
+        assert bool(context.settings.get("__barrier_handoff_required")) is True
+        assert any(event.event_type == "browser_human_verification_required" for event in result.events)
+        handoff = context.settings.get("__handoff_state")
+        assert isinstance(handoff, dict)
+        assert str(handoff.get("state")) == "paused_for_human"
+
 
 if __name__ == "__main__":
     unittest.main()

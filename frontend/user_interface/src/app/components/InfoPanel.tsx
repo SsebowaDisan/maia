@@ -340,6 +340,7 @@ export function InfoPanel({
     highlightText?: string;
     claimText?: string;
     questionText?: string;
+    viewport?: "desktop" | "mobile";
   }): string => {
     const normalizedUrl = normalizeHttpUrl(params.url);
     if (!normalizedUrl) {
@@ -347,6 +348,7 @@ export function InfoPanel({
     }
     const query = new URLSearchParams();
     query.set("url", normalizedUrl);
+    query.set("viewport", params.viewport || "desktop");
     const highlight = normalizeWebsiteHighlightText(params.highlightText || "").slice(0, 220);
     if (highlight.length >= 8) {
       query.set("highlight", highlight);
@@ -471,6 +473,7 @@ export function InfoPanel({
       highlightText: citationWebsiteUrl ? websiteHighlightText : "",
       claimText: citationFocus?.claimText,
       questionText: userPrompt,
+      viewport: "desktop",
     });
   }, [activeWebsiteUrl, citationFocus?.claimText, citationWebsiteUrl, userPrompt, websiteHighlightText]);
 

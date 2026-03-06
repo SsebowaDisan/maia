@@ -14,7 +14,11 @@ from ..clarification_helpers import (
 )
 from ..constants import GUARDED_ACTION_TOOL_IDS
 from ..contract_gate import build_contract_remediation_steps, run_contract_check_live
-from ..discovery_gate import blocking_requirements_from_slots
+from ..discovery_gate import (
+    blocking_requirements_from_slots,
+    update_slot_lifecycle,
+    with_slot_lifecycle_defaults,
+)
 from ..models import ExecutionState, TaskPreparation
 from ..text_helpers import compact
 from .models import StepGuardOutcome
@@ -65,6 +69,26 @@ def run_guard_checks(
     tool_meta = registry.get(step.tool_id).metadata
     is_guarded_action = step.tool_id in GUARDED_ACTION_TOOL_IDS
     if is_guarded_action:
+        runtime_slots_raw = state.execution_context.settings.get("__task_clarification_slots")
+        runtime_slots = (
+            [dict(row) for row in runtime_slots_raw if isinstance(row, dict)]
+            if isinstance(runtime_slots_raw, list)
+            else [dict(row) for row in task_prep.contract_missing_slots[:8] if isinstance(row, dict)]
+        )
+        runtime_slots = with_slot_lifecycle_defaults(slots=runtime_slots[:8])
+        deferred_missing_requirements = blocking_requirements_from_slots(
+            slots=runtime_slots[:8],
+            fallback_requirements=task_prep.contract_missing_requirements[:6],
+            limit=6,
+        )
+        runtime_slots = update_slot_lifecycle(
+            slots=runtime_slots,
+            unresolved_requirements=deferred_missing_requirements,
+            attempted_requirements=deferred_missing_requirements,
+            evidence_sources=[step.tool_id],
+        )
+        task_prep.contract_missing_slots = runtime_slots[:8]
+        state.execution_context.settings["__task_clarification_slots"] = runtime_slots[:8]
         state.contract_check_result = yield from run_contract_check_live(
             run_id=run_id,
             phase=f"before_action_step_{index}",
@@ -81,6 +105,15 @@ def run_guard_checks(
         ready_for_actions = bool(
             state.contract_check_result.get("ready_for_external_actions")
         )
+        if ready_for_actions:
+            resolved_slots = update_slot_lifecycle(
+                slots=runtime_slots,
+                unresolved_requirements=[],
+                attempted_requirements=deferred_missing_requirements,
+                evidence_sources=[step.tool_id],
+            )
+            task_prep.contract_missing_slots = resolved_slots[:8]
+            state.execution_context.settings["__task_clarification_slots"] = resolved_slots[:8]
         if not ready_for_actions:
             remediation_steps: list[PlannedStep] = []
             if state.remediation_attempts < state.max_remediation_attempts:
@@ -119,16 +152,19 @@ def run_guard_checks(
                 if isinstance(state.contract_check_result.get("missing_items"), list)
                 else []
             )
-            deferred_missing_requirements = blocking_requirements_from_slots(
-                slots=task_prep.contract_missing_slots[:8],
-                fallback_requirements=task_prep.contract_missing_requirements[:6],
-                limit=6,
-            )
             relevant_missing_requirements = select_relevant_clarification_requirements(
                 deferred_missing_requirements=deferred_missing_requirements,
                 contract_missing_items=missing[:8],
                 limit=6,
             )
+            runtime_slots = update_slot_lifecycle(
+                slots=runtime_slots,
+                unresolved_requirements=relevant_missing_requirements,
+                attempted_requirements=deferred_missing_requirements,
+                evidence_sources=[step.tool_id],
+            )
+            task_prep.contract_missing_slots = runtime_slots[:8]
+            state.execution_context.settings["__task_clarification_slots"] = runtime_slots[:8]
             if (
                 relevant_missing_requirements
                 and not task_prep.clarification_blocked
@@ -150,6 +186,7 @@ def run_guard_checks(
                         "deferred_until_after_attempts": True,
                         "tool_id": step.tool_id,
                         "step": index,
+                        "missing_requirement_slots": runtime_slots[:8],
                     },
                 )
                 yield emit_event(clarification_event)
@@ -170,6 +207,7 @@ def run_guard_checks(
                     "tool_id": step.tool_id,
                     "step": index,
                     "missing_items": missing[:8],
+                    "missing_requirement_slots": runtime_slots[:8],
                 },
             )
             yield emit_event(blocked_event)

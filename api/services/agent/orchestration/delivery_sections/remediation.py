@@ -11,7 +11,11 @@ from ..clarification_helpers import (
     select_relevant_clarification_requirements,
 )
 from ..contract_gate import run_contract_check_live
-from ..discovery_gate import blocking_requirements_from_slots
+from ..discovery_gate import (
+    blocking_requirements_from_slots,
+    update_slot_lifecycle,
+    with_slot_lifecycle_defaults,
+)
 from ..models import ExecutionState, TaskPreparation
 from ..text_helpers import compact
 from .models import DeliveryRuntime
@@ -53,8 +57,15 @@ def enforce_delivery_contract_gate(
         if isinstance(state.contract_check_result.get("missing_items"), list)
         else []
     )
+    runtime_slots_raw = state.execution_context.settings.get("__task_clarification_slots")
+    runtime_slots = (
+        [dict(row) for row in runtime_slots_raw if isinstance(row, dict)]
+        if isinstance(runtime_slots_raw, list)
+        else [dict(row) for row in task_prep.contract_missing_slots[:8] if isinstance(row, dict)]
+    )
+    runtime_slots = with_slot_lifecycle_defaults(slots=runtime_slots[:8])
     deferred_missing_requirements = blocking_requirements_from_slots(
-        slots=task_prep.contract_missing_slots[:8],
+        slots=runtime_slots[:8],
         fallback_requirements=task_prep.contract_missing_requirements[:6],
         limit=6,
     )
@@ -63,6 +74,14 @@ def enforce_delivery_contract_gate(
         contract_missing_items=missing[:8],
         limit=6,
     )
+    runtime_slots = update_slot_lifecycle(
+        slots=runtime_slots,
+        unresolved_requirements=relevant_missing_requirements,
+        attempted_requirements=deferred_missing_requirements,
+        evidence_sources=[runtime.tool_id],
+    )
+    task_prep.contract_missing_slots = runtime_slots[:8]
+    state.execution_context.settings["__task_clarification_slots"] = runtime_slots[:8]
     if (
         relevant_missing_requirements
         and not task_prep.clarification_blocked
@@ -84,6 +103,7 @@ def enforce_delivery_contract_gate(
                 "deferred_until_after_attempts": True,
                 "tool_id": runtime.tool_id,
                 "step": runtime.step,
+                "missing_requirement_slots": runtime_slots[:8],
             },
         )
         yield emit_event(clarification_event)
@@ -101,6 +121,7 @@ def enforce_delivery_contract_gate(
             "tool_id": runtime.tool_id,
             "step": runtime.step,
             "missing_items": missing[:8],
+            "missing_requirement_slots": runtime_slots[:8],
         },
     )
     yield emit_event(blocked_event)

@@ -15,7 +15,6 @@ from api.services.agent.llm_runtime import call_json_response, env_bool, sanitiz
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 MARKDOWN_LINK_URL_RE = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)", re.IGNORECASE)
-WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 DELIVERY_TARGET_HINT_RE = re.compile(
     r"(?:recipient(?:\s+for\s+(?:the\s+)?)?(?:findings|research report|report)?\s*[:=]\s*([^\n.;]+))",
     re.IGNORECASE,
@@ -27,13 +26,6 @@ DELIVERY_TARGET_ALT_RE = re.compile(
 NO_HARDCODE_WORDS_CONSTRAINT = (
     "Never use hardcoded words or keyword lists; rely on LLM semantic understanding."
 )
-ACTION_MARKERS: dict[str, tuple[str, ...]] = {
-    "send_email": ("send_email", "email", "recipient", "delivery"),
-    "submit_contact_form": ("submit_contact_form", "contact form", "contact", "form"),
-    "post_message": ("post_message", "message", "post"),
-    "create_document": ("create_document", "document", "doc"),
-    "update_sheet": ("update_sheet", "sheet", "spreadsheet"),
-}
 
 
 def _clean_text_list(raw: Any, *, limit: int, max_item_len: int = 220) -> list[str]:
@@ -61,38 +53,97 @@ def _normalize_for_match(text: str) -> str:
     return " ".join(str(text or "").lower().split()).strip()
 
 
-def _tokenize_for_overlap(text: str) -> set[str]:
-    return {match.group(0).lower() for match in WORD_RE.finditer(str(text or "")) if len(match.group(0)) >= 4}
-
-
-def _llm_missing_item_matches_contract_requirement(
+def _align_missing_items_with_contract_semantics(
     *,
-    missing_item: str,
+    missing_items: list[str],
     required_actions: list[str],
     required_facts: list[str],
-) -> bool:
-    normalized_item = _normalize_for_match(missing_item)
-    if not normalized_item:
-        return False
-    for action in required_actions:
-        markers = ACTION_MARKERS.get(str(action).strip(), (str(action).strip(),))
-        for marker in markers:
-            if marker and marker in normalized_item:
-                return True
-    if required_facts and any(
-        token in normalized_item for token in ("required fact", "unverified", "evidence", "citation", "source")
-    ):
-        return True
-    item_tokens = _tokenize_for_overlap(normalized_item)
-    for fact in required_facts:
-        fact_tokens = _tokenize_for_overlap(fact)
-        if not fact_tokens:
+) -> list[str]:
+    cleaned_missing = _clean_text_list(missing_items, limit=8)
+    if not cleaned_missing:
+        return []
+    cleaned_actions = _clean_text_list(required_actions, limit=8, max_item_len=64)
+    cleaned_facts = _clean_text_list(required_facts, limit=8)
+    if not cleaned_actions and not cleaned_facts:
+        return []
+    normalized_required_actions = {
+        _normalize_for_match(item)
+        for item in cleaned_actions
+        if _normalize_for_match(item)
+    }
+    normalized_required_facts = {
+        _normalize_for_match(item)
+        for item in cleaned_facts
+        if _normalize_for_match(item)
+    }
+
+    def _schema_fallback_alignment() -> list[str]:
+        aligned_rows: list[str] = []
+        allow_generic_contact_row = "submit_contact_form" in normalized_required_actions
+        for row in cleaned_missing:
+            normalized_row = _normalize_for_match(row)
+            if not normalized_row:
+                continue
+            if any(action in normalized_row for action in normalized_required_actions):
+                aligned_rows.append(row)
+                continue
+            if any(fact in normalized_row for fact in normalized_required_facts):
+                aligned_rows.append(row)
+                continue
+            if allow_generic_contact_row:
+                aligned_rows.append(row)
+        return _clean_text_list(aligned_rows, limit=8)
+
+    if not env_bool("MAIA_AGENT_LLM_MISSING_ALIGNMENT_ENABLED", default=True):
+        return _schema_fallback_alignment()
+
+    payload = {
+        "missing_items": cleaned_missing,
+        "required_actions": cleaned_actions,
+        "required_facts": cleaned_facts,
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You determine whether missing contract items are semantically aligned to required actions/facts. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only:\n"
+                '{ "keep_indexes":[0,1], "reason":"..." }\n'
+                "Rules:\n"
+                "- Keep an item only if it semantically maps to at least one required action or required fact.\n"
+                "- Never use hardcoded keyword matching.\n"
+                "- Do not invent new items.\n"
+                "- Use only indexes from missing_items.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=220,
+        )
+    except Exception:
+        return _schema_fallback_alignment()
+    if not isinstance(response, dict):
+        return _schema_fallback_alignment()
+    raw_indexes = response.get("keep_indexes")
+    if not isinstance(raw_indexes, list):
+        return _schema_fallback_alignment()
+    kept: list[str] = []
+    for raw in raw_indexes[:12]:
+        try:
+            idx = int(raw)
+        except Exception:
             continue
-        overlap = len(item_tokens.intersection(fact_tokens))
-        threshold = 2 if len(fact_tokens) >= 4 else 1
-        if overlap >= threshold:
-            return True
-    return False
+        if idx < 0 or idx >= len(cleaned_missing):
+            continue
+        value = cleaned_missing[idx]
+        if value in kept:
+            continue
+        kept.append(value)
+        if len(kept) >= 8:
+            break
+    return kept if kept else _schema_fallback_alignment()
 
 
 def _llm_block_is_actionable(*, contract: dict[str, Any], llm_check: dict[str, Any]) -> bool:
@@ -101,14 +152,12 @@ def _llm_block_is_actionable(*, contract: dict[str, Any], llm_check: dict[str, A
         return False
     required_actions = _clean_text_list(contract.get("required_actions"), limit=8, max_item_len=64)
     required_facts = _clean_text_list(contract.get("required_facts"), limit=8)
-    return any(
-        _llm_missing_item_matches_contract_requirement(
-            missing_item=item,
-            required_actions=required_actions,
-            required_facts=required_facts,
-        )
-        for item in missing_items
+    aligned = _align_missing_items_with_contract_semantics(
+        missing_items=missing_items,
+        required_actions=required_actions,
+        required_facts=required_facts,
     )
+    return bool(aligned)
 
 
 def _calibrate_llm_contract_gate(
@@ -243,6 +292,165 @@ def _align_required_actions_with_intent(
     return list(dict.fromkeys(aligned))[:6]
 
 
+def _reconcile_required_actions_with_llm(
+    *,
+    message: str,
+    agent_goal: str,
+    rewritten_task: str,
+    required_actions: list[str],
+    intent_tags: list[str],
+    delivery_target: str,
+    target_url: str,
+) -> list[str]:
+    cleaned_actions = _clean_text_list(required_actions, limit=6, max_item_len=64)
+    if not env_bool("MAIA_AGENT_LLM_ACTION_RECONCILE_ENABLED", default=True):
+        return cleaned_actions
+    payload = {
+        "message": message[:500],
+        "agent_goal": agent_goal[:420],
+        "rewritten_task": rewritten_task[:420],
+        "intent_tags": _clean_text_list(intent_tags, limit=8, max_item_len=64),
+        "delivery_target": delivery_target[:180],
+        "target_url": target_url[:260],
+        "current_required_actions": cleaned_actions,
+        "allowed_actions": [
+            "send_email",
+            "submit_contact_form",
+            "post_message",
+            "create_document",
+            "update_sheet",
+        ],
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You validate required execution actions for an AI agent task contract. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only:\n"
+                '{ "required_actions":["send_email|submit_contact_form|post_message|create_document|update_sheet"], '
+                '"reason":"..." }\n'
+                "Rules:\n"
+                "- Keep only actions explicitly required by the user request.\n"
+                "- For website outreach via on-site interaction, use submit_contact_form.\n"
+                "- Do not invent delivery channels not requested by the user.\n"
+                "- Never rely on hardcoded keyword matching.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=220,
+        )
+    except Exception:
+        return cleaned_actions
+    if not isinstance(response, dict):
+        return cleaned_actions
+    raw_actions = _clean_text_list(response.get("required_actions"), limit=6, max_item_len=64)
+    allowed_actions = {"send_email", "submit_contact_form", "post_message", "create_document", "update_sheet"}
+    llm_actions = [item for item in raw_actions if item in allowed_actions]
+    if not llm_actions:
+        return cleaned_actions
+    merged = list(dict.fromkeys([*cleaned_actions, *llm_actions]))[:6]
+    return merged
+
+
+def _filter_required_facts_for_execution(
+    *,
+    required_facts: list[str],
+    required_actions: list[str],
+    intent_tags: list[str],
+    message: str,
+    agent_goal: str,
+    rewritten_task: str,
+    delivery_target: str,
+    target_url: str,
+    allow_llm: bool = True,
+) -> list[str]:
+    rows = _clean_text_list(required_facts, limit=6)
+    if not rows:
+        return []
+
+    def _fallback() -> list[str]:
+        action_set = {
+            str(item).strip().lower()
+            for item in required_actions
+            if str(item).strip()
+        }
+        normalized_target = _normalize_for_match(delivery_target)
+        filtered: list[str] = []
+        for row in rows:
+            normalized_row = _normalize_for_match(row)
+            if not normalized_row:
+                continue
+            if normalized_target and normalized_target in normalized_row:
+                continue
+            if "send_email" in action_set and EMAIL_RE.search(row):
+                continue
+            filtered.append(row)
+            if len(filtered) >= 6:
+                break
+        return filtered
+
+    if not allow_llm:
+        return _fallback()
+    if not env_bool("MAIA_AGENT_LLM_REQUIRED_FACT_FILTER_ENABLED", default=True):
+        return _fallback()
+
+    payload = {
+        "message": message[:500],
+        "agent_goal": agent_goal[:420],
+        "rewritten_task": rewritten_task[:420],
+        "required_facts": rows,
+        "required_actions": _clean_text_list(required_actions, limit=6, max_item_len=64),
+        "intent_tags": _clean_text_list(intent_tags, limit=8, max_item_len=64),
+        "delivery_target": delivery_target[:180],
+        "target_url": target_url[:260],
+    }
+    try:
+        response = call_json_response(
+            system_prompt=(
+                "You filter task-contract required facts to keep only evidence-bearing facts. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only:\n"
+                '{ "keep_indexes":[0,1], "reason":"..." }\n'
+                "Rules:\n"
+                "- Keep only facts that must be verified from execution evidence.\n"
+                "- Remove delivery identity, routing target, and action precondition slots.\n"
+                "- Never rely on hardcoded keyword matching.\n"
+                "- Use only indexes from required_facts.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=220,
+        )
+    except Exception:
+        return _fallback()
+    if not isinstance(response, dict):
+        return _fallback()
+    raw_indexes = response.get("keep_indexes")
+    if not isinstance(raw_indexes, list):
+        return _fallback()
+    kept: list[str] = []
+    for raw in raw_indexes[:12]:
+        try:
+            index = int(raw)
+        except Exception:
+            continue
+        if index < 0 or index >= len(rows):
+            continue
+        value = rows[index]
+        if value in kept:
+            continue
+        kept.append(value)
+        if len(kept) >= 6:
+            break
+    return kept
+
+
 def _classify_missing_requirements(
     *,
     required_actions: list[str],
@@ -270,12 +478,7 @@ def _classify_missing_requirements(
     if needs_target_url and not target_url:
         missing.append("Target website URL")
 
-    needs_required_facts = (
-        needs_target_url
-        or bool(required_outputs)
-        or "report_generation" in tags
-        or "location_lookup" in tags
-    )
+    needs_required_facts = bool(required_outputs) or "report_generation" in tags or "location_lookup" in tags
     if needs_required_facts and not required_facts:
         missing.append("Required facts to verify in the final answer")
 
@@ -310,7 +513,7 @@ def _derive_required_facts(
     if "location_lookup" in tags:
         facts.append("Company location details (city/country and address if available)")
 
-    if ("web_research" in tags or "report_generation" in tags) and not facts:
+    if "report_generation" in tags and not facts:
         facts.append("Core factual findings required for the requested report")
 
     return facts[:6]
@@ -328,11 +531,15 @@ def _sanitize_missing_requirements(
     delivery_recipient_required: bool = False,
 ) -> list[str]:
     cleaned = _clean_text_list(items, limit=12)
-    has_delivery_email = bool(EMAIL_RE.search(str(delivery_target or "")))
     fact_rows = {
         _normalize_for_match(str(item))
         for item in required_facts
         if str(item).strip()
+    }
+    context_rows = {
+        _normalize_for_match(item)
+        for item in [context_text, target_url, delivery_target, *required_facts]
+        if _normalize_for_match(item)
     }
     normalized_context = _normalize_for_match(context_text)
     filtered: list[str] = []
@@ -340,32 +547,22 @@ def _sanitize_missing_requirements(
         normalized_row = _normalize_for_match(row)
         if not normalized_row:
             continue
-
-        # The requirement is already explicitly present in user/context text.
         if normalized_context and normalized_row in normalized_context:
             continue
+        if normalized_row in context_rows:
+            continue
         if normalized_row in fact_rows:
-            continue
-        if has_delivery_email and any(
-            token in normalized_row for token in ("recipient", "delivery target", "email address")
-        ):
-            continue
-        if not delivery_recipient_required and "recipient" in normalized_row:
-            continue
-        if not requires_target_url and any(
-            token in normalized_row for token in ("target website", "target url", "website url")
-        ):
-            continue
-        if output_format_optional and any(
-            token in normalized_row for token in ("output format", "format specification", "target format")
-        ):
             continue
         if row in filtered:
             continue
         filtered.append(row)
         if len(filtered) >= 6:
             break
-    _ = target_url
+    _ = (
+        requires_target_url,
+        output_format_optional,
+        delivery_recipient_required,
+    )
     return filtered
 
 
@@ -379,6 +576,9 @@ def _prune_missing_requirements_with_llm(
     delivery_target: str,
     required_actions: list[str],
     required_facts: list[str],
+    requires_target_url: bool = False,
+    output_format_optional: bool = False,
+    delivery_recipient_required: bool = False,
 ) -> list[str]:
     rows = _clean_text_list(items, limit=6)
     if not rows:
@@ -394,6 +594,11 @@ def _prune_missing_requirements_with_llm(
         "required_actions": required_actions[:6],
         "required_facts": required_facts[:6],
         "missing_requirements": rows,
+        "slot_requirements": {
+            "requires_target_url": bool(requires_target_url),
+            "output_format_optional": bool(output_format_optional),
+            "delivery_recipient_required": bool(delivery_recipient_required),
+        },
     }
     try:
         response = call_json_response(
@@ -406,8 +611,11 @@ def _prune_missing_requirements_with_llm(
                 "Return JSON only:\n"
                 '{ "keep_indexes":[0,1], "reason":"..." }\n'
                 "Rules:\n"
-                "- If target_url is already present, URL-related missing blockers are resolved.\n"
-                "- If delivery_target already contains a valid recipient email, recipient-email blockers are resolved.\n"
+                "- Use slot_requirements to determine if URL/recipient/output-format blockers are required.\n"
+                "- If target_url is present and requires_target_url=false, URL blockers are resolved.\n"
+                "- If delivery_recipient_required=false, recipient blockers are resolved.\n"
+                "- If delivery_target contains a valid recipient email, recipient-email blockers are resolved.\n"
+                "- If output_format_optional=true, generic output-format blockers are resolved.\n"
                 "- Do not invent new missing blockers.\n"
                 "- Use only indexes from the provided missing_requirements list.\n\n"
                 f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
@@ -488,6 +696,17 @@ def build_task_contract(
         intent_tags=clean_intent_tags,
         delivery_target=delivery_target,
         target_url=target_url,
+    )
+    heuristic_facts = _filter_required_facts_for_execution(
+        required_facts=heuristic_facts,
+        required_actions=heuristic_actions,
+        intent_tags=clean_intent_tags,
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
+        delivery_target=delivery_target,
+        target_url=target_url,
+        allow_llm=False,
     )
     heuristic_action_set = {str(item).strip().lower() for item in heuristic_actions if str(item).strip()}
     heuristic_outputs = _clean_text_list(deliverables or [], limit=6)
@@ -612,7 +831,48 @@ def build_task_contract(
         delivery_target=clean_target,
         target_url=target_url,
     )
+    required_actions = _reconcile_required_actions_with_llm(
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
+        required_actions=required_actions,
+        intent_tags=clean_intent_tags,
+        delivery_target=clean_target,
+        target_url=target_url,
+    )
+    required_actions = _align_required_actions_with_intent(
+        required_actions=required_actions,
+        intent_tags=clean_intent_tags,
+        delivery_target=clean_target,
+        target_url=target_url,
+    )
+    required_facts = _filter_required_facts_for_execution(
+        required_facts=required_facts,
+        required_actions=required_actions,
+        intent_tags=clean_intent_tags,
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
+        delivery_target=clean_target,
+        target_url=target_url,
+        allow_llm=True,
+    )
     required_action_set = {str(item).strip().lower() for item in required_actions if str(item).strip()}
+    requires_target_url = (
+        "submit_contact_form" in set(required_actions)
+        or "contact_form_submission" in clean_intent_tag_set
+    )
+    output_format_optional = (
+        "report_generation" in clean_intent_tag_set
+        or "docs_write" in clean_intent_tag_set
+        or "sheets_update" in clean_intent_tag_set
+        or "create_document" in required_action_set
+        or "update_sheet" in required_action_set
+    )
+    delivery_recipient_required = (
+        "send_email" in required_action_set
+        or ("email_delivery" in clean_intent_tag_set and "contact_form_submission" not in clean_intent_tag_set)
+    )
     classifier_missing_requirements = _classify_missing_requirements(
         required_actions=required_actions,
         required_outputs=required_outputs,
@@ -621,15 +881,11 @@ def build_task_contract(
         target_url=target_url,
         intent_tags=clean_intent_tags,
     )
-    llm_missing_requirements = [
-        item
-        for item in _clean_text_list(response.get("missing_requirements"), limit=8)
-        if _llm_missing_item_matches_contract_requirement(
-            missing_item=item,
-            required_actions=required_actions,
-            required_facts=required_facts,
-        )
-    ]
+    llm_missing_requirements = _align_missing_items_with_contract_semantics(
+        missing_items=_clean_text_list(response.get("missing_requirements"), limit=8),
+        required_actions=required_actions,
+        required_facts=required_facts,
+    )
     merged_missing_requirements = list(
         dict.fromkeys([*classifier_missing_requirements, *llm_missing_requirements])
     )
@@ -639,21 +895,9 @@ def build_task_contract(
         target_url=target_url,
         required_facts=required_facts,
         context_text=" ".join([clean_message, clean_goal, clean_rewrite]),
-        requires_target_url=(
-            "submit_contact_form" in set(required_actions)
-            or "contact_form_submission" in clean_intent_tag_set
-        ),
-        output_format_optional=(
-            "report_generation" in clean_intent_tag_set
-            or "docs_write" in clean_intent_tag_set
-            or "sheets_update" in clean_intent_tag_set
-            or "create_document" in required_action_set
-            or "update_sheet" in required_action_set
-        ),
-        delivery_recipient_required=(
-            "send_email" in required_action_set
-            or ("email_delivery" in clean_intent_tag_set and "contact_form_submission" not in clean_intent_tag_set)
-        ),
+        requires_target_url=requires_target_url,
+        output_format_optional=output_format_optional,
+        delivery_recipient_required=delivery_recipient_required,
     )
     cleaned_missing_requirements = _prune_missing_requirements_with_llm(
         items=cleaned_missing_requirements,
@@ -664,6 +908,9 @@ def build_task_contract(
         delivery_target=clean_target,
         required_actions=required_actions,
         required_facts=required_facts,
+        requires_target_url=requires_target_url,
+        output_format_optional=output_format_optional,
+        delivery_recipient_required=delivery_recipient_required,
     )
     return {
         "objective": " ".join(str(response.get("objective") or clean_rewrite or clean_message).split()).strip()[:420],
