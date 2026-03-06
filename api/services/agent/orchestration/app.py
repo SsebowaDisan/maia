@@ -335,6 +335,7 @@ class AgentOrchestrator:
                     "__task_preferred_tone": task_prep.task_intelligence.preferred_tone,
                     "__task_preferred_format": task_prep.task_intelligence.preferred_format,
                     "__intent_tags": list(task_prep.task_intelligence.intent_tags),
+                    "__task_target_url": str(task_prep.task_intelligence.target_url or "").strip(),
                     "__task_rewrite_detail": task_prep.rewritten_task,
                     "__task_rewrite_deliverables": task_prep.planned_deliverables,
                     "__task_rewrite_constraints": task_prep.planned_constraints,
@@ -343,6 +344,7 @@ class AgentOrchestrator:
                     "__task_contract_success_checks": task_prep.contract_success_checks[:8],
                     "__task_clarification_missing": task_prep.contract_missing_requirements[:6],
                     "__task_clarification_questions": task_prep.clarification_questions[:6],
+                    "__task_clarification_slots": task_prep.contract_missing_slots[:8],
                     "__clarification_blocked": task_prep.clarification_blocked,
                     "__conversation_summary": str(settings.get("__conversation_summary") or "").strip()[
                         :480
@@ -382,6 +384,7 @@ class AgentOrchestrator:
                     metadata={
                         "missing_requirements": task_prep.contract_missing_requirements[:6],
                         "questions": task_prep.clarification_questions[:6],
+                        "missing_requirement_slots": task_prep.contract_missing_slots[:8],
                     },
                 )
                 yield stream.emit(clarification_block_event)

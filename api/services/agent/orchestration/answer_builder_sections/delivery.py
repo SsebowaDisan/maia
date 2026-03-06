@@ -34,6 +34,10 @@ def append_delivery_status(lines: list[str], ctx: AnswerBuildContext) -> None:
         latest_send = send_actions[-1]
         status = "completed" if latest_send.status == "success" else "not completed"
         lines.append(f"- External action: {status}.")
+        if latest_send.status == "success":
+            lines.append("- External action attempt: executed successfully.")
+        else:
+            lines.append("- External action attempt: executed but failed.")
         lines.append(f"- Tool: `{latest_send.tool_id}`.")
         lines.append(f"- Detail: {compact(latest_send.summary, 180)}")
         if latest_send.status != "success":

@@ -136,6 +136,10 @@ class BrowserToolTests(unittest.TestCase):
         assert "tool_progress" in event_types
         assert "browser_interaction_policy" in event_types
         assert "browser_open" in event_types
+        browser_open_event = next(event for event in result.events if event.event_type == "browser_open")
+        assert browser_open_event.data.get("action") == "open"
+        assert browser_open_event.data.get("action_phase") == "active"
+        assert browser_open_event.data.get("action_status") == "ok"
 
     def test_browser_tool_emits_human_verification_event_when_blocked(self) -> None:
         blocked_connector = _AlwaysBlockedConnectorStub()

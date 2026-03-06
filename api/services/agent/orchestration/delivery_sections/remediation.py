@@ -6,7 +6,12 @@ from typing import Any
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentAction, AgentActivityEvent, utc_now
 
+from ..clarification_helpers import (
+    questions_for_requirements,
+    select_relevant_clarification_requirements,
+)
 from ..contract_gate import run_contract_check_live
+from ..discovery_gate import blocking_requirements_from_slots
 from ..models import ExecutionState, TaskPreparation
 from ..text_helpers import compact
 from .models import DeliveryRuntime
@@ -48,23 +53,32 @@ def enforce_delivery_contract_gate(
         if isinstance(state.contract_check_result.get("missing_items"), list)
         else []
     )
-    deferred_missing_requirements = task_prep.contract_missing_requirements[:6]
+    deferred_missing_requirements = blocking_requirements_from_slots(
+        slots=task_prep.contract_missing_slots[:8],
+        fallback_requirements=task_prep.contract_missing_requirements[:6],
+        limit=6,
+    )
+    relevant_missing_requirements = select_relevant_clarification_requirements(
+        deferred_missing_requirements=deferred_missing_requirements,
+        contract_missing_items=missing[:8],
+        limit=6,
+    )
     if (
-        deferred_missing_requirements
+        relevant_missing_requirements
         and not task_prep.clarification_blocked
         and not bool(state.execution_context.settings.get("__clarification_requested_after_attempt"))
     ):
-        clarification_questions = (
-            task_prep.clarification_questions[:6]
-            if task_prep.clarification_questions
-            else [f"Please provide: {item}" for item in deferred_missing_requirements[:6]]
+        clarification_questions = questions_for_requirements(
+            requirements=relevant_missing_requirements,
+            all_requirements=deferred_missing_requirements,
+            all_questions=task_prep.clarification_questions[:6],
         )
         clarification_event = activity_event_factory(
             event_type="llm.clarification_requested",
             title="Clarification required after autonomous attempts",
-            detail=compact("; ".join(deferred_missing_requirements[:3]), 200),
+            detail=compact("; ".join(relevant_missing_requirements[:3]), 200),
             metadata={
-                "missing_requirements": deferred_missing_requirements,
+                "missing_requirements": relevant_missing_requirements,
                 "questions": clarification_questions,
                 "contract_check_missing_items": missing[:8],
                 "deferred_until_after_attempts": True,

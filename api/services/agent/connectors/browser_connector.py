@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,6 +6,8 @@ import re
 import random
 import time
 from typing import Any, Generator
+
+from api.services.agent.execution.browser_runtime import BrowserRuntime
 
 from .browser_page_state import (
     capture_page_state,
@@ -94,6 +96,7 @@ class BrowserConnector(BaseConnector):
 
         effective_highlight_color = "green" if str(highlight_color).strip().lower() == "green" else "yellow"
         movement_rng = random.Random(datetime.now(timezone.utc).timestamp())
+        runtime = BrowserRuntime(scene_surface="website")
 
         def _elapsed_ms() -> int:
             return int((time.perf_counter() - stream_started) * 1000.0)
@@ -446,7 +449,7 @@ class BrowserConnector(BaseConnector):
                 page_index=1,
                 cursor_payload=quick_cursor,
             ):
-                yield side_event
+                yield runtime.normalize(side_event)
 
             for action_index, action in enumerate(actions[:8], start=1):
                 if not isinstance(action, dict):
@@ -605,6 +608,7 @@ class BrowserConnector(BaseConnector):
             for page_index, target_url in enumerate(targets, start=1):
                 last_cursor = dict(open_cursor)
                 final_cursor = dict(last_cursor)
+                link_click_emitted = False
                 if page_index > 1:
                     target_path = ""
                     target_match = re.match(r"^https?://[^/]+(?P<path>/[^?#]*)?", str(target_url or ""))
@@ -682,11 +686,50 @@ class BrowserConnector(BaseConnector):
                                 ),
                                 "snapshot_ref": click_capture["screenshot_path"],
                             }
+                            link_click_emitted = True
                             last_cursor = dict(click_cursor)
                             final_cursor = dict(click_cursor)
                             break
                         except Exception:
                             continue
+                    if not link_click_emitted:
+                        fallback_x, fallback_y = _jitter_target(186.0, 142.0, spread=20.0)
+                        fallback_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
+                        last_cursor = dict(fallback_cursor)
+                        final_cursor = dict(fallback_cursor)
+                        try:
+                            page.mouse.click(
+                                fallback_x,
+                                fallback_y,
+                                delay=movement_rng.randint(34, 96),
+                            )
+                        except Exception:
+                            pass
+                        fallback_capture = capture_page_state(
+                            page=page,
+                            output_dir=output_dir,
+                            stamp_prefix=stamp_prefix,
+                            label=f"same-domain-fallback-{page_index}",
+                        )
+                        yield {
+                            "event_type": "browser_click",
+                            "title": f"Open same-domain link {page_index}",
+                            "detail": target_url,
+                            "data": _website_payload(
+                                {
+                                    "url": fallback_capture["url"],
+                                    "title": fallback_capture["title"],
+                                    "page_index": page_index - 1,
+                                    "selector": "same-domain-fallback",
+                                    "target_url": target_url,
+                                    "extract_stage": "same_domain_followup",
+                                    "elapsed_ms": _elapsed_ms(),
+                                    **fallback_cursor,
+                                    **page_metrics(page=page),
+                                }
+                            ),
+                            "snapshot_ref": fallback_capture["screenshot_path"],
+                        }
                     try:
                         page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                         page.wait_for_timeout(max(200, wait_ms))
@@ -868,7 +911,7 @@ class BrowserConnector(BaseConnector):
                     page_index=page_index,
                     cursor_payload=last_cursor,
                 ):
-                    yield side_event
+                    yield runtime.normalize(side_event)
 
             browser_context.close()
             browser.close()
@@ -927,4 +970,6 @@ class BrowserConnector(BaseConnector):
                 "same_domain_followup": max(0, len(targets) - 1),
             },
         }
+
+
 

@@ -188,6 +188,77 @@ class ContactFormToolTests(unittest.TestCase):
         assert isinstance(call["sender_name"], str) and str(call["sender_name"]).strip()
         assert call["sender_phone"] == ""
 
+    def test_contact_form_tool_uses_task_target_url_when_prompt_url_missing(self) -> None:
+        connector = _ContactConnectorStub()
+        registry = _RegistryStub(connector)
+        context = ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="r1",
+            mode="company_agent",
+            settings={
+                "__task_target_url": "https://example.com/contact",
+                "agent.contact_sender_email": "sender@example.com",
+            },
+        )
+        with patch(
+            "api.services.agent.tools.contact_form_tools.get_connector_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.agent.tools.contact_form_tools.polish_contact_form_content",
+            return_value={
+                "subject": "Polished subject",
+                "message_text": "Polished message body",
+            },
+        ):
+            tool = BrowserContactFormSendTool()
+            _ = tool.execute(
+                context=context,
+                prompt="Submit the contact form on their website",
+                params={"confirmed": True},
+            )
+
+        assert connector.calls, "expected connector to be invoked"
+        call = connector.calls[0]
+        assert call["url"] == "https://example.com/contact"
+
+    def test_contact_form_tool_attempts_execution_with_missing_sender_identity(self) -> None:
+        connector = _ContactConnectorStub()
+        registry = _RegistryStub(connector)
+        context = ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="r1",
+            mode="company_agent",
+            settings={},
+        )
+        with patch(
+            "api.services.agent.tools.contact_form_tools.get_connector_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.agent.tools.contact_form_tools.polish_contact_form_content",
+            return_value={
+                "subject": "Polished subject",
+                "message_text": "Polished message body",
+            },
+        ), patch(
+            "api.services.agent.tools.contact_form_tools._infer_sender_profile_from_prompt",
+            return_value={},
+        ):
+            tool = BrowserContactFormSendTool()
+            _ = tool.execute(
+                context=context,
+                prompt="Open https://example.com/contact and send a message.",
+                params={"confirmed": True},
+            )
+
+        assert connector.calls, "expected connector to be invoked"
+        call = connector.calls[0]
+        assert call["sender_email"] == ""
+        assert call["sender_name"] == ""
+
 
 if __name__ == "__main__":
     unittest.main()

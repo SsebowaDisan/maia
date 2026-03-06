@@ -17,6 +17,14 @@ ACTION_GAP_HINT_RE = re.compile(
     r"(lack of action|missing action|not completed|not sent|no .*requested|not delivered|not executed)",
     re.IGNORECASE,
 )
+ACTION_ATTEMPT_CONTRADICTION_RE = re.compile(
+    r"(contradict|implies an attempt|tool .*used|attempt was made)",
+    re.IGNORECASE,
+)
+INCOMPLETE_ACK_RE = re.compile(
+    r"(not completed|failed|could not|was not sent|not sent|unable to|did not submit)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_actions(raw: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -46,12 +54,23 @@ def _normalize_actions(raw: list[dict[str, Any]] | None) -> list[dict[str, str]]
 def _build_action_evidence(raw_actions: list[dict[str, Any]] | None) -> dict[str, Any]:
     actions = _normalize_actions(raw_actions)
     successful = [row for row in actions if row.get("status") == "success"]
+    attempted_external = [
+        row for row in actions if row.get("tool_id") in EXTERNAL_ACTION_TOOL_IDS
+    ]
     external_success = [
         row for row in successful if row.get("tool_id") in EXTERNAL_ACTION_TOOL_IDS
     ]
     return {
         "total_actions": len(actions),
         "successful_actions": len(successful),
+        "attempted_external_actions": [
+            {
+                "tool_id": row.get("tool_id"),
+                "status": row.get("status"),
+                "summary": row.get("summary"),
+            }
+            for row in attempted_external[-6:]
+        ],
         "successful_external_actions": [
             {
                 "tool_id": row.get("tool_id"),
@@ -86,6 +105,7 @@ def _is_ok_verdict(clean_verdict: str) -> bool:
 def _should_suppress_action_gap_flag(
     *,
     critic_note: str,
+    answer_text: str,
     action_evidence: dict[str, Any],
     contract_gate: dict[str, Any],
 ) -> bool:
@@ -96,8 +116,11 @@ def _should_suppress_action_gap_flag(
         if isinstance(action_evidence.get("successful_external_actions"), list)
         else []
     )
-    if not successful_external_actions:
-        return False
+    attempted_external_actions = (
+        action_evidence.get("attempted_external_actions")
+        if isinstance(action_evidence.get("attempted_external_actions"), list)
+        else []
+    )
     missing_items = (
         contract_gate.get("missing_items")
         if isinstance(contract_gate.get("missing_items"), list)
@@ -107,6 +130,15 @@ def _should_suppress_action_gap_flag(
         "required action not completed" in str(item).lower()
         for item in missing_items
     )
+    answer_acknowledges_incomplete = bool(
+        INCOMPLETE_ACK_RE.search(" ".join(str(answer_text or "").split()))
+    )
+    if attempted_external_actions and missing_required_action and answer_acknowledges_incomplete:
+        return True
+    if attempted_external_actions and ACTION_ATTEMPT_CONTRADICTION_RE.search(critic_note):
+        return True
+    if not successful_external_actions:
+        return False
     if missing_required_action:
         return False
     if bool(contract_gate.get("ready_for_external_actions")):
@@ -159,6 +191,7 @@ def review_final_answer(
         return {"needs_human_review": False, "critic_note": ""}
     if _should_suppress_action_gap_flag(
         critic_note=clean_verdict,
+        answer_text=answer_text,
         action_evidence=action_evidence,
         contract_gate=contract_gate,
     ):

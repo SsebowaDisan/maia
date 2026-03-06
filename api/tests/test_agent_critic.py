@@ -53,3 +53,38 @@ def test_critic_keeps_action_gap_when_required_action_missing(monkeypatch) -> No
     )
     assert row["needs_human_review"] is True
     assert "Lack of Action" in row["critic_note"]
+
+
+def test_critic_suppresses_attempt_vs_completion_contradiction_when_attempt_failed(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_CRITIC_ENABLED", "1")
+    monkeypatch.setattr(
+        critic,
+        "call_text_response",
+        lambda **kwargs: (
+            "Lack of Action: action marked not completed but browser.contact_form.send was used, "
+            "which implies an attempt was made."
+        ),
+    )
+    row = review_final_answer(
+        request_message="Send message via contact form",
+        answer_text=(
+            "External action was not completed. The agent attempted submission via browser.contact_form.send "
+            "but failed because a required phone field was missing."
+        ),
+        source_urls=["https://example.com"],
+        actions=[
+            {
+                "tool_id": "browser.contact_form.send",
+                "status": "failed",
+                "action_class": "execute",
+                "summary": "Submission failed: telephone number is required.",
+            }
+        ],
+        contract_check={
+            "ready_for_final_response": False,
+            "ready_for_external_actions": False,
+            "missing_items": ["Required action not completed: submit_contact_form"],
+        },
+    )
+    assert row["needs_human_review"] is False
+    assert row["critic_note"] == ""

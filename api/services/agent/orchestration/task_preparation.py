@@ -18,6 +18,11 @@ from api.services.agent.research_depth_profile import (
     derive_research_depth_profile,
 )
 
+from .contract_slots import classify_missing_requirement_slots
+from .discovery_gate import (
+    blocking_requirements_from_slots,
+    clarification_questions_from_slots,
+)
 from .models import TaskPreparation
 from .text_helpers import compact, truthy
 
@@ -421,6 +426,26 @@ def prepare_task_context(
         if str(item).strip()
     ][:8]
     contract_target = " ".join(str(task_contract.get("delivery_target") or "").split()).strip()
+    contract_missing_slots = classify_missing_requirement_slots(
+        missing_requirements=contract_missing_requirements,
+        message=request.message,
+        agent_goal=str(request.agent_goal or ""),
+        rewritten_task=rewritten_task,
+        intent_tags=list(task_intelligence.intent_tags),
+        conversation_summary=conversation_summary,
+    )
+    if isinstance(task_contract, dict):
+        task_contract["missing_requirement_slots"] = contract_missing_slots[:8]
+    contract_blocking_requirements = blocking_requirements_from_slots(
+        slots=contract_missing_slots,
+        fallback_requirements=contract_missing_requirements,
+        limit=6,
+    )
+    clarification_questions = clarification_questions_from_slots(
+        slots=contract_missing_slots,
+        requirements=contract_blocking_requirements,
+        limit=6,
+    )
     contract_completed_event = activity_event_factory(
         event_type="llm.task_contract_completed",
         title="Task contract ready",
@@ -432,6 +457,8 @@ def prepare_task_context(
             "required_actions": contract_actions,
             "delivery_target": contract_target,
             "missing_requirements": contract_missing_requirements,
+            "missing_requirement_slots": contract_missing_slots[:8],
+            "blocking_requirements": contract_blocking_requirements[:6],
             "success_checks": contract_success_checks,
         },
     )
@@ -451,7 +478,7 @@ def prepare_task_context(
         or str(settings.get("__research_depth_tier") or "").strip().lower()
         in {"deep_research", "deep_analytics"}
     )
-    clarification_blocked = clarification_gate_enabled and bool(contract_missing_requirements)
+    clarification_blocked = clarification_gate_enabled and bool(contract_blocking_requirements)
     clarification_deferred = False
     if clarification_blocked and deep_research_requested:
         clarification_blocked = False
@@ -459,17 +486,15 @@ def prepare_task_context(
     if clarification_blocked and defer_clarification_until_exploration:
         clarification_blocked = False
         clarification_deferred = True
-    clarification_questions = [
-        f"Please provide: {item}" for item in contract_missing_requirements[:6]
-    ]
     if clarification_blocked:
         clarification_event = activity_event_factory(
             event_type="llm.clarification_requested",
             title="Clarification required before execution",
-            detail=compact("; ".join(contract_missing_requirements[:3]), 200),
+            detail=compact("; ".join(contract_blocking_requirements[:3]), 200),
             metadata={
-                "missing_requirements": contract_missing_requirements[:6],
+                "missing_requirements": contract_blocking_requirements[:6],
                 "questions": clarification_questions[:6],
+                "missing_requirement_slots": contract_missing_slots[:8],
             },
         )
         yield emit_event(clarification_event)
@@ -482,6 +507,7 @@ def prepare_task_context(
             )
             clarification_metadata = {
                 "missing_requirements": contract_missing_requirements[:6],
+                "missing_requirement_slots": contract_missing_slots[:8],
                 "clarification_bypassed_for_deep_research": True,
             }
         elif contract_missing_requirements and clarification_deferred:
@@ -491,6 +517,7 @@ def prepare_task_context(
             )
             clarification_metadata = {
                 "missing_requirements": contract_missing_requirements[:6],
+                "missing_requirement_slots": contract_missing_slots[:8],
                 "clarification_deferred_until_after_attempts": True,
             }
         clarification_resolved_event = activity_event_factory(
@@ -520,4 +547,5 @@ def prepare_task_context(
         memory_context_snippets=memory_context_snippets,
         clarification_blocked=clarification_blocked,
         clarification_questions=clarification_questions,
+        contract_missing_slots=contract_missing_slots,
     )

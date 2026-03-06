@@ -98,6 +98,20 @@ def _fake_contract_gate_blocked(**_: Any) -> Generator[dict[str, Any], None, dic
     }
 
 
+def _fake_contract_gate_missing_delivery_target(
+    **_: Any,
+) -> Generator[dict[str, Any], None, dict[str, Any]]:
+    if False:
+        yield {}
+    return {
+        "ready_for_final_response": False,
+        "ready_for_external_actions": False,
+        "missing_items": ["Missing delivery target for required action: send_email"],
+        "reason": "Email delivery is requested but recipient is missing.",
+        "recommended_remediation": [],
+    }
+
+
 def _event_factory() -> tuple[
     list[AgentActivityEvent],
     Any,
@@ -138,7 +152,7 @@ def _consume(generator: Generator[dict[str, Any], None, Any]) -> Any:
             return stop.value
 
 
-def test_run_guard_checks_emits_deferred_clarification_after_contract_failure(monkeypatch) -> None:
+def test_run_guard_checks_skips_irrelevant_deferred_clarification_after_contract_failure(monkeypatch) -> None:
     monkeypatch.setattr(
         "api.services.agent.orchestration.step_execution_sections.guards.run_contract_check_live",
         _fake_contract_gate_blocked,
@@ -182,10 +196,66 @@ def test_run_guard_checks_emits_deferred_clarification_after_contract_failure(mo
         )
     )
     assert outcome.decision == "skip"
+    assert state.execution_context.settings.get("__clarification_requested_after_attempt") is None
+    assert not any(event.event_type == "llm.clarification_requested" for event in events)
+
+
+def test_run_guard_checks_emits_deferred_clarification_when_requirements_match_contract_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.step_execution_sections.guards.run_contract_check_live",
+        _fake_contract_gate_missing_delivery_target,
+    )
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.step_execution_sections.guards.build_contract_remediation_steps",
+        lambda **_: [],
+    )
+    events, emit_event, activity_event_factory = _event_factory()
+    request = ChatRequest(message="Analyze and send contact form message", agent_mode="company_agent")
+    task_prep = _task_prep_with_deferred_missing()
+    task_prep.contract_missing_requirements = [
+        "Recipient email address for delivery",
+        "Provide sender company profile for outreach",
+    ]
+    task_prep.clarification_questions = [
+        "Please provide: Recipient email address for delivery",
+        "Please provide: Provide sender company profile for outreach",
+    ]
+    step = PlannedStep(
+        tool_id="browser.contact_form.send",
+        title="Send outreach form",
+        params={"url": "https://axongroup.com/"},
+    )
+    execution_context = ToolExecutionContext(
+        user_id="u1",
+        tenant_id="t1",
+        conversation_id="c1",
+        run_id="r1",
+        mode="company_agent",
+        settings={},
+    )
+    state = ExecutionState(execution_context=execution_context)
+    outcome = _consume(
+        run_guard_checks(
+            run_id="r1",
+            request=request,
+            task_prep=task_prep,
+            state=state,
+            registry=_RegistryStub("browser.contact_form.send"),
+            steps=[step],
+            step_cursor=0,
+            index=1,
+            step_started="2026-03-06T00:00:00+00:00",
+            step=step,
+            params={"confirmed": True},
+            emit_event=emit_event,
+            activity_event_factory=activity_event_factory,
+        )
+    )
+    assert outcome.decision == "skip"
     assert state.execution_context.settings.get("__clarification_requested_after_attempt") is True
-    assert any(event.event_type == "llm.clarification_requested" for event in events)
     clarification_event = next(
         event for event in events if event.event_type == "llm.clarification_requested"
     )
-    assert clarification_event.data.get("deferred_until_after_attempts") is True
-    assert clarification_event.data.get("missing_requirements") == task_prep.contract_missing_requirements
+    assert clarification_event.data.get("missing_requirements") == [
+        "Recipient email address for delivery"
+    ]

@@ -20,12 +20,42 @@ URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
 
-def _resolve_url(prompt: str, params: dict[str, Any]) -> str:
-    url = str(params.get("url") or "").strip()
-    if not url:
-        match = URL_RE.search(str(prompt or ""))
-        url = match.group(0).strip() if match else ""
-    return url
+def _extract_url_candidate(value: Any) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return ""
+    match = URL_RE.search(text)
+    if not match:
+        return ""
+    return match.group(0).strip().rstrip(".,;)")
+
+
+def _resolve_url(prompt: str, params: dict[str, Any], context: ToolExecutionContext) -> str:
+    settings = context.settings if isinstance(context.settings, dict) else {}
+    candidates: list[Any] = [
+        params.get("url"),
+        prompt,
+        settings.get("__task_target_url"),
+        settings.get("__latest_browser_url"),
+        settings.get("__latest_visited_url"),
+    ]
+    latest_submission = settings.get("__latest_contact_form_submission")
+    if isinstance(latest_submission, dict):
+        candidates.append(latest_submission.get("url"))
+    task_contract = settings.get("__task_contract")
+    if isinstance(task_contract, dict):
+        candidates.extend(
+            [
+                task_contract.get("target_url"),
+                task_contract.get("website_url"),
+                task_contract.get("source_url"),
+            ]
+        )
+    for candidate in candidates:
+        resolved = _extract_url_candidate(candidate)
+        if resolved:
+            return resolved
+    return ""
 
 
 def _safe_text(value: Any, *, fallback: str, max_len: int) -> str:
@@ -122,7 +152,7 @@ class BrowserContactFormSendTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> Generator[ToolTraceEvent, None, ToolExecutionResult]:
-        url = _resolve_url(prompt, params)
+        url = _resolve_url(prompt, params, context)
         if not url:
             raise ToolExecutionError("A valid target URL is required for contact form submission.")
 
@@ -149,10 +179,6 @@ class BrowserContactFormSendTool(AgentTool):
             fallback="",
             max_len=180,
         )
-        if not EMAIL_RE.search(sender_email):
-            raise ToolExecutionError(
-                "Sender email address is required for contact form submission."
-            )
         sender_name = _safe_text(
             base_sender_name
             or inferred_sender.get("sender_name")
@@ -160,10 +186,6 @@ class BrowserContactFormSendTool(AgentTool):
             fallback="",
             max_len=120,
         )
-        if not sender_name:
-            raise ToolExecutionError(
-                "Sender full name is required for contact form submission."
-            )
         sender_company = _safe_text(
             base_sender_company
             or inferred_sender.get("sender_company"),

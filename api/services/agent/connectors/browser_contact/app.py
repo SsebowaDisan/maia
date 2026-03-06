@@ -80,8 +80,6 @@ class BrowserContactConnector(BaseConnector):
             )
         if not str(url or "").strip():
             raise ConnectorError("A valid target URL is required for contact form submission.")
-        if "@" not in str(sender_email or ""):
-            raise ConnectorError("A valid sender email is required for contact form submission.")
         if not str(message or "").strip():
             raise ConnectorError("A non-empty message is required for contact form submission.")
 

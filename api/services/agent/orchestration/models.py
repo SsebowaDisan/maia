@@ -28,6 +28,7 @@ class TaskPreparation:
     memory_context_snippets: list[str]
     clarification_blocked: bool
     clarification_questions: list[str]
+    contract_missing_slots: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

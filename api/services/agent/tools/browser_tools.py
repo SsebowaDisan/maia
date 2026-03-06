@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from api.services.agent.connectors.registry import get_connector_registry
 from api.services.agent.connectors.trusted_site_policy import build_trusted_site_overrides
+from api.services.agent.execution.browser_event_contract import normalize_browser_event
 from api.services.agent.models import AgentSource
 from api.services.agent.tools.browser_interaction_guard import assess_browser_interactions
 from api.services.agent.tools.base import (
@@ -265,12 +266,16 @@ class PlaywrightInspectTool(AgentTool):
                     payload = next(stream)
                 except StopIteration as stop:
                     return stop.value
+                normalized_payload = normalize_browser_event(
+                    dict(payload or {}),
+                    default_scene_surface="website",
+                )
                 event = ToolTraceEvent(
-                    event_type=str(payload.get("event_type") or "browser_progress"),
-                    title=str(payload.get("title") or "Browser activity"),
-                    detail=str(payload.get("detail") or ""),
-                    data={**dict(payload.get("data") or {}), "web_provider": web_provider},
-                    snapshot_ref=str(payload.get("snapshot_ref") or "") or None,
+                    event_type=str(normalized_payload.get("event_type") or "browser_progress"),
+                    title=str(normalized_payload.get("title") or "Browser activity"),
+                    detail=str(normalized_payload.get("detail") or ""),
+                    data={**dict(normalized_payload.get("data") or {}), "web_provider": web_provider},
+                    snapshot_ref=str(normalized_payload.get("snapshot_ref") or "") or None,
                 )
                 trace_events.append(event)
                 yield_event = event
