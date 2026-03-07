@@ -51,11 +51,26 @@ type HighlightPalette = {
   labelText: string;
 };
 
+type ZoomHistoryEntry = {
+  eventRef: string;
+  eventType: string;
+  eventIndex: number | null;
+  timestamp: string;
+  action: "zoom_in" | "zoom_out" | "zoom_reset" | "zoom_to_region";
+  sceneSurface: string;
+  sceneRef: string;
+  graphNodeId: string;
+  zoomLevel: number | null;
+  zoomReason: string;
+  zoomPolicyTriggers: string[];
+};
+
 type BrowserFindState = {
   dedupedBrowserKeywords: string[];
   findMatchCount: number;
   findQuery: string;
   showFindOverlay: boolean;
+  semanticFindResults: Array<{ term: string; confidence: number }>;
 };
 
 type PdfPlaybackState = {
@@ -64,6 +79,16 @@ type PdfPlaybackState = {
   pdfScrollPercent: number | null;
   pdfScrollDirection: "up" | "down" | "";
   pdfScanRegion: string;
+  pdfZoomLevel: number | null;
+  pdfZoomReason: string;
+  pdfTargetRegion: HighlightRegion | null;
+  pdfCompareLeft: string;
+  pdfCompareRight: string;
+  pdfCompareVerdict: string;
+  pdfFindQuery: string;
+  pdfFindMatchCount: number;
+  pdfSemanticFindResults: Array<{ term: string; confidence: number }>;
+  zoomHistory: ZoomHistoryEntry[];
 };
 
 type SceneAnimationState = {
@@ -83,4 +108,5 @@ export type {
   HighlightRegion,
   PdfPlaybackState,
   SceneAnimationState,
+  ZoomHistoryEntry,
 };

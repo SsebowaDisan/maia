@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.orchestration.stream_bridge import LiveRunStream
 from api.services.agent.planner import PlannedStep
@@ -12,6 +14,14 @@ class _ActivityStoreStub:
 
     def append(self, event: AgentActivityEvent) -> None:
         self.rows.append(event)
+
+
+class _BrokerStub:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def publish(self, *, user_id: str, event: dict, run_id: str | None = None) -> None:
+        self.rows.append({"user_id": user_id, "run_id": run_id, "event": dict(event)})
 
 
 def _factory_builder(run_id: str = "run-test"):
@@ -222,3 +232,187 @@ def test_stream_bridge_adds_cursor_for_non_browser_interactive_surfaces() -> Non
         assert payload["scene_surface"] == expected_surface
         assert isinstance(payload.get("cursor_x"), float)
         assert isinstance(payload.get("cursor_y"), float)
+
+
+def test_stream_bridge_handles_dotted_zoom_event_surface_and_cursor() -> None:
+    payload = _emit_single_trace(
+        tool_id="marketing.web_research",
+        trace=ToolTraceEvent(
+            event_type="browser.zoom_in",
+            title="Zoom in",
+            data={"zoom_level": 1.6},
+        ),
+    )
+    assert payload["scene_surface"] == "website"
+    assert payload["action"] == "zoom_in"
+    assert isinstance(payload.get("cursor_x"), float)
+    assert isinstance(payload.get("cursor_y"), float)
+
+
+def test_stream_bridge_maps_api_call_surface_and_plugin_hints() -> None:
+    payload = _emit_single_trace(
+        tool_id="analytics.fetch",
+        trace=ToolTraceEvent(
+            event_type="api_call_started",
+            title="Fetch report",
+            data={
+                "connector_id": "google_analytics",
+                "action_id": "analytics.fetch_report",
+            },
+        ),
+    )
+    assert payload["scene_surface"] == "api"
+    assert payload["plugin_connector_label"] == "Google Analytics"
+    assert payload["plugin_action_title"] == "Fetch report"
+
+
+def test_stream_bridge_emit_publishes_event_envelope_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    activity_store = _ActivityStoreStub()
+    broker = _BrokerStub()
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.stream_bridge.get_live_event_broker",
+        lambda: broker,
+    )
+    stream = LiveRunStream(
+        activity_store=activity_store,
+        user_id="u1",
+        run_id="run-test",
+        observed_event_types=[],
+    )
+    event = AgentActivityEvent(
+        event_id="evt-1",
+        run_id="run-test",
+        event_type="document_opened",
+        title="Open document",
+        detail="Loaded file",
+        stage="ui_action",
+        status="completed",
+        event_schema_version="1.0",
+        data={
+            "event_family": "doc",
+            "event_priority": "contextual",
+            "event_render_mode": "animate_live",
+            "event_replay_importance": "normal",
+            "graph_node_id": "node-7",
+            "scene_ref": "scene.document.preview",
+            "event_envelope": {"event_family": "doc"},
+        },
+        seq=6,
+    )
+    stream.emit(event)
+    assert len(broker.rows) == 1
+    payload = broker.rows[0]["event"]
+    assert payload["event_type"] == "document_opened"
+    assert payload["stage"] == "ui_action"
+    assert payload["status"] == "completed"
+    assert payload["event_family"] == "doc"
+    assert payload["event_priority"] == "contextual"
+    assert payload["event_render_mode"] == "animate_live"
+    assert payload["event_index"] == 6
+    assert payload["replay_importance"] == "normal"
+    assert payload["graph_node_id"] == "node-7"
+    assert payload["scene_ref"] == "scene.document.preview"
+    assert payload["data"]["graph_node_ids"] == ["node-7"]
+    assert payload["data"]["scene_refs"] == ["scene.document.preview"]
+    assert payload["data"]["event_refs"] == ["evt-1"]
+
+
+def test_stream_bridge_emit_persists_zoom_event_with_graph_linkage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_store = _ActivityStoreStub()
+    broker = _BrokerStub()
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.stream_bridge.get_live_event_broker",
+        lambda: broker,
+    )
+    stream = LiveRunStream(
+        activity_store=activity_store,
+        user_id="u1",
+        run_id="run-test",
+        observed_event_types=[],
+    )
+    event = AgentActivityEvent(
+        event_id="evt-zoom-1",
+        run_id="run-test",
+        event_type="pdf_zoom_to_region",
+        title="Zoom PDF",
+        detail="Inspect totals block",
+        stage="ui_action",
+        status="in_progress",
+        event_schema_version="1.0",
+        data={
+            "scene_surface": "document",
+            "action": "zoom_to_region",
+            "zoom_level": 2.1,
+            "zoom_reason": "verifier escalation",
+            "zoom_policy_triggers": ["verifier_escalation"],
+            "graph_node_id": "node-zoom-1",
+            "scene_ref": "scene.pdf.reader",
+        },
+        seq=11,
+    )
+    payload = stream.emit(event)["event"]["data"]
+    zoom_event = payload.get("zoom_event") or {}
+    assert zoom_event.get("action") == "zoom_to_region"
+    assert zoom_event.get("event_ref") == "evt-zoom-1"
+    assert zoom_event.get("event_index") == 11
+    assert zoom_event.get("graph_node_id") == "node-zoom-1"
+    assert zoom_event.get("scene_ref") == "scene.pdf.reader"
+    assert payload.get("zoom_history") and isinstance(payload.get("zoom_history"), list)
+    assert payload.get("event_refs") == ["evt-zoom-1"]
+
+
+def test_stream_bridge_links_copy_source_to_later_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    activity_store = _ActivityStoreStub()
+    broker = _BrokerStub()
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.stream_bridge.get_live_event_broker",
+        lambda: broker,
+    )
+    stream = LiveRunStream(
+        activity_store=activity_store,
+        user_id="u1",
+        run_id="run-test",
+        observed_event_types=[],
+    )
+    copy_event = AgentActivityEvent(
+        event_id="evt-copy-1",
+        run_id="run-test",
+        event_type="browser_copy_selection",
+        title="Copy snippet",
+        detail="Copied from source",
+        stage="preview",
+        status="completed",
+        data={
+            "scene_surface": "website",
+            "action": "extract",
+            "source_url": "https://example.com",
+            "clipboard_text": "Revenue grew 31 percent year over year.",
+            "copied_words": ["Revenue", "grew", "31%", "year-over-year"],
+            "graph_node_id": "node-copy-1",
+            "scene_ref": "scene.browser.main",
+        },
+        seq=3,
+    )
+    usage_event = AgentActivityEvent(
+        event_id="evt-usage-1",
+        run_id="run-test",
+        event_type="email_type_body",
+        title="Type email body",
+        detail="Drafting summary",
+        stage="ui_action",
+        status="in_progress",
+        data={
+            "scene_surface": "email",
+            "action": "type",
+        },
+        seq=4,
+    )
+    copy_payload = stream.emit(copy_event)["event"]["data"]
+    usage_payload = stream.emit(usage_event)["event"]["data"]
+    assert copy_payload.get("copy_role") == "source"
+    assert copy_payload.get("copy_provenance", {}).get("copy_event_ref") == "evt-copy-1"
+    assert usage_payload.get("copy_role") == "usage"
+    assert usage_payload.get("copy_usage_refs") == ["evt-copy-1"]
+    assert usage_payload.get("copy_provenance", {}).get("copy_event_ref") == "evt-copy-1"

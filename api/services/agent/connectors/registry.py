@@ -20,6 +20,7 @@ from .gmail_connector import GmailConnector
 from .gmail_playwright_connector import GmailPlaywrightConnector
 from .invoice_connector import InvoiceConnector
 from .m365_connector import M365Connector
+from .plugin_manifest import connector_plugin_manifest
 from .slack_connector import SlackConnector
 
 
@@ -67,6 +68,18 @@ class ConnectorRegistry:
             connector = self.build(connector_id, settings=settings)
             report.append(connector.health_check().to_dict())
         return report
+
+    def plugin_manifests(self, settings: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        manifests: list[dict[str, Any]] = []
+        for connector_id in self.names():
+            manifests.append(self.plugin_manifest(connector_id=connector_id, settings=settings))
+        return manifests
+
+    def plugin_manifest(self, connector_id: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+        connector = self.build(connector_id, settings=settings)
+        health = connector.health_check()
+        manifest = connector_plugin_manifest(connector_id=connector_id, enabled=bool(health.ok))
+        return manifest.model_dump(mode="json")
 
 
 _registry: ConnectorRegistry | None = None

@@ -23,6 +23,7 @@ from ktem.utils.commands import WEB_SEARCH_COMMAND
 
 from api.context import ApiContext
 from api.schemas import ChatRequest, IndexSelection
+from api.services import mindmap_service
 from api.services.agent.orchestrator import get_orchestrator
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.settings_service import load_user_settings
@@ -1568,6 +1569,7 @@ def stream_chat_turn(
                     "info_html": "",
                     "actions_taken": [],
                     "sources_used": [],
+                    "evidence_items": [],
                     "next_recommended_steps": [],
                     "needs_human_review": False,
                     "human_review_notes": "",
@@ -1629,6 +1631,36 @@ def stream_chat_turn(
             else {}
         )
         mindmap_payload: dict[str, Any] = {}
+        if bool(request.use_mindmap):
+            agent_mindmap_settings = dict(request.mindmap_settings or {})
+            try:
+                requested_mindmap_depth = int(agent_mindmap_settings.get("max_depth", 4))
+            except Exception:
+                requested_mindmap_depth = 4
+            requested_map_type = str(
+                agent_mindmap_settings.get("map_type", "work_graph") or "work_graph"
+            ).strip().lower()
+            if requested_map_type not in {"structure", "evidence", "work_graph"}:
+                requested_map_type = "work_graph"
+            action_rows = [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in list(getattr(agent_result, "actions_taken", []) or [])
+                if isinstance(item, dict) or hasattr(item, "to_dict")
+            ]
+            source_rows = [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in list(getattr(agent_result, "sources_used", []) or [])
+                if isinstance(item, dict) or hasattr(item, "to_dict")
+            ]
+            if action_rows or source_rows:
+                mindmap_payload = mindmap_service.build_agent_work_graph(
+                    request_message=message,
+                    actions_taken=action_rows,
+                    sources_used=source_rows,
+                    map_type=requested_map_type,
+                    max_depth=max(2, min(8, requested_mindmap_depth)),
+                    run_id=str(getattr(agent_result, "run_id", "") or ""),
+                )
         info_panel = build_info_panel_copy(
             request_message=message,
             answer_text=answer_text,
@@ -1637,6 +1669,15 @@ def stream_chat_turn(
             next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
             web_summary=agent_web_summary,
         )
+        raw_agent_evidence_items = getattr(agent_result, "evidence_items", [])
+        if isinstance(raw_agent_evidence_items, list):
+            normalized_evidence_items: list[dict[str, Any]] = []
+            for row in raw_agent_evidence_items[:32]:
+                if not isinstance(row, dict):
+                    continue
+                normalized_evidence_items.append(dict(row))
+            if normalized_evidence_items:
+                info_panel["evidence_items"] = normalized_evidence_items
         if mode_variant:
             info_panel["mode_variant"] = mode_variant
         if mindmap_payload:
@@ -1747,7 +1788,7 @@ def stream_chat_turn(
     except Exception:
         requested_mindmap_depth = 4
     requested_map_type = str(mindmap_settings.get("map_type", "structure") or "structure").strip().lower()
-    if requested_map_type not in {"structure", "evidence"}:
+    if requested_map_type not in {"structure", "evidence", "work_graph"}:
         requested_map_type = "structure"
     try:
         for response in pipeline.stream(

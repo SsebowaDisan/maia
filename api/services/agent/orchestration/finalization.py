@@ -19,6 +19,7 @@ from api.services.agent.observability import get_agent_observability
 
 from .answer_builder import compose_professional_answer
 from .contract_gate import action_rows_for_contract_check, run_contract_check_live
+from .evidence_items import EvidenceItem, EvidenceRegion, infer_evidence_source_type
 from .handoff_state import is_handoff_paused, read_handoff_state
 from .models import ExecutionState, TaskPreparation
 from .web_evidence import summarize_web_evidence
@@ -239,6 +240,89 @@ def _source_highlight_boxes(source: Any) -> list[dict[str, float]]:
     return normalized
 
 
+def _source_confidence(source: Any) -> float | None:
+    metadata = _source_metadata(source)
+    return EvidenceItem.confidence_from(metadata.get("confidence"), getattr(source, "score", None))
+
+
+def _source_collected_by(source: Any) -> str:
+    metadata = _source_metadata(source)
+    for key in ("collected_by", "agent_id", "agent_role", "owner_role"):
+        value = " ".join(str(metadata.get(key) or "").split()).strip()
+        if value:
+            return value[:120]
+    return "agent.research"
+
+
+def _source_ref_ids(source: Any, *keys: str) -> list[str]:
+    metadata = _source_metadata(source)
+    return EvidenceItem.refs_from_metadata(metadata, *keys)
+
+
+def _build_evidence_items_from_sources(response_sources: list[Any]) -> list[EvidenceItem]:
+    evidence_items: list[EvidenceItem] = []
+    for idx, source in enumerate(response_sources, start=1):
+        source_url = _source_url(source)
+        source_name = _source_display_label(source, source_url=source_url, fallback_id=idx)
+        page_label = _source_page_label(source)
+        source_extract = _source_extract(source)
+        file_id = _source_file_id(source)
+        source_boxes = _source_highlight_boxes(source)
+        source_unit_id = _source_unit_id(source)
+        source_match_quality = _source_match_quality(source)
+        char_start, char_end = _source_char_span(source)
+        strength_score = _source_strength_score(source)
+        strength_tier = _strength_tier_from_score(strength_score) if strength_score > 0 else 0
+
+        highlight_boxes: list[EvidenceRegion] = []
+        for box in source_boxes:
+            region = EvidenceRegion.from_payload(box)
+            if region is None:
+                continue
+            highlight_boxes.append(region)
+            if len(highlight_boxes) >= 24:
+                break
+
+        title = f"Evidence [{idx}]"
+        if page_label:
+            title += f" - page {page_label}"
+
+        evidence_items.append(
+            EvidenceItem(
+                evidence_id=f"evidence-{idx}",
+                source_type=infer_evidence_source_type(
+                    source_type=str(getattr(source, "source_type", "") or ""),
+                    source_url=source_url,
+                    file_id=file_id,
+                ),
+                title=title,
+                source_name=source_name,
+                source_url=source_url or None,
+                file_id=file_id or None,
+                page=page_label or None,
+                extract=source_extract,
+                unit_id=source_unit_id or None,
+                char_start=char_start if char_start > 0 else None,
+                char_end=char_end if char_end > char_start else None,
+                match_quality=source_match_quality or None,
+                strength_score=round(strength_score, 6) if strength_score > 0 else None,
+                strength_tier=strength_tier if strength_tier > 0 else None,
+                confidence=_source_confidence(source),
+                collected_by=_source_collected_by(source),
+                highlight_boxes=highlight_boxes,
+                graph_node_ids=_source_ref_ids(
+                    source,
+                    "graph_node_ids",
+                    "graph_node_id",
+                ),
+                scene_refs=_source_ref_ids(source, "scene_refs", "scene_ref"),
+                event_refs=_source_ref_ids(source, "event_refs", "event_id"),
+                artifact_refs=_source_ref_ids(source, "artifact_refs", "artifact_id"),
+            )
+        )
+    return evidence_items
+
+
 def _host_from_url(url: str) -> str:
     try:
         host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
@@ -325,28 +409,41 @@ def _strength_tier_from_score(strength_score: float) -> int:
     return 1
 
 
-def _build_info_html_from_sources(response_sources: list[Any]) -> str:
+def _build_info_html_from_sources(
+    response_sources: list[Any],
+    *,
+    evidence_items: list[EvidenceItem] | None = None,
+) -> str:
     if not response_sources:
         return ""
+    rows = list(evidence_items or _build_evidence_items_from_sources(response_sources))
+    if not rows:
+        return ""
     info_blocks: list[str] = ["<div class='evidence-list' data-layout='kotaemon'>"]
-    for idx, source in enumerate(response_sources, start=1):
-        source_url = _source_url(source)
-        source_label = _source_display_label(source, source_url=source_url, fallback_id=idx)
-        page_label = _source_page_label(source)
-        source_extract = _source_extract(source)
-        file_id = _source_file_id(source)
-        source_boxes = _source_highlight_boxes(source)
-        source_unit_id = _source_unit_id(source)
-        source_match_quality = _source_match_quality(source)
-        char_start, char_end = _source_char_span(source)
-        strength_score = _source_strength_score(source)
-        strength_tier = _strength_tier_from_score(strength_score) if strength_score > 0 else 0
+    for idx, item in enumerate(rows, start=1):
+        evidence_id = " ".join(str(item.evidence_id or "").split()).strip() or f"evidence-{idx}"
+        summary_label = " ".join(str(item.title or "").split()).strip() or f"Evidence [{idx}]"
+        source_url = " ".join(str(item.source_url or "").split()).strip()
+        source_label = " ".join(str(item.source_name or "").split()).strip() or f"Indexed source {idx}"
+        file_id = " ".join(str(item.file_id or "").split()).strip()
+        page_label = " ".join(str(item.page or "").split()).strip()
+        source_extract = " ".join(str(item.extract or "").split()).strip()
+        source_unit_id = " ".join(str(item.unit_id or "").split()).strip()
+        source_match_quality = " ".join(str(item.match_quality or "").split()).strip()
+        char_start = int(item.char_start or 0)
+        char_end = int(item.char_end or 0)
+        strength_score = float(item.strength_score or 0.0)
+        strength_tier = int(item.strength_tier or 0)
+        confidence = float(item.confidence) if item.confidence is not None else None
+        source_type = " ".join(str(item.source_type or "").split()).strip().lower()
+        collected_by = " ".join(str(item.collected_by or "").split()).strip()
+        graph_node_ids = [str(value).strip() for value in list(item.graph_node_ids or []) if str(value).strip()]
+        scene_refs = [str(value).strip() for value in list(item.scene_refs or []) if str(value).strip()]
+        event_refs = [str(value).strip() for value in list(item.event_refs or []) if str(value).strip()]
+        source_boxes = [box.model_dump(mode="json") for box in list(item.highlight_boxes or [])]
 
-        summary_label = f"Evidence [{idx}]"
-        if page_label:
-            summary_label += f" - page {page_label}"
-
-        details_attrs = [f"class='evidence'", f"id='evidence-{idx}'", f"data-evidence-id='evidence-{idx}'"]
+        details_attrs = [f"class='evidence'", f"id='{html.escape(evidence_id, quote=True)}'"]
+        details_attrs.append(f"data-evidence-id='{html.escape(evidence_id, quote=True)}'")
         if file_id:
             details_attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
         if page_label:
@@ -363,7 +460,19 @@ def _build_info_html_from_sources(response_sources: list[Any]) -> str:
             details_attrs.append(f"data-char-end='{char_end}'")
         if strength_score > 0:
             details_attrs.append(f"data-strength='{strength_score:.6f}'")
-            details_attrs.append(f"data-strength-tier='{strength_tier}'")
+            details_attrs.append(f"data-strength-tier='{strength_tier or _strength_tier_from_score(strength_score)}'")
+        if confidence is not None:
+            details_attrs.append(f"data-confidence='{confidence:.6f}'")
+        if source_type:
+            details_attrs.append(f"data-source-type='{html.escape(source_type, quote=True)}'")
+        if collected_by:
+            details_attrs.append(f"data-collected-by='{html.escape(collected_by, quote=True)}'")
+        if graph_node_ids:
+            details_attrs.append(f"data-graph-node-id='{html.escape(graph_node_ids[0], quote=True)}'")
+        if scene_refs:
+            details_attrs.append(f"data-scene-ref='{html.escape(scene_refs[0], quote=True)}'")
+        if event_refs:
+            details_attrs.append(f"data-event-ref='{html.escape(event_refs[0], quote=True)}'")
         if source_boxes:
             details_attrs.append(
                 "data-boxes='"
@@ -762,7 +871,11 @@ def finalize_run(
         )
         yield emit_event(critic_ok_event)
 
-    info_html = _build_info_html_from_sources(response_sources)
+    evidence_items = _build_evidence_items_from_sources(response_sources)
+    info_html = _build_info_html_from_sources(
+        response_sources,
+        evidence_items=evidence_items,
+    )
 
     result = AgentRunResult(
         run_id=run_id,
@@ -771,6 +884,7 @@ def finalize_run(
         actions_taken=state.all_actions,
         sources_used=response_sources,
         next_recommended_steps=unique_next_steps[:8],
+        evidence_items=[item.to_info_panel_payload() for item in evidence_items],
         needs_human_review=needs_human_review,
         human_review_notes=human_review_notes,
         web_summary={
@@ -818,6 +932,7 @@ def finalize_run(
                 "next_recommended_steps": result.next_recommended_steps,
                 "needs_human_review": result.needs_human_review,
                 "human_review_notes": result.human_review_notes,
+                "evidence_count": len(result.evidence_items),
                 "event_coverage": coverage,
                 "verification_grade": verification_report.get("grade"),
                 "verification_score": verification_report.get("score"),
@@ -853,6 +968,7 @@ def finalize_run(
             "answer": result.answer,
             "actions_taken": [item.to_dict() for item in result.actions_taken],
             "sources_used": [item.to_dict() for item in result.sources_used],
+            "evidence_items": [dict(item) for item in result.evidence_items],
             "next_recommended_steps": result.next_recommended_steps,
             "needs_human_review": result.needs_human_review,
             "human_review_notes": result.human_review_notes,

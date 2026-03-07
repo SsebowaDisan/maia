@@ -282,7 +282,88 @@ def _sanitize_map_type(map_type: str) -> str:
     value = " ".join(str(map_type or "").split()).strip().lower()
     if value in {"evidence", "citation", "claims"}:
         return "evidence"
+    if value in {
+        "work_graph",
+        "work-graph",
+        "work graph",
+        "execution_graph",
+        "execution graph",
+        "execution",
+        "workflow",
+    }:
+        return "work_graph"
     return "structure"
+
+
+def _work_graph_node_type(raw_type: str) -> str:
+    value = str(raw_type or "").strip().lower()
+    if value in {"root", "question", "topic"}:
+        return "task"
+    if value in {"source", "web_source", "page", "section", "chunk"}:
+        return "research"
+    if value in {"claim", "finding"}:
+        return "verification"
+    return "plan_step"
+
+
+def _work_graph_edge_family(raw_type: str) -> str:
+    value = str(raw_type or "").strip().lower()
+    if value in {"hierarchy", "sequence", "next"}:
+        return "sequential"
+    if value in {"support", "citation", "evidence"}:
+        return "evidence"
+    if value in {"verify", "verification", "validated"}:
+        return "verification"
+    return "dependency"
+
+
+def _build_work_graph_payload(
+    *,
+    structure_payload: dict[str, Any],
+    evidence_payload: dict[str, Any],
+) -> dict[str, Any]:
+    structure_nodes = structure_payload.get("nodes", [])
+    structure_edges = structure_payload.get("edges", [])
+    mapped_nodes: list[dict[str, Any]] = []
+    for node in structure_nodes if isinstance(structure_nodes, list) else []:
+        if not isinstance(node, dict):
+            continue
+        mapped = dict(node)
+        mapped["work_graph_type"] = _work_graph_node_type(
+            str(node.get("node_type") or node.get("type") or "")
+        )
+        mapped.setdefault("status", "completed")
+        mapped_nodes.append(mapped)
+
+    mapped_edges: list[dict[str, Any]] = []
+    for edge in structure_edges if isinstance(structure_edges, list) else []:
+        if not isinstance(edge, dict):
+            continue
+        mapped = dict(edge)
+        mapped["edge_family"] = _work_graph_edge_family(str(edge.get("type") or ""))
+        mapped_edges.append(mapped)
+
+    settings = dict(structure_payload.get("settings", {}) or {})
+    settings["map_type"] = "work_graph"
+    settings["graph_mode"] = "execution"
+    payload: dict[str, Any] = {
+        **structure_payload,
+        "map_type": "work_graph",
+        "kind": "work_graph",
+        "nodes": mapped_nodes,
+        "edges": mapped_edges,
+        "settings": settings,
+        "graph": {
+            "schema": "work_graph.v1",
+            "node_count": len(mapped_nodes),
+            "edge_count": len(mapped_edges),
+        },
+    }
+    payload["variants"] = {
+        "structure": {**structure_payload, "map_type": "structure"},
+        "evidence": {**evidence_payload, "map_type": "evidence"},
+    }
+    return payload
 
 
 def build_knowledge_map(
@@ -300,56 +381,55 @@ def build_knowledge_map(
 ) -> dict[str, Any]:
     selected_map_type = _sanitize_map_type(map_type)
     focus_payload = focus if isinstance(focus, dict) else {}
+    structure_payload = build_structure_map(
+        question=question,
+        context=context,
+        documents=documents,
+        max_depth=max_depth,
+        source_type_hint=source_type_hint,
+        focus=focus_payload,
+        node_limit=node_limit,
+    )
+    evidence_payload = build_evidence_map(
+        question=question,
+        context=context,
+        documents=documents,
+        answer_text=answer_text,
+        max_depth=max_depth,
+        focus=focus_payload,
+        node_limit=node_limit,
+    )
+
     if selected_map_type == "evidence":
-        payload = build_evidence_map(
-            question=question,
-            context=context,
-            documents=documents,
-            answer_text=answer_text,
-            max_depth=max_depth,
-            focus=focus_payload,
-            node_limit=node_limit,
-        )
-        alternate = build_structure_map(
-            question=question,
-            context=context,
-            documents=documents,
-            max_depth=max_depth,
-            source_type_hint=source_type_hint,
-            focus=focus_payload,
-            node_limit=node_limit,
+        payload = evidence_payload
+    elif selected_map_type == "work_graph":
+        payload = _build_work_graph_payload(
+            structure_payload=structure_payload,
+            evidence_payload=evidence_payload,
         )
     else:
-        payload = build_structure_map(
-            question=question,
-            context=context,
-            documents=documents,
-            max_depth=max_depth,
-            source_type_hint=source_type_hint,
-            focus=focus_payload,
-            node_limit=node_limit,
-        )
-        alternate = build_evidence_map(
-            question=question,
-            context=context,
-            documents=documents,
-            answer_text=answer_text,
-            max_depth=max_depth,
-            focus=focus_payload,
-            node_limit=node_limit,
-        )
+        payload = structure_payload
 
     payload["map_type"] = selected_map_type
     payload.setdefault("settings", {})
     payload["settings"]["map_type"] = selected_map_type
     payload["tree"] = _build_tree_view(payload)
-    alt_key = "evidence" if selected_map_type == "structure" else "structure"
-    payload["variants"] = {
-        alt_key: {
-            **alternate,
-            "tree": _build_tree_view(alternate),
-        },
-    }
+    if selected_map_type == "work_graph":
+        variants = payload.get("variants", {})
+        if isinstance(variants, dict):
+            for variant_key in ("structure", "evidence"):
+                variant_payload = variants.get(variant_key)
+                if isinstance(variant_payload, dict):
+                    variant_payload["tree"] = _build_tree_view(variant_payload)
+    else:
+        alternate = evidence_payload if selected_map_type == "structure" else structure_payload
+        alt_key = "evidence" if selected_map_type == "structure" else "structure"
+        payload["variants"] = {
+            alt_key: {
+                **alternate,
+                "tree": _build_tree_view(alternate),
+            },
+        }
 
     if include_reasoning_map:
         context_nodes = _build_reasoning_context_nodes(

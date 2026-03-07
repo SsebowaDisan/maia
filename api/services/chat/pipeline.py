@@ -129,7 +129,7 @@ def create_pipeline(
             )
         if "map_type" in request.mindmap_settings:
             parsed_map_type = str(request.mindmap_settings.get("map_type", "structure") or "structure").strip().lower()
-            if parsed_map_type not in {"structure", "evidence"}:
+            if parsed_map_type not in {"structure", "evidence", "work_graph"}:
                 parsed_map_type = "structure"
             effective_settings["reasoning.options.simple.mindmap_map_type"] = parsed_map_type
 

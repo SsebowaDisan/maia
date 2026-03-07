@@ -1,5 +1,6 @@
 from api.services.agent.models import AgentSource
 from api.services.agent.orchestration.finalization import (
+    _build_evidence_items_from_sources,
     _build_info_html_from_sources,
     _post_resume_verification_state,
 )
@@ -19,6 +20,11 @@ def test_build_info_html_from_sources_emits_structured_evidence_blocks() -> None
                 "char_start": 10,
                 "char_end": 92,
                 "strength_score": 0.73125,
+                "confidence": 0.84,
+                "agent_role": "research",
+                "graph_node_id": "node-14",
+                "scene_ref": "scene.browser.main",
+                "event_id": "evt-411",
                 "highlight_boxes": [{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.04}],
             },
         ),
@@ -42,6 +48,12 @@ def test_build_info_html_from_sources_emits_structured_evidence_blocks() -> None
     assert "data-file-id='file-2'" in info_html
     assert "data-strength='0.731250'" in info_html
     assert "data-strength-tier='3'" in info_html
+    assert "data-confidence='0.840000'" in info_html
+    assert "data-collected-by='research'" in info_html
+    assert "data-source-type='web'" in info_html
+    assert "data-graph-node-id='node-14'" in info_html
+    assert "data-scene-ref='scene.browser.main'" in info_html
+    assert "data-event-ref='evt-411'" in info_html
     assert "data-boxes='[{&quot;x&quot;:0.1,&quot;y&quot;:0.2,&quot;width&quot;:0.3,&quot;height&quot;:0.04}]'" in info_html
     assert info_html.count(" open>") == 1
 
@@ -62,6 +74,39 @@ def test_build_info_html_from_sources_sanitizes_noisy_web_labels_and_artifact_ur
     assert "Markdown Content" not in info_html
     assert "data-source-url=" not in info_html
     assert "<b>Extract:</b>" not in info_html
+
+
+def test_build_evidence_items_from_sources_emits_info_panel_payload() -> None:
+    sources = [
+        AgentSource(
+            source_type="file",
+            label="Quarterly report",
+            file_id="file-77",
+            score=0.62,
+            metadata={
+                "page_label": "12",
+                "excerpt": "Revenue increased by 14% year over year.",
+                "graph_node_ids": ["node-a", "node-b"],
+                "scene_refs": ["scene.pdf.reader"],
+                "event_refs": ["evt-1", "evt-2"],
+                "highlight_boxes": [{"x": 0.05, "y": 0.1, "width": 0.4, "height": 0.07}],
+            },
+        )
+    ]
+
+    rows = _build_evidence_items_from_sources(sources)
+    assert len(rows) == 1
+
+    payload = rows[0].to_info_panel_payload()
+    assert payload["id"] == "evidence-1"
+    assert payload["source_type"] == "file"
+    assert payload["file_id"] == "file-77"
+    assert payload["page"] == "12"
+    assert payload["extract"].startswith("Revenue increased")
+    assert payload["graph_node_ids"] == ["node-a", "node-b"]
+    assert payload["scene_refs"] == ["scene.pdf.reader"]
+    assert payload["event_refs"] == ["evt-1", "evt-2"]
+    assert payload.get("region", {}).get("x") == 0.05
 
 
 def test_post_resume_verification_state_clears_pending_barrier_when_contract_is_ready() -> None:

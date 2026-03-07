@@ -202,6 +202,14 @@ class AnswerWithInlineCitation(AnswerWithContextPipeline):
         answer: str, citations: list[InlineEvidence]
     ) -> tuple[str, dict[int, int]]:
         normalized_answer = AnswerWithInlineCitation._split_merged_citations(answer)
+        # Canonicalize all inline markers to the bracket style used by the renderer.
+        inline_indices = AnswerWithInlineCitation._extract_citation_indices(normalized_answer)
+        if inline_indices:
+            identity_mapping = {idx: idx for idx in inline_indices}
+            normalized_answer = AnswerWithInlineCitation._apply_citation_mapping(
+                normalized_answer,
+                identity_mapping,
+            )
         seen: set[int] = set()
         ordered_indices: list[int] = []
 

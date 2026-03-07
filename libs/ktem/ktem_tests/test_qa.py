@@ -51,7 +51,16 @@ def test_ingest_pipeline(patch, mock_openai_embedding, tmp_path):
         storage_path=tmp_path,
     )
     indexing_pipeline.indexing_vector_pipeline.embedding.openai_api_key = "some-key"
-    input_file_path = Path(__file__).parent / "resources/dummy.pdf"
+    input_file_path = Path(__file__).parent / "resources" / "dummy.pdf"
+    if not input_file_path.exists():
+        input_file_path = (
+            Path(__file__).resolve().parents[3]
+            / "libs"
+            / "maia"
+            / "tests"
+            / "resources"
+            / "dummy.pdf"
+        )
 
     # call ingestion pipeline
     indexing_pipeline(input_file_path, force_reindex=True)

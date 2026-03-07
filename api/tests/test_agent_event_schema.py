@@ -32,6 +32,15 @@ def test_agent_event_dict_contains_schema_and_legacy_keys() -> None:
     assert payload["stage"]
     assert payload["status"]
     assert payload["data"]["file_id"] == "file_1"
+    assert payload["data"]["event_family"] == "doc"
+    assert payload["data"]["event_priority"] in {"contextual", "important", "critical", "background", "internal"}
+    assert payload["data"]["event_render_mode"] in {
+        "animate_live",
+        "summarize",
+        "compress",
+        "replay_later",
+    }
+    assert isinstance(payload["data"].get("event_envelope"), dict)
     assert payload["snapshot_ref"] == "snapshot://run_test/1"
 
     # Backward-compatible aliases are still emitted.
@@ -150,3 +159,32 @@ def test_handoff_events_have_waiting_and_completed_status() -> None:
     assert paused.status == "waiting"
     assert resumed.stage == "system"
     assert resumed.status == "completed"
+
+
+def test_agent_handoff_events_have_expected_stage_and_status() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    handoff = emitter.emit(
+        event_type="agent.handoff",
+        title="Agent handoff",
+        data={"from_role": "planner", "to_role": "research"},
+    )
+    waiting = emitter.emit(
+        event_type="agent.waiting",
+        title="Agent waiting for verification",
+    )
+    resumed = emitter.emit(
+        event_type="agent.resume",
+        title="Agent resumed",
+    )
+    blocked = emitter.emit(
+        event_type="agent.blocked",
+        title="Agent blocked",
+    )
+    assert handoff.stage == "tool"
+    assert handoff.status == "info"
+    assert waiting.stage == "system"
+    assert waiting.status == "waiting"
+    assert resumed.stage == "tool"
+    assert resumed.status == "completed"
+    assert blocked.stage == "error"
+    assert blocked.status == "blocked"

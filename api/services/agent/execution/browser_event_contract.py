@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from api.services.agent.event_envelope import build_event_envelope, merge_event_envelope_data
+from api.services.agent.events import infer_stage, infer_status
+
 from .browser_action_models import BrowserActionEvent, BrowserActionName, BrowserActionPhase
+from .compare_contract import apply_compare_contract
+from .semantic_find import apply_semantic_find
+from .verifier_conflict import apply_verifier_conflict_policy
+from .zoom_policy import apply_zoom_policy
 
 _ACTION_BY_EVENT_TYPE: dict[str, BrowserActionName] = {
     "browser_open": "navigate",
@@ -35,6 +42,14 @@ _ACTION_BY_EVENT_TYPE: dict[str, BrowserActionName] = {
     "browser_interaction_completed": "verify",
     "browser_interaction_failed": "verify",
     "browser_human_verification_required": "verify",
+    "browser_zoom_in": "zoom_in",
+    "browser_zoom_out": "zoom_out",
+    "browser_zoom_reset": "zoom_reset",
+    "browser_zoom_to_region": "zoom_to_region",
+    "browser.zoom_in": "zoom_in",
+    "browser.zoom_out": "zoom_out",
+    "browser.zoom_reset": "zoom_reset",
+    "browser.zoom_to_region": "zoom_to_region",
 }
 
 
@@ -85,6 +100,15 @@ def _target_from_data(data: dict[str, Any]) -> dict[str, Any]:
         "page_total",
         "query",
         "provider",
+        "zoom_level",
+        "zoom_from",
+        "zoom_to",
+        "zoom_reason",
+        "target_region",
+        "region_x",
+        "region_y",
+        "region_width",
+        "region_height",
     ):
         value = data.get(key)
         if value in (None, ""):
@@ -98,7 +122,7 @@ def _infer_action(event_type: str) -> BrowserActionName:
     mapped = _ACTION_BY_EVENT_TYPE.get(normalized)
     if mapped:
         return mapped
-    if not normalized.startswith("browser_"):
+    if not normalized.startswith(("browser_", "browser.")):
         return "other"
     if "navigate" in normalized or "open" in normalized:
         return "navigate"
@@ -110,6 +134,14 @@ def _infer_action(event_type: str) -> BrowserActionName:
         return "type"
     if "scroll" in normalized:
         return "scroll"
+    if "zoom_to_region" in normalized:
+        return "zoom_to_region"
+    if "zoom_in" in normalized:
+        return "zoom_in"
+    if "zoom_out" in normalized:
+        return "zoom_out"
+    if "zoom_reset" in normalized:
+        return "zoom_reset"
     if "extract" in normalized or "highlight" in normalized or "copy" in normalized or "find" in normalized:
         return "extract"
     if "verify" in normalized or "confirm" in normalized:
@@ -150,6 +182,33 @@ def normalize_browser_event(
     )
     normalized_data = dict(data)
     normalized_data.update(event_model.to_data())
+    normalized_data = apply_verifier_conflict_policy(
+        event_type=event_type,
+        data=normalized_data,
+    )
+    normalized_data = apply_zoom_policy(
+        event_type=event_type,
+        data=normalized_data,
+    )
+    normalized_data = apply_semantic_find(
+        event_type=event_type,
+        data=normalized_data,
+    )
+    normalized_data = apply_compare_contract(
+        event_type=event_type,
+        data=normalized_data,
+    )
+    envelope = build_event_envelope(
+        event_type=event_type,
+        stage=infer_stage(event_type),
+        status=infer_status(event_type),
+        data=normalized_data,
+    )
+    normalized_data = merge_event_envelope_data(
+        data=normalized_data,
+        envelope=envelope,
+        event_schema_version="interaction_v2",
+    )
     payload["event_type"] = event_type
     payload["data"] = normalized_data
     payload.setdefault("title", "Browser activity")

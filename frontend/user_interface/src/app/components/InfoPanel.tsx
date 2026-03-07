@@ -4,13 +4,21 @@ import { toast } from "sonner";
 import { buildRawFileUrl } from "../../api/client";
 import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { renderRichText } from "../utils/richText";
-import type { AgentSourceRecord, CitationFocus, SourceUsageRecord } from "../types";
+import type { AgentActivityEvent, AgentSourceRecord, CitationFocus, SourceUsageRecord } from "../types";
 import { parseEvidence } from "../utils/infoInsights";
 import type { EvidenceCard } from "../utils/infoInsights";
 import { MindmapViewer } from "./MindmapViewer";
 import { getMindmapPayload } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
 import { EvidenceCardsList } from "./infoPanel/EvidenceCardsList";
+import { ArtifactCardsPanel } from "./infoPanel/ArtifactCardsPanel";
+import { WorkspaceRailTabBar } from "./infoPanel/WorkspaceRailTabBar";
+import { WorkspaceFocusSummary } from "./infoPanel/WorkspaceFocusSummary";
+import { WorkspaceLogPanel } from "./infoPanel/WorkspaceLogPanel";
+import { WorkspaceTimelineDock } from "./infoPanel/WorkspaceTimelineDock";
+import { extractArtifactRows } from "./infoPanel/artifactRows";
+import { useWorkspaceRailTab } from "./infoPanel/useWorkspaceRailTab";
+import { useWorkspaceRenderMode } from "./infoPanel/useWorkspaceRenderMode";
 import { useCitationAnchorBinding } from "./infoPanel/useCitationAnchorBinding";
 import {
   choosePreferredSourceUrl,
@@ -29,6 +37,7 @@ interface InfoPanelProps {
   infoHtml?: string;
   infoPanel?: Record<string, unknown>;
   mindmap?: Record<string, unknown>;
+  activityEvents?: AgentActivityEvent[];
   sourcesUsed?: AgentSourceRecord[];
   webSummary?: Record<string, unknown>;
   sourceUsage?: SourceUsageRecord[];
@@ -97,6 +106,7 @@ export function InfoPanel({
   infoHtml = "",
   infoPanel = {},
   mindmap = {},
+  activityEvents = [],
   indexId = null,
   onClearCitationFocus,
   onSelectCitationFocus,
@@ -104,6 +114,7 @@ export function InfoPanel({
   width = 340,
 }: InfoPanelProps) {
   const [viewerHeights, setViewerHeights] = useState<ViewerHeights>(() => loadViewerHeights());
+  const [pinnedCitationFocus, setPinnedCitationFocus] = useState<CitationFocus | null>(citationFocus);
   const dragViewerRef = useRef<ViewerHeightKey | null>(null);
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(0);
@@ -193,6 +204,16 @@ export function InfoPanel({
     [],
   );
 
+  useEffect(() => {
+    if (citationFocus) {
+      setPinnedCitationFocus(citationFocus);
+    }
+  }, [citationFocus]);
+
+  useEffect(() => {
+    setPinnedCitationFocus(citationFocus || null);
+  }, [selectedConversationId]);
+
   const renderViewerResizeHandle = (viewer: ViewerHeightKey, label: string) => {
     return (
       <div
@@ -207,7 +228,13 @@ export function InfoPanel({
     );
   };
 
-  const evidenceCards = useMemo(() => parseEvidence(String(infoHtml || "")), [infoHtml]);
+  const evidenceCards = useMemo(
+    () =>
+      parseEvidence(String(infoHtml || ""), {
+        infoPanel: infoPanel as Record<string, unknown>,
+      }),
+    [infoHtml, infoPanel],
+  );
   const renderedInfoHtml = useMemo(() => renderRichText(String(infoHtml || "")), [infoHtml]);
 
   useCitationAnchorBinding({
@@ -273,6 +300,15 @@ export function InfoPanel({
       : [];
     return nodes.length > 0;
   }, [mindmapPayload]);
+  const artifactRows = useMemo(() => extractArtifactRows(infoPanel), [infoPanel]);
+  const hasArtifacts = artifactRows.length > 0;
+  const { activeWorkspaceTab, setActiveWorkspaceTab } = useWorkspaceRailTab({
+    conversationId: selectedConversationId,
+    hasMindmapPayload,
+    hasArtifacts,
+    hasTheatreFocus: Boolean(citationFocus),
+  });
+  const { workspaceRenderMode, setWorkspaceRenderMode } = useWorkspaceRenderMode();
 
   const mindmapViewerKey = useMemo(() => {
     const payload = mindmapPayload as {
@@ -318,7 +354,23 @@ export function InfoPanel({
       unitId: card.unitId,
       charStart: card.charStart,
       charEnd: card.charEnd,
+      graphNodeIds: card.graphNodeIds,
+      sceneRefs: card.sceneRefs,
+      eventRefs: card.eventRefs,
     });
+  };
+
+  const jumpToEvidenceCard = (rawEvidenceId: string) => {
+    const evidenceId = normalizeEvidenceId(rawEvidenceId);
+    if (!evidenceId) {
+      return;
+    }
+    const index = evidenceCards.findIndex((row) => normalizeEvidenceId(row.id) === evidenceId);
+    if (index < 0) {
+      return;
+    }
+    selectEvidenceCard(evidenceCards[index], index);
+    setActiveWorkspaceTab("evidence");
   };
 
   return (
@@ -329,84 +381,74 @@ export function InfoPanel({
       <div className="border-b border-black/[0.06] px-5 py-4">
         <h3 className="text-[15px] tracking-tight text-[#1d1d1f]">Information panel</h3>
       </div>
+      <WorkspaceRailTabBar
+        activeTab={activeWorkspaceTab}
+        onChangeTab={setActiveWorkspaceTab}
+        workspaceRenderMode={workspaceRenderMode}
+        onChangeRenderMode={setWorkspaceRenderMode}
+      />
+      <WorkspaceFocusSummary citationFocus={pinnedCitationFocus} />
 
       <div id="html-info-panel" className="flex-1 space-y-4 overflow-y-auto px-5 py-6">
-        {hasMindmapPayload ? (
-          <div>
-            <MindmapViewer
-              key={mindmapViewerKey}
-              payload={mindmapPayload}
-              conversationId={selectedConversationId}
-              viewerHeight={viewerHeights.mindmap}
-              onAskNode={onAskMindmapNode}
-              onSaveMap={(payload) => {
-                const storageKey = "maia.saved-mindmaps";
-                try {
-                  const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
-                  const convKey = String(selectedConversationId || "global");
-                  const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
-                  const next = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
-                  existing[convKey] = next;
-                  window.localStorage.setItem(storageKey, JSON.stringify(existing));
-                  toast.success("Mind-map saved");
-                } catch {
-                  toast.error("Unable to save mind-map");
+        {activeWorkspaceTab === "work_graph" ? (
+          hasMindmapPayload ? (
+            <div>
+              <MindmapViewer
+                key={mindmapViewerKey}
+                payload={mindmapPayload}
+                conversationId={selectedConversationId}
+                viewerHeight={viewerHeights.mindmap}
+                onAskNode={onAskMindmapNode}
+                onSaveMap={(payload) => {
+                  const storageKey = "maia.saved-mindmaps";
+                  try {
+                    const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+                    const convKey = String(selectedConversationId || "global");
+                    const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
+                    const next = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
+                    existing[convKey] = next;
+                    window.localStorage.setItem(storageKey, JSON.stringify(existing));
+                    toast.success("Mind-map saved");
+                  } catch {
+                    toast.error("Unable to save mind-map");
+                  }
+                }}
+                onShareMap={(payload) =>
+                  buildMindmapShareLink({
+                    map: payload as unknown as Record<string, unknown>,
+                    conversationId: selectedConversationId,
+                  })
                 }
-              }}
-              onShareMap={(payload) =>
-                buildMindmapShareLink({
-                  map: payload as unknown as Record<string, unknown>,
-                  conversationId: selectedConversationId,
-                })
-              }
-            />
-            {renderViewerResizeHandle("mindmap", "mindmap")}
-          </div>
-        ) : (
-          <div className="rounded-xl bg-[#f5f5f7] p-4 text-[12px] text-[#6e6e73]">
-            Mind-map is not available for this answer.
-          </div>
-        )}
-
-        <div className="rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-          <div className="mb-2 flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Evidence rail</p>
-              <p className="truncate text-[13px] text-[#1d1d1f]" title={`${evidenceCards.length} evidence entries`}>
-                {evidenceCards.length ? `${evidenceCards.length} evidence entries indexed` : "No evidence entries found"}
-              </p>
+              />
+              {renderViewerResizeHandle("mindmap", "mindmap")}
             </div>
+          ) : (
+            <div className="rounded-xl bg-[#f5f5f7] p-4 text-[12px] text-[#6e6e73]">
+              Work graph is not available for this answer.
+            </div>
+          )
+        ) : null}
+
+        {activeWorkspaceTab === "evidence" ? (
+          <div className="rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Evidence rail</p>
+                <p className="truncate text-[13px] text-[#1d1d1f]" title={`${evidenceCards.length} evidence entries`}>
+                  {evidenceCards.length ? `${evidenceCards.length} evidence entries indexed` : "No evidence entries found"}
+                </p>
+              </div>
+            </div>
+
+            <EvidenceCardsList
+              cards={evidenceCards}
+              selectedEvidenceId={normalizeEvidenceId(citationFocus?.evidenceId)}
+              onSelectCard={selectEvidenceCard}
+            />
           </div>
+        ) : null}
 
-          <EvidenceCardsList
-            cards={evidenceCards}
-            selectedEvidenceId={normalizeEvidenceId(citationFocus?.evidenceId)}
-            onSelectCard={selectEvidenceCard}
-          />
-
-          <details className="mt-3 rounded-xl border border-black/[0.08] bg-white px-3 py-2">
-            <summary className="cursor-pointer text-[11px] font-medium text-[#4c4c50]">
-              Rendered citations and report markup
-            </summary>
-            {renderedInfoHtml.trim() ? (
-              <div
-                ref={infoHtmlRef}
-                className="mt-2 max-h-[420px] overflow-auto rounded-lg border border-black/[0.06] bg-white p-3"
-              >
-                <div
-                  className="chat-answer-html assistantAnswerBody info-panel-answer-html text-[13px] leading-[1.5] text-[#1d1d1f]"
-                  dangerouslySetInnerHTML={{ __html: renderedInfoHtml }}
-                />
-              </div>
-            ) : (
-              <div className="mt-2 rounded-lg border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-                This run did not provide rendered evidence HTML.
-              </div>
-            )}
-          </details>
-        </div>
-
-        {citationFocus ? (
+        {activeWorkspaceTab === "theatre" && citationFocus ? (
           <CitationPreviewPanel
             citationFocus={citationFocus}
             citationOpenUrl={citationOpenUrl}
@@ -420,7 +462,32 @@ export function InfoPanel({
             renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
           />
         ) : null}
+
+        {activeWorkspaceTab === "theatre" && !citationFocus ? (
+          <div className="rounded-xl bg-[#f5f5f7] p-4 text-[12px] text-[#6e6e73]">
+            Theatre preview appears here when you select a citation or live scene focus.
+          </div>
+        ) : null}
+
+        {activeWorkspaceTab === "artifacts" ? (
+          <ArtifactCardsPanel artifactRows={artifactRows} onJumpToEvidence={jumpToEvidenceCard} />
+        ) : null}
+
+        {activeWorkspaceTab === "logs" ? (
+          <WorkspaceLogPanel
+            activityEvents={activityEvents}
+            renderedInfoHtml={renderedInfoHtml}
+            infoHtmlRef={infoHtmlRef}
+            workspaceRenderMode={workspaceRenderMode}
+          />
+        ) : null}
       </div>
+      <WorkspaceTimelineDock
+        activeTab={activeWorkspaceTab}
+        citationFocus={pinnedCitationFocus}
+        onSelectCitationFocus={onSelectCitationFocus}
+        workspaceRenderMode={workspaceRenderMode}
+      />
     </div>
   );
 }

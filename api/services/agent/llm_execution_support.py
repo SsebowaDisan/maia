@@ -61,6 +61,26 @@ def build_location_delivery_brief(
     )
 
 
+def draft_delivery_report_content(
+    *,
+    request_message: str,
+    objective: str,
+    report_title: str,
+    executed_steps: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    preferred_tone: str = "",
+) -> dict[str, str]:
+    _sync_call_json_response()
+    return _polishing_module.draft_delivery_report_content(
+        request_message=request_message,
+        objective=objective,
+        report_title=report_title,
+        executed_steps=executed_steps,
+        sources=sources,
+        preferred_tone=preferred_tone,
+    )
+
+
 def curate_next_steps_for_task(
     *,
     request_message: str,
@@ -179,6 +199,7 @@ __all__ = [
     "build_location_delivery_brief",
     "call_json_response",
     "curate_next_steps_for_task",
+    "draft_delivery_report_content",
     "polish_contact_form_content",
     "polish_email_content",
     "rewrite_task_for_execution",

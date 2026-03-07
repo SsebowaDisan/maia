@@ -163,6 +163,52 @@ def test_build_knowledge_map_evidence_has_claim_and_support_edges() -> None:
     assert support_edges, "Evidence map should include support edges."
 
 
+def test_build_knowledge_map_work_graph_includes_variants_and_edge_families() -> None:
+    documents = [
+        {
+            "text": "The planner decomposes goals, then the browser and verifier execute and confirm outcomes.",
+            "metadata": {
+                "source_id": "src_exec",
+                "source_name": "Execution Playbook.pdf",
+                "page_label": "5",
+            },
+        },
+        {
+            "text": "Evidence links connect findings to source snippets for final decision confidence.",
+            "metadata": {
+                "source_id": "src_exec",
+                "source_name": "Execution Playbook.pdf",
+                "page_label": "6",
+            },
+        },
+    ]
+
+    payload = build_knowledge_map(
+        question="How does execution flow across planning, action, and verification?",
+        context="",
+        documents=documents,
+        answer_text="The agent plans, executes, verifies, and links evidence.",
+        include_reasoning_map=False,
+        map_type="work_graph",
+    )
+
+    assert payload["map_type"] == "work_graph"
+    assert payload.get("kind") == "work_graph"
+    assert isinstance(payload.get("graph"), dict)
+    assert payload["graph"].get("schema") == "work_graph.v1"
+    variants = payload.get("variants", {})
+    assert isinstance(variants, dict)
+    assert {"structure", "evidence"}.issubset(set(variants.keys()))
+
+    node_rows = payload.get("nodes", [])
+    assert isinstance(node_rows, list) and node_rows
+    assert any(isinstance(node, dict) and "work_graph_type" in node for node in node_rows)
+
+    edge_rows = payload.get("edges", [])
+    assert isinstance(edge_rows, list) and edge_rows
+    assert all(isinstance(edge, dict) and "edge_family" in edge for edge in edge_rows)
+
+
 def test_compute_balanced_tree_layout_alternates_root_sides() -> None:
     nodes = [
         {"id": "root"},

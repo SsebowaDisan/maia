@@ -1,5 +1,6 @@
 import type { ConnectorCredentialRecord } from "../../../api/client";
 import type { ConnectorDefinition } from "./connectorDefinitions";
+import { formatSceneSummary, type ConnectorCapabilitySummary } from "./pluginCapabilities";
 
 type ConnectorHealth = {
   ok: boolean;
@@ -10,6 +11,7 @@ type ManualConnectorCardProps = {
   connector: ConnectorDefinition;
   health?: ConnectorHealth;
   stored?: ConnectorCredentialRecord;
+  capability?: ConnectorCapabilitySummary;
   currentDraft: Record<string, string>;
   busy: boolean;
   onDraftChange: (fieldKey: string, value: string) => void;
@@ -30,6 +32,7 @@ export function ManualConnectorCard({
   connector,
   health,
   stored,
+  capability,
   currentDraft,
   busy,
   onDraftChange,
@@ -55,6 +58,20 @@ export function ManualConnectorCard({
       </div>
 
       {health?.message ? <p className="mt-3 text-[12px] text-[#6e6e73]">{health.message}</p> : null}
+      {capability ? (
+        <div className="mt-3 rounded-xl border border-[#ececf0] bg-[#fafafa] px-3 py-2">
+          <p className="text-[12px] font-medium text-[#1d1d1f]">
+            Plugin capabilities: {capability.actionCount} actions across {formatSceneSummary(capability.sceneTypes)}
+          </p>
+          <p className="mt-1 text-[11px] text-[#6e6e73]">
+            Evidence emitters {capability.evidenceEmitterCount} · Graph mappings {capability.graphMappingCount} ·{" "}
+            {capability.enabled ? "enabled" : "disabled"}
+          </p>
+          {capability.featuredActions.length ? (
+            <p className="mt-1 text-[11px] text-[#6e6e73]">Key actions: {capability.featuredActions.join(", ")}</p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-3">
         {connector.fields.map((field) => (

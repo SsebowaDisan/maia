@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { getIngestionJob } from "../../../api/client";
 import type { ChatAttachment, ChatTurn } from "../../types";
 import { formatIngestionJobProgress, formatUploadProgress } from "./ingestionProgress";
+import { buildWorkspaceModeOverride } from "./workspaceModeOverride";
 import type { ChatMainProps, ComposerAttachment } from "./types";
 
 const CHAT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
@@ -288,10 +289,11 @@ function useChatMainInteractions({
     if (!payload || isSending) {
       return;
     }
+    const workspaceModeOverride = buildWorkspaceModeOverride();
     const modeSettingOverrides =
       agentMode === "deep_search" && deepSearchProfile === "web_search"
-        ? WEB_SEARCH_SETTING_OVERRIDES
-        : undefined;
+        ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
+        : workspaceModeOverride;
     const turnAttachments: ChatAttachment[] = attachments
       .filter((item) => item.status !== "error")
       .map((item) => ({ name: item.name, fileId: item.fileId }));

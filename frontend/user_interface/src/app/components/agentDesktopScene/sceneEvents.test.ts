@@ -49,4 +49,49 @@ describe("overlayForInteractionEvent", () => {
     expect(overlay?.variant).toBe("human-alert");
     expect(overlay?.text).toContain("failed");
   });
+
+  it("maps zoom actions to focused overlay text", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "pdf_zoom_to_region",
+      sceneSurface: "document",
+      activeDetail: "Inspecting small table text",
+      scrollDirection: "",
+      action: "zoom_to_region",
+      actionPhase: "active",
+      actionStatus: "ok",
+      actionTargetLabel: "totals table",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.text.toLowerCase()).toContain("zoom");
+  });
+
+  it("renders agent handoff overlays", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "agent.handoff",
+      sceneSurface: "website",
+      activeDetail: "Planner to Browser handoff",
+      scrollDirection: "",
+      action: "",
+      actionPhase: "",
+      actionStatus: "info",
+      actionTargetLabel: "",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.text.toLowerCase()).toContain("handing off");
+  });
+
+  it("maps api extract actions to record-centric overlays", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "api_call_started",
+      sceneSurface: "api",
+      activeDetail: "Fetching analytics report",
+      scrollDirection: "",
+      action: "extract",
+      actionPhase: "active",
+      actionStatus: "ok",
+      actionTargetLabel: "",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.text.toLowerCase()).toContain("record");
+  });
 });

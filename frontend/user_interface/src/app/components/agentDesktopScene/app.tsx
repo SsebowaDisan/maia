@@ -1,8 +1,10 @@
 import { renderRichText } from "../../utils/richText";
+import { ApiScene } from "./ApiScene";
 import { BrowserScene } from "./BrowserScene";
 import { DocsScene } from "./DocsScene";
 import { DocumentFallbackScene, DocumentPdfScene } from "./DocumentScenes";
 import { EmailScene } from "./EmailScene";
+import { parseApiSceneState } from "./api_scene_state";
 import {
   asHttpUrl,
   compactValue,
@@ -11,6 +13,7 @@ import {
   parseHighlightRegions,
   parseLiveCopiedWords,
   parsePdfPlaybackState,
+  parseZoomHistory,
   parseScrollPercent,
   parseSheetState,
 } from "./helpers";
@@ -47,7 +50,7 @@ function AgentDesktopScene({
   onSnapshotError,
 }: AgentDesktopSceneProps) {
   const highlightRegions = parseHighlightRegions(activeSceneData);
-  const { dedupedBrowserKeywords, findMatchCount, findQuery, showFindOverlay } =
+  const { dedupedBrowserKeywords, findMatchCount, findQuery, showFindOverlay, semanticFindResults } =
     parseBrowserFindState(activeSceneData, isBrowserScene, activeEventType, highlightRegions);
   const documentHighlights = parseDocumentHighlights(activeSceneData);
 
@@ -78,6 +81,86 @@ function AgentDesktopScene({
     compactValue(actionTarget["title"]) ||
     compactValue(actionTarget["url"]) ||
     compactValue(actionTarget["source_name"]);
+  const copyUsageRefs = Array.isArray(activeSceneData["copy_usage_refs"])
+    ? activeSceneData["copy_usage_refs"]
+        .map((item) => compactValue(item))
+        .filter((item) => item.length > 0)
+        .slice(0, 6)
+    : [];
+  const copyProvenance =
+    activeSceneData["copy_provenance"] && typeof activeSceneData["copy_provenance"] === "object"
+      ? (activeSceneData["copy_provenance"] as Record<string, unknown>)
+      : {};
+  const copySourceSnippet = compactValue(copyProvenance["snippet"]);
+  const compareMode =
+    activeSceneData["compare_mode"] && typeof activeSceneData["compare_mode"] === "object"
+      ? (activeSceneData["compare_mode"] as Record<string, unknown>)
+      : {};
+  const compareLeft =
+    compactValue(activeSceneData["compare_left"]) ||
+    compactValue(activeSceneData["compare_region_a"]) ||
+    compactValue(activeSceneData["compare_a"]) ||
+    compactValue(compareMode["left"]) ||
+    compactValue(compareMode["region_a"]);
+  const compareRight =
+    compactValue(activeSceneData["compare_right"]) ||
+    compactValue(activeSceneData["compare_region_b"]) ||
+    compactValue(activeSceneData["compare_b"]) ||
+    compactValue(compareMode["right"]) ||
+    compactValue(compareMode["region_b"]);
+  const compareVerdict =
+    compactValue(activeSceneData["compare_verdict"]) || compactValue(compareMode["verdict"]);
+  const verifierConflict = Boolean(activeSceneData["verifier_conflict"]);
+  const verifierConflictReason = compactValue(activeSceneData["verifier_conflict_reason"]);
+  const verifierRecheckRequired = Boolean(activeSceneData["verifier_recheck_required"]);
+  const zoomEscalationRequested = Boolean(activeSceneData["zoom_escalation_requested"]);
+  const zoomRaw = Number(activeSceneData["zoom_level"] ?? actionTarget["zoom_level"]);
+  const zoomLevel = Number.isFinite(zoomRaw) && zoomRaw > 0 ? zoomRaw : null;
+  const zoomReason =
+    compactValue(activeSceneData["zoom_reason"]) ||
+    compactValue(actionTarget["zoom_reason"]) ||
+    compactValue(activeSceneData["reason"]);
+  const regionSource =
+    activeSceneData["target_region"] && typeof activeSceneData["target_region"] === "object"
+      ? (activeSceneData["target_region"] as Record<string, unknown>)
+      : actionTarget;
+  const parsePercent = (value: unknown): number | null => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return Math.max(0, Math.min(100, parsed));
+  };
+  const regionX = parsePercent(regionSource["x"] ?? regionSource["region_x"]);
+  const regionY = parsePercent(regionSource["y"] ?? regionSource["region_y"]);
+  const regionWidth = parsePercent(regionSource["width"] ?? regionSource["region_width"]);
+  const regionHeight = parsePercent(regionSource["height"] ?? regionSource["region_height"]);
+  const targetRegion =
+    regionX !== null &&
+    regionY !== null &&
+    regionWidth !== null &&
+    regionHeight !== null &&
+    regionWidth > 0 &&
+    regionHeight > 0
+      ? {
+          keyword: actionTargetLabel || "target",
+          color: "yellow" as const,
+          x: regionX,
+          y: regionY,
+          width: regionWidth,
+          height: regionHeight,
+        }
+      : null;
+  const readingMode = action === "scroll" || action === "extract" || showFindOverlay;
+  const zoomHistory = parseZoomHistory(activeSceneData);
+  const apiSceneState = parseApiSceneState({
+    activeSceneData,
+    activeEventType,
+    actionTargetLabel,
+    actionStatus,
+    sceneText,
+    activeDetail,
+  });
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
@@ -87,6 +170,16 @@ function AgentDesktopScene({
     pdfScanRegion,
     pdfScrollDirection,
     pdfScrollPercent,
+    pdfZoomLevel,
+    pdfZoomReason,
+    pdfTargetRegion,
+    pdfCompareLeft,
+    pdfCompareRight,
+    pdfCompareVerdict,
+    pdfFindQuery,
+    pdfFindMatchCount,
+    pdfSemanticFindResults,
+    zoomHistory: pdfZoomHistory,
   } = parsePdfPlaybackState(activeSceneData, activeEventType);
   const emailBodyPreview = String(emailBodyHint || "").trim();
   const rawDocBodyPreview = String(docBodyHint || "").trim();
@@ -140,18 +233,35 @@ function AgentDesktopScene({
         dedupedBrowserKeywords={dedupedBrowserKeywords}
         findMatchCount={findMatchCount}
         findQuery={findQuery}
+        semanticFindResults={semanticFindResults}
         highlightRegions={highlightRegions}
         onSnapshotError={onSnapshotError}
         providerLabel={providerLabel}
         renderQualityLabel={renderQualityLabel}
         contentDensityLabel={contentDensityLabel}
+        readingMode={readingMode}
         sceneText={sceneText}
         scrollDirection={scrollDirection}
         scrollPercent={scrollPercent}
+        targetRegion={targetRegion}
+        zoomHistory={zoomHistory}
+        zoomLevel={zoomLevel}
+        zoomReason={zoomReason}
+        compareLeft={compareLeft}
+        compareRight={compareRight}
+        compareVerdict={compareVerdict}
+        verifierConflict={verifierConflict}
+        verifierConflictReason={verifierConflictReason}
+        verifierRecheckRequired={verifierRecheckRequired}
+        zoomEscalationRequested={zoomEscalationRequested}
         showFindOverlay={showFindOverlay}
         snapshotUrl={snapshotUrl}
       />
     );
+  }
+
+  if (apiSceneState.isApiScene && !isBrowserScene && !isDocumentScene && !isDocsScene && !isSheetsScene) {
+    return <ApiScene activeTitle={activeTitle} state={apiSceneState} />;
   }
 
   if (
@@ -187,6 +297,8 @@ function AgentDesktopScene({
         emailBodyScrollRef={emailBodyScrollRef}
         emailRecipient={emailRecipient}
         emailSubject={emailSubject}
+        copyUsageRefs={copyUsageRefs}
+        copySourceSnippet={copySourceSnippet}
       />
     );
   }
@@ -206,6 +318,14 @@ function AgentDesktopScene({
         sheetPreviewRows={sheetPreviewRows}
         sheetStatusLine={sheetStatusLine}
         sheetsFrameUrl={sheetsFrameUrl}
+        zoomHistory={zoomHistory}
+        compareLeft={compareLeft}
+        compareRight={compareRight}
+        compareVerdict={compareVerdict}
+        verifierConflict={verifierConflict}
+        verifierConflictReason={verifierConflictReason}
+        verifierRecheckRequired={verifierRecheckRequired}
+        zoomEscalationRequested={zoomEscalationRequested}
       />
     );
   }
@@ -225,6 +345,20 @@ function AgentDesktopScene({
         pdfScanRegion={pdfScanRegion}
         pdfScrollDirection={pdfScrollDirection}
         pdfScrollPercent={pdfScrollPercent}
+        pdfZoomLevel={pdfZoomLevel}
+        pdfZoomReason={pdfZoomReason}
+        zoomHistory={pdfZoomHistory}
+        pdfTargetRegion={pdfTargetRegion}
+        pdfCompareLeft={pdfCompareLeft}
+        pdfCompareRight={pdfCompareRight}
+        pdfCompareVerdict={pdfCompareVerdict}
+        pdfFindQuery={pdfFindQuery}
+        pdfFindMatchCount={pdfFindMatchCount}
+        pdfSemanticFindResults={pdfSemanticFindResults}
+        verifierConflict={verifierConflict}
+        verifierConflictReason={verifierConflictReason}
+        verifierRecheckRequired={verifierRecheckRequired}
+        zoomEscalationRequested={zoomEscalationRequested}
         sceneText={sceneText}
         stageFileUrl={stageFileUrl}
       />

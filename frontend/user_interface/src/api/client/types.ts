@@ -71,6 +71,14 @@ type AgentActivityEvent = {
   detail: string;
   timestamp: string;
   data?: Record<string, unknown>;
+  event_family?: string;
+  event_priority?: string;
+  event_render_mode?: string;
+  event_replay_importance?: string;
+  replay_importance?: string;
+  event_index?: number;
+  graph_node_id?: string | null;
+  scene_ref?: string | null;
   snapshot_ref?: string | null;
   metadata: Record<string, unknown>;
 };
@@ -219,6 +227,69 @@ type ConnectorCredentialRecord = {
   date_updated: string;
 };
 
+type ConnectorPluginActionManifest = {
+  action_id: string;
+  title: string;
+  description: string;
+  event_family:
+    | "plan"
+    | "graph"
+    | "scene"
+    | "browser"
+    | "pdf"
+    | "doc"
+    | "sheet"
+    | "email"
+    | "api"
+    | "verify"
+    | "approval"
+    | "memory"
+    | "artifact"
+    | "system";
+  scene_type: "system" | "browser" | "document" | "email" | "sheet" | "api";
+  tool_ids: string[];
+};
+
+type ConnectorPluginEvidenceEmitter = {
+  emitter_id: string;
+  source_type: "web" | "pdf" | "sheet" | "email" | "api" | "document";
+  fields: string[];
+};
+
+type ConnectorPluginSceneMapping = {
+  scene_type: "system" | "browser" | "document" | "email" | "sheet" | "api";
+  action_ids: string[];
+};
+
+type ConnectorPluginGraphMapping = {
+  action_id: string;
+  node_type:
+    | "task"
+    | "plan_step"
+    | "research"
+    | "browser_action"
+    | "document_review"
+    | "spreadsheet_analysis"
+    | "email_draft"
+    | "verification"
+    | "approval"
+    | "artifact"
+    | "memory_lookup"
+    | "api_operation"
+    | "decision";
+  edge_family: "sequential" | "dependency" | "evidence" | "verification";
+};
+
+type ConnectorPluginManifest = {
+  connector_id: string;
+  label: string;
+  enabled: boolean;
+  actions: ConnectorPluginActionManifest[];
+  evidence_emitters: ConnectorPluginEvidenceEmitter[];
+  scene_mapping: ConnectorPluginSceneMapping[];
+  graph_mapping: ConnectorPluginGraphMapping[];
+};
+
 type GoogleOAuthStatus = {
   connected: boolean;
   scopes: string[];
@@ -287,6 +358,11 @@ export type {
   ChatResponse,
   ChatStreamEvent,
   ConnectorCredentialRecord,
+  ConnectorPluginActionManifest,
+  ConnectorPluginEvidenceEmitter,
+  ConnectorPluginGraphMapping,
+  ConnectorPluginManifest,
+  ConnectorPluginSceneMapping,
   ConversationDetail,
   ConversationSummary,
   DeleteFileGroupResponse,

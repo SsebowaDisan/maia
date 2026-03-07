@@ -73,7 +73,7 @@ function getSharedMindmap(shareId: string) {
 
 function getMindmapBySource(options: {
   sourceId: string;
-  mapType?: "structure" | "evidence";
+  mapType?: "structure" | "evidence" | "work_graph";
   maxDepth?: number;
   includeReasoningMap?: boolean;
 }) {
@@ -88,7 +88,7 @@ function getMindmapBySource(options: {
 
 function exportMindmapMarkdown(options: {
   sourceId: string;
-  mapType?: "structure" | "evidence";
+  mapType?: "structure" | "evidence" | "work_graph";
   maxDepth?: number;
   includeReasoningMap?: boolean;
 }) {

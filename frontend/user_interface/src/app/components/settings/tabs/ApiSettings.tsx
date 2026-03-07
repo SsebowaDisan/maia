@@ -1,5 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
+
+import { listConnectorPlugins, type ConnectorPluginManifest } from "../../../../api/client";
 import { ManualConnectorCard } from "../ManualConnectorCard";
 import type { ConnectorDefinition } from "../connectorDefinitions";
+import { summarizeConnectorCapabilities } from "../pluginCapabilities";
 import { SettingsRow } from "../ui/SettingsRow";
 import { SettingsSection } from "../ui/SettingsSection";
 import { StatusChip, toneFromBoolean } from "../ui/StatusChip";
@@ -49,6 +53,32 @@ export function ApiSettings({
 }: ApiSettingsProps) {
   const mapsChip = toneFromBoolean(mapsStatus.configured, { trueLabel: "Configured", falseLabel: "Not configured" });
   const braveChip = toneFromBoolean(braveStatus.configured, { trueLabel: "Configured", falseLabel: "Not configured" });
+  const [pluginManifests, setPluginManifests] = useState<ConnectorPluginManifest[]>([]);
+  const [pluginStatus, setPluginStatus] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    void listConnectorPlugins()
+      .then((rows) => {
+        if (!mounted) {
+          return;
+        }
+        setPluginManifests(Array.isArray(rows) ? rows : []);
+        setPluginStatus("");
+      })
+      .catch(() => {
+        if (!mounted) {
+          return;
+        }
+        setPluginManifests([]);
+        setPluginStatus("Plugin capabilities are temporarily unavailable.");
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const capabilityMap = useMemo(() => summarizeConnectorCapabilities(pluginManifests), [pluginManifests]);
 
   return (
     <>
@@ -134,9 +164,21 @@ export function ApiSettings({
         <SettingsRow
           title="Manual connectors"
           description={`Configure ${connectors.length} connectors from the list below.`}
-          right={<StatusChip label={`${connectors.length} total`} tone="neutral" />}
+          right={
+            <StatusChip
+              label={`${Object.keys(capabilityMap).length || connectors.length} total`}
+              tone="neutral"
+            />
+          }
           noDivider
         />
+        {pluginStatus ? (
+          <p className="mt-2 text-[12px] text-[#6e6e73]">{pluginStatus}</p>
+        ) : (
+          <p className="mt-2 text-[12px] text-[#6e6e73]">
+            Runtime plugin capabilities are synced from `/api/agent/connectors/plugins`.
+          </p>
+        )}
       </SettingsSection>
 
       {statusMessage ? (
@@ -157,6 +199,7 @@ export function ApiSettings({
               connector={connector}
               health={health}
               stored={stored}
+              capability={capabilityMap[connector.id]}
               currentDraft={currentDraft}
               busy={busy}
               onDraftChange={(fieldKey, value) => onDraftChange(connector.id, fieldKey, value)}

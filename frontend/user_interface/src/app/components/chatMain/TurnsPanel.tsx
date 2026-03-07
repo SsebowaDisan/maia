@@ -1,7 +1,7 @@
 import { Check, Copy, ExternalLink, FileText, PenLine, RotateCcw, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { buildRawFileUrl } from "../../../api/client";
-import type { AgentActivityEvent, ChatTurn } from "../../types";
+import type { AgentActivityEvent, ChatTurn, CitationFocus } from "../../types";
 import { parseEvidence } from "../../utils/infoInsights";
 import type { EvidenceCard } from "../../utils/infoInsights";
 import { renderRichText } from "../../utils/richText";
@@ -30,6 +30,7 @@ type TurnsPanelProps = {
   saveInlineEdit: () => Promise<void>;
   selectedTurnIndex: number | null;
   setEditingText: (value: string) => void;
+  citationFocus?: CitationFocus | null;
 };
 
 function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
@@ -93,6 +94,7 @@ function TurnsPanel({
   saveInlineEdit,
   selectedTurnIndex,
   setEditingText,
+  citationFocus = null,
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
   const evidenceCacheRef = useRef<Map<number, { info: string; cards: EvidenceCard[] }>>(new Map());
@@ -249,7 +251,9 @@ function TurnsPanel({
       if (cached && cached.info === infoHtml) {
         return cached.cards;
       }
-      const cards = parseEvidence(infoHtml);
+      const cards = parseEvidence(infoHtml, {
+        infoPanel: (turn.infoPanel as Record<string, unknown>) || null,
+      });
       evidenceCacheRef.current.set(turnIndex, { info: infoHtml, cards });
       return cards;
     };
@@ -555,6 +559,21 @@ function TurnsPanel({
                     stageAttachment={stageAttachment}
                     needsHumanReview={Boolean(turn.needsHumanReview)}
                     humanReviewNotes={turn.humanReviewNotes || null}
+                    jumpTarget={
+                      selectedTurnIndex === index && citationFocus
+                        ? {
+                            graphNodeIds: citationFocus.graphNodeIds || [],
+                            sceneRefs: citationFocus.sceneRefs || [],
+                            eventRefs: citationFocus.eventRefs || [],
+                            nonce: [
+                              citationFocus.evidenceId || "",
+                              citationFocus.graphNodeIds?.join("|") || "",
+                              citationFocus.sceneRefs?.join("|") || "",
+                              citationFocus.eventRefs?.join("|") || "",
+                            ].join(":"),
+                          }
+                        : null
+                    }
                   />
                 </div>
               </div>

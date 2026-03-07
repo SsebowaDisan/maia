@@ -341,7 +341,11 @@ function resolveCitationFocusFromAnchor(params: {
   evidenceCards?: EvidenceCard[];
 }): ResolvedCitationFocus {
   const { turn, citationAnchor } = params;
-  const evidenceCards = params.evidenceCards || parseEvidence(turn.info || "");
+  const evidenceCards =
+    params.evidenceCards ||
+    parseEvidence(turn.info || "", {
+      infoPanel: (turn.infoPanel as Record<string, unknown>) || null,
+    });
   const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
   const pageAttr = citationAnchor.getAttribute("data-page") || "";
   const sourceUrlAttr = citationAnchor.getAttribute("data-source-url") || "";
@@ -458,6 +462,9 @@ function resolveCitationFocusFromAnchor(params: {
     unitId: unitIdAttr || matchedEvidence?.unitId,
     charStart: charStartAttrRaw && Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
     charEnd: charEndAttrRaw && Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
+    graphNodeIds: matchedEvidence?.graphNodeIds,
+    sceneRefs: matchedEvidence?.sceneRefs,
+    eventRefs: matchedEvidence?.eventRefs,
   };
 
   return {

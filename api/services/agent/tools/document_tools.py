@@ -132,6 +132,10 @@ class DocumentCreateTool(AgentTool):
         )
         if copied_section:
             body = f"{body}\n\n{copied_section}"
+        if body:
+            context.settings["__latest_report_content"] = body
+        if title:
+            context.settings["__latest_report_title"] = title
 
         trace_events: list[ToolTraceEvent] = []
         trace_events.append(

@@ -9,6 +9,7 @@ from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 from api.services.agent.tools.base import ToolExecutionContext, ToolTraceEvent
 from api.services.agent.tools.theater_cursor import cursor_payload
+from api.services.agent.zoom_history import enrich_event_data_with_zoom
 from .role_contracts import resolve_owner_role_for_tool
 
 
@@ -25,20 +26,84 @@ class LiveRunStream:
         self.user_id = user_id
         self.run_id = run_id
         self.observed_event_types = observed_event_types
+        self._latest_copy_by_surface: dict[str, dict[str, Any]] = {}
+        self._latest_copy_any: dict[str, Any] | None = None
 
     def emit(self, event: AgentActivityEvent) -> dict[str, Any]:
+        event_data = dict(event.data or {})
+        event_index = (
+            int(event.seq)
+            if isinstance(event.seq, int) and event.seq > 0
+            else len(self.observed_event_types) + 1
+        )
+        graph_node_id = str(event_data.get("graph_node_id") or "").strip()
+        scene_ref = str(event_data.get("scene_ref") or "").strip()
+        replay_importance = str(event_data.get("event_replay_importance") or "").strip()
+        event_data = enrich_event_data_with_zoom(
+            data=event_data,
+            event_type=event.event_type,
+            event_id=event.event_id,
+            event_index=event_index,
+            timestamp=event.timestamp,
+            graph_node_id=graph_node_id,
+            scene_ref=scene_ref,
+        )
+        event_data = self._enrich_copy_provenance(
+            event=event,
+            payload=event_data,
+            event_index=event_index,
+            graph_node_id=graph_node_id,
+            scene_ref=scene_ref,
+        )
+        graph_node_id = str(event_data.get("graph_node_id") or graph_node_id).strip()
+        scene_ref = str(event_data.get("scene_ref") or scene_ref).strip()
+        event_data.setdefault("event_index", event_index)
+        if graph_node_id:
+            event_data.setdefault("graph_node_id", graph_node_id)
+        if scene_ref:
+            event_data.setdefault("scene_ref", scene_ref)
+        if replay_importance:
+            event_data.setdefault("replay_importance", replay_importance)
+        event_data.setdefault(
+            "timeline",
+            {
+                "event_index": event_index,
+                "replay_importance": replay_importance or "normal",
+                "graph_node_id": graph_node_id or None,
+                "scene_ref": scene_ref or None,
+            },
+        )
+        event.data = dict(event_data)
+        event.metadata = dict(event_data)
         self.observed_event_types.append(event.event_type)
         self.activity_store.append(event)
+        event_family = str(event_data.get("event_family") or "").strip()
+        event_priority = str(event_data.get("event_priority") or "").strip()
+        event_render_mode = str(event_data.get("event_render_mode") or "").strip()
         get_live_event_broker().publish(
             user_id=self.user_id,
             run_id=self.run_id,
             event={
                 "type": event.event_type,
+                "event_type": event.event_type,
                 "message": event.title,
+                "title": event.title,
+                "detail": event.detail,
                 "data": event.data,
                 "run_id": self.run_id,
                 "event_id": event.event_id,
                 "seq": event.seq,
+                "stage": event.stage,
+                "status": event.status,
+                "event_schema_version": event.event_schema_version,
+                "snapshot_ref": event.snapshot_ref,
+                "event_family": event_family or None,
+                "event_priority": event_priority or None,
+                "event_render_mode": event_render_mode or None,
+                "event_index": event_index,
+                "replay_importance": replay_importance or None,
+                "graph_node_id": graph_node_id or None,
+                "scene_ref": scene_ref or None,
             },
         )
         return {"type": "activity", "event": event.to_dict()}
@@ -79,17 +144,30 @@ class LiveRunStream:
             if inferred:
                 return inferred
 
-        if normalized_event.startswith(("browser_", "web_", "brave.", "bing.")):
+        if str(payload.get("event_family") or "").strip().lower() == "api":
+            return "api"
+        if str(payload.get("plugin_scene_type") or "").strip().lower() == "api":
+            return "api"
+        if (
+            str(payload.get("connector_id") or "").strip()
+            or str(payload.get("integration_id") or "").strip()
+            or str(payload.get("plugin_connector_id") or "").strip()
+        ):
+            return "api"
+
+        if normalized_event.startswith(("api_", "api.")):
+            return "api"
+        if normalized_event.startswith(("browser_", "browser.", "web_", "web.", "brave.", "bing.")):
             return "website"
         if normalized_event.startswith("role_"):
             return "system"
         if normalized_event.startswith(("email_", "email.", "gmail_", "gmail.")):
             return "email"
-        if normalized_event.startswith(("sheet_", "sheets.")) or normalized_event == "drive.go_to_sheet":
+        if normalized_event.startswith(("sheet_", "sheet.", "sheets.")) or normalized_event == "drive.go_to_sheet":
             return "google_sheets"
-        if normalized_event.startswith(("document_", "pdf_")):
+        if normalized_event.startswith(("document_", "pdf_", "pdf.")):
             return "document"
-        if normalized_event.startswith(("doc_", "docs.")) or normalized_event == "drive.go_to_doc":
+        if normalized_event.startswith(("doc_", "doc.", "docs.")) or normalized_event == "drive.go_to_doc":
             return "google_docs"
         if normalized_event.startswith("drive."):
             if normalized_tool.startswith("workspace.sheets."):
@@ -137,6 +215,105 @@ class LiveRunStream:
         return None
 
     @staticmethod
+    def _clean_text(value: Any) -> str:
+        return " ".join(str(value or "").split()).strip()
+
+    @staticmethod
+    def _string_list(value: Any, *, limit: int = 12) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        cleaned = [LiveRunStream._clean_text(item) for item in value]
+        return list(dict.fromkeys([item for item in cleaned if item]))[: max(1, int(limit or 1))]
+
+    @staticmethod
+    def _is_copy_source_event(*, event_type: str, action: str, payload: dict[str, Any]) -> bool:
+        if LiveRunStream._clean_text(payload.get("clipboard_text")):
+            return True
+        if LiveRunStream._string_list(payload.get("copied_words"), limit=16):
+            return True
+        if LiveRunStream._string_list(payload.get("copied_snippets"), limit=8):
+            return True
+        normalized_event = str(event_type or "").strip().lower()
+        normalized_action = str(action or "").strip().lower()
+        return normalized_action == "extract" and ("copy" in normalized_event or "clipboard" in normalized_event)
+
+    @staticmethod
+    def _is_copy_usage_event(*, action: str, payload: dict[str, Any]) -> bool:
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action != "type":
+            return False
+        if LiveRunStream._clean_text(payload.get("clipboard_text")):
+            return False
+        return True
+
+    def _enrich_copy_provenance(
+        self,
+        *,
+        event: AgentActivityEvent,
+        payload: dict[str, Any],
+        event_index: int,
+        graph_node_id: str,
+        scene_ref: str,
+    ) -> dict[str, Any]:
+        data = dict(payload or {})
+        action = str(data.get("action") or "").strip().lower()
+        scene_surface = str(data.get("scene_surface") or "").strip().lower()
+        source_url = (
+            self._clean_text(data.get("source_url"))
+            or self._clean_text(data.get("url"))
+            or self._clean_text(data.get("target_url"))
+        )
+        snippet = self._clean_text(data.get("clipboard_text"))[:420]
+        copied_words = self._string_list(data.get("copied_words"), limit=16)
+        copied_snippets = self._string_list(data.get("copied_snippets"), limit=8)
+        existing_usage_refs = self._string_list(data.get("copy_usage_refs"), limit=12)
+
+        if self._is_copy_source_event(event_type=event.event_type, action=action, payload=data):
+            provenance = {
+                "copy_event_ref": event.event_id,
+                "copy_event_index": event_index,
+                "scene_surface": scene_surface,
+                "scene_ref": scene_ref,
+                "graph_node_id": graph_node_id,
+                "timestamp": event.timestamp,
+                "source_url": source_url,
+                "snippet": snippet,
+                "copied_words": copied_words,
+                "copied_snippets": copied_snippets,
+            }
+            provenance = {key: value for key, value in provenance.items() if value not in (None, "", [])}
+            data["copy_provenance"] = provenance
+            data["copy_role"] = "source"
+            if scene_surface:
+                self._latest_copy_by_surface[scene_surface] = provenance
+            self._latest_copy_any = provenance
+            return data
+
+        if self._is_copy_usage_event(action=action, payload=data):
+            source = self._latest_copy_by_surface.get(scene_surface) or self._latest_copy_any
+            if isinstance(source, dict) and source:
+                copy_ref = self._clean_text(source.get("copy_event_ref"))
+                if copy_ref and copy_ref not in existing_usage_refs:
+                    existing_usage_refs.append(copy_ref)
+                if existing_usage_refs:
+                    data["copy_usage_refs"] = existing_usage_refs[:12]
+                usage = {
+                    "usage_event_ref": event.event_id,
+                    "usage_event_index": event_index,
+                    "copy_event_ref": copy_ref,
+                    "copy_event_index": source.get("copy_event_index"),
+                    "scene_surface": source.get("scene_surface"),
+                    "scene_ref": source.get("scene_ref"),
+                    "graph_node_id": source.get("graph_node_id"),
+                    "source_url": source.get("source_url"),
+                    "snippet": source.get("snippet"),
+                }
+                usage = {key: value for key, value in usage.items() if value not in (None, "", [])}
+                data["copy_provenance"] = usage
+                data["copy_role"] = "usage"
+        return data
+
+    @staticmethod
     def _enrich_interaction_payload(
         *,
         event_type: str,
@@ -157,15 +334,22 @@ class LiveRunStream:
         interactive_event = normalized_event.startswith(
             (
                 "browser_",
+                "browser.",
                 "web_",
+                "web.",
                 "pdf_",
+                "pdf.",
                 "doc_",
+                "doc.",
                 "docs.",
                 "sheet_",
+                "sheet.",
                 "sheets.",
                 "drive.",
                 "email_",
+                "email.",
                 "gmail_",
+                "gmail.",
                 "clipboard_",
             )
         )

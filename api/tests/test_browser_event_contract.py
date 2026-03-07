@@ -124,3 +124,112 @@ def test_normalize_browser_event_propagates_owner_role_and_v2_schema() -> None:
     data = normalized.get("data") or {}
     assert data.get("owner_role") == "browser"
     assert data.get("event_schema_version") == "interaction_v2"
+    assert data.get("event_family") == "browser"
+    assert data.get("event_render_mode") in {"animate_live", "summarize", "compress", "replay_later"}
+    assert isinstance(data.get("event_envelope"), dict)
+
+
+def test_normalize_browser_event_maps_zoom_to_region_action() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_zoom_to_region",
+            "title": "Zoom to region",
+            "detail": "Inspect totals table",
+            "data": {
+                "zoom_level": 2.0,
+                "content_density": 0.82,
+                "confidence": 0.41,
+                "target_region": {"x": 120, "y": 220, "width": 300, "height": 160},
+                "zoom_reason": "small text",
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("action") == "zoom_to_region"
+    assert data.get("scene_surface") == "website"
+    assert data.get("action_target", {}).get("zoom_level") == 2.0
+    assert isinstance(data.get("action_target", {}).get("target_region"), dict)
+    assert data.get("zoom_policy_version") == "zoom_policy_v1"
+    assert data.get("zoom_policy_triggered") is True
+    assert "text_density_high" in list(data.get("zoom_policy_triggers") or [])
+
+
+def test_normalize_browser_event_marks_zoom_recommendation_for_low_confidence_extract() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_extract",
+            "title": "Extract facts",
+            "detail": "Capture page summary",
+            "data": {
+                "confidence": 0.2,
+                "content_density": 0.9,
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("zoom_policy_recommended") is True
+    assert data.get("zoom_policy_triggered") is False
+    assert "confidence_low" in list(data.get("zoom_policy_triggers") or [])
+
+
+def test_normalize_browser_event_derives_semantic_find_results() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_find_in_page",
+            "title": "Find in page",
+            "detail": "operating margin",
+            "data": {
+                "find_query": "operating margin",
+                "keywords": ["operating margin", "gross margin", "net margin"],
+                "match_count": 4,
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    results = list(data.get("semantic_find_results") or [])
+    assert data.get("semantic_find_query") == "operating margin"
+    assert data.get("semantic_find_source") in {"keywords", "semantic_find_terms"}
+    assert len(results) >= 1
+    assert results[0].get("term")
+    assert isinstance(results[0].get("confidence"), float)
+
+
+def test_normalize_browser_event_sets_compare_mode_payload() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_compare_sources",
+            "title": "Compare sources",
+            "detail": "Cross-check claims",
+            "data": {
+                "scene_surface": "website",
+                "compare_left": "Source A revenue growth: 31%",
+                "compare_right": "Source B revenue growth: 29%",
+                "compare_verdict": "Minor discrepancy",
+                "compare_confidence": 0.74,
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("compare_mode_enabled") is True
+    assert data.get("compare_left")
+    assert data.get("compare_right")
+    assert isinstance(data.get("compare_mode"), dict)
+
+
+def test_normalize_browser_event_flags_verifier_conflict_for_low_confidence_verify() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_verify",
+            "title": "Verify claim support",
+            "detail": "Checking evidence",
+            "data": {
+                "action": "verify",
+                "verification_confidence": 0.49,
+                "citation_support_ratio": 0.44,
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("verifier_conflict") is True
+    assert data.get("verifier_recheck_required") is True
+    assert data.get("zoom_escalation_requested") is True

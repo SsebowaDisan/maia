@@ -24,11 +24,12 @@ import type {
 type AgentMode = "ask" | "company_agent" | "deep_search";
 type AccessMode = "restricted" | "full_access";
 const MINDMAP_SETTINGS_STORAGE_KEY = "maia.conversation-mindmap-settings";
+type MindmapMapType = "structure" | "evidence" | "work_graph";
 type ConversationMindmapSettings = {
   enabled: boolean;
   maxDepth: number;
   includeReasoningMap: boolean;
-  mapType: "structure" | "evidence";
+  mapType: MindmapMapType;
 };
 const DEEP_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
   __deep_search_enabled: true,
@@ -59,6 +60,17 @@ type SendMessageOptions = {
   agentMode?: AgentMode;
   accessMode?: AccessMode;
 };
+
+function normalizeMindmapMapType(raw: unknown): MindmapMapType {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "work_graph") {
+    return "work_graph";
+  }
+  if (value === "evidence") {
+    return "evidence";
+  }
+  return "structure";
+}
 
 function readStringList(value: unknown, limit = 8): string[] {
   if (!Array.isArray(value)) {
@@ -146,7 +158,7 @@ export function useConversationChat({
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
   const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
   const [mindmapIncludeReasoning, setMindmapIncludeReasoning] = useState(true);
-  const [mindmapMapType, setMindmapMapType] = useState<"structure" | "evidence">("structure");
+  const [mindmapMapType, setMindmapMapType] = useState<MindmapMapType>("structure");
   const [conversationMindmapSettings, setConversationMindmapSettings] = useState<
     Record<string, ConversationMindmapSettings>
   >(() => {
@@ -159,7 +171,23 @@ export function useConversationChat({
         return {};
       }
       const parsed = JSON.parse(raw) as Record<string, ConversationMindmapSettings>;
-      return parsed && typeof parsed === "object" ? parsed : {};
+      if (!parsed || typeof parsed !== "object") {
+        return {};
+      }
+      const normalized: Record<string, ConversationMindmapSettings> = {};
+      for (const [conversationId, value] of Object.entries(parsed)) {
+        if (!value || typeof value !== "object") {
+          continue;
+        }
+        const candidate = value as Partial<ConversationMindmapSettings>;
+        normalized[conversationId] = {
+          enabled: Boolean(candidate.enabled),
+          maxDepth: Math.max(2, Math.min(8, Number(candidate.maxDepth || 4))),
+          includeReasoningMap: Boolean(candidate.includeReasoningMap),
+          mapType: normalizeMindmapMapType(candidate.mapType),
+        };
+      }
+      return normalized;
     } catch {
       return {};
     }
@@ -257,7 +285,7 @@ export function useConversationChat({
         setMindmapEnabled(Boolean(mapSettings.enabled));
         setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
         setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
-        setMindmapMapType(mapSettings.mapType === "evidence" ? "evidence" : "structure");
+        setMindmapMapType(normalizeMindmapMapType(mapSettings.mapType));
       } else {
         setMindmapEnabled(true);
         setMindmapMaxDepth(4);
@@ -607,9 +635,7 @@ export function useConversationChat({
                 mindmapIncludeReasoning,
             ),
             mapType:
-              (String(options?.mindmapSettings?.["map_type"] || mindmapMapType).toLowerCase() === "evidence"
-                ? "evidence"
-                : "structure"),
+              normalizeMindmapMapType(options?.mindmapSettings?.["map_type"] || mindmapMapType),
           },
         }));
         setInfoText(response.info || "");

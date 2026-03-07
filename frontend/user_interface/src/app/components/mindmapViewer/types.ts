@@ -1,3 +1,5 @@
+export type MindmapMapType = "structure" | "evidence" | "work_graph";
+
 export type MindmapNode = {
   id: string;
   title: string;
@@ -34,7 +36,7 @@ export type ReasoningEdge = {
 
 export type MindmapPayload = {
   version?: number;
-  map_type?: "structure" | "evidence";
+  map_type?: MindmapMapType;
   kind?: string;
   title?: string;
   root_id?: string;
@@ -65,5 +67,5 @@ export type MindMapViewerProps = {
   onAskNode?: (payload: FocusNodePayload) => void;
   onSaveMap?: (payload: MindmapPayload) => void;
   onShareMap?: (payload: MindmapPayload) => Promise<string | void> | string | void;
-  onMapTypeChange?: (mapType: "structure" | "evidence") => void;
+  onMapTypeChange?: (mapType: MindmapMapType) => void;
 };

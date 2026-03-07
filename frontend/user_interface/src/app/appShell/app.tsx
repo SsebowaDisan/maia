@@ -4,10 +4,12 @@ import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
 import { HelpView } from "../components/HelpView";
 import { InfoPanel } from "../components/InfoPanel";
+import { LeftExecutionRail } from "../components/LeftExecutionRail";
 import { ResourcesView } from "../components/ResourcesView";
 import { SettingsView } from "../components/SettingsView";
 import { TopNav } from "../components/TopNav";
 import { WorkspaceOverlayModal, type WorkspaceOverlayTab } from "../components/WorkspaceOverlayModal";
+import { NodeFollowUpModal } from "../components/mindmapViewer/NodeFollowUpModal";
 import { getSharedMindmap } from "../../api/client";
 import {
   clearCitationDeepLinkInUrl,
@@ -23,18 +25,24 @@ import { useConversationChat } from "./useConversationChat";
 import { useFileLibrary } from "./useFileLibrary";
 import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
-
 type WorkspaceModalTab = WorkspaceOverlayTab;
+type MindmapNodeFollowUpDraft = {
+  nodeId: string;
+  title: string;
+  text: string;
+  pageRef?: string;
+  sourceId?: string;
+  sourceName?: string;
+  defaultPrompt: string;
+};
 
 function isWorkspaceModalTab(value: string): value is WorkspaceModalTab {
   return value === "Files" || value === "Resources" || value === "Settings" || value === "Help";
 }
-
 function hasHttpUrl(value: unknown): boolean {
   const text = String(value || "").trim();
   return /^https?:\/\//i.test(text);
 }
-
 function webSummaryHasUrl(value: unknown): boolean {
   if (!value || typeof value !== "object") {
     return false;
@@ -65,13 +73,14 @@ function webSummaryHasUrl(value: unknown): boolean {
   }
   return false;
 }
-
 export default function App() {
   const deepLinkHandledRef = useRef(false);
   const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
   const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
   const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
+  const [mindmapNodeFollowUp, setMindmapNodeFollowUp] = useState<MindmapNodeFollowUpDraft | null>(null);
+  const [isSendingMindmapFollowUp, setIsSendingMindmapFollowUp] = useState(false);
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -226,6 +235,7 @@ export default function App() {
     ? chatState.chatTurns[chatState.chatTurns.length - 1] || null
     : null;
   const activeTurn = selectedTurn || latestTurn;
+  const pendingSteps = Array.isArray(activeTurn?.nextRecommendedSteps) ? activeTurn.nextRecommendedSteps : [];
   const selectedTurnMindmap =
     activeTurn?.mindmap && Object.keys(activeTurn.mindmap || {}).length > 0
       ? activeTurn.mindmap
@@ -367,6 +377,7 @@ export default function App() {
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={openWorkspaceModal}
             />
+            <LeftExecutionRail activityEvents={chatState.activityEvents} pendingSteps={pendingSteps} />
 
             {!layout.isSidebarCollapsed ? (
               <ResizeHandle
@@ -417,6 +428,7 @@ export default function App() {
                 layout.setActiveTab("Chat");
                 layout.setIsInfoPanelOpen(true);
               }}
+              citationFocus={chatState.citationFocus}
             />
 
             {isInfoPanelVisible ? (
@@ -440,6 +452,7 @@ export default function App() {
                 infoHtml={activeTurn?.info || ""}
                 infoPanel={activeTurn?.infoPanel || {}}
                 mindmap={effectiveMindmapPayload}
+                activityEvents={chatState.activityEvents}
                 sourcesUsed={activeTurn?.sourcesUsed || []}
                 webSummary={activeTurn?.webSummary || {}}
                 sourceUsage={activeTurn?.sourceUsage || []}
@@ -452,33 +465,63 @@ export default function App() {
                   const defaultPrompt = focusTitle
                     ? `What are the most important details about "${focusTitle}"?`
                     : "What are the most important details about this selected topic?";
-                  const typedPrompt = window.prompt(
-                    "Ask a focused follow-up for this node:",
+                  setMindmapNodeFollowUp({
+                    nodeId: node.nodeId,
+                    title: focusTitle,
+                    text: focusText,
+                    pageRef: node.pageRef,
+                    sourceId: node.sourceId,
+                    sourceName: node.sourceName,
                     defaultPrompt,
-                  );
-                  if (typedPrompt === null) {
+                  });
+                }}
+              />
+            ) : null}
+
+            {mindmapNodeFollowUp ? (
+              <NodeFollowUpModal
+                open
+                nodeTitle={mindmapNodeFollowUp.title}
+                nodeText={mindmapNodeFollowUp.text}
+                sourceName={mindmapNodeFollowUp.sourceName}
+                defaultPrompt={mindmapNodeFollowUp.defaultPrompt}
+                submitting={isSendingMindmapFollowUp}
+                onCancel={() => {
+                  if (isSendingMindmapFollowUp) {
                     return;
                   }
-                  const nextPrompt = typedPrompt.trim() || defaultPrompt;
-                  void chatState.handleSendMessage(nextPrompt, undefined, {
-                    citationMode: chatState.citationMode,
-                    useMindmap: chatState.mindmapEnabled,
-                    mindmapSettings: {
-                      max_depth: chatState.mindmapMaxDepth,
-                      include_reasoning_map: chatState.mindmapIncludeReasoning,
-                      map_type: chatState.mindmapMapType,
-                    },
-                    mindmapFocus: {
-                      node_id: node.nodeId,
-                      title: focusTitle,
-                      text: focusText,
-                      page_ref: node.pageRef,
-                      source_id: node.sourceId,
-                      source_name: node.sourceName,
-                    },
-                    agentMode: chatState.composerMode,
-                    accessMode: chatState.accessMode,
-                  });
+                  setMindmapNodeFollowUp(null);
+                }}
+                onSubmit={async (typedPrompt) => {
+                  if (!mindmapNodeFollowUp) {
+                    return;
+                  }
+                  const nextPrompt = String(typedPrompt || "").trim() || mindmapNodeFollowUp.defaultPrompt;
+                  setIsSendingMindmapFollowUp(true);
+                  try {
+                    await chatState.handleSendMessage(nextPrompt, undefined, {
+                      citationMode: chatState.citationMode,
+                      useMindmap: chatState.mindmapEnabled,
+                      mindmapSettings: {
+                        max_depth: chatState.mindmapMaxDepth,
+                        include_reasoning_map: chatState.mindmapIncludeReasoning,
+                        map_type: chatState.mindmapMapType,
+                      },
+                      mindmapFocus: {
+                        node_id: mindmapNodeFollowUp.nodeId,
+                        title: mindmapNodeFollowUp.title,
+                        text: mindmapNodeFollowUp.text,
+                        page_ref: mindmapNodeFollowUp.pageRef,
+                        source_id: mindmapNodeFollowUp.sourceId,
+                        source_name: mindmapNodeFollowUp.sourceName,
+                      },
+                      agentMode: chatState.composerMode,
+                      accessMode: chatState.accessMode,
+                    });
+                    setMindmapNodeFollowUp(null);
+                  } finally {
+                    setIsSendingMindmapFollowUp(false);
+                  }
                 }}
               />
             ) : null}

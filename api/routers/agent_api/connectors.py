@@ -32,6 +32,26 @@ def connector_health(
     return get_connector_registry().health_report(settings=settings)
 
 
+@router.get("/connectors/plugins")
+def connector_plugins(
+    user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
+    settings = load_user_settings(get_context(), user_id)
+    return get_connector_registry().plugin_manifests(settings=settings)
+
+
+@router.get("/connectors/plugins/{connector_id}")
+def connector_plugin(
+    connector_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    registry = get_connector_registry()
+    if connector_id not in registry.names():
+        raise HTTPException(status_code=404, detail="Unknown connector.")
+    settings = load_user_settings(get_context(), user_id)
+    return registry.plugin_manifest(connector_id=connector_id, settings=settings)
+
+
 @router.post("/connectors/credentials")
 def upsert_connector_credentials(
     payload: CredentialUpsertRequest,

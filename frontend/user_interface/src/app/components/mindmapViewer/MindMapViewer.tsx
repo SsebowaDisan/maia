@@ -13,7 +13,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { MindNodeCard } from "./MindNodeCard";
-import type { MindMapViewerProps, MindmapPayload } from "./types";
+import type { MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
 import {
   computeDepths,
   isDescendant,
@@ -60,6 +60,57 @@ function CurvedMindEdge({
 
 const edgeTypes = { mindCurve: CurvedMindEdge };
 
+function normalizeMapType(raw: unknown): MindmapMapType {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "work_graph") {
+    return "work_graph";
+  }
+  if (value === "evidence") {
+    return "evidence";
+  }
+  return "structure";
+}
+
+function detectDefaultMapType(payload: MindmapPayload | null): MindmapMapType {
+  if (!payload) {
+    return "structure";
+  }
+  const direct = normalizeMapType(payload.map_type);
+  if (direct === "work_graph" || String(payload.kind || "").trim().toLowerCase() === "work_graph") {
+    return "work_graph";
+  }
+  const variants = payload.variants;
+  if (variants && typeof variants === "object" && Object.prototype.hasOwnProperty.call(variants, "work_graph")) {
+    return "work_graph";
+  }
+  return direct;
+}
+
+function _compactNodeValue(raw: unknown): string {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.length <= 40) {
+    return text;
+  }
+  return `${text.slice(0, 37).trimEnd()}...`;
+}
+
+function payloadSupportsMapType(payload: MindmapPayload | null, mapType: MindmapMapType): boolean {
+  if (!payload) {
+    return false;
+  }
+  if (normalizeMapType(payload.map_type) === mapType) {
+    return true;
+  }
+  const variants = payload.variants;
+  if (!variants || typeof variants !== "object") {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(variants, mapType);
+}
+
 export function MindMapViewer({
   payload: rawPayload,
   conversationId = null,
@@ -70,13 +121,13 @@ export function MindMapViewer({
   const effectiveViewerHeight = Math.max(260, Math.min(1200, Math.round(Number(viewerHeight) || 520)));
   const basePayload = useMemo(() => toMindmapPayload(rawPayload), [rawPayload]);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<string[]>([]);
-  const [activeMapType, setActiveMapType] = useState<"structure" | "evidence">("structure");
+  const [activeMapType, setActiveMapType] = useState<MindmapMapType>("structure");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [lastFitKey, setLastFitKey] = useState("");
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
 
   useEffect(() => {
-    const detected = basePayload?.map_type === "evidence" ? "evidence" : "structure";
+    const detected = detectDefaultMapType(basePayload);
     setActiveMapType(detected);
   }, [basePayload]);
 
@@ -84,7 +135,7 @@ export function MindMapViewer({
     if (!basePayload) {
       return null;
     }
-    const detected = basePayload.map_type === "evidence" ? "evidence" : "structure";
+    const detected = detectDefaultMapType(basePayload);
     if (activeMapType === detected) {
       return basePayload;
     }
@@ -108,7 +159,11 @@ export function MindMapViewer({
       return;
     }
     setCollapsedNodeIds(saved.collapsedNodeIds);
-    setActiveMapType(saved.activeMapType);
+    setActiveMapType(
+      payloadSupportsMapType(payload, saved.activeMapType)
+        ? saved.activeMapType
+        : detectDefaultMapType(payload),
+    );
     setSelectedNodeId(saved.focusedNodeId);
   }, [conversationId, maxDepth, payload]);
 
@@ -290,7 +345,15 @@ export function MindMapViewer({
             },
           data: {
             title: displayTitle,
-            subtitle: undefined,
+            subtitle:
+              activeMapType === "work_graph"
+                ? [
+                    _compactNodeValue((node as Record<string, unknown>)["status"]),
+                    _compactNodeValue((node as Record<string, unknown>)["tool_id"]),
+                  ]
+                    .filter((row) => row.length > 0)
+                    .join(" • ") || undefined
+                : undefined,
             hasChildren,
             collapsed: collapsedNodeIds.includes(node.id),
             nodeType: String(node.type || node.node_type || ""),

@@ -5,6 +5,7 @@ import type {
   HighlightPalette,
   HighlightRegion,
   PdfPlaybackState,
+  ZoomHistoryEntry,
 } from "./types";
 
 function compactValue(value: unknown): string {
@@ -104,29 +105,37 @@ function parseBrowserFindState(
   activeEventType: string,
   highlightRegions: HighlightRegion[],
 ): BrowserFindState {
+  const semanticFindResults = parseSemanticFindResults(activeSceneData);
+  const semanticTerms = semanticFindResults.map((item) => item.term);
   const browserKeywords = [
+    ...semanticTerms,
+    ...readStringList(activeSceneData["semantic_find_terms"], 10),
     ...readStringList(activeSceneData["highlighted_keywords"], 10),
     ...readStringList(activeSceneData["keywords"], 10),
   ];
   const dedupedBrowserKeywords = Array.from(new Set(browserKeywords)).slice(0, 10);
-  const explicitFindQuery = compactValue(activeSceneData["find_query"]);
+  const explicitFindQuery =
+    compactValue(activeSceneData["semantic_find_query"]) || compactValue(activeSceneData["find_query"]);
   const findQuery = explicitFindQuery || dedupedBrowserKeywords.slice(0, 2).join(" ").trim();
   const matchCountRaw =
-    typeof activeSceneData["match_count"] === "number"
-      ? activeSceneData["match_count"]
-      : Number(activeSceneData["match_count"]);
+    typeof activeSceneData["semantic_find_match_count"] === "number"
+      ? activeSceneData["semantic_find_match_count"]
+      : typeof activeSceneData["match_count"] === "number"
+        ? activeSceneData["match_count"]
+        : Number(activeSceneData["semantic_find_match_count"] ?? activeSceneData["match_count"]);
   const findMatchCount = Number.isFinite(matchCountRaw)
     ? Math.max(0, Number(matchCountRaw))
-    : highlightRegions.length;
+    : Math.max(highlightRegions.length, semanticFindResults.length);
   const showFindOverlay =
     isBrowserScene &&
-    Boolean(findQuery || dedupedBrowserKeywords.length || highlightRegions.length) &&
+    Boolean(findQuery || dedupedBrowserKeywords.length || highlightRegions.length || semanticFindResults.length) &&
     (activeEventType === "browser_find_in_page" ||
       activeEventType === "browser_keyword_highlight" ||
       activeEventType === "browser_copy_selection" ||
-      highlightRegions.length > 0);
+      highlightRegions.length > 0 ||
+      semanticFindResults.length > 0);
 
-  return { dedupedBrowserKeywords, findMatchCount, findQuery, showFindOverlay };
+  return { dedupedBrowserKeywords, findMatchCount, findQuery, showFindOverlay, semanticFindResults };
 }
 
 function parseLiveCopiedWords(
@@ -156,6 +165,69 @@ function parseScrollPercent(value: unknown): number | null {
   return Math.max(0, Math.min(100, Number(scrollPercentRaw)));
 }
 
+function parseSemanticFindResults(
+  activeSceneData: Record<string, unknown>,
+): Array<{ term: string; confidence: number }> {
+  if (!Array.isArray(activeSceneData["semantic_find_results"])) {
+    return [];
+  }
+  return activeSceneData["semantic_find_results"]
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const row = item as Record<string, unknown>;
+      const term = compactValue(row["term"] || row["query"] || row["text"]);
+      const confidenceRaw = Number(row["confidence"] ?? row["score"]);
+      if (!term || !Number.isFinite(confidenceRaw)) {
+        return null;
+      }
+      return {
+        term,
+        confidence: Math.max(0, Math.min(1, Number(confidenceRaw.toFixed(3)))),
+      };
+    })
+    .filter((item): item is { term: string; confidence: number } => Boolean(item))
+    .slice(0, 8);
+}
+
+function parseZoomHistory(activeSceneData: Record<string, unknown>): ZoomHistoryEntry[] {
+  if (!Array.isArray(activeSceneData["zoom_history"])) {
+    return [];
+  }
+  return activeSceneData["zoom_history"]
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const row = item as Record<string, unknown>;
+      const action = compactValue(row["action"]).toLowerCase();
+      if (action !== "zoom_in" && action !== "zoom_out" && action !== "zoom_reset" && action !== "zoom_to_region") {
+        return null;
+      }
+      const eventIndexRaw = Number(row["event_index"]);
+      const eventIndex = Number.isFinite(eventIndexRaw) && eventIndexRaw > 0 ? Math.round(eventIndexRaw) : null;
+      const zoomLevelRaw = Number(row["zoom_level"]);
+      const zoomLevel = Number.isFinite(zoomLevelRaw) && zoomLevelRaw > 0 ? Number(zoomLevelRaw.toFixed(3)) : null;
+      const zoomPolicyTriggers = readStringList(row["zoom_policy_triggers"], 8);
+      return {
+        eventRef: compactValue(row["event_ref"]),
+        eventType: compactValue(row["event_type"]),
+        eventIndex,
+        timestamp: compactValue(row["timestamp"]),
+        action: action as ZoomHistoryEntry["action"],
+        sceneSurface: compactValue(row["scene_surface"]),
+        sceneRef: compactValue(row["scene_ref"]),
+        graphNodeId: compactValue(row["graph_node_id"]),
+        zoomLevel,
+        zoomReason: compactValue(row["zoom_reason"]),
+        zoomPolicyTriggers,
+      };
+    })
+    .filter((item): item is ZoomHistoryEntry => Boolean(item))
+    .slice(-12);
+}
+
 function parseSheetState(sheetBodyPreview: string): { sheetPreviewRows: string[]; sheetStatusLine: string } {
   const rows = sheetBodyPreview
     .split(/\r?\n/)
@@ -169,8 +241,16 @@ function parseSheetState(sheetBodyPreview: string): { sheetPreviewRows: string[]
 
 function parsePdfPlaybackState(
   activeSceneData: Record<string, unknown>,
-  _activeEventType: string,
+  activeEventType: string,
 ): PdfPlaybackState {
+  const parsePercent = (value: unknown): number | null => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return Math.max(0, Math.min(100, parsed));
+  };
+
   const parsePositiveInt = (value: unknown, fallback: number) => {
     const parsed = typeof value === "number" ? value : Number(value);
     if (!Number.isFinite(parsed)) {
@@ -213,6 +293,81 @@ function parsePdfPlaybackState(
       ? (normalizedDirection as "up" | "down")
       : "";
   const pdfScanRegion = compactValue(activeSceneData["scan_region"]);
+  const zoomHistory = parseZoomHistory(activeSceneData);
+  const latestZoom = zoomHistory.length ? zoomHistory[zoomHistory.length - 1] : null;
+  const pdfZoomLevelRaw = Number(activeSceneData["pdf_zoom_level"] ?? activeSceneData["zoom_level"]);
+  const pdfZoomLevel =
+    Number.isFinite(pdfZoomLevelRaw) && pdfZoomLevelRaw > 0
+      ? pdfZoomLevelRaw
+      : latestZoom?.zoomLevel ?? null;
+  const pdfZoomReason =
+    compactValue(activeSceneData["zoom_reason"]) ||
+    compactValue(latestZoom?.zoomReason) ||
+    compactValue(activeSceneData["scan_reason"]) ||
+    compactValue(activeSceneData["reason"]);
+
+  const targetRegion =
+    activeSceneData["target_region"] && typeof activeSceneData["target_region"] === "object"
+      ? (activeSceneData["target_region"] as Record<string, unknown>)
+      : {};
+  const regionX = parsePercent(targetRegion["x"] ?? activeSceneData["region_x"]);
+  const regionY = parsePercent(targetRegion["y"] ?? activeSceneData["region_y"]);
+  const regionWidth = parsePercent(targetRegion["width"] ?? activeSceneData["region_width"]);
+  const regionHeight = parsePercent(targetRegion["height"] ?? activeSceneData["region_height"]);
+  const pdfTargetRegion =
+    regionX !== null &&
+    regionY !== null &&
+    regionWidth !== null &&
+    regionHeight !== null &&
+    regionWidth > 0 &&
+    regionHeight > 0
+      ? {
+          keyword: compactValue(targetRegion["label"]) || "focus region",
+          color: "yellow" as const,
+          x: regionX,
+          y: regionY,
+          width: regionWidth,
+          height: regionHeight,
+        }
+      : null;
+
+  const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
+  const compareMode =
+    activeSceneData["compare_mode"] && typeof activeSceneData["compare_mode"] === "object"
+      ? (activeSceneData["compare_mode"] as Record<string, unknown>)
+      : {};
+  const compareLeft =
+    compactValue(activeSceneData["compare_left"]) ||
+    compactValue(activeSceneData["compare_region_a"]) ||
+    compactValue(activeSceneData["compare_a"]) ||
+    compactValue(compareMode["left"]) ||
+    compactValue(compareMode["region_a"]);
+  const compareRight =
+    compactValue(activeSceneData["compare_right"]) ||
+    compactValue(activeSceneData["compare_region_b"]) ||
+    compactValue(activeSceneData["compare_b"]) ||
+    compactValue(compareMode["right"]) ||
+    compactValue(compareMode["region_b"]);
+  const hasCompareEvent =
+    normalizedEventType === "pdf_compare_regions" || normalizedEventType === "pdf.compare_regions";
+  const pdfCompareLeft = hasCompareEvent ? compareLeft || "Region A" : compareLeft;
+  const pdfCompareRight = hasCompareEvent ? compareRight || "Region B" : compareRight;
+  const pdfCompareVerdict =
+    compactValue(activeSceneData["compare_verdict"]) || compactValue(compareMode["verdict"]);
+
+  const pdfFindQuery =
+    compactValue(activeSceneData["semantic_find_query"]) ||
+    compactValue(activeSceneData["pdf_find_query"]) ||
+    compactValue(activeSceneData["find_query"]);
+  const pdfSemanticFindResults = parseSemanticFindResults(activeSceneData);
+  const pdfFindMatchCountRaw = Number(
+    activeSceneData["pdf_find_match_count"] ??
+      activeSceneData["semantic_find_match_count"] ??
+      activeSceneData["match_count"],
+  );
+  const pdfFindMatchCount = Number.isFinite(pdfFindMatchCountRaw)
+    ? Math.max(0, Math.round(pdfFindMatchCountRaw))
+    : pdfSemanticFindResults.length;
 
   return {
     pdfPage,
@@ -220,6 +375,16 @@ function parsePdfPlaybackState(
     pdfScrollPercent: scrollPercent ?? inferredPdfScrollPercent,
     pdfScrollDirection,
     pdfScanRegion,
+    pdfZoomLevel,
+    pdfZoomReason,
+    pdfTargetRegion,
+    pdfCompareLeft,
+    pdfCompareRight,
+    pdfCompareVerdict,
+    pdfFindQuery,
+    pdfFindMatchCount,
+    pdfSemanticFindResults,
+    zoomHistory,
   };
 }
 
@@ -232,6 +397,8 @@ export {
   parseHighlightRegions,
   parseLiveCopiedWords,
   parsePdfPlaybackState,
+  parseSemanticFindResults,
   parseScrollPercent,
   parseSheetState,
+  parseZoomHistory,
 };

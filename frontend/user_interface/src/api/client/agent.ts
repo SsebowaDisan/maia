@@ -1,5 +1,5 @@
 import { API_BASE, request, withUserIdQuery } from "./core";
-import type { AgentLiveEvent, ConnectorCredentialRecord } from "./types";
+import type { AgentLiveEvent, ConnectorCredentialRecord, ConnectorPluginManifest } from "./types";
 
 function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
   return `${API_BASE}/api/agent/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(eventId)}/snapshot`;
@@ -28,6 +28,14 @@ function listAgentTools() {
 
 function listConnectorHealth() {
   return request<Array<Record<string, unknown>>>("/api/agent/connectors/health");
+}
+
+function listConnectorPlugins() {
+  return request<ConnectorPluginManifest[]>("/api/agent/connectors/plugins");
+}
+
+function getConnectorPlugin(connectorId: string) {
+  return request<ConnectorPluginManifest>(`/api/agent/connectors/plugins/${encodeURIComponent(connectorId)}`);
 }
 
 function listConnectorCredentials() {
@@ -101,9 +109,11 @@ export {
   exportAgentRunEvents,
   getAgentEventSnapshotUrl,
   getAgentRunEvents,
+  getConnectorPlugin,
   listAgentTools,
   listConnectorCredentials,
   listConnectorHealth,
+  listConnectorPlugins,
   subscribeAgentEvents,
   upsertConnectorCredentials,
 };

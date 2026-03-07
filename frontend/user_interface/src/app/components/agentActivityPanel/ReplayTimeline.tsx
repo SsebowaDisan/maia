@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import type { AgentActivityEvent } from "../../types";
 import { styleForEvent } from "../agentActivityMeta";
+import { filmstripRowsForMode, readReplayMode, timelineRowsForMode } from "./replayModePolicy";
 
 interface ReplayTimelineProps {
   streaming: boolean;
@@ -15,6 +16,91 @@ interface ReplayTimelineProps {
   visibleEvents: AgentActivityEvent[];
   onSelectEvent: (event: AgentActivityEvent, index: number) => void;
   listRef: RefObject<HTMLDivElement | null>;
+}
+
+function replayImportance(event: AgentActivityEvent): string {
+  const direct = String(event.replay_importance || event.event_replay_importance || "").trim().toLowerCase();
+  if (direct) {
+    return direct;
+  }
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  return String(payload.replay_importance || payload.event_replay_importance || "").trim().toLowerCase();
+}
+
+function replayImportanceBadge(importance: string): { label: string; className: string } | null {
+  if (importance === "critical") {
+    return { label: "Critical", className: "border-[#d64c4c]/40 bg-[#fff0f0] text-[#9a1f1f]" };
+  }
+  if (importance === "high") {
+    return { label: "High", className: "border-[#d8912b]/35 bg-[#fff8eb] text-[#8a5610]" };
+  }
+  return null;
+}
+
+function zoomSummary(event: AgentActivityEvent): string {
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  const zoomEvent =
+    payload.zoom_event && typeof payload.zoom_event === "object"
+      ? (payload.zoom_event as Record<string, unknown>)
+      : null;
+  const action = String(zoomEvent?.action || payload.action || "").trim().toLowerCase();
+  if (!["zoom_in", "zoom_out", "zoom_reset", "zoom_to_region"].includes(action)) {
+    return "";
+  }
+  const zoomLevelRaw = Number(zoomEvent?.zoom_level ?? payload.zoom_level);
+  const zoomLevelLabel = Number.isFinite(zoomLevelRaw) && zoomLevelRaw > 0 ? `${Math.round(zoomLevelRaw * 100)}%` : "";
+  const reason = String(zoomEvent?.zoom_reason || payload.zoom_reason || "").trim();
+  if (!zoomLevelLabel && !reason) {
+    return "Zoom action";
+  }
+  if (zoomLevelLabel && reason) {
+    return `${zoomLevelLabel} - ${reason}`;
+  }
+  return zoomLevelLabel || reason;
+}
+
+function copyProvenanceSummary(event: AgentActivityEvent): string {
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  const copyRole = String(payload.copy_role || "").trim().toLowerCase();
+  const copyProvenance =
+    payload.copy_provenance && typeof payload.copy_provenance === "object"
+      ? (payload.copy_provenance as Record<string, unknown>)
+      : null;
+  const copyUsageRefs = Array.isArray(payload.copy_usage_refs)
+    ? payload.copy_usage_refs.map((item) => String(item || "").trim()).filter((item) => item.length > 0)
+    : [];
+  if (copyRole === "source") {
+    const snippet = String(copyProvenance?.snippet || payload.clipboard_text || "").trim();
+    return snippet ? `Copied source: ${snippet.slice(0, 88)}` : "Copied source captured";
+  }
+  if (copyRole === "usage" || copyUsageRefs.length) {
+    const refs = copyUsageRefs.length
+      ? copyUsageRefs.slice(0, 2)
+      : [String(copyProvenance?.copy_event_ref || "").trim()].filter((item) => item.length > 0);
+    if (!refs.length) {
+      return "Uses copied source evidence";
+    }
+    return `Uses copied source ${refs.join(", ")}`;
+  }
+  return "";
+}
+
+function verifierConflictSummary(event: AgentActivityEvent): string {
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  const conflict = Boolean(payload.verifier_conflict);
+  if (!conflict) {
+    return "";
+  }
+  const reason = String(payload.verifier_conflict_reason || "").trim();
+  const recheck = Boolean(payload.verifier_recheck_required);
+  const zoomEscalation = Boolean(payload.zoom_escalation_requested);
+  const tail =
+    recheck || zoomEscalation
+      ? ` (${[recheck ? "re-check" : "", zoomEscalation ? "zoom escalation" : ""]
+          .filter((item) => item.length > 0)
+          .join(", ")})`
+      : "";
+  return `${reason || "Verifier conflict detected"}${tail}`;
 }
 
 function ReplayTimeline({
@@ -33,7 +119,18 @@ function ReplayTimeline({
 }: ReplayTimelineProps) {
   const activeStyle = styleForEvent(activeEvent);
   const ActiveIcon = activeStyle.icon;
-  const recentFilmstripEvents = streaming ? filmstripEvents.slice(-24) : filmstripEvents;
+  const replayMode = readReplayMode(visibleEvents);
+  const baseFilmstripEvents = streaming ? filmstripEvents.slice(-24) : filmstripEvents;
+  const recentFilmstripEvents = filmstripRowsForMode({
+    filmstripRows: baseFilmstripEvents,
+    safeCursor,
+    replayMode,
+  });
+  const timelineRows = timelineRowsForMode({
+    visibleEvents,
+    safeCursor,
+    replayMode,
+  });
 
   return (
     <>
@@ -55,7 +152,9 @@ function ReplayTimeline({
             <span className="text-[11px] text-[#6e6e73]">
               Step {safeCursor + 1} of {totalEvents}
             </span>
-            <span className="text-[11px] text-[#6e6e73]">{progressPercent}%</span>
+            <span className="text-[11px] text-[#6e6e73]">
+              {progressPercent}% {replayMode === "fast" ? "- compressed" : replayMode === "full_theatre" ? "- full" : ""}
+            </span>
           </div>
           <input
             type="range"
@@ -97,6 +196,12 @@ function ReplayTimeline({
         <div className="inline-flex min-w-full gap-2">
           {recentFilmstripEvents.map(({ event, index }) => {
             const isActive = index === safeCursor;
+            const sequence =
+              Number(event.event_index) > 0
+                ? Number(event.event_index)
+                : typeof event.seq === "number" && Number.isFinite(event.seq)
+                  ? Number(event.seq)
+                  : index + 1;
             return (
               <button
                 key={`${event.event_id}-chip`}
@@ -113,7 +218,7 @@ function ReplayTimeline({
                     : "border-black/[0.08] bg-white/80 text-[#4c4c50] hover:bg-white"
                 }`}
               >
-                <span className="font-semibold">{index + 1}</span>
+                <span className="font-semibold">{sequence}</span>
                 <span className="max-w-[140px] truncate">{event.title}</span>
               </button>
             );
@@ -125,12 +230,26 @@ function ReplayTimeline({
         ref={listRef}
         className={`${streaming ? "max-h-72" : "max-h-56"} space-y-1.5 overflow-y-auto pr-1`}
       >
-        {visibleEvents.map((event, index) => {
+        {timelineRows.map(({ event, index }) => {
           const style = styleForEvent(event);
           const Icon = style.icon;
           const isActive = index === safeCursor;
+          const importance = replayImportance(event);
+          const importanceBadge = replayImportanceBadge(importance);
+          const eventIndexFromPayload = Number(event.event_index);
+          const zoomDetail = zoomSummary(event);
+          const copyDetail = copyProvenanceSummary(event);
+          const verifierDetail = verifierConflictSummary(event);
+          const payloadEventIndex =
+            Number.isFinite(eventIndexFromPayload) && eventIndexFromPayload > 0
+              ? eventIndexFromPayload
+              : Number((event.data as Record<string, unknown> | undefined)?.event_index || 0);
           const sequenceLabel =
-            typeof event.seq === "number" && Number.isFinite(event.seq) ? `#${event.seq}` : `${index + 1}`;
+            Number.isFinite(payloadEventIndex) && payloadEventIndex > 0
+              ? `#${Math.round(payloadEventIndex)}`
+              : typeof event.seq === "number" && Number.isFinite(event.seq)
+                ? `#${event.seq}`
+                : `${index + 1}`;
           return (
             <button
               key={event.event_id || `${event.timestamp}-${index}`}
@@ -150,12 +269,28 @@ function ReplayTimeline({
                 <div className="flex min-w-0 items-center gap-2">
                   <Icon className={`h-3.5 w-3.5 shrink-0 ${style.accent}`} />
                   <p className="truncate text-[12px] font-medium text-[#1d1d1f]">{event.title}</p>
+                  {importanceBadge ? (
+                    <span
+                      className={`rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.06em] ${importanceBadge.className}`}
+                    >
+                      {importanceBadge.label}
+                    </span>
+                  ) : null}
                 </div>
                 <span className="shrink-0 text-[10px] text-[#86868b]">
                   {streaming ? sequenceLabel : new Date(event.timestamp).toLocaleTimeString()}
                 </span>
               </div>
               {event.detail ? <p className="mt-0.5 line-clamp-2 text-[11px] text-[#6e6e73]">{event.detail}</p> : null}
+              {zoomDetail ? (
+                <p className="mt-0.5 line-clamp-1 text-[10px] font-medium text-[#365f9c]">{zoomDetail}</p>
+              ) : null}
+              {copyDetail ? (
+                <p className="mt-0.5 line-clamp-1 text-[10px] font-medium text-[#7d4f16]">{copyDetail}</p>
+              ) : null}
+              {verifierDetail ? (
+                <p className="mt-0.5 line-clamp-1 text-[10px] font-medium text-[#a14913]">{verifierDetail}</p>
+              ) : null}
             </button>
           );
         })}

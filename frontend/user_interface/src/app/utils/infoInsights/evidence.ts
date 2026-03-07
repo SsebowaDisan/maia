@@ -204,7 +204,145 @@ function parseHighlightBoxesFromDetails(details: Element): HighlightBox[] {
   return parseHighlightBoxes(candidate.getAttribute("data-bboxes"));
 }
 
-function parseEvidence(infoHtml: string): EvidenceCard[] {
+function toFiniteNumberOptional(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeId(rawValue: unknown, fallback: string): string {
+  const normalized = String(rawValue || "").trim();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized.toLowerCase();
+}
+
+function normalizeStringList(
+  value: unknown,
+  {
+    limit = 10,
+    maxItemLength = 180,
+  }: {
+    limit?: number;
+    maxItemLength?: number;
+  } = {},
+): string[] {
+  const rows = Array.isArray(value) ? value : [value];
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const text = normalizeText(String(row || "")).slice(0, maxItemLength);
+    if (!text) {
+      continue;
+    }
+    const lowered = text.toLowerCase();
+    if (seen.has(lowered)) {
+      continue;
+    }
+    seen.add(lowered);
+    output.push(text);
+    if (output.length >= Math.max(1, limit)) {
+      break;
+    }
+  }
+  return output;
+}
+
+function parseStringListAttribute(details: Element, listAttr: string, singleAttr: string): string[] {
+  const explicit = details.getAttribute(listAttr);
+  if (explicit) {
+    try {
+      const parsed = JSON.parse(explicit);
+      const normalized = normalizeStringList(parsed);
+      if (normalized.length) {
+        return normalized;
+      }
+    } catch {
+      const normalized = normalizeStringList(explicit.split(","));
+      if (normalized.length) {
+        return normalized;
+      }
+    }
+  }
+  return normalizeStringList(details.getAttribute(singleAttr));
+}
+
+function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] {
+  if (!rawInfoPanel || typeof rawInfoPanel !== "object") {
+    return [];
+  }
+  const infoPanel = rawInfoPanel as Record<string, unknown>;
+  const rawItems = Array.isArray(infoPanel.evidence_items)
+    ? infoPanel.evidence_items
+    : Array.isArray(infoPanel.evidenceItems)
+      ? infoPanel.evidenceItems
+      : [];
+  if (!rawItems.length) {
+    return [];
+  }
+  const cards: EvidenceCard[] = [];
+  for (let index = 0; index < rawItems.length && cards.length < 32; index += 1) {
+    const row = rawItems[index];
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const item = row as Record<string, unknown>;
+    const highlightBoxesRaw = Array.isArray(item.highlight_boxes)
+      ? item.highlight_boxes
+      : Array.isArray(item.highlightBoxes)
+        ? item.highlightBoxes
+        : [];
+    const highlightBoxes = highlightBoxesRaw
+      .map((entry) => normalizeHighlightBox(entry))
+      .filter((entry): entry is HighlightBox => Boolean(entry));
+    const graphNodeIds = normalizeStringList(item.graph_node_ids ?? item.graphNodeIds);
+    const sceneRefs = normalizeStringList(item.scene_refs ?? item.sceneRefs);
+    const eventRefs = normalizeStringList(item.event_refs ?? item.eventRefs);
+    const source = normalizeText(
+      String(item.source_name || item.source || item.title || `Indexed source ${index + 1}`),
+    );
+    const extract = normalizeText(String(item.extract || item.snippet || item.title || "")).trim();
+    const score = toFiniteNumberOptional(item.strength_score ?? item.strengthScore);
+    const tier = toFiniteNumberOptional(item.strength_tier ?? item.strengthTier);
+    const confidence = toFiniteNumberOptional(item.confidence);
+    const charStart = toFiniteNumberOptional(item.char_start ?? item.charStart);
+    const charEnd = toFiniteNumberOptional(item.char_end ?? item.charEnd);
+    cards.push({
+      id: normalizeId(item.id ?? item.evidence_id ?? item.evidenceId, `evidence-${index + 1}`),
+      title: normalizeText(String(item.title || `Evidence [${index + 1}]`)),
+      source: source || "Indexed source",
+      sourceType: normalizeText(String(item.source_type || item.sourceType || "")).toLowerCase() || undefined,
+      sourceUrl: normalizeHttpUrl(item.source_url ?? item.sourceUrl) || undefined,
+      page: normalizeText(String(item.page || "")).trim() || undefined,
+      fileId: normalizeText(String(item.file_id || item.fileId || "")).trim() || undefined,
+      extract: extract || "No extract available for this citation.",
+      highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+      confidence: typeof confidence === "number" ? confidence : undefined,
+      collectedBy: normalizeText(String(item.collected_by || item.collectedBy || "")).trim() || undefined,
+      graphNodeIds: graphNodeIds.length ? graphNodeIds : undefined,
+      sceneRefs: sceneRefs.length ? sceneRefs : undefined,
+      eventRefs: eventRefs.length ? eventRefs : undefined,
+      strengthScore: typeof score === "number" ? score : undefined,
+      strengthTier: typeof tier === "number" ? tier : undefined,
+      matchQuality: normalizeText(String(item.match_quality || item.matchQuality || "")).trim() || undefined,
+      unitId: normalizeText(String(item.unit_id || item.unitId || "")).trim() || undefined,
+      charStart: typeof charStart === "number" ? charStart : undefined,
+      charEnd: typeof charEnd === "number" ? charEnd : undefined,
+    });
+  }
+  return cards;
+}
+
+function parseEvidence(
+  infoHtml: string,
+  options?: {
+    infoPanel?: Record<string, unknown> | null;
+  },
+): EvidenceCard[] {
+  const panelCards = parseEvidenceItemsFromInfoPanel(options?.infoPanel || null);
+  if (panelCards.length) {
+    return panelCards;
+  }
   if (!infoHtml.trim()) {
     return [];
   }
@@ -265,6 +403,13 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
     const strengthScore = Number.isFinite(rawStrength) ? rawStrength : undefined;
     const rawStrengthTier = Number(details.getAttribute("data-strength-tier") || "");
     const strengthTier = Number.isFinite(rawStrengthTier) ? rawStrengthTier : undefined;
+    const rawConfidence = Number(details.getAttribute("data-confidence") || "");
+    const confidence = Number.isFinite(rawConfidence) ? rawConfidence : undefined;
+    const collectedBy = normalizeText(details.getAttribute("data-collected-by") || "").trim() || undefined;
+    const sourceType = normalizeText(details.getAttribute("data-source-type") || "").trim().toLowerCase() || undefined;
+    const graphNodeIds = parseStringListAttribute(details, "data-graph-node-ids", "data-graph-node-id");
+    const sceneRefs = parseStringListAttribute(details, "data-scene-refs", "data-scene-ref");
+    const eventRefs = parseStringListAttribute(details, "data-event-refs", "data-event-ref");
     const matchQuality = (details.getAttribute("data-match-quality") || "").trim() || undefined;
     const unitId = (details.getAttribute("data-unit-id") || "").trim() || undefined;
     const rawCharStart = Number(details.getAttribute("data-char-start") || "");
@@ -276,12 +421,18 @@ function parseEvidence(infoHtml: string): EvidenceCard[] {
       id: detailsId || `evidence-${index + 1}`,
       title: summary,
       source,
+      sourceType,
       sourceUrl,
       page: pageAttr || pageMatch?.[1],
       fileId,
       extract,
       imageSrc,
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+      confidence,
+      collectedBy,
+      graphNodeIds: graphNodeIds.length ? graphNodeIds : undefined,
+      sceneRefs: sceneRefs.length ? sceneRefs : undefined,
+      eventRefs: eventRefs.length ? eventRefs : undefined,
       strengthScore,
       strengthTier,
       matchQuality,

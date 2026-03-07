@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AgentActivityEvent } from "../../types";
 import {
+  agentColorFromEvent,
+  agentEventTypeFromEvent,
+  agentLabelFromEvent,
   cursorLabelFromSemantics,
   eventTab,
+  isApiRuntimeEvent,
   roleKeyFromEvent,
   roleLabelFromKey,
   sceneSurfaceFromEvent,
@@ -45,5 +49,38 @@ describe("interactionSemantics", () => {
     });
     expect(label).toContain("Research");
     expect(label.toLowerCase()).toContain("evidence");
+  });
+
+  it("supports zoom action semantics for cursor labels", () => {
+    const label = cursorLabelFromSemantics({
+      action: "zoom_to_region",
+      actionStatus: "ok",
+      actionPhase: "active",
+      sceneSurfaceLabel: "Document",
+      roleLabel: "Verifier",
+    });
+    expect(label).toContain("Verifier");
+    expect(label.toLowerCase()).toContain("inspect");
+  });
+
+  it("reads agent identity and alias event type from metadata", () => {
+    const event = makeEvent({
+      agent_label: "Planner",
+      agent_color: "#7c3aed",
+      agent_event_type: "agent.handoff",
+      owner_role: "planner",
+    });
+    expect(agentLabelFromEvent(event)).toBe("Planner");
+    expect(agentColorFromEvent(event)).toBe("#7c3aed");
+    expect(agentEventTypeFromEvent(event)).toBe("agent.handoff");
+  });
+
+  it("marks api scene events as api runtime events", () => {
+    const event = makeEvent({
+      event_family: "api",
+      scene_surface: "api",
+    });
+    expect(eventTab(event)).toBe("system");
+    expect(isApiRuntimeEvent(event)).toBe(true);
   });
 });

@@ -27,14 +27,17 @@ def _context() -> ToolExecutionContext:
 
 
 def test_document_create_tool_writes_local_markdown() -> None:
+    context = _context()
     result = DocumentCreateTool().execute(
-        context=_context(),
+        context=context,
         prompt="draft",
         params={"title": "Ops Brief", "body": "Key operations updates.", "provider": "local"},
     )
     path = Path(result.data["path"])
     assert path.exists()
     assert path.read_text(encoding="utf-8").startswith("# Ops Brief")
+    assert context.settings.get("__latest_report_title") == "Ops Brief"
+    assert context.settings.get("__latest_report_content") == "Key operations updates."
 
 
 def test_document_create_tool_includes_copied_highlights() -> None:

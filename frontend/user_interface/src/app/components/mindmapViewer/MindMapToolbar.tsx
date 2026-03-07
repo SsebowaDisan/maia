@@ -13,9 +13,9 @@ type MindMapToolbarProps = {
   title: string;
   mapType: string;
   kind: string;
-  activeMapType: "structure" | "evidence";
+  activeMapType: "structure" | "evidence" | "work_graph";
   hasVariants: boolean;
-  onSwitchMapType: (mapType: "structure" | "evidence") => void;
+  onSwitchMapType: (mapType: "structure" | "evidence" | "work_graph") => void;
   onExpand: () => void;
   onCollapse: () => void;
   onToggleLayout: () => void;
@@ -78,6 +78,16 @@ function MindMapToolbar({
             } disabled:opacity-40`}
           >
             Evidence
+          </button>
+          <button
+            type="button"
+            onClick={() => onSwitchMapType("work_graph")}
+            disabled={!hasVariants}
+            className={`h-6 px-2.5 rounded-full text-[10px] transition-colors ${
+              activeMapType === "work_graph" ? "bg-[#1d1d1f] text-white" : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
+            } disabled:opacity-40`}
+          >
+            Work graph
           </button>
         </div>
         <button
@@ -173,4 +183,3 @@ function MindMapToolbar({
 }
 
 export { MindMapToolbar };
-

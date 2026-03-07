@@ -16,6 +16,7 @@ const SURFACE_TO_TAB: Record<string, PreviewTab> = {
   sheets: "document",
   email: "email",
   gmail: "email",
+  api: "system",
   system: "system",
   workspace: "system",
 };
@@ -37,7 +38,37 @@ const ROLE_LABELS: Record<string, string> = {
   system: "System",
 };
 
-const ACTIONS = new Set(["navigate", "hover", "click", "type", "scroll", "extract", "verify", "other"]);
+const ROLE_COLORS: Record<string, string> = {
+  conductor: "#2563eb",
+  planner: "#7c3aed",
+  research: "#0ea5e9",
+  browser: "#0284c7",
+  writer: "#7c2d12",
+  verifier: "#15803d",
+  safety: "#dc2626",
+  document_reader: "#475569",
+  analyst: "#1d4ed8",
+  chart_builder: "#1d4ed8",
+  workspace_editor: "#9333ea",
+  goal_page_discovery: "#0369a1",
+  contact_form: "#0369a1",
+  system: "#6b7280",
+};
+
+const ACTIONS = new Set([
+  "navigate",
+  "hover",
+  "click",
+  "type",
+  "scroll",
+  "zoom_in",
+  "zoom_out",
+  "zoom_reset",
+  "zoom_to_region",
+  "extract",
+  "verify",
+  "other",
+]);
 
 function normalizeToken(value: string): string {
   return String(value || "")
@@ -83,6 +114,25 @@ function eventTab(event: AgentActivityEvent | null): PreviewTab {
     return "browser";
   }
   return "system";
+}
+
+function isApiRuntimeEvent(event: AgentActivityEvent | null): boolean {
+  if (!event) {
+    return false;
+  }
+  const sceneSurface = sceneSurfaceFromEvent(event).toLowerCase();
+  if (sceneSurface === "api") {
+    return true;
+  }
+  const eventFamily =
+    readStringField(event.data?.["event_family"]) ||
+    readStringField(event.metadata?.["event_family"]) ||
+    "";
+  if (eventFamily.trim().toLowerCase() === "api") {
+    return true;
+  }
+  const eventType = readStringField(event.event_type).trim().toLowerCase();
+  return eventType.startsWith("api_") || eventType.startsWith("api.");
 }
 
 function sceneSurfaceFromEvent(event: AgentActivityEvent | null): string {
@@ -141,6 +191,53 @@ function roleLabelFromKey(roleKey: string): string {
   return ROLE_LABELS[normalized] || toTitleFromSnake(normalized);
 }
 
+function roleColorFromKey(roleKey: string): string {
+  const normalized = normalizeToken(roleKey);
+  if (!normalized) {
+    return ROLE_COLORS.system;
+  }
+  return ROLE_COLORS[normalized] || ROLE_COLORS.system;
+}
+
+function agentLabelFromEvent(event: AgentActivityEvent | null): string {
+  if (!event) {
+    return "";
+  }
+  const explicitLabel =
+    readStringField(event.data?.["agent_label"]) ||
+    readStringField(event.metadata?.["agent_label"]);
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+  return roleLabelFromKey(roleKeyFromEvent(event));
+}
+
+function agentColorFromEvent(event: AgentActivityEvent | null): string {
+  if (!event) {
+    return ROLE_COLORS.system;
+  }
+  const explicitColor =
+    readStringField(event.data?.["agent_color"]) ||
+    readStringField(event.metadata?.["agent_color"]);
+  if (explicitColor) {
+    return explicitColor;
+  }
+  return roleColorFromKey(roleKeyFromEvent(event));
+}
+
+function agentEventTypeFromEvent(event: AgentActivityEvent | null): string {
+  if (!event) {
+    return "";
+  }
+  return (
+    readStringField(event.data?.["agent_event_type"]) ||
+    readStringField(event.metadata?.["agent_event_type"]) ||
+    readStringField(event.event_type)
+  )
+    .trim()
+    .toLowerCase();
+}
+
 function interactionActionFromEvent(event: AgentActivityEvent | null): string {
   if (!event) {
     return "";
@@ -180,6 +277,7 @@ function surfaceLabelForSceneKey(sceneSurfaceKey: string): string {
   if (key === "google_docs") return "Google Docs";
   if (key === "document") return "Document";
   if (key === "email") return "Email";
+  if (key === "api") return "API";
   if (key === "workspace") return "Workspace";
   return "System";
 }
@@ -190,13 +288,27 @@ function cursorLabelFromSemantics(args: {
   actionPhase: string;
   sceneSurfaceLabel: string;
   roleLabel: string;
+  agentEventType?: string;
 }): string {
   const action = normalizeToken(args.action);
   const status = normalizeToken(args.actionStatus);
   const phase = normalizeToken(args.actionPhase);
   const roleLabel = String(args.roleLabel || "").trim();
+  const agentEventType = String(args.agentEventType || "").trim().toLowerCase();
   const subject = roleLabel || "Agent";
   const surfaceLabel = String(args.sceneSurfaceLabel || "workspace").trim().toLowerCase();
+  if (agentEventType === "agent.waiting") {
+    return `${subject} awaiting confirmation`;
+  }
+  if (agentEventType === "agent.blocked") {
+    return `${subject} blocked`;
+  }
+  if (agentEventType === "agent.handoff") {
+    return `${subject} handing off`;
+  }
+  if (agentEventType === "agent.resume") {
+    return `${subject} resumed`;
+  }
   if (status === "failed") {
     return `${subject} retrying`;
   }
@@ -211,6 +323,18 @@ function cursorLabelFromSemantics(args: {
   }
   if (action === "scroll") {
     return `${subject} scanning`;
+  }
+  if (action === "zoom_in") {
+    return `${subject} zooming in`;
+  }
+  if (action === "zoom_out") {
+    return `${subject} zooming out`;
+  }
+  if (action === "zoom_reset") {
+    return `${subject} resetting zoom`;
+  }
+  if (action === "zoom_to_region") {
+    return `${subject} inspecting detail`;
   }
   if (action === "extract") {
     return `${subject} gathering evidence`;
@@ -229,26 +353,41 @@ function roleNarrativeFromSemantics(args: {
   action: string;
   sceneSurfaceLabel: string;
   fallback: string;
+  agentEventType?: string;
 }): string {
   const roleLabel = String(args.roleLabel || "").trim() || "Agent";
   const action = normalizeToken(args.action);
   const surface = String(args.sceneSurfaceLabel || "workspace").trim().toLowerCase();
+  const agentEventType = String(args.agentEventType || "").trim().toLowerCase();
+  if (agentEventType === "agent.handoff") return `${roleLabel} is handing control to the next specialist.`;
+  if (agentEventType === "agent.waiting") return `${roleLabel} is waiting for human verification.`;
+  if (agentEventType === "agent.blocked") return `${roleLabel} is blocked by a policy or verification rule.`;
+  if (agentEventType === "agent.resume") return `${roleLabel} resumed execution.`;
   if (action === "navigate") return `${roleLabel} is opening ${surface}.`;
   if (action === "click") return `${roleLabel} is selecting a target in ${surface}.`;
   if (action === "type") return `${roleLabel} is composing output in ${surface}.`;
   if (action === "scroll") return `${roleLabel} is scanning ${surface}.`;
+  if (action === "zoom_in") return `${roleLabel} is zooming in on ${surface}.`;
+  if (action === "zoom_out") return `${roleLabel} is zooming out in ${surface}.`;
+  if (action === "zoom_reset") return `${roleLabel} is resetting zoom in ${surface}.`;
+  if (action === "zoom_to_region") return `${roleLabel} is zooming to a focus region in ${surface}.`;
   if (action === "extract") return `${roleLabel} is gathering evidence from ${surface}.`;
   if (action === "verify") return `${roleLabel} is verifying completion in ${surface}.`;
   return `${roleLabel} is ${String(args.fallback || "working").trim().toLowerCase()}.`;
 }
 
 export {
+  agentColorFromEvent,
+  agentEventTypeFromEvent,
+  agentLabelFromEvent,
   cursorFromEvent,
   cursorLabelFromSemantics,
   eventTab,
+  isApiRuntimeEvent,
   interactionActionFromEvent,
   interactionActionPhaseFromEvent,
   interactionActionStatusFromEvent,
+  roleColorFromKey,
   roleKeyFromEvent,
   roleLabelFromKey,
   roleNarrativeFromSemantics,

@@ -1,4 +1,12 @@
 import type { AgentActivityEvent } from "../../types";
+import { appendZoomHistory, collectReferenceTokens, type ZoomHistoryEntry } from "./zoomHistory";
+import {
+  readBooleanField,
+  readNumberField,
+  readObjectListField,
+  readStringField,
+  readStringListField,
+} from "./value_readers";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+)/i;
 const PHASE_ORDER = [
@@ -32,63 +40,28 @@ const PHASE_LABELS: Record<ActivityPhaseKey, string> = {
   delivery: "Delivery",
 };
 
-function readStringField(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function readNumberField(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value.trim());
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function readStringListField(value: unknown, limit = 16): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const cleaned = value
-    .map((item) => String(item || "").trim())
-    .filter((item) => item.length > 0);
-  return Array.from(new Set(cleaned)).slice(0, Math.max(1, limit));
-}
-
-function readBooleanField(value: unknown): boolean | null {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return null;
-}
-
-function readObjectListField(value: unknown, limit = 16): Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
-    .slice(0, Math.max(1, limit));
-}
-
 function mergeLiveSceneData(
   events: AgentActivityEvent[],
   activeEvent: AgentActivityEvent | null,
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
+  let zoomHistory: ZoomHistoryEntry[] = [];
+  const mergedGraphNodeIds: string[] = [];
+  const mergedSceneRefs: string[] = [];
+  const mergedEventRefs: string[] = [];
+
+  const appendUniqueTokens = (target: string[], values: string[]) => {
+    if (!values.length) {
+      return;
+    }
+    for (const value of values) {
+      const cleaned = readStringField(value);
+      if (!cleaned || target.includes(cleaned)) {
+        continue;
+      }
+      target.push(cleaned);
+    }
+  };
 
   const assignString = (key: string, value: unknown) => {
     const text = readStringField(value);
@@ -97,7 +70,8 @@ function mergeLiveSceneData(
     }
   };
 
-  const applyPayload = (payload: Record<string, unknown>, eventType: string) => {
+  const applyPayload = (payload: Record<string, unknown>, event: AgentActivityEvent) => {
+    const eventType = event.event_type;
     const normalizedType = String(eventType || "").toLowerCase();
     const isPlanningEvent =
       normalizedType.startsWith("plan_") ||
@@ -123,6 +97,8 @@ function mergeLiveSceneData(
       "link",
       "highlight_color",
       "find_query",
+      "semantic_find_query",
+      "semantic_find_source",
       "clipboard_text",
       "scroll_direction",
       "doc_id",
@@ -150,6 +126,14 @@ function mergeLiveSceneData(
       "scan_region",
       "page_label",
       "source_name",
+      "compare_left",
+      "compare_right",
+      "compare_region_a",
+      "compare_region_b",
+      "compare_a",
+      "compare_b",
+      "compare_verdict",
+      "verifier_conflict_reason",
     ].forEach((key) => assignString(key, payload[key]));
 
     [
@@ -180,6 +164,18 @@ function mergeLiveSceneData(
     if (blockedSignal !== null) {
       merged["blocked_signal"] = blockedSignal;
     }
+    const verifierConflict = readBooleanField(payload["verifier_conflict"]);
+    if (verifierConflict !== null) {
+      merged["verifier_conflict"] = verifierConflict;
+    }
+    const verifierRecheckRequired = readBooleanField(payload["verifier_recheck_required"]);
+    if (verifierRecheckRequired !== null) {
+      merged["verifier_recheck_required"] = verifierRecheckRequired;
+    }
+    const zoomEscalationRequested = readBooleanField(payload["zoom_escalation_requested"]);
+    if (zoomEscalationRequested !== null) {
+      merged["zoom_escalation_requested"] = zoomEscalationRequested;
+    }
 
     const searchTerms = readStringListField(payload["search_terms"] ?? payload["planned_search_terms"], 12);
     if (searchTerms.length) {
@@ -207,6 +203,14 @@ function mergeLiveSceneData(
       }
     }
 
+    const semanticFindTerms = readStringListField(payload["semantic_find_terms"], 16);
+    if (semanticFindTerms.length) {
+      merged["semantic_find_terms"] = semanticFindTerms;
+      if (!Array.isArray(merged["keywords"])) {
+        merged["keywords"] = semanticFindTerms;
+      }
+    }
+
     const stepIds = readStringListField(payload["step_ids"], 16);
     if (stepIds.length) {
       merged["step_ids"] = stepIds;
@@ -222,9 +226,24 @@ function mergeLiveSceneData(
       merged["copied_words"] = copiedWords;
     }
 
+    const copyUsageRefs = readStringListField(payload["copy_usage_refs"], 12);
+    if (copyUsageRefs.length) {
+      merged["copy_usage_refs"] = copyUsageRefs;
+    }
+
     const highlightedWords = readObjectListField(payload["highlighted_words"], 18);
     if (highlightedWords.length) {
       merged["highlighted_words"] = highlightedWords;
+    }
+    if (payload["copy_provenance"] && typeof payload["copy_provenance"] === "object") {
+      merged["copy_provenance"] = payload["copy_provenance"] as Record<string, unknown>;
+    }
+    const semanticFindResults = readObjectListField(payload["semantic_find_results"], 18);
+    if (semanticFindResults.length) {
+      merged["semantic_find_results"] = semanticFindResults;
+    }
+    if (payload["compare_mode"] && typeof payload["compare_mode"] === "object") {
+      merged["compare_mode"] = payload["compare_mode"] as Record<string, unknown>;
     }
 
     if (payload["action_target"] && typeof payload["action_target"] === "object") {
@@ -256,6 +275,12 @@ function mergeLiveSceneData(
         merged["planned_keywords"] = plannedKeywords;
       }
     }
+
+    const refs = collectReferenceTokens(event, payload);
+    appendUniqueTokens(mergedGraphNodeIds, refs.graphNodeIds);
+    appendUniqueTokens(mergedSceneRefs, refs.sceneRefs);
+    appendUniqueTokens(mergedEventRefs, refs.eventRefs);
+    zoomHistory = appendZoomHistory(zoomHistory, event, payload);
   };
 
   for (const event of events) {
@@ -268,11 +293,31 @@ function mergeLiveSceneData(
     if (!payload) {
       continue;
     }
-    applyPayload(payload, event.event_type);
+    applyPayload(payload, event);
   }
 
   if (activeEvent?.data && typeof activeEvent.data === "object") {
-    applyPayload(activeEvent.data as Record<string, unknown>, activeEvent.event_type);
+    applyPayload(activeEvent.data as Record<string, unknown>, activeEvent);
+  }
+
+  if (mergedGraphNodeIds.length) {
+    merged["graph_node_ids"] = mergedGraphNodeIds.slice(0, 24);
+  }
+  if (mergedSceneRefs.length) {
+    merged["scene_refs"] = mergedSceneRefs.slice(0, 24);
+  }
+  if (mergedEventRefs.length) {
+    merged["event_refs"] = mergedEventRefs.slice(0, 24);
+  }
+  if (zoomHistory.length) {
+    merged["zoom_history"] = zoomHistory;
+    const latestZoom = zoomHistory[zoomHistory.length - 1];
+    if (!readStringField(merged["zoom_reason"]) && latestZoom.zoomReason) {
+      merged["zoom_reason"] = latestZoom.zoomReason;
+    }
+    if (readNumberField(merged["zoom_level"]) === null && latestZoom.zoomLevel !== null) {
+      merged["zoom_level"] = latestZoom.zoomLevel;
+    }
   }
 
   return merged;

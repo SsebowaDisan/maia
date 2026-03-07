@@ -13,12 +13,45 @@ import { useAgentActivityDerived } from "./useAgentActivityDerived";
 
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
+function normalizeTokenList(values: string[] | undefined): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const cleaned = values
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  return Array.from(new Set(cleaned)).slice(0, 16);
+}
+
+function readEventString(event: AgentActivityEvent, key: string): string {
+  const direct = String((event as Record<string, unknown>)[key] || "").trim();
+  if (direct) {
+    return direct;
+  }
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  return String(payload[key] || "").trim();
+}
+
+function readEventStringList(event: AgentActivityEvent, key: string): string[] {
+  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
+  const raw = payload[key];
+  if (Array.isArray(raw)) {
+    return normalizeTokenList(raw.map((value) => String(value || "")));
+  }
+  const text = String(raw || "").trim();
+  if (!text) {
+    return [];
+  }
+  return normalizeTokenList(text.split(","));
+}
+
 export function AgentActivityPanel({
   events,
   streaming,
   stageAttachment,
   needsHumanReview,
   humanReviewNotes,
+  jumpTarget = null,
   onJumpToEvent,
 }: AgentActivityPanelProps) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -53,6 +86,7 @@ export function AgentActivityPanel({
 
   const {
     activeEvent,
+    activeRoleColor,
     activeRoleLabel,
     activeTab,
     browserEvents,
@@ -294,6 +328,45 @@ export function AgentActivityPanel({
   }, [eventCursor]);
 
   useEffect(() => {
+    if (!jumpTarget || !orderedEvents.length) {
+      return;
+    }
+    const targetGraphNodeIds = normalizeTokenList(jumpTarget.graphNodeIds);
+    const targetSceneRefs = normalizeTokenList(jumpTarget.sceneRefs);
+    const targetEventRefs = normalizeTokenList(jumpTarget.eventRefs);
+    if (!targetGraphNodeIds.length && !targetSceneRefs.length && !targetEventRefs.length) {
+      return;
+    }
+
+    let matchedIndex = -1;
+    for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+      const event = orderedEvents[index];
+      const eventId = String(event.event_id || "").trim().toLowerCase();
+      const graphNodeId = readEventString(event, "graph_node_id").toLowerCase();
+      const sceneRef = readEventString(event, "scene_ref").toLowerCase();
+      const graphNodeIds = readEventStringList(event, "graph_node_ids");
+      const sceneRefs = readEventStringList(event, "scene_refs");
+      const eventRefs = readEventStringList(event, "event_refs");
+      const byEventRef = targetEventRefs.some((ref) => ref === eventId || eventRefs.includes(ref));
+      const byGraphNode =
+        targetGraphNodeIds.some((ref) => ref === graphNodeId) ||
+        targetGraphNodeIds.some((ref) => graphNodeIds.includes(ref));
+      const bySceneRef =
+        targetSceneRefs.some((ref) => ref === sceneRef) ||
+        targetSceneRefs.some((ref) => sceneRefs.includes(ref));
+      if (byEventRef || byGraphNode || bySceneRef) {
+        matchedIndex = index;
+        break;
+      }
+    }
+    if (matchedIndex < 0) {
+      return;
+    }
+    setCursor(matchedIndex);
+    setIsPlaying(false);
+  }, [jumpTarget?.nonce, orderedEvents]);
+
+  useEffect(() => {
     if (!isFullscreenViewer) {
       return;
     }
@@ -361,6 +434,7 @@ export function AgentActivityPanel({
     sceneTransitionLabel,
     safeCursor,
     totalEvents: orderedEvents.length,
+    activeRoleColor,
     activeRoleLabel,
     roleNarrative,
     activeTitle: sceneEvent?.title || activeEvent?.title || "",

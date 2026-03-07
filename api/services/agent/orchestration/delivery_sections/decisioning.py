@@ -5,6 +5,7 @@ from typing import Any
 from api.schemas import ChatRequest
 from api.services.agent.llm_execution_support import (
     build_location_delivery_brief,
+    draft_delivery_report_content,
     polish_email_content,
 )
 from api.services.agent.models import AgentActivityEvent, utc_now
@@ -61,6 +62,9 @@ def prepare_delivery_content(
     activity_event_factory,
 ) -> tuple[str, str, list[AgentActivityEvent]]:
     task_intelligence = task_prep.task_intelligence
+    preferred_tone = str(
+        task_intelligence.preferred_tone or task_prep.user_preferences.get("tone") or ""
+    ).strip()
     report_title = str(
         state.execution_context.settings.get("__latest_report_title")
         or "Website Analysis Report"
@@ -68,19 +72,33 @@ def prepare_delivery_content(
     report_body = str(
         state.execution_context.settings.get("__latest_report_content") or ""
     ).strip()
+    if report_body.lower().startswith("no dedicated report draft was generated"):
+        report_body = ""
     if not report_body:
-        summary_lines = [
-            f"- {row.get('title') or row.get('tool_id')}: {row.get('summary') or ''}".strip()
-            for row in state.executed_steps
-            if str(row.get("status") or "") == "success"
-        ]
-        report_body = "\n".join(
-            [
-                "No dedicated report draft was generated; sending execution summary.",
-                "",
-                *summary_lines[:10],
-            ]
-        ).strip()
+        drafted_report = draft_delivery_report_content(
+            request_message=request.message,
+            objective=task_intelligence.objective,
+            report_title=report_title or "Website Analysis Report",
+            executed_steps=[dict(row) for row in state.executed_steps],
+            sources=[
+                {
+                    "label": str(source.label or "").strip(),
+                    "url": str(source.url or "").strip(),
+                    "source_type": str(source.source_type or "").strip(),
+                    "metadata": (
+                        source.metadata if isinstance(source.metadata, dict) else {}
+                    ),
+                }
+                for source in state.all_sources[:16]
+            ],
+            preferred_tone=preferred_tone,
+        )
+        draft_subject = " ".join(str(drafted_report.get("subject") or "").split()).strip()
+        draft_body = str(drafted_report.get("body_text") or "").strip()
+        if draft_subject:
+            report_title = draft_subject
+        if draft_body:
+            report_body = draft_body
 
     pre_send_events: list[AgentActivityEvent] = []
     required_facts_for_delivery = (
@@ -174,9 +192,6 @@ def prepare_delivery_content(
                 )
             )
 
-    preferred_tone = str(
-        task_intelligence.preferred_tone or task_prep.user_preferences.get("tone") or ""
-    ).strip()
     context_summary = f"{task_intelligence.objective} Tone: {preferred_tone}".strip()
     polished_email = polish_email_content(
         subject=report_title or "Website Analysis Report",
@@ -192,4 +207,6 @@ def prepare_delivery_content(
         or report_body
         or "Report requested, but no body content was generated."
     ).strip()
+    state.execution_context.settings["__latest_report_title"] = report_title
+    state.execution_context.settings["__latest_report_content"] = report_body
     return report_title, report_body, pre_send_events

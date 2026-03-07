@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from api.services.agent.event_envelope import build_event_envelope, merge_event_envelope_data
 from api.services.agent.models import AgentActivityEvent, new_id
 
 EVENT_SCHEMA_VERSION = "1.0"
@@ -45,6 +46,10 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "llm.web_routing_decision": "plan",
     "llm.plan_step": "plan",
     "llm.plan_fact_coverage": "plan",
+    "agent.handoff": "tool",
+    "agent.resume": "tool",
+    "agent.waiting": "system",
+    "agent.blocked": "error",
     "role_handoff": "tool",
     "role_activated": "tool",
     "role_contract_check": "tool",
@@ -104,6 +109,22 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "llm.web_routing_decision": {"description": "LLM web routing decision selected", "user_visible": True},
     "llm.plan_step": {"description": "Planned execution step generated", "user_visible": True},
     "llm.plan_fact_coverage": {"description": "Required-fact coverage was checked for the plan", "user_visible": True},
+    "agent.handoff": {
+        "description": "Agent control transferred between specialized roles",
+        "user_visible": True,
+    },
+    "agent.resume": {
+        "description": "Agent resumed active execution after handoff or pause",
+        "user_visible": True,
+    },
+    "agent.waiting": {
+        "description": "Agent waiting for human verification before continuing",
+        "user_visible": True,
+    },
+    "agent.blocked": {
+        "description": "Agent execution blocked by a policy or verification barrier",
+        "user_visible": True,
+    },
     "role_handoff": {"description": "Execution ownership transferred between micro-agent roles", "user_visible": True},
     "role_activated": {"description": "Micro-agent role activated for the next execution step", "user_visible": True},
     "role_contract_check": {"description": "Step tool usage validated against active role contract", "user_visible": True},
@@ -285,9 +306,24 @@ CORE_EVENT_TYPES: tuple[str, ...] = (
 def infer_stage(event_type: str) -> EventStage:
     if event_type in _STAGE_OVERRIDES:
         return _STAGE_OVERRIDES[event_type]
-    if event_type.startswith(("web_", "browser_")):
+    if event_type.startswith(("web_", "web.", "browser_", "browser.")):
         return "preview"
-    if event_type.startswith(("document_", "pdf_", "email_", "doc_", "docs.", "sheet_", "sheets.", "drive.")):
+    if event_type.startswith(
+        (
+            "document_",
+            "pdf_",
+            "pdf.",
+            "email_",
+            "email.",
+            "doc_",
+            "doc.",
+            "docs.",
+            "sheet_",
+            "sheet.",
+            "sheets.",
+            "drive.",
+        )
+    ):
         return "ui_action"
     if event_type.startswith("tool_"):
         return "tool"
@@ -298,12 +334,17 @@ def infer_stage(event_type: str) -> EventStage:
 
 def infer_status(event_type: str) -> EventStatus:
     if event_type in {
+        "agent.waiting",
         "approval_required",
         "email_auth_required",
         "browser_human_verification_required",
         "handoff_paused",
     }:
         return "waiting"
+    if event_type == "agent.blocked":
+        return "blocked"
+    if event_type == "agent.resume":
+        return "completed"
     if event_type == "handoff_resumed":
         return "completed"
     if event_type == "role_activated":
@@ -379,6 +420,19 @@ class RunEventEmitter:
         payload_data = dict(data or {})
         if metadata:
             payload_data.update(metadata)
+        resolved_stage = stage or infer_stage(event_type)
+        resolved_status = status or infer_status(event_type)
+        envelope = build_event_envelope(
+            event_type=event_type,
+            stage=resolved_stage,
+            status=resolved_status,
+            data=payload_data,
+        )
+        payload_data = merge_event_envelope_data(
+            data=payload_data,
+            envelope=envelope,
+            event_schema_version=self.schema_version,
+        )
         return AgentActivityEvent(
             event_id=new_id("evt"),
             run_id=self.run_id,
@@ -388,8 +442,8 @@ class RunEventEmitter:
             metadata=payload_data,
             data=payload_data,
             seq=self.seq,
-            stage=stage or infer_stage(event_type),
-            status=status or infer_status(event_type),
+            stage=resolved_stage,
+            status=resolved_status,
             event_schema_version=self.schema_version,
             snapshot_ref=snapshot_ref,
         )

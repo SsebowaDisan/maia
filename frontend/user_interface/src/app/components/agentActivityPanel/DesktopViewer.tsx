@@ -13,6 +13,7 @@ interface DesktopViewerProps {
   sceneTransitionLabel: string;
   safeCursor: number;
   totalEvents: number;
+  activeRoleColor: string;
   activeRoleLabel: string;
   roleNarrative: string;
   activeTitle: string;
@@ -74,6 +75,7 @@ function DesktopViewer({
   sceneTransitionLabel,
   safeCursor,
   totalEvents,
+  activeRoleColor,
   activeRoleLabel,
   roleNarrative,
   activeTitle,
@@ -123,7 +125,10 @@ function DesktopViewer({
           <Monitor className="h-3.5 w-3.5" />
           Agent desktop
           {activeRoleLabel ? (
-            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white">
+            <span
+              className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white"
+              style={{ backgroundColor: `${String(activeRoleColor || "#6b7280")}33`, borderColor: `${String(activeRoleColor || "#6b7280")}99` }}
+            >
               {activeRoleLabel}
             </span>
           ) : null}

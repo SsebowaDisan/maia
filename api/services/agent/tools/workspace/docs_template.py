@@ -32,6 +32,10 @@ class WorkspaceDocsTemplateTool(WorkspaceConnectorTool):
         if not isinstance(replacements, dict):
             replacements = {}
         prompt_text = str(params.get("body") or prompt).strip()
+        if title:
+            context.settings["__latest_report_title"] = title
+        if prompt_text:
+            context.settings["__latest_report_content"] = prompt_text
         render_markdown = bool(params.get("render_markdown", True))
         make_public, public_role, public_discoverable = resolve_public_share_options(
             params=params,

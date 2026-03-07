@@ -77,6 +77,13 @@ def execute_planned_steps(
                     metadata=dict(pause_notice.get("metadata") or {}),
                 )
                 yield emit_event(pause_event)
+                waiting_event = activity_event_factory(
+                    event_type="agent.waiting",
+                    title="Agent waiting for human verification",
+                    detail=str(pause_notice.get("detail") or "")[:200],
+                    metadata=dict(pause_notice.get("metadata") or {}),
+                )
+                yield emit_event(waiting_event)
                 state.execution_context.settings["__handoff_pause_emitted"] = True
             break
         step = steps[step_cursor]
@@ -102,6 +109,18 @@ def execute_planned_steps(
                     },
                 )
                 yield emit_event(handoff_event)
+                agent_handoff_event = activity_event_factory(
+                    event_type="agent.handoff",
+                    title="Agent handoff",
+                    detail=f"{active_role} -> {owner_role}",
+                    metadata={
+                        "from_role": active_role,
+                        "to_role": owner_role,
+                        "step": index,
+                        "tool_id": step.tool_id,
+                    },
+                )
+                yield emit_event(agent_handoff_event)
             role_event = activity_event_factory(
                 event_type="role_activated",
                 title=f"Role active: {owner_role}",
@@ -113,6 +132,17 @@ def execute_planned_steps(
                 },
             )
             yield emit_event(role_event)
+            agent_resume_event = activity_event_factory(
+                event_type="agent.resume",
+                title=f"Agent resumed: {owner_role}",
+                detail=step.title[:200],
+                metadata={
+                    "role": owner_role,
+                    "step": index,
+                    "tool_id": step.tool_id,
+                },
+            )
+            yield emit_event(agent_resume_event)
             active_role = owner_role
             state.execution_context.settings["__active_execution_role"] = owner_role
 

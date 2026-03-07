@@ -20,6 +20,13 @@ def test_interaction_release_gate_core_surfaces_and_actions() -> None:
             "document",
         ),
         (
+            "pdf_zoom_to_region",
+            {"pdf_page": 2, "zoom_level": 2.1, "target_region": {"x": 10, "y": 12, "width": 100, "height": 50}},
+            "document",
+            "zoom_to_region",
+            "document",
+        ),
+        (
             "doc_insert_text",
             {"document_id": "doc-123", "source_url": "https://docs.google.com/document/d/doc-123/edit"},
             "google_docs",
@@ -31,6 +38,13 @@ def test_interaction_release_gate_core_surfaces_and_actions() -> None:
             {"spreadsheet_id": "sheet-123", "source_url": "https://docs.google.com/spreadsheets/d/sheet-123/edit"},
             "google_sheets",
             "verify",
+            "google_sheets",
+        ),
+        (
+            "sheet_zoom_in",
+            {"zoom_level": 1.25},
+            "google_sheets",
+            "zoom_in",
             "google_sheets",
         ),
         (

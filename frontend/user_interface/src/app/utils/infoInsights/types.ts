@@ -9,12 +9,18 @@ type EvidenceCard = {
   id: string;
   title: string;
   source: string;
+  sourceType?: string;
   sourceUrl?: string;
   page?: string;
   fileId?: string;
   extract: string;
   imageSrc?: string;
   highlightBoxes?: HighlightBox[];
+  confidence?: number;
+  collectedBy?: string;
+  graphNodeIds?: string[];
+  sceneRefs?: string[];
+  eventRefs?: string[];
   strengthScore?: number;
   strengthTier?: number;
   matchQuality?: string;

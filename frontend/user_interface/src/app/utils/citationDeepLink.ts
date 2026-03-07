@@ -18,6 +18,9 @@ type CitationDeepLinkPayload = {
   matchQuality?: string;
   strengthScore?: number;
   strengthTier?: number;
+  graphNodeIds?: string[];
+  sceneRefs?: string[];
+  eventRefs?: string[];
 };
 
 const PARAM_KEY = "citation";
@@ -80,6 +83,28 @@ function normalizeHighlightBoxes(value: unknown): CitationHighlightBox[] {
   return boxes;
 }
 
+function normalizeTextList(value: unknown, maxItems: number, maxChars: number): string[] {
+  const rows = Array.isArray(value) ? value : [value];
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const text = normalizeText(row, maxChars);
+    if (!text) {
+      continue;
+    }
+    const lowered = text.toLowerCase();
+    if (seen.has(lowered)) {
+      continue;
+    }
+    seen.add(lowered);
+    output.push(text);
+    if (output.length >= Math.max(1, maxItems)) {
+      break;
+    }
+  }
+  return output;
+}
+
 function toBase64Url(raw: string): string {
   const bytes = new TextEncoder().encode(raw);
   let binary = "";
@@ -120,6 +145,9 @@ function toPayload(params: {
     highlightBoxes: normalizeHighlightBoxes(citationFocus.highlightBoxes),
     unitId: normalizeText(citationFocus.unitId, 180) || undefined,
     matchQuality: normalizeText(citationFocus.matchQuality, 24) || undefined,
+    graphNodeIds: normalizeTextList(citationFocus.graphNodeIds, 8, 180),
+    sceneRefs: normalizeTextList(citationFocus.sceneRefs, 8, 180),
+    eventRefs: normalizeTextList(citationFocus.eventRefs, 8, 180),
     charStart: Number.isFinite(charStart) && charStart > 0 ? charStart : undefined,
     charEnd: Number.isFinite(charEnd) && charEnd > 0 ? charEnd : undefined,
     strengthScore: Number.isFinite(strengthScore) ? Number(strengthScore.toFixed(6)) : undefined,
@@ -142,6 +170,9 @@ function payloadToFocus(payload: CitationDeepLinkPayload): CitationFocus {
     highlightBoxes: normalizeHighlightBoxes(payload.highlightBoxes),
     unitId: normalizeText(payload.unitId, 180) || undefined,
     matchQuality: normalizeText(payload.matchQuality, 24) || undefined,
+    graphNodeIds: normalizeTextList(payload.graphNodeIds, 8, 180),
+    sceneRefs: normalizeTextList(payload.sceneRefs, 8, 180),
+    eventRefs: normalizeTextList(payload.eventRefs, 8, 180),
     charStart: Number.isFinite(Number(payload.charStart)) ? Number(payload.charStart) : undefined,
     charEnd: Number.isFinite(Number(payload.charEnd)) ? Number(payload.charEnd) : undefined,
     strengthScore: Number.isFinite(Number(payload.strengthScore))
@@ -187,6 +218,9 @@ function decodeCitationPayload(encoded: string): {
       highlightBoxes: normalizeHighlightBoxes(parsed.highlightBoxes),
       unitId: normalizeText(parsed.unitId, 180) || undefined,
       matchQuality: normalizeText(parsed.matchQuality, 24) || undefined,
+      graphNodeIds: normalizeTextList(parsed.graphNodeIds, 8, 180),
+      sceneRefs: normalizeTextList(parsed.sceneRefs, 8, 180),
+      eventRefs: normalizeTextList(parsed.eventRefs, 8, 180),
       charStart: Number.isFinite(Number(parsed.charStart)) ? Number(parsed.charStart) : undefined,
       charEnd: Number.isFinite(Number(parsed.charEnd)) ? Number(parsed.charEnd) : undefined,
       strengthScore: Number.isFinite(Number(parsed.strengthScore))

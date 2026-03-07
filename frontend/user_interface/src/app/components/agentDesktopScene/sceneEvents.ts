@@ -34,6 +34,10 @@ function normalizedAction(raw: string): string {
     value === "click" ||
     value === "type" ||
     value === "scroll" ||
+    value === "zoom_in" ||
+    value === "zoom_out" ||
+    value === "zoom_reset" ||
+    value === "zoom_to_region" ||
     value === "extract" ||
     value === "verify"
   ) {
@@ -58,6 +62,9 @@ function surfaceLabel(surface: string): string {
   }
   if (normalizedSurface === "email") {
     return "draft";
+  }
+  if (normalizedSurface === "api") {
+    return "record";
   }
   return "workspace";
 }
@@ -118,6 +125,34 @@ function inferDefaultOverlayForAction({
       pulse: phase === "active",
     };
   }
+  if (normalized === "zoom_in") {
+    return {
+      text: "Zooming in",
+      variant: "center-pill",
+      pulse: true,
+    };
+  }
+  if (normalized === "zoom_out") {
+    return {
+      text: "Zooming out",
+      variant: "center-pill",
+      pulse: true,
+    };
+  }
+  if (normalized === "zoom_reset") {
+    return {
+      text: "Resetting zoom",
+      variant: "left-chip",
+      pulse: true,
+    };
+  }
+  if (normalized === "zoom_to_region") {
+    return {
+      text: label ? `Zooming to ${label}` : "Zooming to region",
+      variant: "center-pill",
+      pulse: true,
+    };
+  }
   if (normalized === "extract") {
     return {
       text: label ? `Extracting from ${label}` : `Extracting from ${target}`,
@@ -150,7 +185,8 @@ function overlayForInteractionEvent({
   if (
     type === "browser_human_verification_required" ||
     type === "approval_required" ||
-    type === "policy_blocked"
+    type === "policy_blocked" ||
+    type === "agent.waiting"
   ) {
     return {
       text: "Human verification required",
@@ -163,6 +199,27 @@ function overlayForInteractionEvent({
       text: "Action failed",
       variant: "human-alert",
       detail: clean(activeDetail) || "The agent will retry or request help.",
+    };
+  }
+  if (type === "agent.blocked") {
+    return {
+      text: "Agent blocked",
+      variant: "human-alert",
+      detail: clean(activeDetail) || "Policy or verification barrier requires intervention.",
+    };
+  }
+  if (type === "agent.handoff") {
+    return {
+      text: "Handing off to next specialist",
+      variant: "left-chip",
+      pulse: true,
+    };
+  }
+  if (type === "agent.resume") {
+    return {
+      text: "Execution resumed",
+      variant: "left-chip",
+      pulse: true,
     };
   }
 

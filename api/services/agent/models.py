@@ -112,6 +112,7 @@ class AgentRunResult:
     actions_taken: list[AgentAction]
     sources_used: list[AgentSource]
     next_recommended_steps: list[str]
+    evidence_items: list[dict[str, Any]] = field(default_factory=list)
     needs_human_review: bool = False
     human_review_notes: str = ""
     web_summary: dict[str, Any] = field(default_factory=dict)
@@ -123,6 +124,7 @@ class AgentRunResult:
             "info_html": self.info_html,
             "actions_taken": [item.to_dict() for item in self.actions_taken],
             "sources_used": [item.to_dict() for item in self.sources_used],
+            "evidence_items": [dict(item) for item in self.evidence_items],
             "next_recommended_steps": self.next_recommended_steps,
             "needs_human_review": self.needs_human_review,
             "human_review_notes": self.human_review_notes,

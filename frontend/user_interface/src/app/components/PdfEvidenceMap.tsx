@@ -161,6 +161,9 @@ function toCitationFromEvidence(params: {
     unitId: row.unitId || citationFocus.unitId,
     charStart: row.charStart ?? citationFocus.charStart,
     charEnd: row.charEnd ?? citationFocus.charEnd,
+    graphNodeIds: row.graphNodeIds || citationFocus.graphNodeIds,
+    sceneRefs: row.sceneRefs || citationFocus.sceneRefs,
+    eventRefs: row.eventRefs || citationFocus.eventRefs,
   };
 }
 
@@ -189,6 +192,9 @@ function toCitationFromPage(params: {
     unitId: citationFocus.unitId,
     charStart: citationFocus.charStart,
     charEnd: citationFocus.charEnd,
+    graphNodeIds: citationFocus.graphNodeIds,
+    sceneRefs: citationFocus.sceneRefs,
+    eventRefs: citationFocus.eventRefs,
   };
 }
 

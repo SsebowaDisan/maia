@@ -26,6 +26,7 @@ function ChatMain({
   mindmapIncludeReasoning,
   mindmapMapType,
   onCitationClick,
+  citationFocus = null,
   agentMode,
   onAgentModeChange,
   accessMode,
@@ -98,6 +99,7 @@ function ChatMain({
             saveInlineEdit={interactions.saveInlineEdit}
             selectedTurnIndex={selectedTurnIndex}
             setEditingText={interactions.setEditingText}
+            citationFocus={citationFocus}
           />
         )}
       </div>

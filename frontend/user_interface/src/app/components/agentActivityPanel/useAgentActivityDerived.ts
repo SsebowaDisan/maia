@@ -19,12 +19,16 @@ import {
   resolveSheetBodyHint,
 } from "./contentDerivation";
 import {
+  agentColorFromEvent,
+  agentEventTypeFromEvent,
+  agentLabelFromEvent,
   cursorFromEvent,
   cursorLabelFromSemantics,
   eventTab,
   interactionActionFromEvent,
   interactionActionPhaseFromEvent,
   interactionActionStatusFromEvent,
+  isApiRuntimeEvent,
   roleKeyFromEvent,
   roleLabelFromKey,
   roleNarrativeFromSemantics,
@@ -54,6 +58,23 @@ const EMAIL_SCENE_EVENT_TYPES = new Set([
   "email_sent",
 ]);
 
+function readEventIndex(event: AgentActivityEvent, fallback: number): number {
+  const direct = Number(event.event_index);
+  if (Number.isFinite(direct) && direct > 0) {
+    return direct;
+  }
+  const data = event.data || event.metadata || {};
+  const payloadIndex = Number((data as Record<string, unknown>).event_index);
+  if (Number.isFinite(payloadIndex) && payloadIndex > 0) {
+    return payloadIndex;
+  }
+  const seq = Number(event.seq);
+  if (Number.isFinite(seq) && seq > 0) {
+    return seq;
+  }
+  return fallback;
+}
+
 function useAgentActivityDerived({
   events,
   cursor,
@@ -65,6 +86,11 @@ function useAgentActivityDerived({
   const orderedEvents = useMemo(() => {
     const decorated = events.map((event, index) => ({ event, index }));
     decorated.sort((left, right) => {
+      const leftEventIndex = readEventIndex(left.event, left.index + 1);
+      const rightEventIndex = readEventIndex(right.event, right.index + 1);
+      if (leftEventIndex !== rightEventIndex) {
+        return leftEventIndex - rightEventIndex;
+      }
       const leftSeq =
         typeof left.event.seq === "number" && Number.isFinite(left.event.seq)
           ? left.event.seq
@@ -104,12 +130,12 @@ function useAgentActivityDerived({
       return null;
     }
     const activeEventTab = eventTab(activeEvent);
-    if (activeEventTab !== "system") {
+    if (activeEventTab !== "system" || isApiRuntimeEvent(activeEvent)) {
       return activeEvent;
     }
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const candidate = visibleEvents[idx];
-      if (eventTab(candidate) !== "system") {
+      if (eventTab(candidate) !== "system" || isApiRuntimeEvent(candidate)) {
         return candidate;
       }
     }
@@ -178,6 +204,7 @@ function useAgentActivityDerived({
   const isEmailScene = previewTab === "email" && hasEmailSceneSignal;
   const isDocumentScene = previewTab === "document";
   const isSystemScene = previewTab === "system";
+  const isApiScene = isApiRuntimeEvent(sceneEvent || activeEvent);
 
   const currentSceneSourceUrl =
     readStringField(sceneEvent?.data?.["source_url"]) ||
@@ -243,6 +270,8 @@ function useAgentActivityDerived({
         ? "google_docs"
         : isEmailScene
           ? "email"
+          : isApiScene
+            ? "api"
           : isSystemScene
             ? "system"
             : "workspace";
@@ -292,7 +321,19 @@ function useAgentActivityDerived({
       roleKeyFromEvent(visibleEvents[visibleEvents.length - 1] || null),
     [activeEvent, sceneEvent, visibleEvents],
   );
-  const activeRoleLabel = roleLabelFromKey(activeRoleKey) || "Agent";
+  const activeRoleLabel =
+    agentLabelFromEvent(sceneEvent) ||
+    agentLabelFromEvent(activeEvent) ||
+    roleLabelFromKey(activeRoleKey) ||
+    "Agent";
+  const activeRoleColor =
+    agentColorFromEvent(sceneEvent) ||
+    agentColorFromEvent(activeEvent) ||
+    "#6b7280";
+  const agentEventType =
+    agentEventTypeFromEvent(sceneEvent) ||
+    agentEventTypeFromEvent(activeEvent) ||
+    "";
 
   const interactionAction =
     interactionActionFromEvent(sceneEvent) || interactionActionFromEvent(activeEvent);
@@ -309,8 +350,16 @@ function useAgentActivityDerived({
         actionPhase: interactionActionPhase,
         sceneSurfaceLabel,
         roleLabel: activeRoleLabel,
+        agentEventType,
       }),
-    [activeRoleLabel, interactionAction, interactionActionPhase, interactionActionStatus, sceneSurfaceLabel],
+    [
+      activeRoleLabel,
+      agentEventType,
+      interactionAction,
+      interactionActionPhase,
+      interactionActionStatus,
+      sceneSurfaceLabel,
+    ],
   );
 
   const roleNarrative = useMemo(
@@ -320,8 +369,16 @@ function useAgentActivityDerived({
         action: interactionAction,
         sceneSurfaceLabel,
         fallback: sceneEvent?.title || activeEvent?.title || "working",
+        agentEventType,
       }),
-    [activeRoleLabel, activeEvent?.title, interactionAction, sceneEvent?.title, sceneSurfaceLabel],
+    [
+      activeRoleLabel,
+      activeEvent?.title,
+      agentEventType,
+      interactionAction,
+      sceneEvent?.title,
+      sceneSurfaceLabel,
+    ],
   );
 
   const eventCursor = useMemo(() => {
@@ -336,6 +393,7 @@ function useAgentActivityDerived({
     activeEvent,
     activeRoleKey,
     activeRoleLabel,
+    activeRoleColor,
     activeTab,
     browserEvents,
     browserUrl,
@@ -358,6 +416,7 @@ function useAgentActivityDerived({
     isDocsScene,
     isDocumentScene,
     isEmailScene,
+    isApiScene,
     isPdfScene,
     isSheetsScene,
     isSystemScene,

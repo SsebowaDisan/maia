@@ -1,5 +1,14 @@
 import { InteractionOverlay } from "./InteractionOverlay";
-import type { DocumentHighlight } from "./types";
+import {
+  PdfComparePanel,
+  PdfMiniMap,
+  PdfScrollRail,
+  PdfTargetFocus,
+  PdfVerifierConflictBadge,
+  PdfZoomBadge,
+  PdfZoomHistoryPanel,
+} from "./document_scene_panels";
+import type { DocumentHighlight, ZoomHistoryEntry } from "./types";
 
 function highlightBackground(color: "yellow" | "green") {
   return color === "green" ? "rgba(112, 216, 123, 0.22)" : "rgba(255, 213, 79, 0.22)";
@@ -18,30 +27,30 @@ type DocumentPdfSceneProps = {
   pdfScanRegion: string;
   pdfScrollDirection: "up" | "down" | "";
   pdfScrollPercent: number | null;
+  pdfZoomLevel: number | null;
+  pdfZoomReason: string;
+  zoomHistory: ZoomHistoryEntry[];
+  pdfTargetRegion: {
+    keyword: string;
+    color: "yellow" | "green";
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+  pdfCompareLeft: string;
+  pdfCompareRight: string;
+  pdfCompareVerdict: string;
+  pdfFindQuery: string;
+  pdfFindMatchCount: number;
+  pdfSemanticFindResults: Array<{ term: string; confidence: number }>;
+  verifierConflict: boolean;
+  verifierConflictReason: string;
+  verifierRecheckRequired: boolean;
+  zoomEscalationRequested: boolean;
   sceneText: string;
   stageFileUrl: string;
 };
-
-function PdfScrollRail({
-  pdfScrollPercent,
-}: {
-  pdfScrollPercent: number | null;
-}) {
-  if (typeof pdfScrollPercent !== "number") {
-    return null;
-  }
-  return (
-    <div className="pointer-events-none absolute right-2 top-14 bottom-4 flex flex-col items-center">
-      <div className="h-full w-1.5 rounded-full bg-black/20">
-        <div
-          className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
-          style={{ height: "24px", marginTop: `calc(${pdfScrollPercent}% - 12px)` }}
-        />
-      </div>
-      <span className="mt-1 text-[10px] font-medium text-black/70">{Math.round(pdfScrollPercent)}%</span>
-    </div>
-  );
-}
 
 function DocumentPdfScene({
   activeDetail,
@@ -56,6 +65,20 @@ function DocumentPdfScene({
   pdfScanRegion,
   pdfScrollDirection,
   pdfScrollPercent,
+  pdfZoomLevel,
+  pdfZoomReason,
+  zoomHistory,
+  pdfTargetRegion,
+  pdfCompareLeft,
+  pdfCompareRight,
+  pdfCompareVerdict,
+  pdfFindQuery,
+  pdfFindMatchCount,
+  pdfSemanticFindResults,
+  verifierConflict,
+  verifierConflictReason,
+  verifierRecheckRequired,
+  zoomEscalationRequested,
   sceneText,
   stageFileUrl,
 }: DocumentPdfSceneProps) {
@@ -74,6 +97,11 @@ function DocumentPdfScene({
     normalizedAction === "navigate" &&
     normalizedActionPhase !== "failed" &&
     totalPages > 1;
+  const showFindOverlay =
+    normalizedAction === "find" ||
+    normalizedEventType.startsWith("pdf_find") ||
+    normalizedEventType.startsWith("pdf.find") ||
+    Boolean(pdfFindQuery);
   const showScanSweep = showScanFocus && normalizedActionPhase === "active";
   return (
     <div className="absolute inset-0">
@@ -81,6 +109,12 @@ function DocumentPdfScene({
         src={frameUrl}
         title="Agent PDF live preview"
         className="absolute inset-0 h-full w-full bg-white"
+      />
+      <PdfVerifierConflictBadge
+        verifierConflict={verifierConflict}
+        verifierConflictReason={verifierConflictReason}
+        verifierRecheckRequired={verifierRecheckRequired}
+        zoomEscalationRequested={zoomEscalationRequested}
       />
       <div className="pointer-events-none absolute left-3 right-3 top-3 rounded-xl border border-black/15 bg-white/86 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
         <div className="flex items-center justify-between gap-2">
@@ -96,6 +130,24 @@ function DocumentPdfScene({
           <p className="mt-1.5 line-clamp-2 rounded-md border border-black/10 bg-white/95 px-2 py-1 text-[10px] text-[#2e2e31]">
             {pdfScanRegion}
           </p>
+        ) : null}
+        {showFindOverlay ? (
+          <div className="mt-1 rounded-md border border-black/10 bg-white/95 px-2 py-1 text-[10px] text-[#2e2e31]">
+            <p>
+              Find: {pdfFindQuery || "scanning terms"}{" "}
+              <span className="text-[#6b6b70]">({Math.max(1, pdfFindMatchCount || 1)} matches)</span>
+            </p>
+            {pdfSemanticFindResults.length ? (
+              <div className="mt-1 space-y-0.5">
+                {pdfSemanticFindResults.slice(0, 3).map((item) => (
+                  <p key={`pdf-semantic-${item.term}`} className="line-clamp-1 text-[#4b4b50]">
+                    <span className="font-medium">{item.term}</span>
+                    <span className="ml-1 text-[#6b6b70]">{Math.round(item.confidence * 100)}%</span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ) : null}
         {pdfScrollDirection ? (
           <p className="mt-1 text-[10px] uppercase tracking-[0.06em] text-[#5b5b60]">
@@ -128,11 +180,25 @@ function DocumentPdfScene({
           ) : null}
         </div>
       ) : null}
+      <PdfTargetFocus pdfTargetRegion={pdfTargetRegion} />
+      <PdfZoomBadge pdfZoomLevel={pdfZoomLevel} pdfZoomReason={pdfZoomReason} />
+      <PdfZoomHistoryPanel zoomHistory={zoomHistory} />
+      <PdfMiniMap
+        pdfPage={page}
+        pdfPageTotal={totalPages}
+        pdfScrollPercent={pdfScrollPercent}
+        pdfTargetRegion={pdfTargetRegion}
+      />
       {showPageTurnBadge ? (
         <div className="pointer-events-none absolute right-4 top-16 z-20 rounded-full border border-black/15 bg-white/92 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#2d2d31]">
           Page turn
         </div>
       ) : null}
+      <PdfComparePanel
+        pdfCompareLeft={pdfCompareLeft}
+        pdfCompareRight={pdfCompareRight}
+        pdfCompareVerdict={pdfCompareVerdict}
+      />
       {documentHighlights.length ? (
         <div className="pointer-events-none absolute left-3 right-3 bottom-3 rounded-xl border border-black/15 bg-white/85 px-3 py-2 text-[11px] text-[#1d1d1f] backdrop-blur-sm">
           <p className="text-[11px] font-semibold">Copied highlights</p>

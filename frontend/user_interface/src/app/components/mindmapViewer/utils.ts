@@ -1,11 +1,13 @@
 import type { Edge, Node } from "@xyflow/react";
 
+export type MindmapMapType = "structure" | "evidence" | "work_graph";
+
 export type CanvasState = {
   collapsedNodeIds: string[];
   showReasoningMap: boolean;
   layoutMode: "balanced" | "horizontal";
   nodePositions: Record<string, { x: number; y: number }>;
-  activeMapType: "structure" | "evidence";
+  activeMapType: MindmapMapType;
   focusedNodeId: string | null;
 };
 
@@ -65,6 +67,7 @@ export function parseCanvasState(value: string | null): CanvasState | null {
   }
   try {
     const parsed = JSON.parse(value) as Partial<CanvasState>;
+    const rawMapType = String(parsed.activeMapType || "").trim().toLowerCase();
     return {
       collapsedNodeIds: Array.isArray(parsed.collapsedNodeIds)
         ? parsed.collapsedNodeIds.filter((row): row is string => typeof row === "string")
@@ -75,7 +78,12 @@ export function parseCanvasState(value: string | null): CanvasState | null {
         parsed.nodePositions && typeof parsed.nodePositions === "object"
           ? (parsed.nodePositions as Record<string, { x: number; y: number }>)
           : {},
-      activeMapType: parsed.activeMapType === "evidence" ? "evidence" : "structure",
+      activeMapType:
+        rawMapType === "work_graph"
+          ? "work_graph"
+          : rawMapType === "evidence"
+            ? "evidence"
+            : "structure",
       focusedNodeId:
         parsed.focusedNodeId && typeof parsed.focusedNodeId === "string"
           ? parsed.focusedNodeId

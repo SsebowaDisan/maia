@@ -11,6 +11,8 @@ type EmailSceneProps = {
   emailBodyScrollRef: React.RefObject<HTMLDivElement | null>;
   emailRecipient: string;
   emailSubject: string;
+  copyUsageRefs: string[];
+  copySourceSnippet: string;
 };
 
 function focusedEmailField({
@@ -62,6 +64,8 @@ function EmailScene({
   emailBodyScrollRef,
   emailRecipient,
   emailSubject,
+  copyUsageRefs,
+  copySourceSnippet,
 }: EmailSceneProps) {
   const focus = focusedEmailField({
     eventType: activeEventType,
@@ -125,6 +129,17 @@ function EmailScene({
           {activeEventType === "email_click_send" ? (
             <div className="rounded-xl border border-[#0a84ff]/25 bg-[#0a84ff]/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0756a8]">
               Send action confirmed
+            </div>
+          ) : null}
+          {copyUsageRefs.length ? (
+            <div className="rounded-xl border border-[#b37a17]/30 bg-[#fff5e7] px-3 py-1.5 text-[10px] text-[#7d4f16]">
+              <p className="font-semibold uppercase tracking-[0.08em]">Copy provenance</p>
+              <p className="mt-0.5">
+                Using copied source {copyUsageRefs.slice(0, 2).join(", ")}
+              </p>
+              {copySourceSnippet ? (
+                <p className="mt-0.5 line-clamp-2 text-[#8a5d1a]">{copySourceSnippet}</p>
+              ) : null}
             </div>
           ) : null}
         </div>

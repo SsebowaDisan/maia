@@ -2,6 +2,7 @@ from api.services.agent import llm_execution_support
 from api.services.agent.llm_execution_support import (
     build_location_delivery_brief,
     curate_next_steps_for_task,
+    draft_delivery_report_content,
     polish_contact_form_content,
     polish_email_content,
     rewrite_task_for_execution,
@@ -100,6 +101,105 @@ def test_polish_email_content_preserves_long_body_when_llm_over_compresses(monke
     assert result["subject"] == "Condensed report"
     assert result["body_text"].startswith("## Executive Summary")
     assert len(result["body_text"]) > 3000
+
+
+def test_draft_delivery_report_content_fallback_when_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_DRAFT_ENABLED", "0")
+    result = draft_delivery_report_content(
+        request_message="What is machine learning? Research and send report.",
+        objective="Research machine learning and deliver a report.",
+        report_title="Machine Learning Research Report",
+        executed_steps=[
+            {"title": "Search reliable sources", "status": "success", "summary": "Collected references."}
+        ],
+        sources=[{"label": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Machine_learning"}],
+    )
+    assert result["subject"] == "Machine Learning Research Report"
+    assert "## Executive Summary" not in result["body_text"]
+    assert "Research Overview" in result["body_text"]
+    assert "Evidence Trail" in result["body_text"]
+
+
+def test_draft_delivery_report_content_parses_llm_json(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_DRAFT_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_execution_support,
+        "call_json_response",
+        lambda **kwargs: {
+            "subject": "Machine Learning Research Brief",
+            "body_text": (
+                "## Machine Learning in Context\n\n"
+                + ("Machine learning is a subset of AI that learns patterns from data. " * 25)
+                + "\n\n## Evidence and Practical Impact\n\n"
+                + ("This synthesis connects model families, business uses, and reliability limits. " * 22)
+            ),
+        },
+    )
+    result = draft_delivery_report_content(
+        request_message="What is machine learning? Research and send report.",
+        objective="Research machine learning and deliver a report.",
+        report_title="Machine Learning Research Report",
+        executed_steps=[],
+        sources=[],
+    )
+    assert result["subject"] == "Machine Learning Research Brief"
+    assert result["body_text"].startswith("## Machine Learning in Context")
+    assert "subset of AI" in result["body_text"]
+
+
+def test_draft_delivery_report_content_uses_llm_template_recommendation(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_DRAFT_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_TEMPLATE_RECOMMENDER_ENABLED", "1")
+    calls: list[dict] = []
+    responses = [
+        {
+            "template_name": "ml_concept_brief",
+            "rationale": "Emphasize explanation, practical value, and constraints.",
+            "sections": [
+                {"title": "What Machine Learning Is", "purpose": "Define the core concept."},
+                {"title": "How It Works in Practice", "purpose": "Explain model learning behavior."},
+                {"title": "Where It Creates Value", "purpose": "Outline practical uses."},
+                {"title": "Limits and Risks", "purpose": "State uncertainty and constraints."},
+            ],
+            "detail_target": "detailed",
+        },
+        {
+            "subject": "Machine Learning Research Brief",
+            "body_text": (
+                "## What Machine Learning Is\n\n"
+                + ("Machine learning learns patterns from data. " * 28)
+                + "\n\n## How It Works in Practice\n\n"
+                + ("Models optimize predictions based on training signals. " * 24)
+            ),
+        },
+    ]
+
+    def _mock_call_json_response(**kwargs):
+        calls.append(kwargs)
+        index = len(calls) - 1
+        if index < len(responses):
+            return responses[index]
+        return responses[-1]
+
+    monkeypatch.setattr(llm_execution_support, "call_json_response", _mock_call_json_response)
+
+    result = draft_delivery_report_content(
+        request_message="what is machine learning and send me a detailed research report",
+        objective="Research machine learning and deliver a detailed report.",
+        report_title="Machine Learning Report",
+        executed_steps=[],
+        sources=[
+            {"label": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Machine_learning"},
+            {"label": "IBM ML overview", "url": "https://www.ibm.com/topics/machine-learning"},
+            {"label": "Google ML intro", "url": "https://developers.google.com/machine-learning/intro"},
+        ],
+    )
+
+    assert result["subject"] == "Machine Learning Research Brief"
+    assert result["body_text"].startswith("## What Machine Learning Is")
+    assert len(calls) >= 2
+    assert "Recommend the best report template structure" in str(calls[0].get("user_prompt") or "")
+    assert "recommended_template" in str(calls[1].get("user_prompt") or "")
 
 
 def test_polish_contact_form_content_fallback(monkeypatch) -> None:

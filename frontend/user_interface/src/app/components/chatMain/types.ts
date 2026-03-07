@@ -64,9 +64,10 @@ type ChatMainProps = {
   onMindmapMaxDepthChange: (depth: number) => void;
   mindmapIncludeReasoning: boolean;
   onMindmapIncludeReasoningChange: (enabled: boolean) => void;
-  mindmapMapType: "structure" | "evidence";
-  onMindmapMapTypeChange: (mapType: "structure" | "evidence") => void;
+  mindmapMapType: "structure" | "evidence" | "work_graph";
+  onMindmapMapTypeChange: (mapType: "structure" | "evidence" | "work_graph") => void;
   onCitationClick: (citation: CitationFocus) => void;
+  citationFocus?: CitationFocus | null;
   agentMode: "ask" | "company_agent" | "deep_search";
   onAgentModeChange: (mode: "ask" | "company_agent" | "deep_search") => void;
   accessMode: "restricted" | "full_access";

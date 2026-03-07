@@ -76,6 +76,14 @@ export type AgentActivityEvent = {
   detail: string;
   timestamp: string;
   data?: Record<string, unknown>;
+  event_family?: string;
+  event_priority?: string;
+  event_render_mode?: string;
+  event_replay_importance?: string;
+  replay_importance?: string;
+  event_index?: number;
+  graph_node_id?: string | null;
+  scene_ref?: string | null;
   snapshot_ref?: string | null;
   metadata: Record<string, unknown>;
 };
@@ -100,6 +108,9 @@ export type CitationFocus = {
   unitId?: string;
   charStart?: number;
   charEnd?: number;
+  graphNodeIds?: string[];
+  sceneRefs?: string[];
+  eventRefs?: string[];
   matchQuality?: string;
   strengthScore?: number;
   strengthTier?: number;
