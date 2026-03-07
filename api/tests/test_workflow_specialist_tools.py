@@ -8,7 +8,11 @@ from api.services.agent.tools.document_highlight_tools import DocumentHighlightE
 from api.services.agent.tools.document_tools import DocumentCreateTool
 from api.services.agent.tools.invoice_tools import InvoiceCreateTool, InvoiceSendTool
 from api.services.agent.tools.data_tools import ReportGenerationTool
-from api.services.agent.tools.workspace_tools import WorkspaceResearchNotesTool, WorkspaceSheetsTrackStepTool
+from api.services.agent.tools.workspace_tools import (
+    WorkspaceDriveSearchTool,
+    WorkspaceResearchNotesTool,
+    WorkspaceSheetsTrackStepTool,
+)
 
 
 def _context() -> ToolExecutionContext:
@@ -195,6 +199,14 @@ class _StubWorkspaceConnector:
         self.public_share_calls.append((file_id, role, discoverable))
         return {"ok": True, "file_id": file_id, "role": role, "scope": "anyone", "discoverable": discoverable}
 
+    def list_drive_files(self, *, query: str):
+        _ = query
+        return {
+            "files": [
+                {"id": "drive-file-1", "name": "Quarterly Report", "mimeType": "application/pdf"},
+            ]
+        }
+
 
 class _RegistryStub:
     def __init__(self, workspace: _StubWorkspaceConnector) -> None:
@@ -236,6 +248,11 @@ def test_workspace_research_notes_tool_appends_note() -> None:
     assert "docs.create_completed" in event_types
     assert "docs.insert_started" in event_types
     assert "docs.insert_completed" in event_types
+    assert all(
+        str(event.data.get("scene_surface") or "") == "google_docs"
+        for event in result.events
+        if event.event_type.startswith(("doc_", "docs.", "drive."))
+    )
 
 
 def test_workspace_research_notes_tool_can_enable_public_link() -> None:
@@ -270,6 +287,26 @@ def test_workspace_sheets_track_step_tool_appends_rows() -> None:
     assert "sheets.create_completed" in event_types
     assert "sheets.append_started" in event_types
     assert "sheets.append_completed" in event_types
+    assert all(
+        str(event.data.get("scene_surface") or "") == "google_sheets"
+        for event in result.events
+        if event.event_type.startswith(("sheet_", "sheets.", "drive."))
+    )
+
+
+def test_workspace_drive_search_tool_emits_document_surface() -> None:
+    workspace = _StubWorkspaceConnector()
+    context = _context()
+    with patch("api.services.agent.tools.workspace_tools.get_connector_registry", return_value=_RegistryStub(workspace)):
+        result = WorkspaceDriveSearchTool().execute(
+            context=context,
+            prompt="find report files",
+            params={"query": "report"},
+        )
+    assert result.events
+    event = result.events[0]
+    assert event.event_type == "drive.search_completed"
+    assert str(event.data.get("scene_surface") or "") == "document"
 
 
 def test_workspace_sheets_track_step_tool_can_enable_public_link() -> None:

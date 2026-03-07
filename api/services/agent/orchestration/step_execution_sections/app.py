@@ -9,8 +9,10 @@ from api.services.agent.models import AgentActivityEvent, utc_now
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
 
-from ..handoff_state import is_handoff_paused, read_handoff_state
+from ..execution_trace import record_retry_trace
+from ..handoff_state import handoff_pause_notice, is_handoff_paused
 from ..models import ExecutionState, TaskPreparation
+from ..role_contracts import resolve_owner_role_for_tool
 from .failure import handle_step_failure
 from .guards import (
     prepare_step_params,
@@ -61,24 +63,18 @@ def execute_planned_steps(
 ) -> Generator[dict[str, Any], None, None]:
     step_cursor = 0
     display_step_index = 0
+    active_role = " ".join(
+        str(state.execution_context.settings.get("__active_execution_role") or "").split()
+    ).strip().lower()
     while step_cursor < len(steps):
         if is_handoff_paused(settings=state.execution_context.settings):
             if not bool(state.execution_context.settings.get("__handoff_pause_emitted")):
-                handoff = read_handoff_state(settings=state.execution_context.settings)
-                pause_note = " ".join(str(handoff.get("note") or "").split()).strip()
-                pause_reason = " ".join(str(handoff.get("pause_reason") or "").split()).strip()
+                pause_notice = handoff_pause_notice(settings=state.execution_context.settings)
                 pause_event = activity_event_factory(
-                    event_type="policy_blocked",
-                    title="Execution paused for human verification",
-                    detail=(
-                        pause_note
-                        or pause_reason
-                        or "Human verification is required before execution can continue."
-                    )[:200],
-                    metadata={
-                        "handoff_state": handoff,
-                        "pause_reason": pause_reason,
-                    },
+                    event_type=str(pause_notice.get("event_type") or "handoff_paused"),
+                    title=str(pause_notice.get("title") or "Execution paused for human verification"),
+                    detail=str(pause_notice.get("detail") or "")[:200],
+                    metadata=dict(pause_notice.get("metadata") or {}),
                 )
                 yield emit_event(pause_event)
                 state.execution_context.settings["__handoff_pause_emitted"] = True
@@ -91,6 +87,34 @@ def execute_planned_steps(
         display_step_index += 1
         index = display_step_index
         step_started = utc_now().isoformat()
+        owner_role = resolve_owner_role_for_tool(step.tool_id)
+        if active_role != owner_role:
+            if active_role:
+                handoff_event = activity_event_factory(
+                    event_type="role_handoff",
+                    title="Role handoff",
+                    detail=f"{active_role} -> {owner_role}",
+                    metadata={
+                        "from_role": active_role,
+                        "to_role": owner_role,
+                        "step": index,
+                        "tool_id": step.tool_id,
+                    },
+                )
+                yield emit_event(handoff_event)
+            role_event = activity_event_factory(
+                event_type="role_activated",
+                title=f"Role active: {owner_role}",
+                detail=step.title[:200],
+                metadata={
+                    "role": owner_role,
+                    "step": index,
+                    "tool_id": step.tool_id,
+                },
+            )
+            yield emit_event(role_event)
+            active_role = owner_role
+            state.execution_context.settings["__active_execution_role"] = owner_role
 
         queued_event = activity_event_factory(
             event_type="tool_queued",
@@ -173,6 +197,13 @@ def execute_planned_steps(
                 params=guard_outcome.params,
                 exc=exc,
             ):
+                retry_trace = record_retry_trace(
+                    state=state,
+                    step_index=index,
+                    tool_id=step.tool_id,
+                    reason=str(exc),
+                    status="started",
+                )
                 retry_event = activity_event_factory(
                     event_type="tool_progress",
                     title=step.title,
@@ -181,6 +212,7 @@ def execute_planned_steps(
                         "tool_id": step.tool_id,
                         "step": index,
                         "retry": True,
+                        "retry_trace": retry_trace,
                     },
                 )
                 yield emit_event(retry_event)
@@ -200,6 +232,13 @@ def execute_planned_steps(
                         tool_id=step.tool_id,
                         status="success",
                         duration_seconds=retry_elapsed,
+                    )
+                    record_retry_trace(
+                        state=state,
+                        step_index=index,
+                        tool_id=step.tool_id,
+                        reason="retry completed successfully",
+                        status="completed",
                     )
                     yield from handle_step_success(
                         access_context=access_context,
@@ -221,6 +260,13 @@ def execute_planned_steps(
                     step_cursor += 1
                     continue
                 except Exception as retry_exc:
+                    record_retry_trace(
+                        state=state,
+                        step_index=index,
+                        tool_id=step.tool_id,
+                        reason=str(retry_exc),
+                        status="failed",
+                    )
                     exc = retry_exc
                     elapsed = time.perf_counter() - retry_started_clock
             get_agent_observability().observe_tool_execution(

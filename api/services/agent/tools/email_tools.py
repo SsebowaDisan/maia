@@ -13,6 +13,23 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
     ToolMetadata,
 )
+from api.services.agent.tools.theater_cursor import with_scene
+
+
+def _email_scene_payload(
+    *,
+    lane: str,
+    payload: dict[str, Any] | None = None,
+    primary_index: int = 1,
+    secondary_index: int = 1,
+) -> dict[str, Any]:
+    return with_scene(
+        payload or {},
+        scene_surface="email",
+        lane=lane,
+        primary_index=max(1, int(primary_index)),
+        secondary_index=max(1, int(secondary_index)),
+    )
 
 
 class EmailDraftTool(AgentTool):
@@ -58,28 +75,46 @@ class EmailDraftTool(AgentTool):
                     event_type="email_draft_create",
                     title="Create draft envelope",
                     detail="Initialized email draft structure",
+                    data=_email_scene_payload(
+                        lane="email-draft-create",
+                        payload={"to": recipient, "subject": subject},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_set_to",
                     title="Set recipients",
                     detail=f"Recipient: {recipient}",
-                    data={"to": recipient},
+                    data=_email_scene_payload(
+                        lane="email-set-to",
+                        payload={"to": recipient},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_set_subject",
                     title="Set subject",
                     detail=subject,
-                    data={"subject": subject},
+                    data=_email_scene_payload(
+                        lane="email-set-subject",
+                        payload={"subject": subject},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_set_body",
                     title="Draft body content",
                     detail="Body generated from task objective",
+                    data=_email_scene_payload(
+                        lane="email-set-body",
+                        payload={"body_length": len(content)},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_ready_to_send",
                     title="Draft ready for send",
                     detail="Draft prepared with recipient and subject",
+                    data=_email_scene_payload(
+                        lane="email-ready",
+                        payload={"to": recipient, "subject": subject},
+                    ),
                 ),
             ],
         )
@@ -133,6 +168,10 @@ class EmailSendTool(AgentTool):
                         event_type="approval_required",
                         title="SMTP credentials missing",
                         detail="Configure SMTP settings before sending email.",
+                        data=_email_scene_payload(
+                            lane="email-config-missing",
+                            payload={"to": recipient, "subject": subject},
+                        ),
                     )
                 ],
             )
@@ -159,19 +198,28 @@ class EmailSendTool(AgentTool):
                     event_type="email_set_to",
                     title="Confirm recipient",
                     detail=f"Recipient: {recipient}",
-                    data={"to": recipient},
+                    data=_email_scene_payload(
+                        lane="email-confirm-to",
+                        payload={"to": recipient},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_set_subject",
                     title="Confirm subject",
                     detail=subject,
-                    data={"subject": subject},
+                    data=_email_scene_payload(
+                        lane="email-confirm-subject",
+                        payload={"subject": subject},
+                    ),
                 ),
                 ToolTraceEvent(
                     event_type="email_sent",
                     title="Email dispatched",
                     detail=f"SMTP delivery completed for {recipient}",
-                    data={"to": recipient, "subject": subject},
+                    data=_email_scene_payload(
+                        lane="email-sent",
+                        payload={"to": recipient, "subject": subject},
+                    ),
                 ),
             ],
         )

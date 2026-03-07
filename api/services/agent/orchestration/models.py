@@ -29,6 +29,8 @@ class TaskPreparation:
     clarification_blocked: bool
     clarification_questions: list[str]
     contract_missing_slots: list[dict[str, Any]] = field(default_factory=list)
+    session_context_snippets: list[str] = field(default_factory=list)
+    working_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -41,6 +43,7 @@ class PlanPreparation:
     workspace_logging_requested: bool
     deep_workspace_logging_enabled: bool
     delivery_email: str
+    role_owned_steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -68,3 +71,6 @@ class ExecutionState:
     deep_workspace_warning_emitted: bool = False
     dynamic_inspection_inserted: bool = False
     research_retry_inserted: bool = False
+    retry_trace: list[dict[str, Any]] = field(default_factory=list)
+    remediation_trace: list[dict[str, Any]] = field(default_factory=list)
+    parallel_research_trace: list[dict[str, Any]] = field(default_factory=list)

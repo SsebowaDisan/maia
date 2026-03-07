@@ -1,3 +1,4 @@
+import { InteractionOverlay } from "./InteractionOverlay";
 import type { DocumentHighlight } from "./types";
 
 function highlightBackground(color: "yellow" | "green") {
@@ -10,6 +11,7 @@ type DocumentPdfSceneProps = {
   action: string;
   actionPhase: string;
   actionStatus: string;
+  actionTargetLabel: string;
   documentHighlights: DocumentHighlight[];
   pdfPage: number;
   pdfPageTotal: number;
@@ -47,6 +49,7 @@ function DocumentPdfScene({
   action,
   actionPhase,
   actionStatus,
+  actionTargetLabel,
   documentHighlights,
   pdfPage,
   pdfPageTotal,
@@ -71,6 +74,7 @@ function DocumentPdfScene({
     normalizedAction === "navigate" &&
     normalizedActionPhase !== "failed" &&
     totalPages > 1;
+  const showScanSweep = showScanFocus && normalizedActionPhase === "active";
   return (
     <div className="absolute inset-0">
       <iframe
@@ -99,8 +103,30 @@ function DocumentPdfScene({
           </p>
         ) : null}
       </div>
+      <InteractionOverlay
+        sceneSurface="document"
+        activeEventType={activeEventType}
+        activeDetail={activeDetail}
+        scrollDirection={pdfScrollDirection}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
+      />
       {showScanFocus ? (
-        <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[24%] w-[62%] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[#f8cd6f]/85 bg-[#f8cd6f]/12 shadow-[0_0_0_1px_rgba(248,205,111,0.4)]" />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 h-[24%] w-[62%] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-[#f8cd6f]/85 bg-[#f8cd6f]/12 shadow-[0_0_0_1px_rgba(248,205,111,0.4)]">
+          {showScanSweep ? (
+            <div
+              className="absolute left-0 right-0 h-[38%] animate-[pulse_1.2s_ease-in-out_infinite]"
+              style={{
+                top: `${Math.max(2, Math.min(62, Number(pdfScrollPercent ?? 40)))}%`,
+                transform: "translateY(-50%)",
+                background:
+                  "linear-gradient(180deg,rgba(248,205,111,0) 0%,rgba(248,205,111,0.38) 50%,rgba(248,205,111,0) 100%)",
+              }}
+            />
+          ) : null}
+        </div>
       ) : null}
       {showPageTurnBadge ? (
         <div className="pointer-events-none absolute right-4 top-16 z-20 rounded-full border border-black/15 bg-white/92 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#2d2d31]">
@@ -133,6 +159,10 @@ function DocumentPdfScene({
 type DocumentFallbackSceneProps = {
   activeEventType: string;
   activeDetail: string;
+  action: string;
+  actionPhase: string;
+  actionStatus: string;
+  actionTargetLabel: string;
   clipboardPreview: string;
   documentHighlights: DocumentHighlight[];
   sceneText: string;
@@ -160,6 +190,10 @@ function isPlannerNarrativeEventType(eventType: string): boolean {
 function DocumentFallbackScene({
   activeEventType,
   activeDetail,
+  action,
+  actionPhase,
+  actionStatus,
+  actionTargetLabel,
   clipboardPreview,
   documentHighlights,
   sceneText,
@@ -172,13 +206,21 @@ function DocumentFallbackScene({
 
   return (
     <div className="absolute inset-0 px-4 py-3 text-white/85">
+      <InteractionOverlay
+        sceneSurface="document"
+        activeEventType={activeEventType}
+        activeDetail={activeDetail}
+        scrollDirection=""
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
+      />
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[12px] font-medium">{stageFileName}</span>
         <span className="text-[10px] uppercase tracking-[0.08em] text-white/65">editing</span>
       </div>
-      <p className="mb-3 text-[11px] text-white/85">
-        {narrativeText}
-      </p>
+      <p className="mb-3 text-[11px] text-white/85">{narrativeText}</p>
       {documentHighlights.length ? (
         <div className="mb-3 space-y-1.5 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2">
           {documentHighlights.map((item, index) => (

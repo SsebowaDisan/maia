@@ -6,6 +6,7 @@ from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import ToolExecutionContext, ToolExecutionResult, ToolMetadata, ToolTraceEvent
 
 from .base import WorkspaceConnectorTool
+from .common import scene_payload
 
 
 class WorkspaceDriveSearchTool(WorkspaceConnectorTool):
@@ -62,10 +63,19 @@ class WorkspaceDriveSearchTool(WorkspaceConnectorTool):
             next_steps=["Open selected files and connect them to report generation."],
             events=[
                 ToolTraceEvent(
-                    event_type="tool_progress",
+                    event_type="drive.search_completed",
                     title="Search Google Drive",
                     detail=query or "recent files",
-                    data={"count": len(files)},
+                    data=scene_payload(
+                        surface="document",
+                        lane="drive-search",
+                        primary_index=1,
+                        secondary_index=max(1, len(files)),
+                        payload={
+                            "query": query,
+                            "count": len(files),
+                        },
+                    ),
                 )
             ],
         )

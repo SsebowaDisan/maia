@@ -23,6 +23,7 @@ class BrowserActionEvent:
     phase: BrowserActionPhase
     status: Literal["ok", "failed"]
     scene_surface: str = "website"
+    owner_role: str = ""
     cursor_x: float | None = None
     cursor_y: float | None = None
     scroll_direction: str = ""
@@ -33,12 +34,13 @@ class BrowserActionEvent:
     def to_data(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "scene_surface": self.scene_surface or "website",
+            "owner_role": self.owner_role,
             "action": self.action,
             "action_phase": self.phase,
             "action_status": self.status,
             "action_target": dict(self.target),
             "action_metadata": dict(self.metadata),
-            "event_schema_version": "browser_action_v1",
+            "event_schema_version": "interaction_v2",
         }
         if isinstance(self.cursor_x, (int, float)):
             payload["cursor_x"] = float(self.cursor_x)

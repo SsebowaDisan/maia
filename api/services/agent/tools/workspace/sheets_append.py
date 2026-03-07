@@ -11,6 +11,7 @@ from api.services.agent.tools.base import (
 )
 
 from .base import WorkspaceConnectorTool
+from .common import scene_payload
 from ..google_target_resolution import resolve_sheet_reference
 
 
@@ -71,41 +72,73 @@ class WorkspaceSheetsAppendTool(WorkspaceConnectorTool):
                 event_type="sheet_open",
                 title="Open Google Sheet",
                 detail=spreadsheet_id,
-                data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+                data=scene_payload(
+                    surface="google_sheets",
+                    lane="sheet-open",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "spreadsheet_url": spreadsheet_url,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             ),
             ToolTraceEvent(
                 event_type="sheets.append_started",
                 title="Start appending rows",
                 detail=f"{sheet_range} ({len(values)} rows)",
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "range": sheet_range,
-                    "rows": len(values),
-                    "source_url": spreadsheet_url,
-                },
+                data=scene_payload(
+                    surface="google_sheets",
+                    lane="sheet-append-start",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "range": sheet_range,
+                        "rows": len(values),
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             ),
             ToolTraceEvent(
                 event_type="sheet_append_row",
                 title="Append row payload",
                 detail=f"{len(values)} row(s)",
-                data={"spreadsheet_id": spreadsheet_id, "sheet_range": sheet_range},
+                data=scene_payload(
+                    surface="google_sheets",
+                    lane="sheet-append-row",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "sheet_range": sheet_range,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             ),
             ToolTraceEvent(
                 event_type="sheets.append_completed",
                 title="Rows appended",
                 detail=f"Updated rows: {updated_rows or 0}",
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "range": sheet_range,
-                    "updated_rows": updated_rows or 0,
-                    "source_url": spreadsheet_url,
-                },
+                data=scene_payload(
+                    surface="google_sheets",
+                    lane="sheet-append-done",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "range": sheet_range,
+                        "updated_rows": updated_rows or 0,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             ),
             ToolTraceEvent(
                 event_type="sheet_save",
                 title="Save Google Sheet",
                 detail=spreadsheet_id,
-                data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+                data=scene_payload(
+                    surface="google_sheets",
+                    lane="sheet-save",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "spreadsheet_url": spreadsheet_url,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             ),
         ]
 

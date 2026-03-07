@@ -503,6 +503,13 @@ class PlaywrightInspectTool(AgentTool):
                 pause_reason=blocked_reason or "human_verification_required",
                 handoff_url=final_url or inspected_url or url,
                 note=human_handoff_note,
+                barrier_type="human_verification",
+                barrier_scope="website_navigation",
+                verification_context={
+                    "tool_id": "browser.playwright.inspect",
+                    "url": final_url or inspected_url or url,
+                    "blocked_reason": blocked_reason or "",
+                },
             )
             handoff_event = ToolTraceEvent(
                 event_type="browser_human_verification_required",

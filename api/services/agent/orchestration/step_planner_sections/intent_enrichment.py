@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+import os
+
 from api.schemas import ChatRequest
 from api.services.agent.planner_helpers import infer_intent_signals_from_text
 from api.services.agent.planner import PlannedStep
 
 from ..models import TaskPreparation
+
+
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = " ".join(str(value or "").split()).strip().lower()
+    if not token:
+        return default
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    if token in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _contact_form_capability_enabled(settings: dict[str, object]) -> bool:
+    if "__contact_form_capability_enabled" in settings:
+        return _coerce_bool(settings.get("__contact_form_capability_enabled"), default=False)
+    return _coerce_bool(
+        settings.get("agent.capabilities.contact_form_enabled")
+        or settings.get("MAIA_AGENT_CONTACT_FORM_ENABLED")
+        or os.getenv("MAIA_AGENT_CONTACT_FORM_ENABLED"),
+        default=False,
+    )
 
 
 def apply_intent_enrichment(
@@ -40,6 +66,24 @@ def apply_intent_enrichment(
         for action in task_prep.contract_actions
         if str(action).strip()
     }
+    capability_required_domains = {
+        " ".join(str(item).split()).strip().lower()
+        for item in (
+            settings.get("__capability_required_domains")
+            if isinstance(settings.get("__capability_required_domains"), list)
+            else []
+        )
+        if " ".join(str(item).split()).strip()
+    }
+    capability_preferred_tool_ids = {
+        " ".join(str(item).split()).strip().lower()
+        for item in (
+            settings.get("__capability_preferred_tool_ids")
+            if isinstance(settings.get("__capability_preferred_tool_ids"), list)
+            else []
+        )
+        if " ".join(str(item).split()).strip()
+    }
     target_url = " ".join(
         str(getattr(task_prep.task_intelligence, "target_url", "") or "").split()
     ).strip() or " ".join(str(inferred_signals.get("url") or "").split()).strip()
@@ -56,8 +100,12 @@ def apply_intent_enrichment(
     contact_form_requested = (
         ("submit_contact_form" in contract_actions)
         or ("contact_form_submission" in intent_tags)
-        or bool(inferred_signals.get("wants_contact_form"))
+        or (
+            "outreach" in capability_required_domains
+            and "browser.contact_form.send" in capability_preferred_tool_ids
+        )
     )
+    contact_form_enabled = _contact_form_capability_enabled(settings)
 
     if highlight_requested and not any(
         step.tool_id == "documents.highlight.extract" for step in steps
@@ -105,7 +153,7 @@ def apply_intent_enrichment(
                 },
             ),
         )
-    if contact_form_requested and target_url and not any(
+    if contact_form_enabled and contact_form_requested and target_url and not any(
         step.tool_id == "browser.contact_form.send" for step in steps
     ):
         insertion = len(steps)

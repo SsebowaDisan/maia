@@ -6,7 +6,7 @@ from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import ToolExecutionContext, ToolExecutionResult, ToolMetadata, ToolTraceEvent
 
 from .base import WorkspaceConnectorTool
-from .common import drain_stream, now_iso, resolve_public_share_options, sheet_col_name
+from .common import drain_stream, now_iso, resolve_public_share_options, scene_payload, sheet_col_name
 
 
 class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
@@ -42,11 +42,34 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
         spreadsheet_id = str(context.settings.get("__deep_research_sheet_id") or "").strip()
         spreadsheet_url = str(context.settings.get("__deep_research_sheet_url") or "").strip()
         trace_events: list[ToolTraceEvent] = []
+
+        def _sheet_scene(
+            *,
+            lane: str,
+            payload: dict[str, Any] | None = None,
+            primary_index: int = 1,
+            secondary_index: int = 1,
+        ) -> dict[str, Any]:
+            return scene_payload(
+                surface="google_sheets",
+                lane=lane,
+                primary_index=primary_index,
+                secondary_index=secondary_index,
+                payload=payload,
+            )
+
         open_event = ToolTraceEvent(
             event_type="sheet_open",
             title="Open Google Sheets tracker",
             detail=spreadsheet_url or spreadsheet_id or title,
-            data={"spreadsheet_id": spreadsheet_id, "spreadsheet_url": spreadsheet_url},
+            data=_sheet_scene(
+                lane="tracker-open",
+                payload={
+                    "spreadsheet_id": spreadsheet_id,
+                    "spreadsheet_url": spreadsheet_url,
+                    "source_url": spreadsheet_url,
+                },
+            ),
         )
         trace_events.append(open_event)
         yield open_event
@@ -60,7 +83,10 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheet_open",
                 title="Create Google Sheets tracker",
                 detail=title,
-                data={"spreadsheet_id": "", "spreadsheet_url": ""},
+                data=_sheet_scene(
+                    lane="tracker-create-open",
+                    payload={"spreadsheet_id": "", "spreadsheet_url": ""},
+                ),
             )
             trace_events.append(create_event)
             yield create_event
@@ -68,7 +94,10 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheets.create_started",
                 title="Start Google Sheets tracker creation",
                 detail=title,
-                data={"title": title, "sheet_title": sheet_name},
+                data=_sheet_scene(
+                    lane="tracker-create-start",
+                    payload={"title": title, "sheet_title": sheet_name},
+                ),
             )
             trace_events.append(sheet_create_started)
             yield sheet_create_started
@@ -84,11 +113,14 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheets.create_completed",
                 title="Google Sheets tracker created",
                 detail=spreadsheet_id or title,
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "spreadsheet_url": spreadsheet_url,
-                    "source_url": spreadsheet_url,
-                },
+                data=_sheet_scene(
+                    lane="tracker-create-done",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "spreadsheet_url": spreadsheet_url,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             )
             trace_events.append(sheet_create_completed)
             yield sheet_create_completed
@@ -97,7 +129,13 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                     event_type="drive.go_to_sheet",
                     title="Open tracker sheet link",
                     detail=spreadsheet_url,
-                    data={"source_url": spreadsheet_url, "spreadsheet_url": spreadsheet_url},
+                    data=_sheet_scene(
+                        lane="tracker-open-link",
+                        payload={
+                            "source_url": spreadsheet_url,
+                            "spreadsheet_url": spreadsheet_url,
+                        },
+                    ),
                 )
                 trace_events.append(open_sheet_event)
                 yield open_sheet_event
@@ -109,13 +147,16 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="drive.share_started",
                 title="Enable public link access for tracker",
                 detail=spreadsheet_id,
-                data={
-                    "file_id": spreadsheet_id,
-                    "role": public_role,
-                    "scope": "anyone",
-                    "discoverable": public_discoverable,
-                    "source_url": spreadsheet_url,
-                },
+                data=_sheet_scene(
+                    lane="tracker-share-start",
+                    payload={
+                        "file_id": spreadsheet_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             )
             trace_events.append(share_start)
             yield share_start
@@ -131,13 +172,16 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                     event_type="drive.share_completed",
                     title="Public link access enabled for tracker",
                     detail=spreadsheet_id,
-                    data={
-                        "file_id": spreadsheet_id,
-                        "role": public_role,
-                        "scope": "anyone",
-                        "discoverable": public_discoverable,
-                        "source_url": spreadsheet_url,
-                    },
+                    data=_sheet_scene(
+                        lane="tracker-share-done",
+                        payload={
+                            "file_id": spreadsheet_id,
+                            "role": public_role,
+                            "scope": "anyone",
+                            "discoverable": public_discoverable,
+                            "source_url": spreadsheet_url,
+                        },
+                    ),
                 )
                 trace_events.append(share_done)
                 yield share_done
@@ -147,14 +191,17 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                     event_type="drive.share_failed",
                     title="Failed to enable public link access for tracker",
                     detail=public_share_error[:200],
-                    data={
-                        "file_id": spreadsheet_id,
-                        "role": public_role,
-                        "scope": "anyone",
-                        "discoverable": public_discoverable,
-                        "source_url": spreadsheet_url,
-                        "error": public_share_error[:300],
-                    },
+                    data=_sheet_scene(
+                        lane="tracker-share-failed",
+                        payload={
+                            "file_id": spreadsheet_id,
+                            "role": public_role,
+                            "scope": "anyone",
+                            "discoverable": public_discoverable,
+                            "source_url": spreadsheet_url,
+                            "error": public_share_error[:300],
+                        },
+                    ),
                 )
                 trace_events.append(share_failed)
                 yield share_failed
@@ -164,12 +211,15 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheets.append_started",
                 title="Write tracker header row",
                 detail=sheet_range,
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "range": sheet_range,
-                    "rows": 1,
-                    "source_url": spreadsheet_url,
-                },
+                data=_sheet_scene(
+                    lane="tracker-header-start",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "range": sheet_range,
+                        "rows": 1,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             )
             trace_events.append(header_start)
             yield header_start
@@ -182,12 +232,15 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheets.append_completed",
                 title="Tracker header row saved",
                 detail=sheet_range,
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "range": sheet_range,
-                    "updated_rows": 1,
-                    "source_url": spreadsheet_url,
-                },
+                data=_sheet_scene(
+                    lane="tracker-header-done",
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "range": sheet_range,
+                        "updated_rows": 1,
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             )
             trace_events.append(header_done)
             yield header_done
@@ -199,11 +252,17 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
                 event_type="sheet_cell_update",
                 title=f"Update cell {sheet_col_name(cell_index)}",
                 detail=str(cell_value)[:140],
-                data={
-                    "spreadsheet_id": spreadsheet_id,
-                    "column": sheet_col_name(cell_index),
-                    "value": str(cell_value),
-                },
+                data=_sheet_scene(
+                    lane="tracker-cell-update",
+                    primary_index=cell_index + 1,
+                    secondary_index=max(1, len(row_values)),
+                    payload={
+                        "spreadsheet_id": spreadsheet_id,
+                        "column": sheet_col_name(cell_index),
+                        "value": str(cell_value),
+                        "source_url": spreadsheet_url,
+                    },
+                ),
             )
             trace_events.append(cell_event)
             yield cell_event
@@ -212,7 +271,14 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
             event_type="sheet_append_row",
             title="Append tracker row",
             detail=f"{step_name} ({status})",
-            data={"spreadsheet_id": spreadsheet_id, "sheet_range": sheet_range},
+            data=_sheet_scene(
+                lane="tracker-append-row",
+                payload={
+                    "spreadsheet_id": spreadsheet_id,
+                    "sheet_range": sheet_range,
+                    "source_url": spreadsheet_url,
+                },
+            ),
         )
         trace_events.append(append_event)
         yield append_event
@@ -220,12 +286,15 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
             event_type="sheets.append_started",
             title="Start appending tracker row",
             detail=f"{step_name} ({status})",
-            data={
-                "spreadsheet_id": spreadsheet_id,
-                "range": sheet_range,
-                "rows": 1,
-                "source_url": spreadsheet_url,
-            },
+            data=_sheet_scene(
+                lane="tracker-append-start",
+                payload={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "rows": 1,
+                    "source_url": spreadsheet_url,
+                },
+            ),
         )
         trace_events.append(append_started)
         yield append_started
@@ -248,12 +317,15 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
             event_type="sheets.append_completed",
             title="Tracker row appended",
             detail=f"Updated rows: {updated_rows or 0}",
-            data={
-                "spreadsheet_id": spreadsheet_id,
-                "range": sheet_range,
-                "updated_rows": updated_rows or 0,
-                "source_url": spreadsheet_url,
-            },
+            data=_sheet_scene(
+                lane="tracker-append-done",
+                payload={
+                    "spreadsheet_id": spreadsheet_id,
+                    "range": sheet_range,
+                    "updated_rows": updated_rows or 0,
+                    "source_url": spreadsheet_url,
+                },
+            ),
         )
         trace_events.append(append_completed)
         yield append_completed
@@ -261,11 +333,14 @@ class WorkspaceSheetsTrackStepTool(WorkspaceConnectorTool):
             event_type="sheet_save",
             title="Save tracker updates",
             detail=spreadsheet_id or "tracker saved",
-            data={
-                "spreadsheet_id": spreadsheet_id,
-                "spreadsheet_url": spreadsheet_url,
-                "source_url": spreadsheet_url,
-            },
+            data=_sheet_scene(
+                lane="tracker-save",
+                payload={
+                    "spreadsheet_id": spreadsheet_id,
+                    "spreadsheet_url": spreadsheet_url,
+                    "source_url": spreadsheet_url,
+                },
+            ),
         )
         trace_events.append(save_event)
         yield save_event

@@ -13,6 +13,7 @@ from api.services.agent.tools.base import (
     ToolMetadata,
     ToolTraceEvent,
 )
+from api.services.agent.tools.theater_cursor import with_scene
 
 
 def _safe_slug(text: str) -> str:
@@ -59,6 +60,25 @@ def _build_copied_highlights_section(raw: Any, *, limit: int = 14) -> str:
     if not lines:
         return ""
     return "\n".join(["## Copied Highlights", *lines])
+
+
+def _doc_scene_payload(
+    *,
+    provider: str,
+    lane: str,
+    primary_index: int = 1,
+    secondary_index: int = 1,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_provider = " ".join(str(provider or "").split()).strip().lower()
+    surface = "google_docs" if normalized_provider == "google_workspace" else "document"
+    return with_scene(
+        payload or {},
+        scene_surface=surface,
+        lane=lane,
+        primary_index=max(1, int(primary_index)),
+        secondary_index=max(1, int(secondary_index)),
+    )
 
 
 class DocumentCreateTool(AgentTool):
@@ -119,7 +139,11 @@ class DocumentCreateTool(AgentTool):
                 event_type="doc_open",
                 title="Open document composer",
                 detail=f"Provider: {provider}",
-                data={"provider": provider, "title": title},
+                data=_doc_scene_payload(
+                    provider=provider,
+                    lane="doc-open",
+                    payload={"provider": provider, "title": title},
+                ),
             )
         )
         trace_events.append(
@@ -127,6 +151,11 @@ class DocumentCreateTool(AgentTool):
                 event_type="doc_locate_anchor",
                 title="Locate first editable section",
                 detail="Finding insertion anchor for generated content",
+                data=_doc_scene_payload(
+                    provider=provider,
+                    lane="doc-anchor",
+                    payload={"provider": provider, "title": title},
+                ),
             )
         )
         if copied_section:
@@ -136,7 +165,14 @@ class DocumentCreateTool(AgentTool):
                     event_type="doc_copy_clipboard",
                     title="Copy highlighted words",
                     detail=preview_line[:160],
-                    data={"include_copied_highlights": True},
+                    data=_doc_scene_payload(
+                        provider=provider,
+                        lane="doc-copy-highlight",
+                        payload={
+                            "include_copied_highlights": True,
+                            "provider": provider,
+                        },
+                    ),
                 )
             )
             trace_events.append(
@@ -144,7 +180,14 @@ class DocumentCreateTool(AgentTool):
                     event_type="doc_paste_clipboard",
                     title="Paste highlighted words into document",
                     detail="Appending copied highlights section",
-                    data={"include_copied_highlights": True},
+                    data=_doc_scene_payload(
+                        provider=provider,
+                        lane="doc-paste-highlight",
+                        payload={
+                            "include_copied_highlights": True,
+                            "provider": provider,
+                        },
+                    ),
                 )
             )
         trace_events.append(
@@ -152,7 +195,14 @@ class DocumentCreateTool(AgentTool):
                 event_type="doc_insert_text",
                 title="Insert generated content",
                 detail="Writing generated body into document",
-                data={"body_length": len(body)},
+                data=_doc_scene_payload(
+                    provider=provider,
+                    lane="doc-insert",
+                    payload={
+                        "body_length": len(body),
+                        "provider": provider,
+                    },
+                ),
             )
         )
 
@@ -173,13 +223,17 @@ class DocumentCreateTool(AgentTool):
                         event_type="drive.share_started",
                         title="Enable public link access",
                         detail=doc_id,
-                        data={
-                            "file_id": doc_id,
-                            "role": public_role,
-                            "scope": "anyone",
-                            "discoverable": public_discoverable,
-                            "source_url": doc_url,
-                        },
+                        data=_doc_scene_payload(
+                            provider=provider,
+                            lane="doc-share-start",
+                            payload={
+                                "file_id": doc_id,
+                                "role": public_role,
+                                "scope": "anyone",
+                                "discoverable": public_discoverable,
+                                "source_url": doc_url,
+                            },
+                        ),
                     )
                 )
                 try:
@@ -194,13 +248,17 @@ class DocumentCreateTool(AgentTool):
                             event_type="drive.share_completed",
                             title="Public link access enabled",
                             detail=doc_id,
-                            data={
-                                "file_id": doc_id,
-                                "role": public_role,
-                                "scope": "anyone",
-                                "discoverable": public_discoverable,
-                                "source_url": doc_url,
-                            },
+                            data=_doc_scene_payload(
+                                provider=provider,
+                                lane="doc-share-done",
+                                payload={
+                                    "file_id": doc_id,
+                                    "role": public_role,
+                                    "scope": "anyone",
+                                    "discoverable": public_discoverable,
+                                    "source_url": doc_url,
+                                },
+                            ),
                         )
                     )
                 except Exception as exc:
@@ -210,14 +268,18 @@ class DocumentCreateTool(AgentTool):
                             event_type="drive.share_failed",
                             title="Failed to enable public link access",
                             detail=public_share_error[:200],
-                            data={
-                                "file_id": doc_id,
-                                "role": public_role,
-                                "scope": "anyone",
-                                "discoverable": public_discoverable,
-                                "source_url": doc_url,
-                                "error": public_share_error[:300],
-                            },
+                            data=_doc_scene_payload(
+                                provider=provider,
+                                lane="doc-share-failed",
+                                payload={
+                                    "file_id": doc_id,
+                                    "role": public_role,
+                                    "scope": "anyone",
+                                    "discoverable": public_discoverable,
+                                    "source_url": doc_url,
+                                    "error": public_share_error[:300],
+                                },
+                            ),
                         )
                     )
             if doc_id and body:
@@ -226,12 +288,16 @@ class DocumentCreateTool(AgentTool):
                         event_type="docs.insert_started",
                         title="Append content to Google Doc",
                         detail=f"{len(body)} characters",
-                        data={
-                            "doc_id": doc_id,
-                            "characters": len(body),
-                            "source_url": doc_url,
-                            "render_mode": "markdown" if render_markdown else "plain_text",
-                        },
+                        data=_doc_scene_payload(
+                            provider=provider,
+                            lane="doc-insert-start",
+                            payload={
+                                "doc_id": doc_id,
+                                "characters": len(body),
+                                "source_url": doc_url,
+                                "render_mode": "markdown" if render_markdown else "plain_text",
+                            },
+                        ),
                     )
                 )
                 if render_markdown and hasattr(connector, "docs_insert_markdown"):
@@ -239,24 +305,36 @@ class DocumentCreateTool(AgentTool):
                 else:
                     connector.docs_insert_text(document_id=doc_id, text=f"\n\n{body}\n")
                 trace_events.append(
-                    ToolTraceEvent(
-                        event_type="docs.insert_completed",
-                        title="Google Doc content appended",
-                        detail=f"{len(body)} characters",
-                        data={
-                            "doc_id": doc_id,
-                            "characters": len(body),
-                            "source_url": doc_url,
-                            "render_mode": "markdown" if render_markdown else "plain_text",
-                        },
+                        ToolTraceEvent(
+                            event_type="docs.insert_completed",
+                            title="Google Doc content appended",
+                            detail=f"{len(body)} characters",
+                            data=_doc_scene_payload(
+                                provider=provider,
+                                lane="doc-insert-done",
+                                payload={
+                                    "doc_id": doc_id,
+                                    "characters": len(body),
+                                    "source_url": doc_url,
+                                    "render_mode": "markdown" if render_markdown else "plain_text",
+                                },
+                            ),
+                        )
                     )
-                )
             trace_events.append(
                 ToolTraceEvent(
                     event_type="doc_save",
                     title="Save Google Doc",
                     detail="Document created via Google Docs API",
-                    data={"document_id": doc_id, "url": doc_url},
+                    data=_doc_scene_payload(
+                        provider=provider,
+                        lane="doc-save",
+                        payload={
+                            "document_id": doc_id,
+                            "url": doc_url,
+                            "source_url": doc_url,
+                        },
+                    ),
                 )
             )
             return ToolExecutionResult(
@@ -300,7 +378,11 @@ class DocumentCreateTool(AgentTool):
                 event_type="doc_save",
                 title="Save local document",
                 detail=f"Saved markdown document at {file_path.as_posix()}",
-                data={"path": str(file_path.resolve())},
+                data=_doc_scene_payload(
+                    provider=provider,
+                    lane="doc-save-local",
+                    payload={"path": str(file_path.resolve())},
+                ),
             )
         )
         return ToolExecutionResult(

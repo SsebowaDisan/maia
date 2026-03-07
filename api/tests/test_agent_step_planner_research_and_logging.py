@@ -454,6 +454,81 @@ def test_intent_enrichment_adds_contact_form_step_when_requested(monkeypatch) ->
         message="Analyze the website and send them a message about their services.",
         agent_mode="company_agent",
     )
+    task_prep = _task_prep(contract_actions=["submit_contact_form"], intent_tags=("web_research",))
+    steps = [
+        PlannedStep(
+            tool_id="browser.playwright.inspect",
+            title="Inspect website",
+            params={"url": "https://axongroup.com/"},
+        ),
+        PlannedStep(tool_id="report.generate", title="Generate report", params={"summary": "x"}),
+    ]
+    enriched = apply_intent_enrichment(
+        request=request,
+        settings={"__contact_form_capability_enabled": True},
+        task_prep=task_prep,
+        steps=steps,
+    )
+    tool_ids = [step.tool_id for step in enriched]
+    assert "browser.contact_form.send" in tool_ids
+    contact_step = next(step for step in enriched if step.tool_id == "browser.contact_form.send")
+    assert contact_step.params.get("url") == "https://axongroup.com/"
+
+
+def test_intent_enrichment_skips_contact_form_when_specialist_capability_disabled(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import intent_enrichment as enrichment_module
+
+    monkeypatch.setattr(
+        enrichment_module,
+        "infer_intent_signals_from_text",
+        lambda **kwargs: {
+            "url": "https://axongroup.com/",
+            "wants_contact_form": True,
+            "wants_highlight_words": False,
+            "wants_docs_output": False,
+            "wants_sheets_output": False,
+        },
+    )
+    request = ChatRequest(
+        message="Analyze and contact them through the website form.",
+        agent_mode="company_agent",
+    )
+    task_prep = _task_prep(contract_actions=["submit_contact_form"], intent_tags=("contact_form_submission",))
+    steps = [
+        PlannedStep(
+            tool_id="browser.playwright.inspect",
+            title="Inspect website",
+            params={"url": "https://axongroup.com/"},
+        ),
+        PlannedStep(tool_id="report.generate", title="Generate report", params={"summary": "x"}),
+    ]
+    enriched = apply_intent_enrichment(
+        request=request,
+        settings={"__contact_form_capability_enabled": False},
+        task_prep=task_prep,
+        steps=steps,
+    )
+    assert all(step.tool_id != "browser.contact_form.send" for step in enriched)
+
+
+def test_intent_enrichment_does_not_use_heuristic_phrase_only_for_contact_step(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import intent_enrichment as enrichment_module
+
+    monkeypatch.setattr(
+        enrichment_module,
+        "infer_intent_signals_from_text",
+        lambda **kwargs: {
+            "url": "https://axongroup.com/",
+            "wants_contact_form": True,
+            "wants_highlight_words": False,
+            "wants_docs_output": False,
+            "wants_sheets_output": False,
+        },
+    )
+    request = ChatRequest(
+        message="Please contact them.",
+        agent_mode="company_agent",
+    )
     task_prep = _task_prep(contract_actions=[], intent_tags=("web_research",))
     steps = [
         PlannedStep(
@@ -465,14 +540,51 @@ def test_intent_enrichment_adds_contact_form_step_when_requested(monkeypatch) ->
     ]
     enriched = apply_intent_enrichment(
         request=request,
-        settings={},
+        settings={"__contact_form_capability_enabled": True},
         task_prep=task_prep,
         steps=steps,
     )
-    tool_ids = [step.tool_id for step in enriched]
-    assert "browser.contact_form.send" in tool_ids
-    contact_step = next(step for step in enriched if step.tool_id == "browser.contact_form.send")
-    assert contact_step.params.get("url") == "https://axongroup.com/"
+    assert all(step.tool_id != "browser.contact_form.send" for step in enriched)
+
+
+def test_intent_enrichment_can_use_contract_planning_signals_for_contact_step(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import intent_enrichment as enrichment_module
+
+    monkeypatch.setattr(
+        enrichment_module,
+        "infer_intent_signals_from_text",
+        lambda **kwargs: {
+            "url": "https://axongroup.com/",
+            "wants_contact_form": False,
+            "wants_highlight_words": False,
+            "wants_docs_output": False,
+            "wants_sheets_output": False,
+        },
+    )
+    request = ChatRequest(
+        message="Analyze the site and proceed with approved outreach workflow.",
+        agent_mode="company_agent",
+    )
+    task_prep = _task_prep(contract_actions=[], intent_tags=("web_research",))
+    steps = [
+        PlannedStep(
+            tool_id="browser.playwright.inspect",
+            title="Inspect website",
+            params={"url": "https://axongroup.com/"},
+        ),
+        PlannedStep(tool_id="report.generate", title="Generate report", params={"summary": "x"}),
+    ]
+    enriched = apply_intent_enrichment(
+        request=request,
+        settings={
+            "__contact_form_capability_enabled": True,
+            "__capability_required_domains": ["outreach"],
+            "__capability_preferred_tool_ids": ["browser.contact_form.send"],
+        },
+        task_prep=task_prep,
+        steps=steps,
+    )
+    assert any(step.tool_id == "browser.contact_form.send" for step in enriched)
 
 
 def test_workspace_roadmap_steps_marked_for_optional_skip() -> None:

@@ -322,10 +322,14 @@ class WebResearchTool(AgentTool):
                 event_type="tool_progress",
                 title="Apply domain scope to web research",
                 detail=f"{domain_scope_mode} scope: {', '.join(domain_scope_hosts[:3])}",
-                data={
-                    "domain_scope_hosts": domain_scope_hosts[:6],
-                    "domain_scope_mode": domain_scope_mode,
-                },
+                data=_website_scene_payload(
+                    lane="search-domain-scope",
+                    primary_index=1,
+                    payload={
+                        "domain_scope_hosts": domain_scope_hosts[:6],
+                        "domain_scope_mode": domain_scope_mode,
+                    },
+                ),
             )
             trace_events.append(scope_event)
             yield scope_event
@@ -333,11 +337,15 @@ class WebResearchTool(AgentTool):
             event_type="tool_progress",
             title="Select web research provider",
             detail=f"Provider: {requested_provider}",
-            data={
-                "provider_requested": requested_provider,
-                "provider_fallback_enabled": allow_provider_fallback,
-                "research_depth_tier": depth_tier,
-            },
+            data=_website_scene_payload(
+                lane="search-provider-select",
+                primary_index=1,
+                payload={
+                    "provider_requested": requested_provider,
+                    "provider_fallback_enabled": allow_provider_fallback,
+                    "research_depth_tier": depth_tier,
+                },
+            ),
         )
         trace_events.append(provider_event)
         yield provider_event
@@ -709,11 +717,15 @@ class WebResearchTool(AgentTool):
                             if requested_provider == "bing_search"
                             else "Using Bing as secondary provider"
                         ),
-                        data={
-                            "query": query_variants[0],
-                            "provider": "bing_search",
-                            "result_limit": fallback_count,
-                        },
+                        data=_website_scene_payload(
+                            lane="bing-provider-select",
+                            primary_index=1,
+                            payload={
+                                "query": query_variants[0],
+                                "provider": "bing_search",
+                                "result_limit": fallback_count,
+                            },
+                        ),
                     )
                 )
                 yield trace_events[-1]
@@ -1035,13 +1047,18 @@ class WebResearchTool(AgentTool):
                     f"Collected {len(unique_urls)} unique sources; target is {min_unique_sources}. "
                     "Continue with additional targeted queries."
                 ),
-                data={
-                    "source_count": len(unique_urls),
-                    "target_source_count": min_unique_sources,
-                    "coverage_ok": False,
-                    "domain_scope_hosts": domain_scope_hosts[:6],
-                    "domain_scope_mode": domain_scope_mode,
-                },
+                data=_website_scene_payload(
+                    lane="research-coverage-check",
+                    primary_index=max(1, len(unique_urls)),
+                    secondary_index=max(1, min_unique_sources),
+                    payload={
+                        "source_count": len(unique_urls),
+                        "target_source_count": min_unique_sources,
+                        "coverage_ok": False,
+                        "domain_scope_hosts": domain_scope_hosts[:6],
+                        "domain_scope_mode": domain_scope_mode,
+                    },
+                ),
             )
             trace_events.append(shortfall_event)
             yield shortfall_event

@@ -1,5 +1,8 @@
 from api.services.agent.models import AgentSource
-from api.services.agent.orchestration.finalization import _build_info_html_from_sources
+from api.services.agent.orchestration.finalization import (
+    _build_info_html_from_sources,
+    _post_resume_verification_state,
+)
 
 
 def test_build_info_html_from_sources_emits_structured_evidence_blocks() -> None:
@@ -59,3 +62,31 @@ def test_build_info_html_from_sources_sanitizes_noisy_web_labels_and_artifact_ur
     assert "Markdown Content" not in info_html
     assert "data-source-url=" not in info_html
     assert "<b>Extract:</b>" not in info_html
+
+
+def test_post_resume_verification_state_clears_pending_barrier_when_contract_is_ready() -> None:
+    settings: dict[str, object] = {"__barrier_resume_pending_verification": True}
+    state = _post_resume_verification_state(
+        settings=settings,  # type: ignore[arg-type]
+        contract_check_result={"ready_for_external_actions": True},
+        final_missing_items=[],
+        handoff_state={"state": "resumed"},
+    )
+    assert state["blocked"] is False
+    assert state["cleared"] is True
+    assert settings.get("__barrier_resume_pending_verification") is False
+    assert settings.get("__barrier_resume_verified_at")
+
+
+def test_post_resume_verification_state_blocks_when_contract_missing_items_remain() -> None:
+    settings: dict[str, object] = {"__barrier_resume_pending_verification": True}
+    state = _post_resume_verification_state(
+        settings=settings,  # type: ignore[arg-type]
+        contract_check_result={"ready_for_external_actions": False},
+        final_missing_items=["Missing confirmation"],
+        handoff_state={"state": "resumed"},
+    )
+    assert state["blocked"] is True
+    assert state["cleared"] is False
+    assert settings.get("__barrier_resume_pending_verification") is True
+    assert "Post-resume verification" in str(settings.get("__barrier_resume_verification_note") or "")

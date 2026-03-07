@@ -9,6 +9,7 @@ from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep, build_plan, resolve_web_routing
 
 from ..models import PlanPreparation, TaskPreparation
+from ..role_router import build_role_owned_steps, role_owned_steps_to_payload
 from ..text_helpers import extract_first_email
 from .contracts import (
     build_planning_request,
@@ -42,6 +43,31 @@ from .workspace_logging import (
 )
 
 
+def _extract_available_tool_ids(registry: Any) -> set[str]:
+    try:
+        rows = registry.list_tools()
+    except Exception:
+        return set()
+    available: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tool_id = str(row.get("tool_id") or "").strip()
+        if tool_id:
+            available.add(tool_id)
+    return available
+
+
+def _filter_steps_by_available_tools(
+    *,
+    steps: list[PlannedStep],
+    available_tool_ids: set[str],
+) -> list[PlannedStep]:
+    if not available_tool_ids:
+        return list(steps)
+    return [step for step in steps if step.tool_id in available_tool_ids]
+
+
 def build_execution_steps(
     *,
     request: ChatRequest,
@@ -51,6 +77,10 @@ def build_execution_steps(
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, PlanPreparation]:
+    available_tool_ids = _extract_available_tool_ids(registry)
+    settings["__contact_form_capability_enabled"] = (
+        "browser.contact_form.send" in available_tool_ids
+    )
     planning_request, planning_message = build_planning_request(
         request=request,
         task_prep=task_prep,
@@ -69,6 +99,11 @@ def build_execution_steps(
             rationale=capability_analysis.rationale,
         )
     )
+    settings["__capability_required_domains"] = list(capability_analysis.required_domains[:12])
+    settings["__capability_preferred_tool_ids"] = list(
+        capability_analysis.preferred_tool_ids[:24]
+    )
+    settings["__capability_matched_signals"] = list(capability_analysis.matched_signals[:24])
 
     yield emit_event(
         plan_decompose_started_event(
@@ -89,6 +124,10 @@ def build_execution_steps(
         planning_request,
         preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
         web_routing=web_routing,
+    )
+    steps = _filter_steps_by_available_tools(
+        steps=steps,
+        available_tool_ids=available_tool_ids,
     )
     yield emit_event(
         plan_decompose_completed_event(
@@ -184,12 +223,26 @@ def build_execution_steps(
             planned_keywords=research_plan.planned_keywords,
         )
 
+    role_owned_step_models = build_role_owned_steps(steps=steps)
+    role_owned_steps = role_owned_steps_to_payload(steps=role_owned_step_models)
+
     for idx, planned_step in enumerate(steps, start=1):
+        role_step = role_owned_step_models[idx - 1] if idx - 1 < len(role_owned_step_models) else None
         yield emit_event(
             plan_step_event(
                 activity_event_factory=activity_event_factory,
                 step_number=idx,
                 planned_step=planned_step,
+                owner_role=(
+                    str(role_step.owner_role or "").strip()
+                    if role_step is not None
+                    else ""
+                ),
+                handoff_from_role=(
+                    str(role_step.handoff_from_role or "").strip()
+                    if role_step is not None
+                    else ""
+                ),
             )
         )
 
@@ -217,6 +270,7 @@ def build_execution_steps(
                 "max_file_scan_pages": research_plan.max_file_scan_pages,
                 "simple_explanation_required": research_plan.simple_explanation_required,
             },
+            role_owned_steps=role_owned_steps,
         )
     )
     yield emit_event(
@@ -239,9 +293,16 @@ def build_execution_steps(
                 "simple_explanation_required": research_plan.simple_explanation_required,
             },
             fact_coverage=fact_coverage,
+            role_owned_steps=role_owned_steps,
         )
     )
-    yield emit_event(plan_ready_event(activity_event_factory=activity_event_factory, steps=steps))
+    yield emit_event(
+        plan_ready_event(
+            activity_event_factory=activity_event_factory,
+            steps=steps,
+            role_owned_steps=role_owned_steps,
+        )
+    )
     get_agent_observability().observe_plan_steps(
         tool_ids=[item.tool_id for item in steps],
     )
@@ -255,4 +316,5 @@ def build_execution_steps(
         workspace_logging_requested=workspace_logging_plan.workspace_logging_requested,
         deep_workspace_logging_enabled=workspace_logging_plan.deep_workspace_logging_enabled,
         delivery_email=delivery_email,
+        role_owned_steps=role_owned_steps,
     )

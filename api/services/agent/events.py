@@ -35,7 +35,9 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "llm.task_contract_completed": "plan",
     "llm.clarification_requested": "plan",
     "llm.clarification_resolved": "plan",
+    "llm.context_session": "plan",
     "llm.context_memory": "plan",
+    "llm.working_context_compiled": "plan",
     "llm.research_depth_profile": "plan",
     "llm.plan_decompose_started": "plan",
     "llm.plan_decompose_completed": "plan",
@@ -43,6 +45,13 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "llm.web_routing_decision": "plan",
     "llm.plan_step": "plan",
     "llm.plan_fact_coverage": "plan",
+    "role_handoff": "tool",
+    "role_activated": "tool",
+    "role_contract_check": "tool",
+    "role_dispatch_plan": "plan",
+    "execution_checkpoint": "system",
+    "handoff_paused": "system",
+    "handoff_resumed": "system",
     "llm.form_field_mapping": "preview",
     "llm.delivery_check_started": "result",
     "llm.delivery_check_completed": "result",
@@ -87,12 +96,27 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "llm.task_contract_completed": {"description": "LLM task contract build completed", "user_visible": True},
     "llm.clarification_requested": {"description": "Clarification is required before execution", "user_visible": True},
     "llm.clarification_resolved": {"description": "Clarification requirements resolved", "user_visible": True},
+    "llm.context_session": {"description": "Recent session context snippets loaded for planning", "user_visible": True},
+    "llm.working_context_compiled": {"description": "Execution working context compiled from processors", "user_visible": True},
     "llm.plan_decompose_started": {"description": "LLM step decomposition started", "user_visible": True},
     "llm.plan_decompose_completed": {"description": "LLM step decomposition completed", "user_visible": True},
     "llm.capability_plan": {"description": "Capability-based planning analysis completed", "user_visible": True},
     "llm.web_routing_decision": {"description": "LLM web routing decision selected", "user_visible": True},
     "llm.plan_step": {"description": "Planned execution step generated", "user_visible": True},
     "llm.plan_fact_coverage": {"description": "Required-fact coverage was checked for the plan", "user_visible": True},
+    "role_handoff": {"description": "Execution ownership transferred between micro-agent roles", "user_visible": True},
+    "role_activated": {"description": "Micro-agent role activated for the next execution step", "user_visible": True},
+    "role_contract_check": {"description": "Step tool usage validated against active role contract", "user_visible": True},
+    "role_dispatch_plan": {"description": "Role dispatch segments prepared for persistent execution", "user_visible": True},
+    "execution_checkpoint": {"description": "Execution checkpoint captured for resumable orchestration", "user_visible": True},
+    "handoff_paused": {
+        "description": "Execution paused at a human-verification barrier with resumable handoff state",
+        "user_visible": True,
+    },
+    "handoff_resumed": {
+        "description": "Execution resumed after the user completed the handoff barrier",
+        "user_visible": True,
+    },
     "llm.location_brief": {"description": "LLM location finding synthesized from evidence", "user_visible": True},
     "llm.delivery_check_started": {"description": "Task contract verification started", "user_visible": True},
     "llm.delivery_check_completed": {"description": "Task contract verification passed", "user_visible": True},
@@ -218,6 +242,7 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "drive.share_started": {"description": "Drive sharing update started", "user_visible": True},
     "drive.share_completed": {"description": "Drive sharing update completed", "user_visible": True},
     "drive.share_failed": {"description": "Drive sharing update failed", "user_visible": True},
+    "drive.search_completed": {"description": "Google Drive search results captured", "user_visible": True},
     "llm.form_field_mapping": {
         "description": "LLM mapped unresolved required contact-form fields",
         "user_visible": True,
@@ -272,8 +297,17 @@ def infer_stage(event_type: str) -> EventStage:
 
 
 def infer_status(event_type: str) -> EventStatus:
-    if event_type in {"approval_required", "email_auth_required", "browser_human_verification_required"}:
+    if event_type in {
+        "approval_required",
+        "email_auth_required",
+        "browser_human_verification_required",
+        "handoff_paused",
+    }:
         return "waiting"
+    if event_type == "handoff_resumed":
+        return "completed"
+    if event_type == "role_activated":
+        return "in_progress"
     if event_type.endswith("_started") or event_type in {
         "desktop_starting",
         "response_writing",

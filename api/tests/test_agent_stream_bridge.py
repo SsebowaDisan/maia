@@ -85,6 +85,19 @@ def test_stream_bridge_infers_google_docs_surface() -> None:
     assert payload["scene_surface"] == "google_docs"
 
 
+def test_stream_bridge_keeps_document_surface_for_doc_copy_clipboard() -> None:
+    payload = _emit_single_trace(
+        tool_id="documents.highlight.extract",
+        trace=ToolTraceEvent(
+            event_type="doc_copy_clipboard",
+            title="Copy highlights",
+            detail="Copied top snippet",
+            data={"scene_surface": "document"},
+        ),
+    )
+    assert payload["scene_surface"] == "document"
+
+
 def test_stream_bridge_infers_pdf_surface_as_document() -> None:
     payload = _emit_single_trace(
         tool_id="documents.highlight.extract",
@@ -163,3 +176,49 @@ def test_stream_bridge_infers_scroll_fields_for_browser_scroll() -> None:
     )
     assert payload["scroll_direction"] == "down"
     assert isinstance(payload.get("scroll_percent"), float)
+
+
+def test_stream_bridge_adds_owner_role_to_normalized_trace() -> None:
+    payload = _emit_single_trace(
+        tool_id="report.generate",
+        trace=ToolTraceEvent(
+            event_type="tool_progress",
+            title="Draft report",
+            data={"scene_surface": "system"},
+        ),
+    )
+    assert payload.get("owner_role") == "writer"
+
+
+def test_stream_bridge_marks_drive_search_surface_as_document() -> None:
+    payload = _emit_single_trace(
+        tool_id="workspace.drive.search",
+        trace=ToolTraceEvent(
+            event_type="drive.search_completed",
+            title="Drive search",
+            detail="query",
+            data={"query": "Q4 report"},
+        ),
+    )
+    assert payload["scene_surface"] == "document"
+
+
+def test_stream_bridge_adds_cursor_for_non_browser_interactive_surfaces() -> None:
+    checks = [
+        ("workspace.docs.research_notes", "doc_type_text", "google_docs"),
+        ("workspace.sheets.track_step", "sheet_append_row", "google_sheets"),
+        ("email.send", "email_set_body", "email"),
+        ("documents.highlight.extract", "pdf_scan_region", "document"),
+    ]
+    for tool_id, event_type, expected_surface in checks:
+        payload = _emit_single_trace(
+            tool_id=tool_id,
+            trace=ToolTraceEvent(
+                event_type=event_type,
+                title="interaction",
+                detail="test",
+            ),
+        )
+        assert payload["scene_surface"] == expected_surface
+        assert isinstance(payload.get("cursor_x"), float)
+        assert isinstance(payload.get("cursor_y"), float)

@@ -96,15 +96,24 @@ def plan_step_event(
     activity_event_factory,
     step_number: int,
     planned_step: PlannedStep,
+    owner_role: str = "",
+    handoff_from_role: str = "",
 ) -> AgentActivityEvent:
+    owner_role_clean = " ".join(str(owner_role or "").split()).strip().lower()
+    handoff_from_clean = " ".join(str(handoff_from_role or "").split()).strip().lower()
+    detail = f"{planned_step.title} ({planned_step.tool_id})"
+    if owner_role_clean:
+        detail = f"[{owner_role_clean}] {detail}"
     return activity_event_factory(
         event_type="llm.plan_step",
         title=f"Planned step {step_number}",
-        detail=f"{planned_step.title} ({planned_step.tool_id})",
+        detail=detail,
         metadata={
             "step": step_number,
             "title": planned_step.title,
             "tool_id": planned_step.tool_id,
+            "owner_role": owner_role_clean,
+            "handoff_from_role": handoff_from_clean,
             "params": planned_step.params,
             "why_this_step": planned_step.why_this_step,
             "expected_evidence": list(planned_step.expected_evidence),
@@ -123,6 +132,7 @@ def plan_candidate_event(
     planned_search_terms: list[str],
     planned_keywords: list[str],
     research_depth_profile: dict[str, Any],
+    role_owned_steps: list[dict[str, Any]] | None = None,
 ) -> AgentActivityEvent:
     return activity_event_factory(
         event_type="plan_candidate",
@@ -148,6 +158,11 @@ def plan_candidate_event(
                 "planned_search_terms": planned_search_terms[:6],
                 "planned_keywords": planned_keywords[:12],
                 "research_depth_profile": research_depth_profile if isinstance(research_depth_profile, dict) else {},
+                "role_owned_steps": (
+                    role_owned_steps[:32]
+                    if isinstance(role_owned_steps, list)
+                    else []
+                ),
             },
         },
     )
@@ -161,6 +176,7 @@ def plan_refined_event(
     planned_keywords: list[str],
     research_depth_profile: dict[str, Any],
     fact_coverage: dict[str, object] | None = None,
+    role_owned_steps: list[dict[str, Any]] | None = None,
 ) -> AgentActivityEvent:
     return activity_event_factory(
         event_type="plan_refined",
@@ -171,6 +187,11 @@ def plan_refined_event(
             "search_terms": planned_search_terms[:6],
             "keywords": planned_keywords[:12],
             "research_depth_profile": research_depth_profile if isinstance(research_depth_profile, dict) else {},
+            "role_owned_steps": (
+                role_owned_steps[:32]
+                if isinstance(role_owned_steps, list)
+                else []
+            ),
             "fact_coverage": fact_coverage if isinstance(fact_coverage, dict) else {},
         },
     )
@@ -210,9 +231,21 @@ def plan_fact_coverage_event(
     )
 
 
-def plan_ready_event(*, activity_event_factory, steps: list[PlannedStep]) -> AgentActivityEvent:
+def plan_ready_event(
+    *,
+    activity_event_factory,
+    steps: list[PlannedStep],
+    role_owned_steps: list[dict[str, Any]] | None = None,
+) -> AgentActivityEvent:
     return activity_event_factory(
         event_type="plan_ready",
         title=f"Prepared {len(steps)} execution steps",
-        metadata={"steps": [step.__dict__ for step in steps]},
+        metadata={
+            "steps": [step.__dict__ for step in steps],
+            "role_owned_steps": (
+                role_owned_steps[:32]
+                if isinstance(role_owned_steps, list)
+                else []
+            ),
+        },
     )

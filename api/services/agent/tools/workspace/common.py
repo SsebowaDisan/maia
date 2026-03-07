@@ -5,6 +5,7 @@ import os
 from typing import Any, Generator
 
 from api.services.agent.tools.base import ToolExecutionResult, ToolTraceEvent
+from api.services.agent.tools.theater_cursor import with_scene
 
 
 def now_iso() -> str:
@@ -76,6 +77,23 @@ def normalize_public_role(value: Any) -> str:
     if role not in {"reader", "commenter", "writer"}:
         return "reader"
     return role
+
+
+def scene_payload(
+    *,
+    surface: str,
+    lane: str,
+    primary_index: int = 1,
+    secondary_index: int = 1,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return with_scene(
+        payload or {},
+        scene_surface=str(surface or "system").strip() or "system",
+        lane=lane,
+        primary_index=max(1, int(primary_index)),
+        secondary_index=max(1, int(secondary_index)),
+    )
 
 
 def resolve_public_share_options(*, params: dict[str, Any], settings: dict[str, Any]) -> tuple[bool, str, bool]:

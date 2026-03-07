@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 from typing import Any, Generator
 
+from api.services.agent.connectors.browser_goal import (
+    resolve_goal_page_discovery_capability,
+)
+
 from ..base import BaseConnector, ConnectorError, ConnectorHealth
 from ..browser_navigation_utils import accept_cookie_banner
 from .capture import capture_page_state, move_cursor
@@ -61,21 +65,9 @@ class BrowserContactConnector(BaseConnector):
         return ConnectorHealth(self.connector_id, True, "configured")
 
     def _goal_page_discovery_enabled(self) -> bool:
-        enabled = _coerce_bool(
-            self.settings.get("agent.capabilities.goal_page_discovery_enabled")
-            or self.settings.get("MAIA_AGENT_GOAL_PAGE_DISCOVERY_ENABLED")
-            or os.getenv("MAIA_AGENT_GOAL_PAGE_DISCOVERY_ENABLED"),
-            default=False,
-        )
-        if not enabled:
-            return False
-        raw_tags = self.settings.get("__intent_tags")
-        tags = {
-            " ".join(str(item or "").split()).strip().lower()
-            for item in (raw_tags if isinstance(raw_tags, list) else [])
-            if " ".join(str(item or "").split()).strip()
-        }
-        return bool({"goal_page_navigation", "contact_form_submission"}.intersection(tags))
+        decision = resolve_goal_page_discovery_capability(settings=self.settings)
+        self.settings["__goal_page_discovery_decision"] = decision
+        return bool(decision.get("enabled"))
 
     def submit_contact_form_live_stream(
         self,
@@ -169,6 +161,11 @@ class BrowserContactConnector(BaseConnector):
                 wait_ms=wait_ms,
                 timeout_ms=timeout_ms,
                 goal_page_discovery_enabled=self._goal_page_discovery_enabled(),
+                goal_page_discovery_decision=(
+                    self.settings.get("__goal_page_discovery_decision")
+                    if isinstance(self.settings.get("__goal_page_discovery_decision"), dict)
+                    else None
+                ),
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
             )

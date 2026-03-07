@@ -26,7 +26,9 @@ from .discovery_gate import (
     with_slot_lifecycle_defaults,
 )
 from .models import TaskPreparation
+from .session_store import get_session_store
 from .text_helpers import compact, truthy
+from .working_context import compile_working_context
 
 _SCOPE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 
@@ -83,6 +85,25 @@ def _normalize_rewritten_task_scope(
         return cleaned_rewrite
     source_scope = " ".join([str(message or "").strip(), str(agent_goal or "").strip()]).strip()
     return source_scope[:900] if source_scope else cleaned_rewrite[:900]
+
+
+def _selected_file_ids(request: ChatRequest) -> list[str]:
+    collected: list[str] = []
+    for selection in request.index_selection.values():
+        file_ids = getattr(selection, "file_ids", []) or []
+        for file_id in file_ids:
+            file_id_text = str(file_id).strip()
+            if file_id_text:
+                collected.append(file_id_text)
+    return list(dict.fromkeys(collected))
+
+
+def _selected_index_id(request: ChatRequest) -> int | None:
+    for raw_index_id in request.index_selection.keys():
+        text = str(raw_index_id).strip()
+        if text.isdigit():
+            return int(text)
+    return None
 
 
 def _force_deep_search_profile(
@@ -300,6 +321,34 @@ def prepare_task_context(
             metadata={"conversation_summary": conversation_summary_text},
         )
         yield emit_event(llm_context_event)
+
+    session_context_snippets: list[str] = []
+    if truthy(settings.get("agent.session_context_enabled"), default=True):
+        session_query = " ".join(
+            [
+                str(request.message or "").strip(),
+                str(request.agent_goal or "").strip(),
+                conversation_summary_text,
+            ]
+        ).strip()
+        if session_query:
+            try:
+                session_context_snippets = get_session_store().retrieve_context_snippets(
+                    query=session_query,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    limit=4,
+                )
+            except Exception:
+                session_context_snippets = []
+    if session_context_snippets:
+        session_event = activity_event_factory(
+            event_type="llm.context_session",
+            title="Loaded relevant session context",
+            detail=f"Retrieved {len(session_context_snippets)} session snippet(s)",
+            metadata={"session_context_snippets": session_context_snippets[:4]},
+        )
+        yield emit_event(session_event)
 
     memory_context_snippets: list[str] = []
     if truthy(settings.get("agent.memory_context_enabled"), default=True):
@@ -586,6 +635,68 @@ def prepare_task_context(
         )
         yield emit_event(clarification_resolved_event)
 
+    working_context = compile_working_context(
+        seed={
+            "message": request.message,
+            "agent_goal": request.agent_goal,
+            "rewritten_task": rewritten_task,
+            "intent_tags": list(task_intelligence.intent_tags),
+            "task_contract": task_contract,
+            "contract_objective": contract_objective,
+            "contract_outputs": contract_outputs,
+            "contract_facts": contract_facts,
+            "contract_actions": contract_actions,
+            "contract_target": contract_target,
+            "contract_success_checks": contract_success_checks,
+            "contract_missing_slots": contract_missing_slots[:8],
+            "conversation_summary": conversation_summary,
+            "conversation_snippets": (
+                settings.get("__conversation_snippets")
+                if isinstance(settings.get("__conversation_snippets"), list)
+                else []
+            ),
+            "selected_file_ids": _selected_file_ids(request),
+            "selected_index_id": _selected_index_id(request),
+            "planned_search_terms": (
+                settings.get("__research_search_terms")
+                if isinstance(settings.get("__research_search_terms"), list)
+                else []
+            ),
+            "planned_keywords": (
+                settings.get("__research_keywords")
+                if isinstance(settings.get("__research_keywords"), list)
+                else []
+            ),
+            "session_context_snippets": session_context_snippets[:6],
+            "memory_context_snippets": memory_context_snippets[:6],
+        }
+    )
+    working_context_preview = " ".join(
+        str(working_context.get("preview") or "").split()
+    ).strip()
+    settings["__working_context"] = working_context
+    settings["__working_context_preview"] = working_context_preview
+    working_context_event = activity_event_factory(
+        event_type="llm.working_context_compiled",
+        title="Compiled execution working context",
+        detail=compact(working_context_preview or "Working context ready", 180),
+        metadata={
+            "working_context_version": str(working_context.get("version") or ""),
+            "sections": sorted(
+                [
+                    str(item).strip()
+                    for item in (
+                        working_context.get("sections", {}).keys()
+                        if isinstance(working_context.get("sections"), dict)
+                        else []
+                    )
+                    if str(item).strip()
+                ]
+            ),
+        },
+    )
+    yield emit_event(working_context_event)
+
     return TaskPreparation(
         task_intelligence=task_intelligence,
         user_preferences=user_preferences,
@@ -603,7 +714,9 @@ def prepare_task_context(
         contract_missing_requirements=contract_missing_requirements,
         contract_success_checks=contract_success_checks,
         memory_context_snippets=memory_context_snippets,
+        session_context_snippets=session_context_snippets,
         clarification_blocked=clarification_blocked,
         clarification_questions=clarification_questions,
         contract_missing_slots=contract_missing_slots,
+        working_context=working_context,
     )

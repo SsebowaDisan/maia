@@ -28,6 +28,35 @@ def collect_contact_channels(page: Any) -> dict[str, list[str]]:
     return _collect_contact_channels(page)
 
 
+def _coerce_goal_page_decision(
+    *,
+    goal_page_discovery_enabled: bool,
+    goal_page_discovery_decision: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if isinstance(goal_page_discovery_decision, dict):
+        try:
+            confidence = float(goal_page_discovery_decision.get("confidence") or 0.0)
+        except Exception:
+            confidence = 0.0
+        return {
+            "enabled": bool(goal_page_discovery_decision.get("enabled")),
+            "confidence": confidence,
+            "reason": safe_text(goal_page_discovery_decision.get("reason"), max_len=220),
+            "source": safe_text(goal_page_discovery_decision.get("source"), max_len=80),
+            "capability_id": safe_text(
+                goal_page_discovery_decision.get("capability_id"), max_len=80
+            )
+            or "goal_page_discovery",
+        }
+    return {
+        "enabled": bool(goal_page_discovery_enabled),
+        "confidence": 0.0,
+        "reason": "",
+        "source": "legacy_flag",
+        "capability_id": "goal_page_discovery",
+    }
+
+
 def rank_navigation_candidates(
     candidates: list[dict[str, Any]],
     *,
@@ -47,11 +76,33 @@ def locate_contact_form_with_discovery(
     timeout_ms: int = 12000,
     max_hops: int = 5,
     goal_page_discovery_enabled: bool = False,
+    goal_page_discovery_decision: dict[str, Any] | None = None,
     output_dir: Path | None = None,
     stamp_prefix: str = "",
 ) -> tuple[Any | None, bool, list[dict[str, Any]]]:
     traces: list[dict[str, Any]] = []
-    if goal_page_discovery_enabled:
+    capability_decision = _coerce_goal_page_decision(
+        goal_page_discovery_enabled=goal_page_discovery_enabled,
+        goal_page_discovery_decision=goal_page_discovery_decision,
+    )
+    traces.append(
+        {
+            "event_type": "browser_verify",
+            "title": "Evaluate optional goal-page discovery capability",
+            "detail": (
+                capability_decision.get("reason")
+                or ("Enabled for this execution path." if capability_decision.get("enabled") else "Disabled for this execution path.")
+            ),
+            "data": {
+                "url": normalize_url(str(page.url or "")),
+                "title": page_title(page),
+                "goal_page_capability": capability_decision,
+                **cursor_payload(page),
+            },
+            "snapshot_ref": None,
+        }
+    )
+    if capability_decision.get("enabled"):
         _, goal_traces, _ = locate_goal_page_with_discovery(
             page,
             goal_profile={

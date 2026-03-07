@@ -9,6 +9,11 @@ EXTERNAL_ACTION_TOOL_IDS = (
     "browser.contact_form.send",
     "slack.post_message",
 )
+EXTERNAL_ACTION_TOOL_MAP = {
+    "send_email": {"gmail.send", "email.send", "mailer.report_send"},
+    "submit_contact_form": {"browser.contact_form.send"},
+    "post_message": {"slack.post_message"},
+}
 
 
 def _required_external_actions(ctx: AnswerBuildContext) -> list[str]:
@@ -35,11 +40,71 @@ def _external_action_contract_status(ctx: AnswerBuildContext) -> tuple[bool | No
     return ready_actions, reason
 
 
+def _normalize_side_effect_status(value: Any) -> str:
+    cleaned = " ".join(str(value or "").split()).strip().lower()
+    if cleaned in {"completed", "success", "sent"}:
+        return "completed"
+    if cleaned in {"failed", "blocked", "pending"}:
+        return cleaned
+    return ""
+
+
+def _truth_ledger_rows(ctx: AnswerBuildContext, *, ready_actions: bool | None) -> list[str]:
+    side_effect_raw = ctx.runtime_settings.get("__side_effect_status")
+    side_effect_status = dict(side_effect_raw) if isinstance(side_effect_raw, dict) else {}
+    required_external_actions = _required_external_actions(ctx)
+    observed_keys = [
+        key
+        for key in side_effect_status.keys()
+        if str(key).strip() in {"send_email", "submit_contact_form", "post_message"}
+    ]
+    ordered_keys: list[str] = []
+    for key in [*required_external_actions, *observed_keys]:
+        normalized = str(key or "").strip()
+        if not normalized or normalized in ordered_keys:
+            continue
+        ordered_keys.append(normalized)
+
+    handoff_state_raw = ctx.runtime_settings.get("__handoff_state")
+    handoff_state = dict(handoff_state_raw) if isinstance(handoff_state_raw, dict) else {}
+    resumed = " ".join(str(handoff_state.get("state") or "").split()).strip().lower() == "resumed"
+    rows: list[str] = []
+    for action_key in ordered_keys[:4]:
+        mapped_tools = EXTERNAL_ACTION_TOOL_MAP.get(action_key, set())
+        row_raw = side_effect_status.get(action_key)
+        row = dict(row_raw) if isinstance(row_raw, dict) else {}
+        side_effect_status_value = _normalize_side_effect_status(row.get("status"))
+        latest_action = next(
+            (item for item in reversed(ctx.actions) if item.tool_id in mapped_tools),
+            None,
+        )
+        attempted = bool(row) or latest_action is not None
+        blocked = side_effect_status_value == "blocked"
+        if attempted and not blocked and ready_actions is False and side_effect_status_value in {"completed", "failed"}:
+            blocked = True
+        approved = attempted and side_effect_status_value not in {"pending", ""}
+        sent = side_effect_status_value == "completed" and not blocked
+        rows.append(
+            (
+                f"- `{action_key}`: attempted={'yes' if attempted else 'no'}, "
+                f"approved={'yes' if approved else 'no'}, "
+                f"blocked={'yes' if blocked else 'no'}, "
+                f"resumed={'yes' if resumed else 'no'}, "
+                f"sent={'yes' if sent else 'no'}."
+            )
+        )
+    return rows
+
+
 def append_delivery_status(lines: list[str], ctx: AnswerBuildContext) -> None:
     lines.append("")
     lines.append("## Delivery Status")
     send_actions = [item for item in ctx.actions if item.tool_id in EXTERNAL_ACTION_TOOL_IDS]
     ready_actions, gate_reason = _external_action_contract_status(ctx)
+    truth_rows = _truth_ledger_rows(ctx, ready_actions=ready_actions)
+    if truth_rows:
+        lines.append("- Truthfulness ledger:")
+        lines.extend(truth_rows)
     if send_actions:
         latest_send = send_actions[-1]
         gate_blocks_success = latest_send.status == "success" and ready_actions is False

@@ -299,6 +299,17 @@ def _successful_action_tool_ids(actions: list[dict[str, Any]]) -> set[str]:
     return successful
 
 
+def _normalize_side_effect_status(value: Any) -> str:
+    cleaned = " ".join(str(value or "").split()).strip().lower()
+    if cleaned in {"success", "completed", "sent"}:
+        return "completed"
+    if cleaned in {"pending", "started", "in_progress"}:
+        return "pending"
+    if cleaned in {"failed", "blocked", "skipped"}:
+        return cleaned
+    return cleaned
+
+
 def _append_remediation(
     *,
     target: list[dict[str, Any]],
@@ -345,9 +356,19 @@ def build_deterministic_contract_check(
     sources: list[dict[str, Any]],
     allowed_tool_ids: list[str],
     pending_action_tool_id: str = "",
+    side_effect_status: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     required_actions = _clean_text_list(contract.get("required_actions"), limit=6, max_item_len=64)
     clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
+    side_effect_rows = (
+        {
+            " ".join(str(key or "").split()).strip().lower(): dict(value)
+            for key, value in side_effect_status.items()
+            if isinstance(value, dict) and " ".join(str(key or "").split()).strip()
+        }
+        if isinstance(side_effect_status, dict)
+        else {}
+    )
     delivery_target = " ".join(str(contract.get("delivery_target") or "").split()).strip()
     required_facts = _filter_required_facts_for_coverage(
         required_facts=_clean_text_list(contract.get("required_facts"), limit=6),
@@ -431,6 +452,8 @@ def build_deterministic_contract_check(
         if not action_key:
             continue
         mapped_tools = ACTION_TOOL_IDS.get(action_key, set())
+        side_effect_row = side_effect_rows.get(action_key, {})
+        side_effect_state = _normalize_side_effect_status(side_effect_row.get("status"))
         if action_key == "send_email" and not delivery_target:
             missing_items.append("Missing delivery target for required action: send_email")
             reason_parts.append("Email delivery is requested but recipient is missing.")
@@ -439,6 +462,22 @@ def build_deterministic_contract_check(
         if clean_pending_action_tool_id and clean_pending_action_tool_id in mapped_tools:
             # When checking contract readiness right before executing this action,
             # avoid self-blocking on "required action not completed".
+            continue
+        if side_effect_state == "completed":
+            continue
+        if side_effect_state in {"failed", "blocked", "skipped"}:
+            missing_items.append(f"External action failed: {action_key} ({side_effect_state})")
+            reason_parts.append(
+                f"Required external action '{action_key}' ended with status {side_effect_state}."
+            )
+            if action_key == "send_email":
+                _append_remediation(
+                    target=remediation,
+                    tool_id="gmail.draft",
+                    title="Prepare email retry draft after failed delivery",
+                    params={"to": delivery_target} if delivery_target else {},
+                    allowed_tool_ids=allowed_set,
+                )
             continue
         if mapped_tools and successful_tools.intersection(mapped_tools):
             continue

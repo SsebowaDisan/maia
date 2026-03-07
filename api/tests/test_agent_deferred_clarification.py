@@ -259,3 +259,64 @@ def test_run_guard_checks_emits_deferred_clarification_when_requirements_match_c
     assert clarification_event.data.get("missing_requirements") == [
         "Recipient email address for delivery"
     ]
+
+
+def test_run_guard_checks_defers_discoverable_blocker_until_attempts_exhausted(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.step_execution_sections.guards.run_contract_check_live",
+        _fake_contract_gate_missing_delivery_target,
+    )
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.step_execution_sections.guards.build_contract_remediation_steps",
+        lambda **_: [],
+    )
+    events, emit_event, activity_event_factory = _event_factory()
+    request = ChatRequest(message="Analyze and send contact form message", agent_mode="company_agent")
+    task_prep = _task_prep_with_deferred_missing()
+    task_prep.contract_missing_requirements = ["Recipient email address for delivery"]
+    task_prep.contract_missing_slots = [
+        {
+            "requirement": "Recipient email address for delivery",
+            "description": "Recipient email address for delivery",
+            "discoverable": True,
+            "blocking": True,
+            "confidence": 0.8,
+            "resolved_value": "",
+            "question": "Please provide recipient email",
+            "state": "attempting_discovery",
+            "attempt_count": 1,
+        }
+    ]
+    step = PlannedStep(
+        tool_id="browser.contact_form.send",
+        title="Send outreach form",
+        params={"url": "https://axongroup.com/"},
+    )
+    execution_context = ToolExecutionContext(
+        user_id="u1",
+        tenant_id="t1",
+        conversation_id="c1",
+        run_id="r1",
+        mode="company_agent",
+        settings={"__task_clarification_slots": task_prep.contract_missing_slots},
+    )
+    state = ExecutionState(execution_context=execution_context)
+    outcome = _consume(
+        run_guard_checks(
+            run_id="r1",
+            request=request,
+            task_prep=task_prep,
+            state=state,
+            registry=_RegistryStub("browser.contact_form.send"),
+            steps=[step],
+            step_cursor=0,
+            index=1,
+            step_started="2026-03-06T00:00:00+00:00",
+            step=step,
+            params={"confirmed": True},
+            emit_event=emit_event,
+            activity_event_factory=activity_event_factory,
+        )
+    )
+    assert outcome.decision == "skip"
+    assert not any(event.event_type == "llm.clarification_requested" for event in events)

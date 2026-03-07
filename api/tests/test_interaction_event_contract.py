@@ -67,3 +67,50 @@ def test_normalize_interaction_event_maps_tool_failure_to_verify() -> None:
     data = normalized.get("data") or {}
     assert data.get("action") == "verify"
     assert data.get("action_status") == "failed"
+
+
+def test_normalize_interaction_event_carries_owner_role_and_v2_schema() -> None:
+    normalized = normalize_interaction_event(
+        {
+            "event_type": "doc_insert_text",
+            "title": "Insert text",
+            "detail": "Write findings",
+            "data": {
+                "role": "writer",
+                "source_name": "Draft",
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("owner_role") == "writer"
+    assert data.get("event_schema_version") == "interaction_v2"
+
+
+def test_normalize_interaction_event_prefers_default_surface_for_doc_events() -> None:
+    normalized = normalize_interaction_event(
+        {
+            "event_type": "doc_copy_clipboard",
+            "title": "Copy",
+            "detail": "Copied snippet",
+            "data": {"clipboard_text": "Axon summary"},
+        },
+        default_scene_surface="document",
+    )
+    data = normalized.get("data") or {}
+    assert data.get("scene_surface") == "document"
+    assert data.get("action") == "extract"
+
+
+def test_normalize_interaction_event_maps_drive_search_completed() -> None:
+    normalized = normalize_interaction_event(
+        {
+            "event_type": "drive.search_completed",
+            "title": "Drive search",
+            "detail": "Quarterly report",
+            "data": {"query": "quarterly report", "count": 4},
+        },
+        default_scene_surface="document",
+    )
+    data = normalized.get("data") or {}
+    assert data.get("scene_surface") == "document"
+    assert data.get("action") == "extract"

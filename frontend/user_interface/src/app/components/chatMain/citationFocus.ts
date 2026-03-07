@@ -353,12 +353,16 @@ function resolveCitationFocusFromAnchor(params: {
     citationAnchor.getAttribute("data-boxes") ||
     citationAnchor.getAttribute("data-bboxes") ||
     "";
-  const strengthAttr = Number(citationAnchor.getAttribute("data-strength") || "");
-  const strengthTierAttr = Number(citationAnchor.getAttribute("data-strength-tier") || "");
+  const strengthAttrRaw = (citationAnchor.getAttribute("data-strength") || "").trim();
+  const strengthTierAttrRaw = (citationAnchor.getAttribute("data-strength-tier") || "").trim();
+  const strengthAttr = Number(strengthAttrRaw);
+  const strengthTierAttr = Number(strengthTierAttrRaw);
   const matchQualityAttr = (citationAnchor.getAttribute("data-match-quality") || "").trim();
   const unitIdAttr = (citationAnchor.getAttribute("data-unit-id") || "").trim();
-  const charStartAttr = Number(citationAnchor.getAttribute("data-char-start") || "");
-  const charEndAttr = Number(citationAnchor.getAttribute("data-char-end") || "");
+  const charStartAttrRaw = (citationAnchor.getAttribute("data-char-start") || "").trim();
+  const charEndAttrRaw = (citationAnchor.getAttribute("data-char-end") || "").trim();
+  const charStartAttr = Number(charStartAttrRaw);
+  const charEndAttr = Number(charEndAttrRaw);
   const evidenceId = parseEvidenceRefId(citationAnchor);
   const expectedRefNumber = extractRefNumber(evidenceId);
   let matchedEvidence = evidenceId
@@ -421,10 +425,10 @@ function resolveCitationFocusFromAnchor(params: {
     JSON.stringify(matchedEvidence?.highlightBoxes || []),
   );
 
-  const strengthScore = Number.isFinite(strengthAttr)
+  const strengthScore = strengthAttrRaw && Number.isFinite(strengthAttr)
     ? strengthAttr
     : matchedEvidence?.strengthScore;
-  const strengthTier = Number.isFinite(strengthTierAttr)
+  const strengthTier = strengthTierAttrRaw && Number.isFinite(strengthTierAttr)
     ? strengthTierAttr
     : matchedEvidence?.strengthTier;
 
@@ -452,8 +456,8 @@ function resolveCitationFocusFromAnchor(params: {
     strengthTier,
     matchQuality: matchQualityAttr || matchedEvidence?.matchQuality,
     unitId: unitIdAttr || matchedEvidence?.unitId,
-    charStart: Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
-    charEnd: Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
+    charStart: charStartAttrRaw && Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
+    charEnd: charEndAttrRaw && Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
   };
 
   return {

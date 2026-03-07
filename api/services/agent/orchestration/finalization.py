@@ -14,7 +14,7 @@ from api.services.agent.events import coverage_report
 from api.services.agent.intelligence import build_verification_report
 from api.services.agent.llm_execution_support import curate_next_steps_for_task
 from api.services.agent.llm_response_formatter import polish_final_response
-from api.services.agent.models import AgentActivityEvent, AgentRunResult
+from api.services.agent.models import AgentActivityEvent, AgentRunResult, utc_now
 from api.services.agent.observability import get_agent_observability
 
 from .answer_builder import compose_professional_answer
@@ -249,6 +249,53 @@ def _host_from_url(url: str) -> str:
     return host
 
 
+def _post_resume_verification_state(
+    *,
+    settings: dict[str, Any],
+    contract_check_result: dict[str, Any],
+    final_missing_items: list[str],
+    handoff_state: dict[str, Any],
+) -> dict[str, Any]:
+    pending_before = bool(settings.get("__barrier_resume_pending_verification"))
+    if not pending_before:
+        return {
+            "pending_before": False,
+            "blocked": False,
+            "cleared": False,
+            "note": "",
+        }
+
+    handoff_runtime_state = " ".join(str(handoff_state.get("state") or "").split()).strip().lower()
+    ready_for_actions = bool(contract_check_result.get("ready_for_external_actions"))
+    verification_can_clear = (
+        ready_for_actions
+        and not final_missing_items
+        and handoff_runtime_state in {"resumed", "running", ""}
+    )
+    if verification_can_clear:
+        settings["__barrier_resume_pending_verification"] = False
+        settings["__barrier_resume_verified_at"] = utc_now().isoformat()
+        settings["__barrier_resume_verification_note"] = ""
+        return {
+            "pending_before": True,
+            "blocked": False,
+            "cleared": True,
+            "note": "",
+        }
+
+    note = (
+        "Post-resume verification is still required before confirming external side effects."
+    )
+    settings["__barrier_resume_pending_verification"] = True
+    settings["__barrier_resume_verification_note"] = note
+    return {
+        "pending_before": True,
+        "blocked": True,
+        "cleared": False,
+        "note": note,
+    }
+
+
 def _filter_sources_for_response_scope(
     *,
     sources: list[Any],
@@ -380,6 +427,7 @@ def finalize_run(
     activity_store: Any,
     audit: Any,
     memory: Any,
+    session_store: Any,
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
     expected_event_types_resolver: Callable[..., list[str]],
@@ -538,6 +586,51 @@ def finalize_run(
     final_reason = " ".join(str(state.contract_check_result.get("reason") or "").split()).strip()
     if final_reason:
         state.execution_context.settings["__task_contract_reason"] = final_reason[:320]
+    handoff_state = read_handoff_state(settings=state.execution_context.settings)
+    post_resume_verification = _post_resume_verification_state(
+        settings=state.execution_context.settings,
+        contract_check_result=state.contract_check_result,
+        final_missing_items=final_missing_items,
+        handoff_state=handoff_state,
+    )
+    if post_resume_verification.get("blocked"):
+        resume_note = str(post_resume_verification.get("note") or "").strip()
+        if resume_note:
+            if resume_note not in state.next_steps:
+                state.next_steps.insert(0, resume_note)
+        missing = (
+            list(state.contract_check_result.get("missing_items", []))
+            if isinstance(state.contract_check_result.get("missing_items"), list)
+            else []
+        )
+        resume_missing = "Post-resume verification required before confirming external side effects."
+        if resume_missing not in missing:
+            missing.append(resume_missing)
+        state.contract_check_result["missing_items"] = missing[:8]
+        state.contract_check_result["ready_for_external_actions"] = False
+        verification_event = activity_event_factory(
+            event_type="verification_check",
+            title="Post-resume verification pending",
+            detail=resume_note or resume_missing,
+            metadata={
+                "post_resume_verification_pending": True,
+                "barrier_type": str(handoff_state.get("barrier_type") or ""),
+                "resume_status": str(handoff_state.get("resume_status") or ""),
+            },
+        )
+        yield emit_event(verification_event)
+    elif post_resume_verification.get("cleared"):
+        verification_event = activity_event_factory(
+            event_type="verification_check",
+            title="Post-resume verification completed",
+            detail="Resumed run passed final contract verification checks.",
+            metadata={
+                "post_resume_verification_pending": False,
+                "barrier_type": str(handoff_state.get("barrier_type") or ""),
+                "resume_status": str(handoff_state.get("resume_status") or ""),
+            },
+        )
+        yield emit_event(verification_event)
 
     unique_next_steps = curate_next_steps_for_task(
         request_message=request.message,
@@ -603,10 +696,17 @@ def finalize_run(
     critic_review_notes = " ".join(
         str(critic_result.get("critic_note") or "").split()
     ).strip()[:420]
-    handoff_state = read_handoff_state(settings=state.execution_context.settings)
     barrier_handoff_required = is_handoff_paused(settings=state.execution_context.settings) or bool(
         state.execution_context.settings.get("__barrier_handoff_required")
     )
+    post_resume_verification_blocked = bool(post_resume_verification.get("blocked"))
+    post_resume_note = " ".join(
+        str(
+            post_resume_verification.get("note")
+            or state.execution_context.settings.get("__barrier_resume_verification_note")
+            or ""
+        ).split()
+    ).strip()[:420]
     barrier_handoff_note = " ".join(
         str(
             handoff_state.get("note")
@@ -614,7 +714,9 @@ def finalize_run(
             or ""
         ).split()
     ).strip()[:420]
-    needs_human_review = bool(critic_needs_human_review or barrier_handoff_required)
+    needs_human_review = bool(
+        critic_needs_human_review or barrier_handoff_required or post_resume_verification_blocked
+    )
     human_review_notes = critic_review_notes
     if barrier_handoff_required and barrier_handoff_note:
         if human_review_notes:
@@ -622,15 +724,30 @@ def finalize_run(
                 human_review_notes = f"{barrier_handoff_note} | {human_review_notes}"[:420]
         else:
             human_review_notes = barrier_handoff_note
+    if post_resume_verification_blocked and post_resume_note:
+        if human_review_notes:
+            if post_resume_note not in human_review_notes:
+                human_review_notes = f"{post_resume_note} | {human_review_notes}"[:420]
+        else:
+            human_review_notes = post_resume_note
 
     if needs_human_review and human_review_notes:
         critic_event = activity_event_factory(
             event_type="verification_check",
-            title="Human review required" if barrier_handoff_required else "Critic review flagged issues",
+            title=(
+                "Human review required"
+                if barrier_handoff_required
+                else (
+                    "Post-resume verification required"
+                    if post_resume_verification_blocked
+                    else "Critic review flagged issues"
+                )
+            ),
             detail=human_review_notes,
             metadata={
                 "needs_human_review": True,
                 "barrier_handoff_required": barrier_handoff_required,
+                "post_resume_verification_pending": post_resume_verification_blocked,
             },
         )
         yield emit_event(critic_event)
@@ -688,6 +805,27 @@ def finalize_run(
     yield emit_event(coverage_event)
 
     activity_store.end_run(run_id, result.to_dict())
+    try:
+        session_store.save_session_run(
+            {
+                "run_id": run_id,
+                "user_id": user_id,
+                "tenant_id": access_context.tenant_id,
+                "conversation_id": conversation_id,
+                "message": request.message,
+                "agent_goal": request.agent_goal,
+                "answer": result.answer,
+                "next_recommended_steps": result.next_recommended_steps,
+                "needs_human_review": result.needs_human_review,
+                "human_review_notes": result.human_review_notes,
+                "event_coverage": coverage,
+                "verification_grade": verification_report.get("grade"),
+                "verification_score": verification_report.get("score"),
+                "task_contract_objective": task_prep.contract_objective,
+            }
+        )
+    except Exception:
+        pass
     audit.write(
         user_id=user_id,
         tenant_id=access_context.tenant_id,

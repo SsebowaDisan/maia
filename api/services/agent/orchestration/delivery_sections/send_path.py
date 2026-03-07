@@ -8,6 +8,7 @@ from api.services.mailer_service import send_report_email as send_report_via_mai
 from maia.integrations.gmail_dwd import GmailDwdError
 
 from ..models import ExecutionState, TaskPreparation
+from ..side_effect_status import record_side_effect_status
 from ..text_helpers import chunk_preserve_text, compact, truncate_text
 from .models import DeliveryRuntime
 
@@ -37,6 +38,14 @@ def run_delivery_send_path(
         metadata={"tool_id": runtime.tool_id, "step": runtime.step},
     )
     yield emit_event(started_delivery)
+    pending_side_effect = record_side_effect_status(
+        settings=state.execution_context.settings,
+        action_key="send_email",
+        status="pending",
+        tool_id=runtime.tool_id,
+        detail=f"Preparing delivery to {task_intelligence.delivery_email}",
+        metadata={"step": runtime.step},
+    )
 
     preview_body = truncate_text(report_body or "Composing report body...")
     set_recipient_event = activity_event_factory(
@@ -114,6 +123,8 @@ def run_delivery_send_path(
                     "recipient": task_intelligence.delivery_email,
                     "subject": report_title,
                     "message_id": message_id,
+                    "external_action_key": "send_email",
+                    "side_effect_status": "completed",
                 },
             )
         )
@@ -130,9 +141,26 @@ def run_delivery_send_path(
             event_type="email_sent",
             title="Report email sent",
             detail=message_id or task_intelligence.delivery_email,
-            metadata={"tool_id": runtime.tool_id, "step": runtime.step},
+            metadata={
+                "tool_id": runtime.tool_id,
+                "step": runtime.step,
+                "side_effect_status": "completed",
+            },
         )
         yield emit_event(sent_event)
+        record_side_effect_status(
+            settings=state.execution_context.settings,
+            action_key="send_email",
+            status="completed",
+            tool_id=runtime.tool_id,
+            detail=send_summary,
+            metadata={
+                "step": runtime.step,
+                "recipient": task_intelligence.delivery_email,
+                "message_id": message_id,
+                "pending_side_effect": pending_side_effect,
+            },
+        )
         completed_delivery = activity_event_factory(
             event_type="tool_completed",
             title=runtime.title,
@@ -152,7 +180,12 @@ def run_delivery_send_path(
                 summary=summary,
                 started_at=runtime.started_at,
                 ended_at=utc_now().isoformat(),
-                metadata={"step": runtime.step, "recipient": task_intelligence.delivery_email},
+                metadata={
+                    "step": runtime.step,
+                    "recipient": task_intelligence.delivery_email,
+                    "external_action_key": "send_email",
+                    "side_effect_status": "failed",
+                },
             )
         )
         state.executed_steps.append(
@@ -168,6 +201,22 @@ def run_delivery_send_path(
             event_type="tool_failed",
             title=runtime.title,
             detail=summary,
-            metadata={"tool_id": runtime.tool_id, "step": runtime.step},
+            metadata={
+                "tool_id": runtime.tool_id,
+                "step": runtime.step,
+                "side_effect_status": "failed",
+            },
         )
         yield emit_event(failed_delivery)
+        record_side_effect_status(
+            settings=state.execution_context.settings,
+            action_key="send_email",
+            status="failed",
+            tool_id=runtime.tool_id,
+            detail=summary,
+            metadata={
+                "step": runtime.step,
+                "recipient": task_intelligence.delivery_email,
+                "pending_side_effect": pending_side_effect,
+            },
+        )

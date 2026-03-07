@@ -322,6 +322,8 @@ class ContactFormToolTests(unittest.TestCase):
         handoff = context.settings.get("__handoff_state")
         assert isinstance(handoff, dict)
         assert str(handoff.get("state")) == "paused_for_human"
+        assert str(handoff.get("barrier_type")) == "human_verification"
+        assert str(handoff.get("barrier_scope")) == "contact_form_submission"
 
 
 if __name__ == "__main__":

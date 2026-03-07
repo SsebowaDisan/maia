@@ -119,3 +119,67 @@ def test_delivery_status_treats_success_as_blocked_when_contract_gate_disallows_
     assert "- External action: not completed." in answer
     assert "- External action attempt: executed but blocked by contract gate." in answer
     assert "- Contract gate reason: Required facts are not yet verified with evidence." in answer
+
+
+def test_delivery_status_truthfulness_ledger_marks_resumed_and_blocked_outcomes() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="Send update email to the stakeholder.",
+            agent_mode="company_agent",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[
+            AgentAction(
+                tool_id="mailer.report_send",
+                action_class="execute",
+                status="success",
+                summary="Report sent.",
+                started_at="2026-03-06T12:00:00Z",
+                ended_at="2026-03-06T12:00:05Z",
+            )
+        ],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__task_contract": {"required_actions": ["send_email"]},
+            "__task_contract_check": {
+                "ready_for_final_response": False,
+                "ready_for_external_actions": False,
+                "reason": "Post-resume verification pending.",
+            },
+            "__side_effect_status": {
+                "send_email": {
+                    "action_key": "send_email",
+                    "status": "blocked",
+                    "tool_id": "mailer.report_send",
+                }
+            },
+            "__handoff_state": {"state": "resumed"},
+        },
+        verification_report=None,
+    )
+    assert "- Truthfulness ledger:" in answer
+    assert "`send_email`: attempted=yes" in answer
+    assert "blocked=yes" in answer
+    assert "resumed=yes" in answer
+
+
+def test_delivery_status_truthfulness_ledger_marks_required_action_not_attempted() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="Please submit the contact form.",
+            agent_mode="company_agent",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__task_contract": {"required_actions": ["submit_contact_form"]},
+        },
+        verification_report=None,
+    )
+    assert "- Truthfulness ledger:" in answer
+    assert "`submit_contact_form`: attempted=no" in answer

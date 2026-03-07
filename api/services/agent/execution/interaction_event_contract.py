@@ -14,7 +14,9 @@ _ACTION_BY_EVENT_TYPE: dict[str, BrowserActionName] = {
     "api_call_started": "extract",
     "api_call_completed": "verify",
     "tool_progress": "extract",
+    "tool_completed": "verify",
     "tool_failed": "verify",
+    "approval_required": "verify",
     "document_opened": "navigate",
     "document_scanned": "extract",
     "highlights_detected": "extract",
@@ -29,11 +31,28 @@ _ACTION_BY_EVENT_TYPE: dict[str, BrowserActionName] = {
     "doc_paste_clipboard": "type",
     "doc_copy_clipboard": "extract",
     "doc_save": "verify",
+    "docs.create_started": "navigate",
+    "docs.create_completed": "verify",
+    "docs.insert_started": "type",
+    "docs.insert_completed": "verify",
+    "docs.replace_started": "type",
+    "docs.replace_completed": "verify",
+    "drive.go_to_doc": "navigate",
+    "drive.go_to_sheet": "navigate",
+    "drive.share_started": "verify",
+    "drive.share_completed": "verify",
+    "drive.share_failed": "verify",
+    "drive.search_completed": "extract",
     "sheet_open": "navigate",
     "sheet_cell_update": "type",
     "sheet_append_row": "type",
     "sheet_save": "verify",
+    "sheets.create_started": "navigate",
+    "sheets.create_completed": "verify",
+    "sheets.append_started": "type",
+    "sheets.append_completed": "verify",
     "email_open_compose": "navigate",
+    "email_draft_create": "navigate",
     "email_set_to": "type",
     "email_set_subject": "type",
     "email_set_body": "type",
@@ -50,6 +69,14 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _owner_role_from_data(data: dict[str, Any]) -> str:
+    for key in ("owner_role", "__owner_role", "agent_role", "role"):
+        value = " ".join(str(data.get(key) or "").split()).strip().lower()
+        if value:
+            return value[:40]
+    return "system"
 
 
 def _phase_for_event_type(event_type: str) -> BrowserActionPhase:
@@ -78,17 +105,26 @@ def _infer_scene_surface(
     declared = str(data.get("scene_surface") or "").strip().lower()
     if declared:
         return declared
+    default_surface = str(default_scene_surface or "system").strip().lower() or "system"
     if normalized.startswith(("browser_", "web_", "brave.", "bing.")):
         return "website"
     if normalized.startswith(("email_", "gmail_")):
         return "email"
     if normalized.startswith(("sheet_", "sheets.")):
+        if default_surface in {"google_sheets"}:
+            return default_surface
         return "google_sheets"
     if normalized.startswith(("doc_", "docs.")):
+        if default_surface in {"google_docs", "document"}:
+            return default_surface
         return "google_docs"
+    if normalized.startswith("drive."):
+        if default_surface in {"google_docs", "google_sheets", "document"}:
+            return default_surface
+        return "document"
     if normalized.startswith(("document_", "pdf_")):
         return "document"
-    return str(default_scene_surface or "system").strip() or "system"
+    return default_surface
 
 
 def _target_from_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -195,6 +231,7 @@ def normalize_interaction_event(
             data=data,
             default_scene_surface=default_scene_surface,
         ),
+        owner_role=_owner_role_from_data(data),
         cursor_x=_as_float(data.get("cursor_x")),
         cursor_y=_as_float(data.get("cursor_y")),
         scroll_direction=str(data.get("scroll_direction") or "").strip().lower(),

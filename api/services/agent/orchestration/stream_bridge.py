@@ -9,6 +9,7 @@ from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 from api.services.agent.tools.base import ToolExecutionContext, ToolTraceEvent
 from api.services.agent.tools.theater_cursor import cursor_payload
+from .role_contracts import resolve_owner_role_for_tool
 
 
 class LiveRunStream:
@@ -80,6 +81,8 @@ class LiveRunStream:
 
         if normalized_event.startswith(("browser_", "web_", "brave.", "bing.")):
             return "website"
+        if normalized_event.startswith("role_"):
+            return "system"
         if normalized_event.startswith(("email_", "email.", "gmail_", "gmail.")):
             return "email"
         if normalized_event.startswith(("sheet_", "sheets.")) or normalized_event == "drive.go_to_sheet":
@@ -101,6 +104,8 @@ class LiveRunStream:
             return "document"
         if normalized_tool.startswith("workspace.sheets."):
             return "google_sheets"
+        if normalized_tool.startswith("workspace.drive."):
+            return "document"
         if normalized_tool.startswith(("browser.", "marketing.web_research", "web.extract.", "web.dataset.")):
             return "website"
         if normalized_tool.startswith(("gmail.", "email.")):
@@ -159,6 +164,9 @@ class LiveRunStream:
                 "sheet_",
                 "sheets.",
                 "drive.",
+                "email_",
+                "gmail_",
+                "clipboard_",
             )
         )
         if not interactive_surface and not interactive_event:
@@ -214,6 +222,8 @@ class LiveRunStream:
             raw_event_type = str(payload_raw.get("event_type") or "tool_progress").strip()
             raw_data = payload_raw.get("data")
             raw_data_dict = dict(raw_data) if isinstance(raw_data, dict) else {}
+            raw_data_dict.setdefault("owner_role", resolve_owner_role_for_tool(step.tool_id))
+            payload_raw["data"] = raw_data_dict
             default_surface = self._infer_scene_surface(
                 event_type=raw_event_type,
                 tool_id=step.tool_id,

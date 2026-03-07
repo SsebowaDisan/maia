@@ -1,20 +1,38 @@
+import { InteractionOverlay } from "./InteractionOverlay";
+
 type DocsSceneProps = {
   activeDetail: string;
+  activeEventType: string;
   activeTitle: string;
+  action: string;
+  actionPhase: string;
+  actionStatus: string;
+  actionTargetLabel: string;
   docBodyHtml: string;
   docBodyPreview: string;
   docsFrameUrl: string;
   sceneText: string;
+  scrollDirection: string;
+  scrollPercent: number | null;
 };
 
 function DocsScene({
   activeDetail,
+  activeEventType,
   activeTitle,
+  action,
+  actionPhase,
+  actionStatus,
+  actionTargetLabel,
   docBodyHtml,
   docBodyPreview,
   docsFrameUrl,
   sceneText,
+  scrollDirection,
+  scrollPercent,
 }: DocsSceneProps) {
+  const isTyping = action === "type" && actionStatus !== "failed";
+  const typingPulse = isTyping && (actionPhase === "active" || actionPhase === "start");
   return (
     <div className="absolute inset-0 bg-[linear-gradient(180deg,#e8eaef_0%,#dde1ea_100%)] p-3 text-[#1d1d1f]">
       <div className="h-full w-full overflow-hidden rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
@@ -32,17 +50,40 @@ function DocsScene({
           ) : null}
         </div>
         <div className="relative h-[calc(100%-42px)] bg-[#f5f6f8]">
+          <InteractionOverlay
+            sceneSurface="google_docs"
+            activeEventType={activeEventType}
+            activeDetail={activeDetail}
+            scrollDirection={scrollDirection}
+            action={action}
+            actionPhase={actionPhase}
+            actionStatus={actionStatus}
+            actionTargetLabel={actionTargetLabel}
+          />
           {docsFrameUrl ? (
-            <iframe
-              src={docsFrameUrl}
-              title="Google Docs live preview"
-              className="h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-              referrerPolicy="no-referrer-when-downgrade"
-            />
+            <>
+              <iframe
+                src={docsFrameUrl}
+                title="Google Docs live preview"
+                className="h-full w-full border-0 bg-white"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+              {typingPulse ? (
+                <div className="pointer-events-none absolute bottom-4 left-4 right-4 rounded-lg border border-[#0a84ff]/30 bg-[#0a84ff]/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0c4f94]">
+                  Typing focus active
+                </div>
+              ) : null}
+            </>
           ) : (
             <div className="h-full p-5">
-              <div className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white px-8 py-6">
+              <div
+                className={`mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border bg-white px-8 py-6 transition-all duration-300 ${
+                  typingPulse
+                    ? "border-[#0a84ff]/35 shadow-[0_0_0_1px_rgba(10,132,255,0.28)]"
+                    : "border-black/[0.08]"
+                }`}
+              >
                 <div className="mb-4 border-b border-black/[0.06] pb-3">
                   <p className="text-[18px] font-semibold text-[#202024]">
                     {activeTitle || "Research Notes"}
@@ -65,6 +106,16 @@ function DocsScene({
               </div>
             </div>
           )}
+          {typeof scrollPercent === "number" ? (
+            <div className="pointer-events-none absolute right-2 top-16 bottom-4 flex flex-col items-center">
+              <div className="h-full w-1.5 rounded-full bg-black/15">
+                <div
+                  className="w-1.5 rounded-full bg-black/45 transition-all duration-300"
+                  style={{ height: "20px", marginTop: `calc(${scrollPercent}% - 10px)` }}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

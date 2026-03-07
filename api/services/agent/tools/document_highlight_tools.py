@@ -223,6 +223,22 @@ def _pdf_scene_payload(
     )
 
 
+def _document_scene_payload(
+    *,
+    lane: str,
+    primary_index: int = 1,
+    secondary_index: int = 1,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return with_scene(
+        payload or {},
+        scene_surface="document",
+        lane=lane,
+        primary_index=max(1, int(primary_index)),
+        secondary_index=max(1, int(secondary_index)),
+    )
+
+
 def _extract_terms(prompt: str, params: dict[str, Any], chunks: list[dict[str, Any]]) -> list[str]:
     provided = params.get("words")
     words: list[str] = []
@@ -475,6 +491,13 @@ class DocumentHighlightExtractTool(AgentTool):
                         event_type="document_opened",
                         title="Open selected files",
                         detail="No selected file content was available",
+                        data=_document_scene_payload(
+                            lane="document-open-empty",
+                            payload={
+                                "chunk_count": 0,
+                                "source_count": 0,
+                            },
+                        ),
                     )
                 ],
             )
@@ -594,11 +617,13 @@ class DocumentHighlightExtractTool(AgentTool):
                 event_type="document_opened",
                 title="Open selected files",
                 detail=f"Scanning {len(chunks)} file excerpt(s)",
-                data={
-                    "chunk_count": len(chunks),
-                    "source_count": len(unique_sources),
-                    "scene_surface": "document",
-                },
+                data=_document_scene_payload(
+                    lane="document-open",
+                    payload={
+                        "chunk_count": len(chunks),
+                        "source_count": len(unique_sources),
+                    },
+                ),
             ),
         ]
         if is_pdf_scan and pdf_scan_steps:
@@ -680,13 +705,15 @@ class DocumentHighlightExtractTool(AgentTool):
                 event_type="document_scanned",
                 title="Scan document excerpts",
                 detail=f"Detected {len(unique_words)} candidate highlighted word(s)",
-                data={
-                    "terms": terms[:10],
-                    "highlight_color": highlight_color,
-                    "scene_surface": "document",
-                    "max_sources": max_sources,
-                    "max_chunks": max_chunks,
-                },
+                data=_document_scene_payload(
+                    lane="document-scan",
+                    payload={
+                        "terms": terms[:10],
+                        "highlight_color": highlight_color,
+                        "max_sources": max_sources,
+                        "max_chunks": max_chunks,
+                    },
+                ),
             )
         )
         events.append(
@@ -694,14 +721,16 @@ class DocumentHighlightExtractTool(AgentTool):
                 event_type="highlights_detected",
                 title="Highlight words in files",
                 detail=", ".join(unique_words[:8]) if unique_words else "No matching words found",
-                data={
-                    "keywords": unique_words[:12],
-                    "highlight_color": highlight_color,
-                    "highlighted_words": highlights[: min(max_highlights, 120)],
-                    "copied_snippets": copied_snippets[:10],
-                    "page_total": len(pdf_scan_steps) if pdf_scan_steps else 0,
-                    "scene_surface": "document",
-                },
+                data=_document_scene_payload(
+                    lane="document-highlights",
+                    payload={
+                        "keywords": unique_words[:12],
+                        "highlight_color": highlight_color,
+                        "highlighted_words": highlights[: min(max_highlights, 120)],
+                        "copied_snippets": copied_snippets[:10],
+                        "page_total": len(pdf_scan_steps) if pdf_scan_steps else 0,
+                    },
+                ),
             )
         )
         if highlights:
@@ -736,11 +765,14 @@ class DocumentHighlightExtractTool(AgentTool):
                     event_type="doc_copy_clipboard",
                     title="Copy highlighted words",
                     detail=_safe_snippet(copied_snippets[0], limit=160),
-                    data={
-                        "clipboard_text": copied_snippets[0],
-                        "highlight_color": highlight_color,
-                        "keywords": unique_words[:12],
-                    },
+                    data=_document_scene_payload(
+                        lane="document-copy-highlight",
+                        payload={
+                            "clipboard_text": copied_snippets[0],
+                            "highlight_color": highlight_color,
+                            "keywords": unique_words[:12],
+                        },
+                    ),
                 )
             )
 

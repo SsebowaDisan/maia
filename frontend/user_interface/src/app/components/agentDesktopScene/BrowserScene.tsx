@@ -224,6 +224,7 @@ function BrowserScene({
           />
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-image" />
           <InteractionOverlay
+            sceneSurface="website"
             activeEventType={activeEventType}
             activeDetail={activeDetail}
             scrollDirection={scrollDirection}
@@ -254,6 +255,7 @@ function BrowserScene({
           />
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-iframe" />
           <InteractionOverlay
+            sceneSurface="website"
             activeEventType={activeEventType}
             activeDetail={activeDetail}
             scrollDirection={scrollDirection}
@@ -276,6 +278,7 @@ function BrowserScene({
       ) : (
         <div className="relative flex-1 space-y-3 p-4">
           <InteractionOverlay
+            sceneSurface="website"
             activeEventType={activeEventType}
             activeDetail={activeDetail}
             scrollDirection={scrollDirection}

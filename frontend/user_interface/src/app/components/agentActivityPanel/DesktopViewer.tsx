@@ -13,6 +13,8 @@ interface DesktopViewerProps {
   sceneTransitionLabel: string;
   safeCursor: number;
   totalEvents: number;
+  activeRoleLabel: string;
+  roleNarrative: string;
   activeTitle: string;
   activeDetail: string;
   sceneText: string;
@@ -72,6 +74,8 @@ function DesktopViewer({
   sceneTransitionLabel,
   safeCursor,
   totalEvents,
+  activeRoleLabel,
+  roleNarrative,
   activeTitle,
   activeDetail,
   sceneText,
@@ -118,6 +122,11 @@ function DesktopViewer({
         <span className="inline-flex items-center gap-1.5">
           <Monitor className="h-3.5 w-3.5" />
           Agent desktop
+          {activeRoleLabel ? (
+            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white">
+              {activeRoleLabel}
+            </span>
+          ) : null}
         </span>
         <div className="inline-flex items-center gap-2">
           {!fullscreen ? (
@@ -144,7 +153,9 @@ function DesktopViewer({
         </div>
       </div>
 
-      <p className="mb-2 text-[13px] font-medium text-white">{desktopStatus}</p>
+      <p className="mb-2 text-[13px] font-medium text-white">
+        {roleNarrative || desktopStatus}
+      </p>
 
       <div
         className={`relative overflow-hidden rounded-xl border border-white/15 bg-[linear-gradient(180deg,#11141b_0%,#0a0c11_100%)] ${viewerHeightClass}`}
@@ -216,7 +227,7 @@ function DesktopViewer({
               <p className="truncate text-[13px] font-semibold text-white">{activeTitle}</p>
               {!suppressOverlayDetail ? (
                 <p className="mt-0.5 line-clamp-2 text-[11px] text-white/85">
-                  {sceneText || activeDetail || "Processing..."}
+                  {sceneText || roleNarrative || activeDetail || "Processing..."}
                 </p>
               ) : null}
             </div>

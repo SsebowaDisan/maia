@@ -8,6 +8,7 @@ from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep
 from api.services.agent.policy import ACCESS_MODE_FULL
 
+from ..agent_roles import is_agent_role, normalize_agent_role
 from ..clarification_helpers import (
     questions_for_requirements,
     select_relevant_clarification_requirements,
@@ -15,11 +16,15 @@ from ..clarification_helpers import (
 from ..constants import GUARDED_ACTION_TOOL_IDS
 from ..contract_gate import build_contract_remediation_steps, run_contract_check_live
 from ..discovery_gate import (
+    attempted_discovery_requirements_from_slots,
     blocking_requirements_from_slots,
+    unresolved_requirements_from_slots,
     update_slot_lifecycle,
     with_slot_lifecycle_defaults,
 )
+from ..execution_trace import record_remediation_trace
 from ..models import ExecutionState, TaskPreparation
+from ..role_contracts import get_role_contract, resolve_owner_role_for_tool, role_allows_tool
 from ..text_helpers import compact
 from .models import StepGuardOutcome
 
@@ -50,6 +55,25 @@ def prepare_step_params(
     return params
 
 
+def _planned_role_for_step(*, settings: dict[str, Any], step_index: int) -> str:
+    rows = settings.get("__role_owned_steps")
+    if not isinstance(rows, list):
+        return ""
+    for row in rows[:96]:
+        if not isinstance(row, dict):
+            continue
+        try:
+            row_step = int(row.get("step"))
+        except Exception:
+            continue
+        if row_step != int(step_index):
+            continue
+        candidate_role = " ".join(str(row.get("owner_role") or "").split()).strip().lower()
+        if is_agent_role(candidate_role):
+            return normalize_agent_role(candidate_role)
+    return ""
+
+
 def run_guard_checks(
     *,
     run_id: str,
@@ -66,6 +90,74 @@ def run_guard_checks(
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, StepGuardOutcome]:
+    planned_role = _planned_role_for_step(
+        settings=state.execution_context.settings,
+        step_index=index,
+    )
+    inferred_role = resolve_owner_role_for_tool(step.tool_id)
+    acting_role = normalize_agent_role(planned_role or inferred_role)
+    role_contract = get_role_contract(acting_role)
+    role_allows_planned_tool = role_allows_tool(
+        role=acting_role,
+        tool_id=step.tool_id,
+    )
+    role_check_event = activity_event_factory(
+        event_type="role_contract_check",
+        title="Role contract check",
+        detail=f"{acting_role} -> {step.tool_id}",
+        metadata={
+            "step": index,
+            "tool_id": step.tool_id,
+            "owner_role": acting_role,
+            "planned_owner_role": planned_role or "",
+            "inferred_owner_role": inferred_role,
+            "role_allows_tool": bool(role_allows_planned_tool),
+            "verification_obligations": list(role_contract.verification_obligations),
+        },
+    )
+    yield emit_event(role_check_event)
+    params["__owner_role"] = acting_role
+    if planned_role and not role_allows_planned_tool:
+        blocked_summary = (
+            f"role_contract_blocked: role `{acting_role}` cannot execute `{step.tool_id}`"
+        )
+        blocked_event = activity_event_factory(
+            event_type="policy_blocked",
+            title=f"Blocked by role contract: {step.title}",
+            detail=compact(blocked_summary, 200),
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "owner_role": acting_role,
+                "planned_owner_role": planned_role,
+                "inferred_owner_role": inferred_role,
+            },
+        )
+        yield emit_event(blocked_event)
+        state.all_actions.append(
+            registry.get(step.tool_id).to_action(
+                status="failed",
+                summary=blocked_summary,
+                started_at=step_started,
+                metadata={
+                    "step": index,
+                    "role_contract_blocked": True,
+                    "owner_role": acting_role,
+                },
+            )
+        )
+        state.executed_steps.append(
+            {
+                "step": index,
+                "tool_id": step.tool_id,
+                "title": step.title,
+                "status": "failed",
+                "summary": blocked_summary,
+                "owner_role": acting_role,
+            }
+        )
+        return StepGuardOutcome(decision="skip", params=params)
+
     tool_meta = registry.get(step.tool_id).metadata
     is_guarded_action = step.tool_id in GUARDED_ACTION_TOOL_IDS
     if is_guarded_action:
@@ -76,6 +168,15 @@ def run_guard_checks(
             else [dict(row) for row in task_prep.contract_missing_slots[:8] if isinstance(row, dict)]
         )
         runtime_slots = with_slot_lifecycle_defaults(slots=runtime_slots[:8])
+        unresolved_requirements = unresolved_requirements_from_slots(
+            slots=runtime_slots[:8],
+            fallback_requirements=task_prep.contract_missing_requirements[:6],
+            limit=8,
+        )
+        attempted_requirements = attempted_discovery_requirements_from_slots(
+            slots=runtime_slots[:8],
+            limit=8,
+        )
         deferred_missing_requirements = blocking_requirements_from_slots(
             slots=runtime_slots[:8],
             fallback_requirements=task_prep.contract_missing_requirements[:6],
@@ -83,8 +184,8 @@ def run_guard_checks(
         )
         runtime_slots = update_slot_lifecycle(
             slots=runtime_slots,
-            unresolved_requirements=deferred_missing_requirements,
-            attempted_requirements=deferred_missing_requirements,
+            unresolved_requirements=unresolved_requirements,
+            attempted_requirements=attempted_requirements,
             evidence_sources=[step.tool_id],
         )
         task_prep.contract_missing_slots = runtime_slots[:8]
@@ -109,7 +210,7 @@ def run_guard_checks(
             resolved_slots = update_slot_lifecycle(
                 slots=runtime_slots,
                 unresolved_requirements=[],
-                attempted_requirements=deferred_missing_requirements,
+                attempted_requirements=attempted_requirements,
                 evidence_sources=[step.tool_id],
             )
             task_prep.contract_missing_slots = resolved_slots[:8]
@@ -127,6 +228,13 @@ def run_guard_checks(
             if remediation_steps:
                 state.remediation_attempts += 1
                 steps[step_cursor:step_cursor] = remediation_steps
+                remediation_trace = record_remediation_trace(
+                    state=state,
+                    step_index=index,
+                    blocked_tool_id=step.tool_id,
+                    inserted_steps=[item.tool_id for item in remediation_steps],
+                    reason="contract_gate_requires_remediation",
+                )
                 remediation_event = activity_event_factory(
                     event_type="plan_refined",
                     title="Inserted contract remediation steps",
@@ -138,6 +246,7 @@ def run_guard_checks(
                         "inserted": len(remediation_steps),
                         "at_step": index,
                         "tool_ids": [item.tool_id for item in remediation_steps],
+                        "remediation_trace": remediation_trace,
                     },
                 )
                 yield emit_event(remediation_event)
@@ -159,8 +268,8 @@ def run_guard_checks(
             )
             runtime_slots = update_slot_lifecycle(
                 slots=runtime_slots,
-                unresolved_requirements=relevant_missing_requirements,
-                attempted_requirements=deferred_missing_requirements,
+                unresolved_requirements=unresolved_requirements,
+                attempted_requirements=attempted_requirements,
                 evidence_sources=[step.tool_id],
             )
             task_prep.contract_missing_slots = runtime_slots[:8]

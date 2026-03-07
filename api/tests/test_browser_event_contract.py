@@ -107,3 +107,20 @@ def test_normalize_browser_event_maps_contact_handoff_event_to_verify() -> None:
     data = normalized.get("data") or {}
     assert data.get("action") == "verify"
     assert data.get("action_status") == "ok"
+
+
+def test_normalize_browser_event_propagates_owner_role_and_v2_schema() -> None:
+    normalized = normalize_browser_event(
+        {
+            "event_type": "browser_click",
+            "title": "Click CTA",
+            "detail": "submit",
+            "data": {
+                "selector": "button.submit",
+                "__owner_role": "browser",
+            },
+        }
+    )
+    data = normalized.get("data") or {}
+    assert data.get("owner_role") == "browser"
+    assert data.get("event_schema_version") == "interaction_v2"

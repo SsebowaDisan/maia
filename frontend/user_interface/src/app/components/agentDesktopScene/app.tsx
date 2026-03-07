@@ -178,6 +178,11 @@ function AgentDesktopScene({
     return (
       <EmailScene
         activeEventType={activeEventType}
+        activeDetail={activeDetail}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         emailBodyHtml={emailBodyHtml}
         emailBodyScrollRef={emailBodyScrollRef}
         emailRecipient={emailRecipient}
@@ -190,7 +195,14 @@ function AgentDesktopScene({
     return (
       <SheetsScene
         activeDetail={activeDetail}
+        activeEventType={activeEventType}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         sceneText={sceneText}
+        scrollDirection={scrollDirection}
+        scrollPercent={scrollPercent}
         sheetPreviewRows={sheetPreviewRows}
         sheetStatusLine={sheetStatusLine}
         sheetsFrameUrl={sheetsFrameUrl}
@@ -206,6 +218,7 @@ function AgentDesktopScene({
         action={action}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         documentHighlights={documentHighlights}
         pdfPage={pdfPage}
         pdfPageTotal={pdfPageTotal}
@@ -222,11 +235,18 @@ function AgentDesktopScene({
     return (
       <DocsScene
         activeDetail={activeDetail}
+        activeEventType={activeEventType}
         activeTitle={activeTitle}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         docBodyHtml={docBodyHtml}
         docBodyPreview={docBodyPreview}
         docsFrameUrl={docsFrameUrl}
         sceneText={sceneText}
+        scrollDirection={scrollDirection}
+        scrollPercent={scrollPercent}
       />
     );
   }
@@ -236,6 +256,10 @@ function AgentDesktopScene({
       <DocumentFallbackScene
         activeEventType={activeEventType}
         activeDetail={activeDetail}
+        action={action}
+        actionPhase={actionPhase}
+        actionStatus={actionStatus}
+        actionTargetLabel={actionTargetLabel}
         clipboardPreview={clipboardPreview}
         documentHighlights={documentHighlights}
         sceneText={sceneText}

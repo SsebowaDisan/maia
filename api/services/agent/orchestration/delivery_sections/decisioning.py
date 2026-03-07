@@ -26,8 +26,21 @@ def should_attempt_delivery(
         and task_intelligence.delivery_email
         and not task_prep.clarification_blocked
     )
+    side_effect_state = ""
+    side_effect_status_raw = state.execution_context.settings.get("__side_effect_status")
+    if isinstance(side_effect_status_raw, dict):
+        send_email_row = side_effect_status_raw.get("send_email")
+        if isinstance(send_email_row, dict):
+            side_effect_state = " ".join(
+                str(send_email_row.get("status") or "").split()
+            ).strip().lower()
+    if side_effect_state in {"pending", "completed", "failed", "blocked"}:
+        return False
+
     delivery_attempted = any(
-        item.tool_id in DELIVERY_ACTION_IDS for item in state.all_actions
+        item.tool_id in DELIVERY_ACTION_IDS
+        and str(item.status or "").strip().lower() in {"success", "failed", "skipped"}
+        for item in state.all_actions
     )
     return delivery_requested and not delivery_attempted
 

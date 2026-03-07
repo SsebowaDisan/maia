@@ -166,6 +166,10 @@ class BrowserToolTests(unittest.TestCase):
         assert "browser_human_verification_required" in event_types
         assert bool(result.data.get("human_handoff_required")) is True
         assert bool(self.context.settings.get("__barrier_handoff_required")) is True
+        handoff_state = self.context.settings.get("__handoff_state")
+        assert isinstance(handoff_state, dict)
+        assert str(handoff_state.get("barrier_type")) == "human_verification"
+        assert str(handoff_state.get("barrier_scope")) == "website_navigation"
         assert blocked_connector.urls
         assert "https://example.com/" in blocked_connector.urls
         handoff_event = next(event for event in result.events if event.event_type == "browser_human_verification_required")

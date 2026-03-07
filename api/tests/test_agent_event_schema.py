@@ -78,3 +78,75 @@ def test_web_release_and_evidence_events_are_result_stage() -> None:
     assert evidence_event.status == "info"
     assert gate_event.stage == "result"
     assert gate_event.status == "info"
+
+
+def test_role_events_have_tool_stage_and_expected_status() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    handoff = emitter.emit(
+        event_type="role_handoff",
+        title="Role handoff",
+        data={"from_role": "research", "to_role": "writer"},
+    )
+    activated = emitter.emit(
+        event_type="role_activated",
+        title="Role active: writer",
+        data={"role": "writer"},
+    )
+    assert handoff.stage == "tool"
+    assert handoff.status == "info"
+    assert activated.stage == "tool"
+    assert activated.status == "in_progress"
+
+
+def test_session_context_event_is_planning_stage() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    event = emitter.emit(
+        event_type="llm.context_session",
+        title="Loaded relevant session context",
+        data={"session_context_snippets": ["snippet"]},
+    )
+    assert event.stage == "plan"
+    assert event.status == "info"
+
+
+def test_working_context_event_is_planning_stage() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    event = emitter.emit(
+        event_type="llm.working_context_compiled",
+        title="Compiled execution working context",
+        data={"working_context_version": "working_context_v1"},
+    )
+    assert event.stage == "plan"
+    assert event.status == "info"
+
+
+def test_role_dispatch_and_execution_checkpoint_stage_defaults() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    dispatch = emitter.emit(
+        event_type="role_dispatch_plan",
+        title="Role dispatch plan ready",
+    )
+    checkpoint = emitter.emit(
+        event_type="execution_checkpoint",
+        title="Checkpoint: execution_cycle_started",
+    )
+    assert dispatch.stage == "plan"
+    assert dispatch.status == "info"
+    assert checkpoint.stage == "system"
+    assert checkpoint.status == "info"
+
+
+def test_handoff_events_have_waiting_and_completed_status() -> None:
+    emitter = RunEventEmitter(run_id="run_test")
+    paused = emitter.emit(
+        event_type="handoff_paused",
+        title="Execution paused for human verification",
+    )
+    resumed = emitter.emit(
+        event_type="handoff_resumed",
+        title="Resumed after human verification",
+    )
+    assert paused.stage == "system"
+    assert paused.status == "waiting"
+    assert resumed.stage == "system"
+    assert resumed.status == "completed"

@@ -12,7 +12,7 @@ from api.services.agent.tools.base import (
 )
 
 from .base import WorkspaceConnectorTool
-from .common import chunk_text, drain_stream, now_iso, resolve_public_share_options
+from .common import chunk_text, drain_stream, now_iso, resolve_public_share_options, scene_payload
 
 
 class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
@@ -69,11 +69,34 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
         document_id = str(context.settings.get("__deep_research_doc_id") or "").strip()
         document_url = str(context.settings.get("__deep_research_doc_url") or "").strip()
         trace_events: list[ToolTraceEvent] = []
+
+        def _doc_scene(
+            *,
+            lane: str,
+            payload: dict[str, Any] | None = None,
+            primary_index: int = 1,
+            secondary_index: int = 1,
+        ) -> dict[str, Any]:
+            return scene_payload(
+                surface="google_docs",
+                lane=lane,
+                primary_index=primary_index,
+                secondary_index=secondary_index,
+                payload=payload,
+            )
+
         open_event = ToolTraceEvent(
             event_type="doc_open",
             title="Open Google research notebook",
             detail=document_url or document_id or title,
-            data={"document_id": document_id, "document_url": document_url},
+            data=_doc_scene(
+                lane="research-note-open",
+                payload={
+                    "document_id": document_id,
+                    "document_url": document_url,
+                    "source_url": document_url,
+                },
+            ),
         )
         trace_events.append(open_event)
         yield open_event
@@ -86,7 +109,10 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="doc_open",
                 title="Create Google research notebook",
                 detail=title,
-                data={"document_id": "", "document_url": ""},
+                data=_doc_scene(
+                    lane="research-note-create-open",
+                    payload={"document_id": "", "document_url": ""},
+                ),
             )
             trace_events.append(create_event)
             yield create_event
@@ -94,7 +120,10 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="docs.create_started",
                 title="Start Google research notebook creation",
                 detail=title,
-                data={"title": title},
+                data=_doc_scene(
+                    lane="research-note-create-start",
+                    payload={"title": title},
+                ),
             )
             trace_events.append(docs_create_started)
             yield docs_create_started
@@ -110,7 +139,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="docs.create_completed",
                 title="Google research notebook created",
                 detail=document_id or title,
-                data={"doc_id": document_id, "document_url": document_url, "source_url": document_url},
+                data=_doc_scene(
+                    lane="research-note-create-done",
+                    payload={
+                        "doc_id": document_id,
+                        "document_url": document_url,
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(docs_create_completed)
             yield docs_create_completed
@@ -119,7 +155,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                     event_type="drive.go_to_doc",
                     title="Open research notebook link",
                     detail=document_url,
-                    data={"source_url": document_url, "document_url": document_url, "doc_id": document_id},
+                    data=_doc_scene(
+                        lane="research-note-open-link",
+                        payload={
+                            "source_url": document_url,
+                            "document_url": document_url,
+                            "doc_id": document_id,
+                        },
+                    ),
                 )
                 trace_events.append(go_to_doc_event)
                 yield go_to_doc_event
@@ -131,13 +174,16 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="drive.share_started",
                 title="Enable public link access for research notebook",
                 detail=document_id,
-                data={
-                    "file_id": document_id,
-                    "role": public_role,
-                    "scope": "anyone",
-                    "discoverable": public_discoverable,
-                    "source_url": document_url,
-                },
+                data=_doc_scene(
+                    lane="research-note-share-start",
+                    payload={
+                        "file_id": document_id,
+                        "role": public_role,
+                        "scope": "anyone",
+                        "discoverable": public_discoverable,
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(share_start)
             yield share_start
@@ -153,13 +199,16 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                     event_type="drive.share_completed",
                     title="Public link access enabled",
                     detail=document_id,
-                    data={
-                        "file_id": document_id,
-                        "role": public_role,
-                        "scope": "anyone",
-                        "discoverable": public_discoverable,
-                        "source_url": document_url,
-                    },
+                    data=_doc_scene(
+                        lane="research-note-share-done",
+                        payload={
+                            "file_id": document_id,
+                            "role": public_role,
+                            "scope": "anyone",
+                            "discoverable": public_discoverable,
+                            "source_url": document_url,
+                        },
+                    ),
                 )
                 trace_events.append(share_done)
                 yield share_done
@@ -169,14 +218,17 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                     event_type="drive.share_failed",
                     title="Failed to enable public link access",
                     detail=public_share_error[:200],
-                    data={
-                        "file_id": document_id,
-                        "role": public_role,
-                        "scope": "anyone",
-                        "discoverable": public_discoverable,
-                        "source_url": document_url,
-                        "error": public_share_error[:300],
-                    },
+                    data=_doc_scene(
+                        lane="research-note-share-failed",
+                        payload={
+                            "file_id": document_id,
+                            "role": public_role,
+                            "scope": "anyone",
+                            "discoverable": public_discoverable,
+                            "source_url": document_url,
+                            "error": public_share_error[:300],
+                        },
+                    ),
                 )
                 trace_events.append(share_failed)
                 yield share_failed
@@ -186,10 +238,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="doc_copy_clipboard",
                 title="Copy web highlights to clipboard",
                 detail=clipboard_source[0],
-                data={
-                    "document_id": document_id,
-                    "clipboard_text": clipboard_source[0],
-                },
+                data=_doc_scene(
+                    lane="research-note-copy",
+                    payload={
+                        "document_id": document_id,
+                        "clipboard_text": clipboard_source[0],
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(copy_event)
             yield copy_event
@@ -198,7 +254,10 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
             event_type="doc_locate_anchor",
             title="Locate notebook insertion point",
             detail="Moving cursor to the end of document",
-            data={"document_id": document_id},
+            data=_doc_scene(
+                lane="research-note-anchor",
+                payload={"document_id": document_id, "source_url": document_url},
+            ),
         )
         trace_events.append(anchor_event)
         yield anchor_event
@@ -210,10 +269,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="doc_paste_clipboard",
                 title="Paste clipboard into Google Doc",
                 detail=paste_preview[0] if paste_preview else "Pasted note block",
-                data={
-                    "document_id": document_id,
-                    "clipboard_text": paste_preview[0] if paste_preview else "",
-                },
+                data=_doc_scene(
+                    lane="research-note-paste",
+                    payload={
+                        "document_id": document_id,
+                        "clipboard_text": paste_preview[0] if paste_preview else "",
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(paste_event)
             yield paste_event
@@ -224,11 +287,17 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                     event_type="doc_type_text",
                     title=f"Type note chunk {chunk_index}/{len(typed_chunks)}",
                     detail=chunk,
-                    data={
-                        "document_id": document_id,
-                        "chunk_index": chunk_index,
-                        "chunk_total": len(typed_chunks),
-                    },
+                    data=_doc_scene(
+                        lane="research-note-type",
+                        primary_index=chunk_index,
+                        secondary_index=max(1, len(typed_chunks)),
+                        payload={
+                            "document_id": document_id,
+                            "chunk_index": chunk_index,
+                            "chunk_total": len(typed_chunks),
+                            "source_url": document_url,
+                        },
+                    ),
                 )
                 trace_events.append(typing_event)
                 yield typing_event
@@ -237,7 +306,13 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="doc_insert_text",
                 title="Append research note",
                 detail=f"{len(note_block)} characters",
-                data={"document_id": document_id},
+                data=_doc_scene(
+                    lane="research-note-insert",
+                    payload={
+                        "document_id": document_id,
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(insert_event)
             yield insert_event
@@ -245,7 +320,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="docs.insert_started",
                 title="Start writing note to Google Doc",
                 detail=f"{len(note_block)} characters",
-                data={"doc_id": document_id, "characters": len(note_block), "source_url": document_url},
+                data=_doc_scene(
+                    lane="research-note-insert-start",
+                    payload={
+                        "doc_id": document_id,
+                        "characters": len(note_block),
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(insert_started)
             yield insert_started
@@ -254,7 +336,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
                 event_type="docs.insert_completed",
                 title="Research note appended",
                 detail=f"{len(note_block)} characters",
-                data={"doc_id": document_id, "characters": len(note_block), "source_url": document_url},
+                data=_doc_scene(
+                    lane="research-note-insert-done",
+                    payload={
+                        "doc_id": document_id,
+                        "characters": len(note_block),
+                        "source_url": document_url,
+                    },
+                ),
             )
             trace_events.append(insert_completed)
             yield insert_completed
@@ -263,7 +352,14 @@ class WorkspaceResearchNotesTool(WorkspaceConnectorTool):
             event_type="doc_save",
             title="Save research notebook",
             detail=document_id or "notebook saved",
-            data={"document_id": document_id, "document_url": document_url, "source_url": document_url},
+            data=_doc_scene(
+                lane="research-note-save",
+                payload={
+                    "document_id": document_id,
+                    "document_url": document_url,
+                    "source_url": document_url,
+                },
+            ),
         )
         trace_events.append(save_event)
         yield save_event

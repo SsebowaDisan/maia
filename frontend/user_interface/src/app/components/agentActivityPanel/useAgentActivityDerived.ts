@@ -1,20 +1,37 @@
 import { useMemo } from "react";
-import { getAgentEventSnapshotUrl, getRawFileUrl } from "../../../api/client";
+import { getRawFileUrl } from "../../../api/client";
 import type { AgentActivityEvent, ChatAttachment } from "../../types";
 import {
   type PreviewTab,
   eventMetadataString,
   findRecentMetadataString,
   sampleFilmstripEvents,
-  tabForEventType,
 } from "../agentActivityMeta";
+import { mergeLiveSceneData, readNumberField, readStringField } from "./helpers";
+import { desktopStatusForEventType } from "./labels";
 import {
-  mergeLiveSceneData,
-  readNumberField,
-  readStringField,
-  URL_PATTERN,
-} from "./helpers";
-import { cursorLabelForEventType, desktopStatusForEventType } from "./labels";
+  resolveBrowserUrl,
+  resolveDocBodyHint,
+  resolveEmailBodyHint,
+  resolveEmailRecipient,
+  resolveEmailSubject,
+  resolveSceneSnapshotUrl,
+  resolveSheetBodyHint,
+} from "./contentDerivation";
+import {
+  cursorFromEvent,
+  cursorLabelFromSemantics,
+  eventTab,
+  interactionActionFromEvent,
+  interactionActionPhaseFromEvent,
+  interactionActionStatusFromEvent,
+  roleKeyFromEvent,
+  roleLabelFromKey,
+  roleNarrativeFromSemantics,
+  sceneSurfaceFromEvent,
+  surfaceLabelForSceneKey,
+  tabForSceneSurface,
+} from "./interactionSemantics";
 
 interface UseAgentActivityDerivedParams {
   events: AgentActivityEvent[];
@@ -36,94 +53,6 @@ const EMAIL_SCENE_EVENT_TYPES = new Set([
   "email_click_send",
   "email_sent",
 ]);
-
-function tabForSceneSurface(surface: string): PreviewTab | null {
-  const normalized = String(surface || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-  if (!normalized) {
-    return null;
-  }
-  if (
-    normalized === "browser" ||
-    normalized === "website" ||
-    normalized === "web" ||
-    normalized === "preview" ||
-    normalized === "maps"
-  ) {
-    return "browser";
-  }
-  if (
-    normalized === "document" ||
-    normalized === "google_docs" ||
-    normalized === "google_sheets" ||
-    normalized === "docs" ||
-    normalized === "sheets"
-  ) {
-    return "document";
-  }
-  if (normalized === "email" || normalized === "gmail") {
-    return "email";
-  }
-  if (normalized === "system" || normalized === "workspace") {
-    return "system";
-  }
-  return null;
-}
-
-function tabForEvent(event: AgentActivityEvent | null): PreviewTab {
-  if (!event) {
-    return "system";
-  }
-  const byType = tabForEventType(event.event_type || "");
-  const sceneSurface =
-    eventMetadataString(event, "scene_surface") ||
-    readStringField(event.data?.["scene_surface"]);
-  const surfaceTab = tabForSceneSurface(sceneSurface);
-  if (surfaceTab && (surfaceTab !== "system" || byType === "system")) {
-    return surfaceTab;
-  }
-  if (byType !== "system") {
-    return byType;
-  }
-  const toolId = eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
-  if (!toolId) return byType;
-  if (
-    toolId.startsWith("workspace.docs.") ||
-    toolId.startsWith("workspace.sheets.") ||
-    toolId === "docs.create" ||
-    toolId.startsWith("documents.highlight.")
-  ) {
-    return "document";
-  }
-  if (
-    toolId.startsWith("browser.") ||
-    toolId.startsWith("marketing.web_research")
-  ) {
-    return "browser";
-  }
-  return byType;
-}
-
-function cursorFromEvent(event: AgentActivityEvent | null): { x: number; y: number } | null {
-  if (!event) {
-    return null;
-  }
-  const dataX = readNumberField(event.data?.["cursor_x"]);
-  const dataY = readNumberField(event.data?.["cursor_y"]);
-  const metaX = readNumberField(event.metadata?.["cursor_x"]);
-  const metaY = readNumberField(event.metadata?.["cursor_y"]);
-  const x = dataX ?? metaX;
-  const y = dataY ?? metaY;
-  if (x === null || y === null) {
-    return null;
-  }
-  return {
-    x: Math.max(2, Math.min(98, x)),
-    y: Math.max(2, Math.min(98, y)),
-  };
-}
 
 function useAgentActivityDerived({
   events,
@@ -166,46 +95,47 @@ function useAgentActivityDerived({
     () => sampleFilmstripEvents(orderedEvents, safeCursor),
     [orderedEvents, safeCursor],
   );
+
   const activeEvent = orderedEvents[safeCursor] || null;
-  const activeTab = tabForEvent(activeEvent);
+  const activeTab = eventTab(activeEvent);
 
   const sceneEvent = useMemo(() => {
     if (!activeEvent) {
       return null;
     }
-    const activeEventTab = tabForEvent(activeEvent);
+    const activeEventTab = eventTab(activeEvent);
     if (activeEventTab !== "system") {
       return activeEvent;
     }
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const candidate = visibleEvents[idx];
-      if (tabForEvent(candidate) !== "system") {
+      if (eventTab(candidate) !== "system") {
         return candidate;
       }
     }
     return activeEvent;
   }, [activeEvent, visibleEvents]);
 
-  const sceneTab = tabForEvent(sceneEvent || activeEvent);
+  const sceneTab = eventTab(sceneEvent || activeEvent);
   const progressPercent =
     orderedEvents.length <= 1
       ? 100
       : Math.round((safeCursor / (orderedEvents.length - 1)) * 100);
 
   const browserEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEvent(event) === "browser"),
+    () => visibleEvents.filter((event) => eventTab(event) === "browser"),
     [visibleEvents],
   );
   const documentEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEvent(event) === "document"),
+    () => visibleEvents.filter((event) => eventTab(event) === "document"),
     [visibleEvents],
   );
   const emailEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEvent(event) === "email"),
+    () => visibleEvents.filter((event) => eventTab(event) === "email"),
     [visibleEvents],
   );
   const systemEvents = useMemo(
-    () => visibleEvents.filter((event) => tabForEvent(event) === "system"),
+    () => visibleEvents.filter((event) => eventTab(event) === "system"),
     [visibleEvents],
   );
 
@@ -239,9 +169,7 @@ function useAgentActivityDerived({
       if (EMAIL_SCENE_EVENT_TYPES.has(eventType)) {
         return true;
       }
-      const surface =
-        eventMetadataString(event, "scene_surface") || readStringField(event.data?.["scene_surface"]);
-      if (tabForSceneSurface(surface) === "email") {
+      if (tabForSceneSurface(sceneSurfaceFromEvent(event)) === "email") {
         return true;
       }
     }
@@ -250,6 +178,7 @@ function useAgentActivityDerived({
   const isEmailScene = previewTab === "email" && hasEmailSceneSignal;
   const isDocumentScene = previewTab === "document";
   const isSystemScene = previewTab === "system";
+
   const currentSceneSourceUrl =
     readStringField(sceneEvent?.data?.["source_url"]) ||
     readStringField(sceneEvent?.metadata?.["source_url"]) ||
@@ -263,18 +192,27 @@ function useAgentActivityDerived({
     readStringField(sceneEvent?.data?.["spreadsheet_url"]) ||
     readStringField(sceneEvent?.metadata?.["spreadsheet_url"]) ||
     (currentSceneSourceUrl.includes("docs.google.com/spreadsheets/") ? currentSceneSourceUrl : "");
+
   const hasSpreadsheetUrlSignal =
     sceneSpreadsheetUrl.length > 0 ||
     currentSceneSourceUrl.includes("docs.google.com/spreadsheets/");
   const hasDocumentUrlSignal =
     sceneDocumentUrl.length > 0 ||
     currentSceneSourceUrl.includes("docs.google.com/document/");
+  const sceneSurface = sceneSurfaceFromEvent(sceneEvent).toLowerCase();
+  const sceneSurfaceTab = tabForSceneSurface(sceneSurface);
+  const sceneToolId = String(sceneEvent?.metadata?.["tool_id"] || sceneEvent?.data?.["tool_id"] || "")
+    .trim()
+    .toLowerCase();
   const isSheetsScene =
     isDocumentScene &&
     (sceneEventType.startsWith("sheet_") ||
       sceneEventType.startsWith("sheets.") ||
       sceneEventType === "drive.go_to_sheet" ||
-      hasSpreadsheetUrlSignal);
+      sceneSurface === "google_sheets" ||
+      hasSpreadsheetUrlSignal ||
+      (sceneSurfaceTab === "document" && sceneToolId.startsWith("workspace.sheets.")));
+
   const mergedPdfPage = readNumberField(mergedSceneData["pdf_page"]);
   const mergedPdfTotal = readNumberField(mergedSceneData["pdf_total_pages"]);
   const hasPdfEventSignal = sceneEventType.startsWith("pdf_");
@@ -285,9 +223,7 @@ function useAgentActivityDerived({
     !isSheetsScene &&
     !hasDocumentUrlSignal &&
     (hasPdfEventSignal || hasPdfDataSignal || !sceneSpreadsheetUrl);
-  const sceneToolId = String(sceneEvent?.metadata?.["tool_id"] || sceneEvent?.data?.["tool_id"] || "")
-    .trim()
-    .toLowerCase();
+
   const hasDocsEventSignal =
     sceneEventType.startsWith("doc_") ||
     sceneEventType.startsWith("docs.") ||
@@ -296,6 +232,7 @@ function useAgentActivityDerived({
     sceneToolId.startsWith("workspace.docs.") ||
     sceneToolId === "docs.create";
   const isDocsScene = isDocumentScene && !isSheetsScene && !isPdfScene && hasDocsEventSignal;
+
   const sceneSurfaceKey = isBrowserScene
     ? "website"
     : isSheetsScene
@@ -309,206 +246,82 @@ function useAgentActivityDerived({
           : isSystemScene
             ? "system"
             : "workspace";
-  const sceneSurfaceLabel = sceneSurfaceKey === "website"
-    ? "Website"
-    : sceneSurfaceKey === "google_sheets"
-      ? "Google Sheets"
-      : sceneSurfaceKey === "document"
-        ? "Document"
-      : sceneSurfaceKey === "google_docs"
-        ? "Google Docs"
-        : sceneSurfaceKey === "email"
-          ? "Email"
-          : sceneSurfaceKey === "system"
-            ? "System"
-            : "Workspace";
+  const sceneSurfaceLabel = surfaceLabelForSceneKey(sceneSurfaceKey);
 
-  const snapshotUrl = useMemo(() => {
-    const resolveSnapshot = (event: AgentActivityEvent | null): string => {
-      if (!event) return "";
-      const raw = readStringField(event.snapshot_ref);
-      if (!raw) return "";
-      if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:image/")) {
-        return raw;
-      }
-      if (!event.run_id || !event.event_id) {
-        return "";
-      }
-      return getAgentEventSnapshotUrl(event.run_id, event.event_id);
-    };
-
-    const preferred = resolveSnapshot(sceneEvent);
-    if (preferred) {
-      return preferred;
-    }
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const fallback = resolveSnapshot(visibleEvents[idx]);
-      if (fallback) {
-        return fallback;
-      }
-    }
-    return "";
-  }, [sceneEvent, visibleEvents]);
-
+  const snapshotUrl = useMemo(
+    () => resolveSceneSnapshotUrl(sceneEvent, visibleEvents),
+    [sceneEvent, visibleEvents],
+  );
   const effectiveSnapshotUrl =
     sceneEvent && snapshotFailedEventId === sceneEvent.event_id ? "" : snapshotUrl;
 
-  const browserUrl = useMemo(() => {
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const event = visibleEvents[idx];
-      const eventType = String(event.event_type || "").toLowerCase();
-      const browserLike =
-        tabForEvent(event) === "browser" ||
-        eventType.startsWith("browser_") ||
-        eventType.startsWith("web_");
-      if (!browserLike) {
-        continue;
-      }
-      const meta = event.metadata || {};
-      const data = event.data || {};
-      const fromMeta =
-        readStringField(meta["url"]) ||
-        readStringField(meta["target_url"]) ||
-        readStringField(meta["page_url"]) ||
-        readStringField(meta["final_url"]) ||
-        readStringField(meta["link"]);
-      if (fromMeta.startsWith("http://") || fromMeta.startsWith("https://")) {
-        return fromMeta;
-      }
-      const fromData =
-        readStringField(data["url"]) ||
-        readStringField(data["target_url"]) ||
-        readStringField(data["page_url"]) ||
-        readStringField(data["final_url"]) ||
-        readStringField(data["link"]);
-      if (fromData.startsWith("http://") || fromData.startsWith("https://")) {
-        return fromData;
-      }
-      if (eventType.startsWith("browser_") || eventType.startsWith("web_")) {
-        const mergedText = `${event.title} ${event.detail}`.trim();
-        const match = mergedText.match(URL_PATTERN);
-        if (match?.[1]) {
-          return match[1];
-        }
-      }
-    }
-    return "";
-  }, [visibleEvents]);
-
-  const emailRecipient = useMemo(() => {
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const event = visibleEvents[idx];
-      if (event.event_type !== "email_set_to" && event.event_type !== "email_draft_create") {
-        continue;
-      }
-      if (event.detail) {
-        return event.detail;
-      }
-    }
-    return "";
-  }, [visibleEvents]);
-
-  const emailSubject = useMemo(() => {
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const event = visibleEvents[idx];
-      if (event.event_type !== "email_set_subject") {
-        continue;
-      }
-      if (event.detail) {
-        return event.detail;
-      }
-    }
-    return "";
-  }, [visibleEvents]);
-
-  const emailBodyHint = useMemo(() => {
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const event = visibleEvents[idx];
-      if (
-        event.event_type !== "email_set_body" &&
-        event.event_type !== "email_type_body" &&
-        event.event_type !== "email_ready_to_send"
-      ) {
-        continue;
-      }
-      const dataPreview =
-        typeof event.data?.["typed_preview"] === "string"
-          ? event.data["typed_preview"]
-          : "";
-      if (dataPreview) {
-        return dataPreview;
-      }
-      if (event.detail) {
-        return event.detail;
-      }
-    }
-    return "";
-  }, [visibleEvents]);
-
-  const docBodyHint = useMemo(() => {
-    let aggregated = "";
-    for (let idx = 0; idx < visibleEvents.length; idx += 1) {
-      const event = visibleEvents[idx];
-      if (event.event_type !== "doc_type_text") {
-        continue;
-      }
-      const dataPreview =
-        typeof event.data?.["typed_preview"] === "string"
-          ? event.data["typed_preview"]
-          : "";
-      if (dataPreview) {
-        aggregated = dataPreview;
-        continue;
-      }
-      const chunk = String(event.detail || "").trim();
-      if (!chunk) {
-        continue;
-      }
-      aggregated += chunk;
-      if (aggregated.length > 4000) {
-        aggregated = aggregated.slice(-4000);
-      }
-    }
-    return aggregated.trim();
-  }, [visibleEvents]);
-
-  const sheetBodyHint = useMemo(() => {
-    const lines: string[] = [];
-    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-      const event = visibleEvents[idx];
-      const type = String(event.event_type || "");
-      if (
-        !(
-          type === "sheet_open" ||
-          type === "sheet_cell_update" ||
-          type === "sheet_append_row" ||
-          type === "sheet_save" ||
-          type.startsWith("sheets.")
-        )
-      ) {
-        continue;
-      }
-      const detail = String(event.detail || "").trim();
-      const title = String(event.title || "").trim();
-      const line = [title, detail].filter(Boolean).join(": ").trim();
-      if (!line) {
-        continue;
-      }
-      lines.unshift(line);
-      if (lines.length >= 24) {
-        break;
-      }
-    }
-    return lines.join("\n");
-  }, [visibleEvents]);
+  const browserUrl = useMemo(
+    () => resolveBrowserUrl(visibleEvents),
+    [visibleEvents],
+  );
+  const emailRecipient = useMemo(
+    () => resolveEmailRecipient(visibleEvents),
+    [visibleEvents],
+  );
+  const emailSubject = useMemo(
+    () => resolveEmailSubject(visibleEvents),
+    [visibleEvents],
+  );
+  const emailBodyHint = useMemo(
+    () => resolveEmailBodyHint(visibleEvents),
+    [visibleEvents],
+  );
+  const docBodyHint = useMemo(
+    () => resolveDocBodyHint(visibleEvents),
+    [visibleEvents],
+  );
+  const sheetBodyHint = useMemo(
+    () => resolveSheetBodyHint(visibleEvents),
+    [visibleEvents],
+  );
 
   const desktopStatus = useMemo(
     () => desktopStatusForEventType(activeEvent?.event_type || "", streaming),
     [activeEvent?.event_type, streaming],
   );
+
+  const activeRoleKey = useMemo(
+    () =>
+      roleKeyFromEvent(sceneEvent) ||
+      roleKeyFromEvent(activeEvent) ||
+      roleKeyFromEvent(visibleEvents[visibleEvents.length - 1] || null),
+    [activeEvent, sceneEvent, visibleEvents],
+  );
+  const activeRoleLabel = roleLabelFromKey(activeRoleKey) || "Agent";
+
+  const interactionAction =
+    interactionActionFromEvent(sceneEvent) || interactionActionFromEvent(activeEvent);
+  const interactionActionPhase =
+    interactionActionPhaseFromEvent(sceneEvent) || interactionActionPhaseFromEvent(activeEvent);
+  const interactionActionStatus =
+    interactionActionStatusFromEvent(sceneEvent) || interactionActionStatusFromEvent(activeEvent);
+
   const cursorLabel = useMemo(
-    () => cursorLabelForEventType(activeEvent?.event_type || ""),
-    [activeEvent?.event_type],
+    () =>
+      cursorLabelFromSemantics({
+        action: interactionAction,
+        actionStatus: interactionActionStatus,
+        actionPhase: interactionActionPhase,
+        sceneSurfaceLabel,
+        roleLabel: activeRoleLabel,
+      }),
+    [activeRoleLabel, interactionAction, interactionActionPhase, interactionActionStatus, sceneSurfaceLabel],
+  );
+
+  const roleNarrative = useMemo(
+    () =>
+      roleNarrativeFromSemantics({
+        roleLabel: activeRoleLabel,
+        action: interactionAction,
+        sceneSurfaceLabel,
+        fallback: sceneEvent?.title || activeEvent?.title || "working",
+      }),
+    [activeRoleLabel, activeEvent?.title, interactionAction, sceneEvent?.title, sceneSurfaceLabel],
   );
 
   const eventCursor = useMemo(() => {
@@ -516,12 +329,13 @@ function useAgentActivityDerived({
     if (activeCursor) {
       return activeCursor;
     }
-    const sceneCursor = cursorFromEvent(sceneEvent);
-    return sceneCursor || null;
+    return cursorFromEvent(sceneEvent);
   }, [activeEvent, sceneEvent]);
 
   return {
     activeEvent,
+    activeRoleKey,
+    activeRoleLabel,
     activeTab,
     browserEvents,
     browserUrl,
@@ -537,6 +351,9 @@ function useAgentActivityDerived({
     emailSubject,
     eventCursor,
     filmstripEvents,
+    interactionAction,
+    interactionActionPhase,
+    interactionActionStatus,
     isBrowserScene,
     isDocsScene,
     isDocumentScene,
@@ -547,6 +364,7 @@ function useAgentActivityDerived({
     mergedSceneData,
     orderedEvents,
     progressPercent,
+    roleNarrative,
     safeCursor,
     sceneDocumentUrl,
     sceneEvent,

@@ -45,6 +45,14 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _owner_role_from_data(data: dict[str, Any]) -> str:
+    for key in ("owner_role", "__owner_role", "agent_role", "role"):
+        value = " ".join(str(data.get(key) or "").split()).strip().lower()
+        if value:
+            return value[:40]
+    return "browser"
+
+
 def _phase_for_event_type(event_type: str) -> BrowserActionPhase:
     normalized = str(event_type or "").strip().lower()
     if normalized.endswith("_started"):
@@ -127,6 +135,7 @@ def normalize_browser_event(
         phase=_phase_for_event_type(event_type),
         status=_status_for_event_type(event_type),
         scene_surface=str(data.get("scene_surface") or default_scene_surface or "website").strip().lower(),
+        owner_role=_owner_role_from_data(data),
         cursor_x=_as_float(data.get("cursor_x")),
         cursor_y=_as_float(data.get("cursor_y")),
         scroll_direction=str(data.get("scroll_direction") or "").strip().lower(),

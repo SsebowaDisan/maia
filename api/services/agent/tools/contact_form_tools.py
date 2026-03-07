@@ -288,6 +288,13 @@ class BrowserContactFormSendTool(AgentTool):
                 pause_reason=handoff_type or "human_verification_required",
                 handoff_url=final_url or url,
                 note=handoff_reason,
+                barrier_type="human_verification",
+                barrier_scope="contact_form_submission",
+                verification_context={
+                    "tool_id": "browser.contact_form.send",
+                    "url": final_url or url,
+                    "handoff_type": handoff_type or "human_verification_required",
+                },
             )
             handoff_event = ToolTraceEvent(
                 event_type="browser_human_verification_required",

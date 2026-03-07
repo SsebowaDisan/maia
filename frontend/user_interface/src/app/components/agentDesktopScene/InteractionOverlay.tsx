@@ -1,6 +1,7 @@
-import { browserOverlayForEvent } from "./sceneEvents";
+import { overlayForInteractionEvent } from "./sceneEvents";
 
 type InteractionOverlayProps = {
+  sceneSurface: string;
   activeEventType: string;
   activeDetail: string;
   scrollDirection: string;
@@ -11,6 +12,7 @@ type InteractionOverlayProps = {
 };
 
 function InteractionOverlay({
+  sceneSurface,
   activeEventType,
   activeDetail,
   scrollDirection,
@@ -19,8 +21,9 @@ function InteractionOverlay({
   actionStatus,
   actionTargetLabel,
 }: InteractionOverlayProps) {
-  const overlay = browserOverlayForEvent({
+  const overlay = overlayForInteractionEvent({
     eventType: activeEventType,
+    sceneSurface,
     activeDetail,
     scrollDirection,
     action,

@@ -1,6 +1,15 @@
+import { InteractionOverlay } from "./InteractionOverlay";
+
 type SheetsSceneProps = {
   activeDetail: string;
+  activeEventType: string;
+  action: string;
+  actionPhase: string;
+  actionStatus: string;
+  actionTargetLabel: string;
   sceneText: string;
+  scrollDirection: string;
+  scrollPercent: number | null;
   sheetPreviewRows: string[];
   sheetStatusLine: string;
   sheetsFrameUrl: string;
@@ -8,11 +17,20 @@ type SheetsSceneProps = {
 
 function SheetsScene({
   activeDetail,
+  activeEventType,
+  action,
+  actionPhase,
+  actionStatus,
+  actionTargetLabel,
   sceneText,
+  scrollDirection,
+  scrollPercent,
   sheetPreviewRows,
   sheetStatusLine,
   sheetsFrameUrl,
 }: SheetsSceneProps) {
+  const typingPulse = action === "type" && (actionPhase === "start" || actionPhase === "active");
+  const activeRowIndex = sheetPreviewRows.length ? Math.max(0, sheetPreviewRows.length - 1) : -1;
   return (
     <div className="absolute inset-0 bg-[linear-gradient(180deg,#e6e8ee_0%,#dce0e9_100%)] p-3 text-[#1d1d1f]">
       <div className="h-full w-full overflow-hidden rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
@@ -30,6 +48,16 @@ function SheetsScene({
           ) : null}
         </div>
         <div className="relative h-[calc(100%-42px)] bg-[#f5f6f8]">
+          <InteractionOverlay
+            sceneSurface="google_sheets"
+            activeEventType={activeEventType}
+            activeDetail={activeDetail}
+            scrollDirection={scrollDirection}
+            action={action}
+            actionPhase={actionPhase}
+            actionStatus={actionStatus}
+            actionTargetLabel={actionTargetLabel}
+          />
           {sheetsFrameUrl ? (
             <iframe
               src={sheetsFrameUrl}
@@ -53,7 +81,11 @@ function SheetsScene({
                     sheetPreviewRows.map((row, rowIndex) => (
                       <div
                         key={`sheet-row-${rowIndex}`}
-                        className="grid grid-cols-[120px_repeat(4,minmax(0,1fr))] border-b border-black/[0.05] text-[12px] text-[#2a2a2d]"
+                        className={`grid grid-cols-[120px_repeat(4,minmax(0,1fr))] border-b text-[12px] text-[#2a2a2d] ${
+                          rowIndex === activeRowIndex && typingPulse
+                            ? "border-[#0a84ff]/35 bg-[#0a84ff]/8"
+                            : "border-black/[0.05]"
+                        }`}
                       >
                         <div className="border-r border-black/[0.05] px-3 py-2 text-[#6e6e73]">
                           {rowIndex + 1}
@@ -73,27 +105,37 @@ function SheetsScene({
             </div>
           )}
           <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,440px)] rounded-lg border border-black/[0.08] bg-white/90 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
-                Live sheet typing
-              </p>
-              <div className="mt-1.5 max-h-[132px] overflow-y-auto rounded-md border border-black/[0.06] bg-white px-2.5 py-2 text-[12px] leading-[1.5] text-[#1f1f22]">
-                {sheetPreviewRows.length ? (
-                  <div className="space-y-1">
-                    {sheetPreviewRows.map((row, index) => (
-                      <p key={`sheet-stream-${index}`} className="line-clamp-2">
-                        {row}
-                      </p>
-                    ))}
-                    <span className="inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
-                  </div>
-                ) : (
-                  <p>
-                    {sheetStatusLine || "Writing roadmap rows to Google Sheets..."}
-                    <span className="ml-1 inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
-                  </p>
-                )}
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
+              Live sheet typing
+            </p>
+            <div className="mt-1.5 max-h-[132px] overflow-y-auto rounded-md border border-black/[0.06] bg-white px-2.5 py-2 text-[12px] leading-[1.5] text-[#1f1f22]">
+              {sheetPreviewRows.length ? (
+                <div className="space-y-1">
+                  {sheetPreviewRows.map((row, index) => (
+                    <p key={`sheet-stream-${index}`} className="line-clamp-2">
+                      {row}
+                    </p>
+                  ))}
+                  <span className="inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
+                </div>
+              ) : (
+                <p>
+                  {sheetStatusLine || "Writing roadmap rows to Google Sheets..."}
+                  <span className="ml-1 inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
+                </p>
+              )}
+            </div>
+          </div>
+          {typeof scrollPercent === "number" ? (
+            <div className="pointer-events-none absolute right-2 top-16 bottom-4 flex flex-col items-center">
+              <div className="h-full w-1.5 rounded-full bg-black/15">
+                <div
+                  className="w-1.5 rounded-full bg-black/45 transition-all duration-300"
+                  style={{ height: "20px", marginTop: `calc(${scrollPercent}% - 10px)` }}
+                />
               </div>
             </div>
+          ) : null}
         </div>
       </div>
     </div>

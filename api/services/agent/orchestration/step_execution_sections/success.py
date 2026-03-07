@@ -8,6 +8,7 @@ from api.services.agent.llm_execution_support import summarize_step_outcome
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep, build_browser_followup_steps
 
+from ..execution_trace import record_parallel_research_trace
 from ..models import ExecutionState
 from ..text_helpers import extract_action_artifact_metadata
 from ..web_evidence import record_web_evidence
@@ -219,6 +220,17 @@ def handle_step_success(
         if inserted_steps:
             insertion_point = step_cursor + 1
             steps[insertion_point:insertion_point] = inserted_steps
+            batch_trace = record_parallel_research_trace(
+                state=state,
+                step_index=index,
+                tool_id=step.tool_id,
+                batch_type="adaptive_research_followups",
+                inserted_steps=[item.tool_id for item in inserted_steps],
+                metadata={
+                    "coverage_ok": coverage_ok,
+                    "inserted": len(inserted_steps),
+                },
+            )
             refined_event = activity_event_factory(
                 event_type="plan_refined",
                 title="Expanded research plan with live source inspections",
@@ -228,6 +240,7 @@ def handle_step_success(
                     "total_steps": len(steps),
                     "step_ids": [item.tool_id for item in steps],
                     "coverage_ok": coverage_ok,
+                    "parallel_research_trace": batch_trace,
                 },
             )
             yield emit_event(refined_event)

@@ -238,20 +238,75 @@ def blocking_requirements_from_slots(
     slots: list[dict[str, Any]],
     fallback_requirements: list[str],
     limit: int = 6,
+    discovery_attempts_required: int = 2,
+) -> list[str]:
+    min_attempts = max(1, int(discovery_attempts_required))
+    slot_rows = [row for row in slots[:24] if isinstance(row, dict)]
+    if slot_rows:
+        candidate_rows: list[str] = []
+        for slot in slot_rows:
+            requirement = _clean_text(slot.get("requirement"))
+            if not requirement:
+                continue
+            if not bool(slot.get("blocking")):
+                continue
+            discoverable = bool(slot.get("discoverable"))
+            state = _clean_text(slot.get("state"), limit=48).lower()
+            try:
+                attempt_count = max(0, int(slot.get("attempt_count") or 0))
+            except Exception:
+                attempt_count = 0
+            discovery_exhausted = state == "blocked" or attempt_count >= min_attempts
+            if not discoverable or discovery_exhausted:
+                candidate_rows.append(requirement)
+        return _clean_rows(candidate_rows, limit=limit)
+
+    # Fallback path when no slots were produced: preserve previous behavior.
+    return _clean_rows(list(fallback_requirements or []), limit=limit)
+
+
+def unresolved_requirements_from_slots(
+    *,
+    slots: list[dict[str, Any]],
+    fallback_requirements: list[str],
+    limit: int = 8,
+) -> list[str]:
+    slot_rows = [row for row in slots[:24] if isinstance(row, dict)]
+    if not slot_rows:
+        return _clean_rows(list(fallback_requirements or []), limit=limit)
+    candidate_rows: list[str] = []
+    for slot in slot_rows:
+        requirement = _clean_text(slot.get("requirement"))
+        if not requirement:
+            continue
+        state = _clean_text(slot.get("state"), limit=48).lower()
+        resolved_value = _clean_text(slot.get("resolved_value"), limit=240)
+        if resolved_value:
+            continue
+        if state == "resolved":
+            continue
+        candidate_rows.append(requirement)
+    return _clean_rows(candidate_rows, limit=limit)
+
+
+def attempted_discovery_requirements_from_slots(
+    *,
+    slots: list[dict[str, Any]],
+    limit: int = 8,
 ) -> list[str]:
     candidate_rows: list[str] = []
-    for slot in slots[:16]:
+    for slot in slots[:24]:
         if not isinstance(slot, dict):
             continue
         requirement = _clean_text(slot.get("requirement"))
         if not requirement:
             continue
-        if bool(slot.get("blocking")) and not bool(slot.get("discoverable")):
+        resolved_value = _clean_text(slot.get("resolved_value"), limit=240)
+        if resolved_value:
+            continue
+        if bool(slot.get("discoverable")):
             candidate_rows.append(requirement)
-    clean_rows = _clean_rows(candidate_rows, limit=limit)
-    if clean_rows:
-        return clean_rows
-    return _clean_rows(list(fallback_requirements or []), limit=limit)
+    return _clean_rows(candidate_rows, limit=limit)
 
 
 def clarification_questions_from_slots(

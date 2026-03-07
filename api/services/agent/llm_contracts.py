@@ -1023,6 +1023,7 @@ def verify_task_contract_fulfillment(
     sources: list[dict[str, Any]],
     allowed_tool_ids: list[str],
     pending_action_tool_id: str = "",
+    side_effect_status: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     normalized_contract = _normalize_contract_for_execution(contract)
     deterministic_check = build_deterministic_contract_check(
@@ -1034,6 +1035,7 @@ def verify_task_contract_fulfillment(
         sources=sources,
         allowed_tool_ids=allowed_tool_ids,
         pending_action_tool_id=pending_action_tool_id,
+        side_effect_status=side_effect_status,
     )
     clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
     if clean_pending_action_tool_id:

@@ -20,6 +20,34 @@ USER_ROLE_MEMBER = "member"
 USER_ROLE_ANALYST = "analyst"
 UserRole = Literal["owner", "admin", "member", "analyst"]
 
+BARRIER_TYPE_HUMAN_VERIFICATION = "human_verification"
+BARRIER_TYPE_EXTERNAL_AUTHORIZATION = "external_authorization"
+BARRIER_TYPE_POLICY_APPROVAL = "policy_approval"
+BARRIER_TYPE_SENSITIVE_SIDE_EFFECT = "sensitive_side_effect"
+BarrierType = Literal[
+    "human_verification",
+    "external_authorization",
+    "policy_approval",
+    "sensitive_side_effect",
+]
+_KNOWN_BARRIER_TYPES: set[str] = {
+    BARRIER_TYPE_HUMAN_VERIFICATION,
+    BARRIER_TYPE_EXTERNAL_AUTHORIZATION,
+    BARRIER_TYPE_POLICY_APPROVAL,
+    BARRIER_TYPE_SENSITIVE_SIDE_EFFECT,
+}
+
+
+def normalize_barrier_type(
+    value: Any,
+    *,
+    default: BarrierType = BARRIER_TYPE_HUMAN_VERIFICATION,
+) -> BarrierType:
+    candidate = " ".join(str(value or "").split()).strip().lower()
+    if candidate in _KNOWN_BARRIER_TYPES:
+        return candidate  # type: ignore[return-value]
+    return default
+
 
 @dataclass(frozen=True)
 class AgentToolCapability:

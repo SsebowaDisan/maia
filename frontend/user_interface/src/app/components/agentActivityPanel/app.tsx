@@ -53,6 +53,7 @@ export function AgentActivityPanel({
 
   const {
     activeEvent,
+    activeRoleLabel,
     activeTab,
     browserEvents,
     browserUrl,
@@ -77,6 +78,7 @@ export function AgentActivityPanel({
     mergedSceneData,
     orderedEvents,
     progressPercent,
+    roleNarrative,
     safeCursor,
     sceneDocumentUrl,
     sceneEvent,
@@ -359,6 +361,8 @@ export function AgentActivityPanel({
     sceneTransitionLabel,
     safeCursor,
     totalEvents: orderedEvents.length,
+    activeRoleLabel,
+    roleNarrative,
     activeTitle: sceneEvent?.title || activeEvent?.title || "",
     activeDetail: sceneEvent?.detail || activeEvent?.detail || "",
     sceneText,

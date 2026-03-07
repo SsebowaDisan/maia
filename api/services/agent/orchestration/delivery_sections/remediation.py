@@ -17,6 +17,7 @@ from ..discovery_gate import (
     with_slot_lifecycle_defaults,
 )
 from ..models import ExecutionState, TaskPreparation
+from ..side_effect_status import record_side_effect_status
 from ..text_helpers import compact
 from .models import DeliveryRuntime
 
@@ -133,7 +134,12 @@ def enforce_delivery_contract_gate(
             summary=blocked_summary,
             started_at=runtime.started_at,
             ended_at=utc_now().isoformat(),
-            metadata={"step": runtime.step, "recipient": task_intelligence.delivery_email},
+            metadata={
+                "step": runtime.step,
+                "recipient": task_intelligence.delivery_email,
+                "external_action_key": "send_email",
+                "side_effect_status": "blocked",
+            },
         )
     )
     state.executed_steps.append(
@@ -155,4 +161,16 @@ def enforce_delivery_contract_gate(
         ).strip()
         if blocked_reason and blocked_reason not in state.next_steps:
             state.next_steps.append(blocked_reason)
+    record_side_effect_status(
+        settings=state.execution_context.settings,
+        action_key="send_email",
+        status="blocked",
+        tool_id=runtime.tool_id,
+        detail=blocked_summary,
+        metadata={
+            "step": runtime.step,
+            "recipient": task_intelligence.delivery_email,
+            "missing_items": missing[:8],
+        },
+    )
     return False

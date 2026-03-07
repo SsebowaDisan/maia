@@ -4,6 +4,7 @@ from typing import Any, Generator
 
 from api.services.agent.audit import get_audit_logger
 from api.services.agent.governance import get_governance_service
+from api.services.agent.llm_runtime import env_bool
 from api.services.agent.policy import (
     ACCESS_MODE_FULL,
     ACTION_CLASS_EXECUTE,
@@ -71,6 +72,10 @@ class ToolRegistry:
         self._capabilities: dict[str, AgentToolCapability] = {
             capability.tool_id: capability for capability in get_capability_matrix()
         }
+        self._contact_form_enabled = env_bool(
+            "MAIA_AGENT_CONTACT_FORM_ENABLED",
+            default=False,
+        )
         self.register(WebResearchTool())
         self.register(CompetitorProfileTool())
         self.register(EmailDraftTool())
@@ -96,7 +101,8 @@ class ToolRegistry:
         self.register(PlaywrightInspectTool())
         self.register(WebStructuredExtractTool())
         self.register(WebDatasetAdapterTool())
-        self.register(BrowserContactFormSendTool())
+        if self._contact_form_enabled:
+            self.register(BrowserContactFormSendTool())
         self.register(GmailDraftTool())
         self.register(GmailSendTool())
         self.register(GmailSearchTool())
