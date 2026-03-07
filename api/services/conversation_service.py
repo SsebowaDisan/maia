@@ -10,6 +10,7 @@ from tzlocal import get_localzone
 
 from ktem.db.models import Conversation, MindmapShare, engine
 from api.services.chat.conversation_naming import (
+    CONVERSATION_ICON_REVIEWED_FIELD,
     CONVERSATION_ICON_KEY_FIELD,
     DEFAULT_CONVERSATION_ICON_KEY,
     generate_conversation_identity,
@@ -113,6 +114,7 @@ def list_conversations(user_id: str) -> list[dict]:
             updated = False
 
             existing_icon_key = _conversation_icon_key_from_data_source(data_source)
+            icon_reviewed = bool(data_source.get(CONVERSATION_ICON_REVIEWED_FIELD))
             needs_name = (
                 backfilled < AUTONAME_BACKFILL_LIMIT
                 and is_placeholder_conversation_name(row.name)
@@ -120,8 +122,14 @@ def list_conversations(user_id: str) -> list[dict]:
             )
             needs_icon = (
                 icon_backfilled < ICON_BACKFILL_LIMIT
-                and not existing_icon_key
                 and bool(first_message)
+                and (
+                    not existing_icon_key
+                    or (
+                        existing_icon_key == DEFAULT_CONVERSATION_ICON_KEY
+                        and not icon_reviewed
+                    )
+                )
             )
 
             if needs_name or needs_icon:
@@ -137,6 +145,7 @@ def list_conversations(user_id: str) -> list[dict]:
                     if needs_icon:
                         next_data_source = deepcopy(data_source)
                         next_data_source[CONVERSATION_ICON_KEY_FIELD] = generated_icon_key
+                        next_data_source[CONVERSATION_ICON_REVIEWED_FIELD] = True
                         row.data_source = next_data_source
                         data_source = next_data_source
                         icon_backfilled += 1
@@ -154,6 +163,7 @@ def list_conversations(user_id: str) -> list[dict]:
                         )
                         next_data_source = deepcopy(data_source)
                         next_data_source[CONVERSATION_ICON_KEY_FIELD] = fallback_icon
+                        next_data_source[CONVERSATION_ICON_REVIEWED_FIELD] = True
                         row.data_source = next_data_source
                         data_source = next_data_source
                         icon_backfilled += 1
@@ -169,6 +179,7 @@ def list_conversations(user_id: str) -> list[dict]:
                 )
                 next_data_source = deepcopy(data_source)
                 next_data_source[CONVERSATION_ICON_KEY_FIELD] = fallback_icon
+                next_data_source[CONVERSATION_ICON_REVIEWED_FIELD] = True
                 row.data_source = next_data_source
                 data_source = next_data_source
                 icon_backfilled += 1
@@ -201,7 +212,8 @@ def create_conversation(user_id: str, name: str | None, is_public: bool) -> dict
         conv.is_public = is_public
         conv.data_source = {
             CONVERSATION_ICON_KEY_FIELD: _conversation_icon_key_from_data_source(conv.data_source)
-            or DEFAULT_CONVERSATION_ICON_KEY
+            or DEFAULT_CONVERSATION_ICON_KEY,
+            CONVERSATION_ICON_REVIEWED_FIELD: False,
         }
         session.add(conv)
         session.commit()

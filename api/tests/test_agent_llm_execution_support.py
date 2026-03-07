@@ -52,6 +52,56 @@ def test_polish_email_content_fallback(monkeypatch) -> None:
     assert result["body_text"] == "Body"
 
 
+def test_polish_email_content_strips_recipient_and_does_not_hard_truncate(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_EMAIL_POLISH_ENABLED", "1")
+    long_body = (
+        "Dear [Recipient],\n\n"
+        "Overview paragraph. " + ("Machine learning impact details. " * 120) + "\n\n"
+        "Contact: ops@example.com"
+    )
+    monkeypatch.setattr(
+        llm_execution_support,
+        "call_json_response",
+        lambda **kwargs: {
+            "subject": "Weekly report",
+            "body_text": long_body,
+        },
+    )
+    result = polish_email_content(
+        subject="Weekly report",
+        body_text=long_body,
+        recipient="ops@example.com",
+    )
+    assert result["subject"] == "Weekly report"
+    assert "ops@example.com" not in result["body_text"]
+    assert "Dear [Recipient]" not in result["body_text"]
+    assert len(result["body_text"]) > 1400
+
+
+def test_polish_email_content_preserves_long_body_when_llm_over_compresses(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_EMAIL_POLISH_ENABLED", "1")
+    source_body = (
+        "## Executive Summary\n\n"
+        + ("This report contains validated findings and evidence-backed recommendations. " * 140)
+    )
+    monkeypatch.setattr(
+        llm_execution_support,
+        "call_json_response",
+        lambda **kwargs: {
+            "subject": "Condensed report",
+            "body_text": "Short summary only",
+        },
+    )
+    result = polish_email_content(
+        subject="Condensed report",
+        body_text=source_body,
+        recipient="ops@example.com",
+    )
+    assert result["subject"] == "Condensed report"
+    assert result["body_text"].startswith("## Executive Summary")
+    assert len(result["body_text"]) > 3000
+
+
 def test_polish_contact_form_content_fallback(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_CONTACT_POLISH_ENABLED", "1")
     monkeypatch.setattr(llm_execution_support, "call_json_response", lambda **kwargs: None)
@@ -121,13 +171,35 @@ def test_rewrite_task_for_execution_parses_json(monkeypatch) -> None:
         },
     )
     row = rewrite_task_for_execution(
-        message="Analyze and send report.",
+        message="Inspect target website, verify location evidence, and send report.",
         agent_goal=None,
         conversation_summary="",
     )
     assert "verify location evidence" in row["detailed_task"]
     assert "Location summary" in row["deliverables"]
     assert "Use only verified website sources" in row["constraints"]
+
+
+def test_rewrite_task_for_execution_rejects_scope_drift(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_REWRITE_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_execution_support,
+        "call_json_response",
+        lambda **kwargs: {
+            "detailed_task": (
+                "Conduct a comprehensive analysis of the website and cover site performance, "
+                "user experience, content quality, and potential areas for improvement."
+            ),
+            "deliverables": ["Detailed report"],
+            "constraints": ["Send to ops@example.com"],
+        },
+    )
+    row = rewrite_task_for_execution(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_goal=None,
+        conversation_summary="",
+    )
+    assert row["detailed_task"] == 'analysis https://axongroup.com/ and send a report to "ops@example.com"'
 
 
 def test_build_location_delivery_brief_disabled(monkeypatch) -> None:

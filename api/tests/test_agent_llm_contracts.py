@@ -1,4 +1,5 @@
 from api.services.agent import llm_contracts
+from api.services.agent import contract_verification
 from api.services.agent.llm_contracts import (
     NO_HARDCODE_WORDS_CONSTRAINT,
     build_task_contract,
@@ -186,6 +187,109 @@ def test_build_task_contract_sanitizes_false_missing_recipient_and_fact_requirem
     assert row["delivery_target"] == "ssebowadisan1@gmail.com"
     assert row["required_facts"] == ["Company location details from the analysis"]
     assert row["missing_requirements"] == []
+
+
+def test_build_task_contract_prunes_inferred_required_facts_outside_user_scope(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_REQUIRED_FACT_FILTER_ENABLED", "0")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "objective": "Analyze website and deliver report",
+            "required_outputs": ["Website analysis report"],
+            "required_facts": ["site performance", "user experience", "content quality"],
+            "required_actions": ["send_email"],
+            "constraints": [],
+            "delivery_target": "ops@example.com",
+            "missing_requirements": [],
+            "success_checks": ["Report sent"],
+        },
+    )
+    row = build_task_contract(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_goal=None,
+        rewritten_task=(
+            "Conduct a comprehensive analysis of the website and include site performance, "
+            "user experience, content quality, and potential areas for improvement in the report."
+        ),
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "email_delivery"],
+        conversation_summary="",
+    )
+    assert row["required_facts"] == []
+    assert "Required facts to verify in the final answer" not in row["missing_requirements"]
+
+
+def test_build_task_contract_drops_generic_report_fact_for_email_delivery(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_REQUIRED_FACT_FILTER_ENABLED", "1")
+
+    def _fake_call_json_response(**kwargs):
+        prompt = str(kwargs.get("user_prompt") or "")
+        if "Build a strict task contract" in prompt:
+            return {
+                "objective": 'analysis https://axongroup.com/ and send a report to "ops@example.com"',
+                "required_outputs": ["Comprehensive analysis report of https://axongroup.com/"],
+                "required_facts": ["Key insights from the analysis of https://axongroup.com/"],
+                "required_actions": ["send_email"],
+                "constraints": [],
+                "delivery_target": "ops@example.com",
+                "missing_requirements": [],
+                "success_checks": ["Report sent"],
+            }
+        if "filter task-contract required facts" in prompt:
+            return {"keep_indexes": [0], "reason": "placeholder fact retained"}
+        return {}
+
+    monkeypatch.setattr(llm_contracts, "call_json_response", _fake_call_json_response)
+
+    row = build_task_contract(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_goal=None,
+        rewritten_task='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "email_delivery"],
+        conversation_summary="",
+    )
+    assert row["required_facts"] == []
+
+
+def test_build_task_contract_drops_generic_fact_without_url_for_report_email(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_TASK_CONTRACT_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_REQUIRED_FACT_FILTER_ENABLED", "1")
+
+    def _fake_call_json_response(**kwargs):
+        prompt = str(kwargs.get("user_prompt") or "")
+        if "Build a strict task contract" in prompt:
+            return {
+                "objective": 'analysis https://axongroup.com/ and send a report to "ops@example.com"',
+                "required_outputs": ["Comprehensive analysis report of https://axongroup.com/"],
+                "required_facts": ["website content analysis"],
+                "required_actions": ["send_email"],
+                "constraints": [],
+                "delivery_target": "ops@example.com",
+                "missing_requirements": [],
+                "success_checks": ["Report sent"],
+            }
+        if "filter task-contract required facts" in prompt:
+            return {"keep_indexes": [0], "reason": "retained"}
+        return {}
+
+    monkeypatch.setattr(llm_contracts, "call_json_response", _fake_call_json_response)
+
+    row = build_task_contract(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_goal=None,
+        rewritten_task='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        deliverables=[],
+        constraints=[],
+        intent_tags=["web_research", "report_generation", "email_delivery"],
+        conversation_summary="",
+    )
+    assert row["required_facts"] == []
 
 
 def test_build_task_contract_sanitizes_missing_items_already_provided_in_goal(monkeypatch) -> None:
@@ -534,7 +638,10 @@ def test_build_task_contract_filters_delivery_slot_from_required_facts(monkeypat
     monkeypatch.setattr(llm_contracts, "call_json_response", _fake_call_json_response)
 
     row = build_task_contract(
-        message="Analyze https://example.com and send the summary to ops@example.com.",
+        message=(
+            "Analyze https://example.com, include headquarters city and country, "
+            "and send the summary to ops@example.com."
+        ),
         agent_goal=None,
         rewritten_task="Find headquarters and send summary email.",
         deliverables=[],
@@ -699,6 +806,37 @@ def test_verify_task_contract_pre_send_gate_does_not_self_block_pending_send_act
     assert row["missing_items"] == []
 
 
+def test_verify_task_contract_pre_send_gate_skips_fact_blockers_for_pending_send_action(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_FACT_SLOT_FILTER_ENABLED", "0")
+    monkeypatch.setenv("MAIA_AGENT_LLM_FACT_COVERAGE_CHECK_ENABLED", "0")
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Analyze website and send report",
+            "required_facts": ["website content analysis"],
+            "required_actions": ["send_email"],
+            "delivery_target": "ops@example.com",
+        },
+        request_message='analysis https://example.com and send a report to "ops@example.com"',
+        executed_steps=[
+            {
+                "tool_id": "browser.playwright.inspect",
+                "status": "success",
+                "title": "Inspect website",
+                "summary": "Collected page evidence from the target domain.",
+            }
+        ],
+        actions=[{"tool_id": "gmail.draft", "status": "success", "summary": "draft created"}],
+        report_body="Website findings report prepared.",
+        sources=[{"url": "https://example.com", "label": "Example"}],
+        allowed_tool_ids=["gmail.draft", "gmail.send", "mailer.report_send"],
+        pending_action_tool_id="mailer.report_send",
+    )
+    assert row["ready_for_final_response"] is True
+    assert row["ready_for_external_actions"] is True
+    assert row["missing_items"] == []
+
+
 def test_verify_task_contract_ignores_delivery_slot_rows_from_required_facts(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
     monkeypatch.setenv("MAIA_AGENT_LLM_FACT_SLOT_FILTER_ENABLED", "0")
@@ -750,7 +888,7 @@ def test_verify_task_contract_parses_json_and_filters_remediation(monkeypatch) -
     )
     assert row["ready_for_final_response"] is False
     assert row["ready_for_external_actions"] is False
-    assert "Missing address in final output" in row["missing_items"]
+    assert row["missing_items"] == ["Unverified required fact: Company address"]
     assert row["recommended_remediation"] == [
         {"tool_id": "docs.create", "title": "Draft location note", "params": {"title": "Location Brief"}}
     ]
@@ -777,6 +915,37 @@ def test_verify_task_contract_ignores_non_actionable_llm_block_when_deterministi
         report_body="Summary with supporting citations is ready.",
         sources=[{"url": "https://example.com", "label": "Example source"}],
         allowed_tool_ids=["docs.create"],
+    )
+    assert row["ready_for_final_response"] is True
+    assert row["ready_for_external_actions"] is True
+    assert row["missing_items"] == []
+
+
+def test_verify_task_contract_semantic_fact_miss_requires_lexical_gap(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "0")
+    monkeypatch.setenv("MAIA_AGENT_LLM_FACT_SLOT_FILTER_ENABLED", "0")
+    monkeypatch.setenv("MAIA_AGENT_LLM_FACT_COVERAGE_CHECK_ENABLED", "1")
+    monkeypatch.setattr(
+        contract_verification,
+        "call_json_response",
+        lambda **kwargs: {"missing_fact_indexes": [0], "reason": "false positive semantic miss"},
+    )
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Research machine learning",
+            "required_facts": ["Overview of machine learning"],
+            "required_actions": [],
+            "delivery_target": "",
+        },
+        request_message="make research about machine learning",
+        executed_steps=[{"tool_id": "marketing.web_research", "status": "success", "summary": "Overview captured"}],
+        actions=[],
+        report_body=(
+            "This report provides an overview of machine learning, including key concepts and "
+            "practical adoption patterns."
+        ),
+        sources=[{"url": "https://example.com", "label": "Example source"}],
+        allowed_tool_ids=["marketing.web_research", "browser.playwright.inspect"],
     )
     assert row["ready_for_final_response"] is True
     assert row["ready_for_external_actions"] is True
@@ -831,6 +1000,39 @@ def test_verify_task_contract_keeps_actionable_llm_block_when_fact_gap_is_report
             "params": {"query": "company headquarters city country"},
         }
     ]
+
+
+def test_verify_task_contract_sanitizes_out_of_contract_llm_missing_items(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_CHECK_ENABLED", "1")
+    monkeypatch.setenv("MAIA_AGENT_LLM_MISSING_ALIGNMENT_ENABLED", "0")
+    monkeypatch.setattr(
+        llm_contracts,
+        "call_json_response",
+        lambda **kwargs: {
+            "ready_for_final_response": False,
+            "ready_for_external_actions": False,
+            "missing_items": ["recipient: ssebowadisan1@gmail.com"],
+            "reason": "Mandatory requirement for recipient email address is missing.",
+            "recommended_remediation": [],
+        },
+    )
+    row = verify_task_contract_fulfillment(
+        contract={
+            "objective": "Research machine learning",
+            "required_facts": ["Bayesian posterior uncertainty decomposition"],
+            "required_actions": [],
+            "delivery_target": "",
+        },
+        request_message="make research about machine learning",
+        executed_steps=[],
+        actions=[],
+        report_body="",
+        sources=[],
+        allowed_tool_ids=["marketing.web_research", "browser.playwright.inspect"],
+    )
+    assert row["ready_for_final_response"] is False
+    assert row["ready_for_external_actions"] is False
+    assert row["missing_items"] == ["Unverified required fact: Bayesian posterior uncertainty decomposition"]
 
 
 def test_verify_task_contract_enforces_no_hardcode_constraint_in_execution_payload(monkeypatch) -> None:

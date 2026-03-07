@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from dataclasses import replace
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -27,6 +28,8 @@ from .discovery_gate import (
 from .models import TaskPreparation
 from .text_helpers import compact, truthy
 
+_SCOPE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+
 
 def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
     try:
@@ -34,6 +37,52 @@ def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
     except Exception:
         parsed = int(default)
     return max(low, min(high, parsed))
+
+
+def _tokenize_scope(text: str) -> set[str]:
+    def _canonical(raw: str) -> str:
+        token = str(raw or "").strip().lower()
+        for suffix in ("ization", "ation", "ments", "ment", "ities", "ity", "ing", "ed", "s"):
+            if token.endswith(suffix) and (len(token) - len(suffix)) >= 4:
+                token = token[: -len(suffix)]
+                break
+        return token
+
+    return {
+        _canonical(match.group(0))
+        for match in _SCOPE_WORD_RE.finditer(str(text or ""))
+        if len(match.group(0)) >= 4
+    }
+
+
+def _rewrite_scope_drifted(*, message: str, agent_goal: str, rewritten_task: str) -> bool:
+    source_tokens = _tokenize_scope(" ".join([message, agent_goal]).strip())
+    rewritten_tokens = _tokenize_scope(rewritten_task)
+    if not rewritten_tokens:
+        return True
+    if not source_tokens:
+        return False
+    novel_tokens = rewritten_tokens.difference(source_tokens)
+    if not novel_tokens:
+        return False
+    novel_ratio = len(novel_tokens) / max(1, len(rewritten_tokens))
+    novel_limit = max(4, int(len(source_tokens) * 0.75))
+    return len(novel_tokens) > novel_limit or novel_ratio >= 0.45
+
+
+def _normalize_rewritten_task_scope(
+    *,
+    message: str,
+    agent_goal: str,
+    rewritten_task: str,
+) -> str:
+    cleaned_rewrite = " ".join(str(rewritten_task or "").split()).strip()
+    if not cleaned_rewrite:
+        return " ".join(str(message or "").split()).strip()
+    if not _rewrite_scope_drifted(message=message, agent_goal=agent_goal, rewritten_task=cleaned_rewrite):
+        return cleaned_rewrite
+    source_scope = " ".join([str(message or "").strip(), str(agent_goal or "").strip()]).strip()
+    return source_scope[:900] if source_scope else cleaned_rewrite[:900]
 
 
 def _force_deep_search_profile(
@@ -341,6 +390,11 @@ def prepare_task_context(
     rewritten_task = " ".join(
         str(rewrite_payload.get("detailed_task") or request.message or "").split()
     ).strip()
+    rewritten_task = _normalize_rewritten_task_scope(
+        message=request.message,
+        agent_goal=str(request.agent_goal or ""),
+        rewritten_task=rewritten_task,
+    )
     planned_deliverables = [
         str(item).strip()
         for item in (rewrite_payload.get("deliverables") if isinstance(rewrite_payload, dict) else [])

@@ -1,9 +1,43 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, env_bool
+
+_SCOPE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+
+
+def _tokenize_scope(text: str) -> set[str]:
+    def _canonical(raw: str) -> str:
+        token = str(raw or "").strip().lower()
+        for suffix in ("ization", "ation", "ments", "ment", "ities", "ity", "ing", "ed", "s"):
+            if token.endswith(suffix) and (len(token) - len(suffix)) >= 4:
+                token = token[: -len(suffix)]
+                break
+        return token
+
+    return {
+        _canonical(match.group(0))
+        for match in _SCOPE_WORD_RE.finditer(str(text or ""))
+        if len(match.group(0)) >= 4
+    }
+
+
+def _rewrite_scope_drifted(*, source_text: str, rewritten_text: str) -> bool:
+    source_tokens = _tokenize_scope(source_text)
+    rewritten_tokens = _tokenize_scope(rewritten_text)
+    if not rewritten_tokens:
+        return True
+    if not source_tokens:
+        return False
+    novel_tokens = rewritten_tokens.difference(source_tokens)
+    if not novel_tokens:
+        return False
+    novel_ratio = len(novel_tokens) / max(1, len(rewritten_tokens))
+    novel_limit = max(4, int(len(source_tokens) * 0.75))
+    return len(novel_tokens) > novel_limit or novel_ratio >= 0.45
 
 
 def rewrite_task_for_execution(
@@ -66,6 +100,9 @@ def rewrite_task_for_execution(
     detailed_task = " ".join(str(response.get("detailed_task") or "").split()).strip()[:900]
     if not detailed_task:
         detailed_task = clean_message[:900]
+    source_scope_text = " ".join([clean_message, clean_goal]).strip()
+    if _rewrite_scope_drifted(source_text=source_scope_text, rewritten_text=detailed_task):
+        detailed_task = source_scope_text[:900] if source_scope_text else clean_message[:900]
 
     def _clean_list(raw: Any, *, limit: int) -> list[str]:
         if not isinstance(raw, list):

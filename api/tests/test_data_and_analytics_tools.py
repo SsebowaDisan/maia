@@ -73,6 +73,31 @@ def test_report_generation_includes_reference_links_from_recent_web_sources() ->
     assert "[OpenAI](https://openai.com)" in result.content
 
 
+def test_report_generation_redacts_delivery_email_from_prompt_context() -> None:
+    context = _context()
+    context.settings["__task_contract"] = {"delivery_target": "ops@example.com"}
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt="make research about machine learning and send report to ops@example.com",
+        params={"title": "ML Brief"},
+    )
+    assert "ops@example.com" not in result.content
+
+
+def test_report_generation_redacts_delivery_email_from_summary_context() -> None:
+    context = _context()
+    context.settings["__task_contract"] = {"delivery_target": "ops@example.com"}
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt="generate report",
+        params={
+            "title": "Research Brief",
+            "summary": "Prepare findings and deliver updates to ops@example.com",
+        },
+    )
+    assert "ops@example.com" not in result.content
+
+
 def test_chart_generate_tool_returns_artifact_path() -> None:
     result = ChartGenerateTool().execute(
         context=_context(),

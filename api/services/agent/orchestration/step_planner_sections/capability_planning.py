@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -51,6 +52,8 @@ _ACTION_PRIORITY: dict[str, int] = {
     "execute": 30,
 }
 
+_DOMAIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+
 @dataclass(frozen=True)
 class CapabilityPlanningAnalysis:
     required_domains: list[str]
@@ -86,6 +89,88 @@ def _capabilities_for_available_tools(available_tool_ids: set[str]) -> list[Agen
         for capability in get_capability_matrix()
         if capability.tool_id in available_tool_ids
     ]
+
+
+def _tokenize_domain_scope(text: str) -> set[str]:
+    def _canonical(raw: str) -> str:
+        token = str(raw or "").strip().lower()
+        for suffix in ("ization", "ation", "ments", "ment", "ities", "ity", "ing", "ed", "s"):
+            if token.endswith(suffix) and (len(token) - len(suffix)) >= 4:
+                token = token[: -len(suffix)]
+                break
+        return token
+
+    return {
+        _canonical(match.group(0))
+        for match in _DOMAIN_TOKEN_RE.finditer(str(text or ""))
+        if len(match.group(0)) >= 4 or any(ch.isdigit() for ch in match.group(0))
+    }
+
+
+def _build_domain_scope_vocab(
+    capabilities: list[AgentToolCapability],
+) -> tuple[dict[str, set[str]], dict[str, int]]:
+    domain_vocab: dict[str, set[str]] = {}
+    for capability in capabilities:
+        domain = str(capability.domain or "").strip()
+        if not domain:
+            continue
+        tokens = _tokenize_domain_scope(
+            " ".join(
+                [
+                    domain,
+                    str(capability.tool_id or "").replace(".", " "),
+                    str(capability.description or ""),
+                ]
+            )
+        )
+        if not tokens:
+            continue
+        domain_vocab.setdefault(domain, set()).update(tokens)
+
+    token_domain_counts: dict[str, int] = {}
+    for tokens in domain_vocab.values():
+        for token in tokens:
+            token_domain_counts[token] = token_domain_counts.get(token, 0) + 1
+    return domain_vocab, token_domain_counts
+
+
+def _filter_llm_domains_by_request_scope(
+    *,
+    proposed_domains: list[str],
+    request_text: str,
+    baseline_domains: set[str],
+    domain_vocab: dict[str, set[str]],
+    token_domain_counts: dict[str, int],
+) -> list[str]:
+    request_tokens = _tokenize_domain_scope(request_text)
+    if not request_tokens:
+        return proposed_domains[:6]
+
+    kept: list[str] = []
+    for domain in proposed_domains:
+        if domain in kept:
+            continue
+        if domain in baseline_domains:
+            kept.append(domain)
+            continue
+        vocab = domain_vocab.get(domain, set())
+        if not vocab:
+            continue
+        discriminative = {
+            token
+            for token in vocab
+            if token_domain_counts.get(token, 0) <= 1
+        }
+        overlap_discriminative = request_tokens.intersection(discriminative)
+        overlap_all = request_tokens.intersection(vocab)
+        # Keep only semantically grounded domain proposals: either at least one
+        # domain-specific signal token or enough direct overlap with domain vocabulary.
+        if overlap_discriminative or len(overlap_all) >= 2:
+            kept.append(domain)
+        if len(kept) >= 6:
+            break
+    return kept
 
 
 def _append_domains(
@@ -142,12 +227,8 @@ def _infer_domains_with_llm(
     payload = {
         "message": str(request.message or "").strip(),
         "agent_goal": str(request.agent_goal or "").strip(),
-        "rewritten_task": str(task_prep.rewritten_task or "").strip(),
-        "contract_objective": str(task_prep.contract_objective or "").strip(),
-        "contract_outputs": list(task_prep.contract_outputs[:8]),
-        "contract_facts": list(task_prep.contract_facts[:8]),
-        "contract_actions": list(task_prep.contract_actions[:8]),
         "intent_tags": [str(tag).strip() for tag in task_prep.task_intelligence.intent_tags[:8]],
+        "contract_actions": list(task_prep.contract_actions[:8]),
         "available_domains": available_domains,
     }
     prompt = (
@@ -157,7 +238,8 @@ def _infer_domains_with_llm(
         "Rules:\n"
         "- Use only available_domains.\n"
         "- Pick 1-6 domains.\n"
-        "- User does not need to name APIs; infer required domains from business intent.\n"
+        "- Use message + agent_goal + intent_tags as the authoritative scope.\n"
+        "- contract_actions can add delivery/workspace domains but must not widen topical scope.\n"
         "- Favor non-technical workflow domains when they can satisfy the request.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
@@ -200,6 +282,7 @@ def analyze_capability_plan(
         {capability.domain for capability in capabilities if str(capability.domain).strip()},
         key=_domain_sort_key,
     )
+    domain_vocab, token_domain_counts = _build_domain_scope_vocab(capabilities)
     domains: set[str] = set()
     matched_signals: list[str] = []
 
@@ -229,17 +312,23 @@ def analyze_capability_plan(
                 candidate_domains=mapped,
             )
 
-    raw_text = " ".join(
+    request_scope_text = " ".join(
         [
             str(request.message or "").strip().lower(),
             str(request.agent_goal or "").strip().lower(),
-            str(task_prep.contract_objective or "").strip().lower(),
         ]
     ).strip()
     llm_domains = _infer_domains_with_llm(
         request=request,
         task_prep=task_prep,
         available_domains=available_domains,
+    )
+    llm_domains = _filter_llm_domains_by_request_scope(
+        proposed_domains=llm_domains,
+        request_text=request_scope_text,
+        baseline_domains=set(domains),
+        domain_vocab=domain_vocab,
+        token_domain_counts=token_domain_counts,
     )
     for domain in llm_domains:
         _append_domains(

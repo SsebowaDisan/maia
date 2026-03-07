@@ -9,6 +9,18 @@ from api.services.agent.planner import LLM_ALLOWED_TOOL_IDS, PlannedStep
 
 from ..models import TaskPreparation
 
+URL_SCOPED_PROBE_TOOL_IDS = {
+    "browser.playwright.inspect",
+    "marketing.web_research",
+    "web.extract.structured",
+    "web.dataset.adapter",
+    "documents.highlight.extract",
+}
+
+
+def _is_allowed_url_scoped_probe(tool_id: str) -> bool:
+    return str(tool_id or "").strip() in URL_SCOPED_PROBE_TOOL_IDS
+
 
 def build_planning_request(
     *,
@@ -73,10 +85,11 @@ def insert_contract_probe_steps(
     steps: list[PlannedStep],
     allowed_tool_ids: list[str],
 ) -> list[PlannedStep]:
+    target_url = " ".join(str(task_prep.task_intelligence.target_url or "").split()).strip()
     probe_rows = propose_fact_probe_steps(
         contract=task_prep.task_contract,
         request_message=request.message,
-        target_url=task_prep.task_intelligence.target_url or "",
+        target_url=target_url,
         existing_steps=[
             {"tool_id": item.tool_id, "title": item.title, "params": item.params}
             for item in steps[:20]
@@ -98,6 +111,8 @@ def insert_contract_probe_steps(
     for row in probe_rows:
         tool_id = str(row.get("tool_id") or "").strip()
         if not tool_id:
+            continue
+        if target_url and not _is_allowed_url_scoped_probe(tool_id):
             continue
         params_raw = row.get("params")
         params_dict = dict(params_raw) if isinstance(params_raw, dict) else {}

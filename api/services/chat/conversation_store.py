@@ -12,6 +12,7 @@ from ktem.db.models import Conversation, engine
 
 from api.context import ApiContext
 from api.services.chat.conversation_naming import (
+    CONVERSATION_ICON_REVIEWED_FIELD,
     CONVERSATION_ICON_KEY_FIELD,
     DEFAULT_CONVERSATION_ICON_KEY,
     generate_conversation_identity,
@@ -21,7 +22,10 @@ from api.services.chat.conversation_naming import (
     normalize_conversation_icon_key,
 )
 
-PRESERVED_DATA_SOURCE_KEYS = {CONVERSATION_ICON_KEY_FIELD}
+PRESERVED_DATA_SOURCE_KEYS = {
+    CONVERSATION_ICON_KEY_FIELD,
+    CONVERSATION_ICON_REVIEWED_FIELD,
+}
 
 
 def read_conversation_icon_key(data_source: Any) -> str | None:
@@ -51,14 +55,20 @@ def get_or_create_conversation(
 
         conv = Conversation(user=user_id)
         conv.name = normalize_conversation_name("")
-        conv.data_source = {CONVERSATION_ICON_KEY_FIELD: DEFAULT_CONVERSATION_ICON_KEY}
+        conv.data_source = {
+            CONVERSATION_ICON_KEY_FIELD: DEFAULT_CONVERSATION_ICON_KEY,
+            CONVERSATION_ICON_REVIEWED_FIELD: False,
+        }
         session.add(conv)
         session.commit()
         session.refresh(conv)
         return (
             conv.id,
             normalize_conversation_name(conv.name),
-            {CONVERSATION_ICON_KEY_FIELD: DEFAULT_CONVERSATION_ICON_KEY},
+            {
+                CONVERSATION_ICON_KEY_FIELD: DEFAULT_CONVERSATION_ICON_KEY,
+                CONVERSATION_ICON_REVIEWED_FIELD: False,
+            },
             DEFAULT_CONVERSATION_ICON_KEY,
         )
 
@@ -141,8 +151,13 @@ def maybe_autoname_conversation(
 
         current_payload = deepcopy(conv.data_source or {})
         current_icon = read_conversation_icon_key(current_payload)
+        icon_reviewed = bool(current_payload.get(CONVERSATION_ICON_REVIEWED_FIELD))
         needs_name = is_placeholder_conversation_name(conv.name)
-        needs_icon = not current_icon
+        needs_icon = (not current_icon) or (
+            bool(str(message or "").strip())
+            and current_icon == DEFAULT_CONVERSATION_ICON_KEY
+            and not icon_reviewed
+        )
         changed = False
 
         if needs_name or needs_icon:
@@ -155,6 +170,7 @@ def maybe_autoname_conversation(
                 changed = True
             if needs_icon:
                 current_payload[CONVERSATION_ICON_KEY_FIELD] = generated_icon_key
+                current_payload[CONVERSATION_ICON_REVIEWED_FIELD] = True
                 conv.data_source = current_payload
                 current_icon = generated_icon_key
                 changed = True

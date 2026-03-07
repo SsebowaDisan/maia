@@ -20,10 +20,16 @@ def test_infer_user_language_code_detects_arabic_script() -> None:
     assert resolved == "ar"
 
 
+def test_infer_user_language_code_ignores_url_artifacts_for_english_request() -> None:
+    resolved = infer_user_language_code(
+        'analysis https://axongroup.com/ and send a report to "ops@example.com"'
+    )
+    assert resolved == "en"
+
+
 def test_build_response_language_rule_uses_detected_language_label() -> None:
     rule = build_response_language_rule(
         requested_language=None,
         latest_message="Que hace esta empresa y como funciona su modelo de negocio?",
     )
     assert "Spanish" in rule
-

@@ -14,6 +14,9 @@ from api.services.agent.orchestration.step_planner_sections.research import (
 from api.services.agent.orchestration.step_planner_sections.intent_enrichment import (
     apply_intent_enrichment,
 )
+from api.services.agent.orchestration.step_planner_sections.contracts import (
+    insert_contract_probe_steps,
+)
 from api.services.agent.orchestration.step_planner_sections.workspace_logging import (
     build_workspace_logging_plan,
     prepend_workspace_roadmap_steps,
@@ -317,6 +320,56 @@ def test_intent_enrichment_adds_docs_and_sheets_steps_from_llm_signal_when_tags_
     assert "workspace.docs.research_notes" in tool_ids
     assert "workspace.sheets.track_step" in tool_ids
     assert tool_ids[0] == "workspace.sheets.track_step"
+
+
+def test_insert_contract_probe_steps_filters_non_web_probe_tools_for_target_url(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import contracts as contracts_module
+
+    monkeypatch.setattr(
+        contracts_module,
+        "propose_fact_probe_steps",
+        lambda **kwargs: [
+            {
+                "tool_id": "analytics.ga4.report",
+                "title": "Gather site performance metrics",
+                "params": {"url": "https://axongroup.com/"},
+            },
+            {
+                "tool_id": "browser.playwright.inspect",
+                "title": "Collect missing evidence",
+                "params": {"url": "https://axongroup.com/products-and-solutions"},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_mode="company_agent",
+    )
+    task_prep = SimpleNamespace(
+        task_contract={"required_facts": ["core findings"]},
+        task_intelligence=SimpleNamespace(target_url="https://axongroup.com/"),
+    )
+    steps = [
+        PlannedStep(
+            tool_id="browser.playwright.inspect",
+            title="Inspect website",
+            params={"url": "https://axongroup.com/"},
+        ),
+        PlannedStep(
+            tool_id="report.generate",
+            title="Generate report",
+            params={"summary": request.message},
+        ),
+    ]
+    result = insert_contract_probe_steps(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+        allowed_tool_ids=["analytics.ga4.report", "browser.playwright.inspect"],
+    )
+    tool_ids = [step.tool_id for step in result]
+    assert "analytics.ga4.report" not in tool_ids
+    assert tool_ids.count("browser.playwright.inspect") == 2
 
 
 def test_intent_enrichment_skips_deep_highlight_without_explicit_file_scope(monkeypatch) -> None:

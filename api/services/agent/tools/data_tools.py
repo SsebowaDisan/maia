@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from statistics import mean
 from typing import Any
 
@@ -15,6 +16,7 @@ from api.services.agent.tools.base import (
 )
 
 SCENE_SURFACE_SYSTEM = "system"
+EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
 
 def _as_float(value: Any) -> float | None:
@@ -40,6 +42,34 @@ def _first_sentence(text: str, max_len: int = 220) -> str:
     if len(clean) <= max_len:
         return clean
     return f"{clean[: max_len - 1].rstrip()}..."
+
+
+def _report_delivery_targets(*, prompt: str, settings: dict[str, Any]) -> list[str]:
+    targets: list[str] = []
+    for match in EMAIL_RE.findall(str(prompt or "")):
+        value = str(match or "").strip().lower()
+        if value and value not in targets:
+            targets.append(value)
+    task_contract = settings.get("__task_contract")
+    if isinstance(task_contract, dict):
+        target_raw = " ".join(str(task_contract.get("delivery_target") or "").split()).strip()
+        for match in EMAIL_RE.findall(target_raw):
+            value = str(match or "").strip().lower()
+            if value and value not in targets:
+                targets.append(value)
+    return targets[:6]
+
+
+def _redact_delivery_targets(text: str, *, targets: list[str]) -> str:
+    clean = str(text or "")
+    if not clean or not targets:
+        return clean
+    for target in targets:
+        if not target:
+            continue
+        clean = re.sub(re.escape(target), "", clean, flags=re.IGNORECASE)
+    clean = " ".join(clean.split())
+    return clean.strip()
 
 
 def _coerce_bool(value: Any) -> bool | None:
@@ -559,6 +589,8 @@ class ReportGenerationTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> ToolExecutionResult:
+        delivery_targets = _report_delivery_targets(prompt=prompt, settings=context.settings)
+        sanitized_prompt = _redact_delivery_targets(prompt, targets=delivery_targets)
         depth_tier = (
             " ".join(str(context.settings.get("__research_depth_tier") or "standard").split())
             .strip()
@@ -566,12 +598,14 @@ class ReportGenerationTool(AgentTool):
             or "standard"
         )
         title = str(params.get("title") or "Executive Report").strip()
-        summary = str(params.get("summary") or prompt).strip() or "No summary provided."
+        summary_seed = str(params.get("summary") or sanitized_prompt).strip()
+        summary = summary_seed or "No summary provided."
         summary = " ".join(summary.split())
+        summary = _redact_delivery_targets(summary, targets=delivery_targets)
         if len(summary) > 560:
             summary = f"{summary[:559].rstrip()}..."
         report_intent_flags = _classify_report_intent_with_llm(
-            prompt=prompt,
+            prompt=sanitized_prompt,
             summary=summary,
             title=title,
             settings=context.settings,
@@ -587,7 +621,8 @@ class ReportGenerationTool(AgentTool):
                 if isinstance(finding_keywords, list)
                 else ""
             )
-            requested_focus = _first_sentence(str(params.get("summary") or prompt), max_len=260)
+            requested_focus = _first_sentence(str(params.get("summary") or sanitized_prompt), max_len=260)
+            requested_focus = _redact_delivery_targets(requested_focus, targets=delivery_targets)
             location_requested = bool(report_intent_flags.get("location_objective"))
             location_signal = _extract_location_signal_with_llm(finding_excerpt)
             summary_parts: list[str] = []
@@ -613,6 +648,7 @@ class ReportGenerationTool(AgentTool):
             direct_answer = _draft_direct_answer(summary)
             if direct_answer:
                 summary = direct_answer
+        summary = _redact_delivery_targets(summary, targets=delivery_targets)
         if len(summary) > 900:
             summary = f"{summary[:899].rstrip()}..."
         raw_sources = params.get("sources")
@@ -653,12 +689,17 @@ class ReportGenerationTool(AgentTool):
         analysis_paragraphs = _analysis_paragraphs_with_llm(
             title=title,
             summary=summary,
-            prompt=prompt,
+            prompt=sanitized_prompt,
             source_rows=source_rows,
             depth_tier=depth_tier,
         )
         if not analysis_paragraphs:
             analysis_paragraphs = _fallback_analysis_paragraphs(summary=summary)
+        analysis_paragraphs = [
+            _redact_delivery_targets(item, targets=delivery_targets)
+            for item in analysis_paragraphs
+            if str(item).strip()
+        ]
         reference_lines = _reference_lines(
             source_rows,
             limit=40 if depth_tier in {"deep_research", "deep_analytics"} else 12,
@@ -667,7 +708,7 @@ class ReportGenerationTool(AgentTool):
             reference_lines = ["- No external links were captured for this run."]
         analytics_lines = _analytics_section_lines(context.settings)
         simple_explanation_requested = _prefers_simple_explanation(
-            prompt=prompt,
+            prompt=sanitized_prompt,
             summary=summary,
             title=title,
             settings=context.settings,
@@ -703,6 +744,7 @@ class ReportGenerationTool(AgentTool):
                 *reference_lines,
             ]
         )
+        content = _redact_delivery_targets(content, targets=delivery_targets)
         context.settings["__latest_report_title"] = title
         context.settings["__latest_report_content"] = content
         if source_rows:

@@ -11,6 +11,7 @@ DEFAULT_CONVERSATION_LABEL = "New chat"
 MAX_CONVERSATION_NAME_LEN = 25
 DEFAULT_CONVERSATION_ICON_KEY = "message-circle"
 CONVERSATION_ICON_KEY_FIELD = "conversation_icon_key"
+CONVERSATION_ICON_REVIEWED_FIELD = "conversation_icon_reviewed"
 ALLOWED_CONVERSATION_ICON_KEYS = (
     "message-circle",
     "briefcase",

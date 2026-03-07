@@ -347,6 +347,7 @@ def build_deterministic_contract_check(
     pending_action_tool_id: str = "",
 ) -> dict[str, Any]:
     required_actions = _clean_text_list(contract.get("required_actions"), limit=6, max_item_len=64)
+    clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
     delivery_target = " ".join(str(contract.get("delivery_target") or "").split()).strip()
     required_facts = _filter_required_facts_for_coverage(
         required_facts=_clean_text_list(contract.get("required_facts"), limit=6),
@@ -363,6 +364,11 @@ def build_deterministic_contract_check(
     missing_items: list[str] = []
     reason_parts: list[str] = []
     remediation: list[dict[str, Any]] = []
+    external_action_keys = ("send_email", "submit_contact_form", "post_message")
+    pending_external_action = any(
+        action_key in required_actions and clean_pending_action_tool_id in ACTION_TOOL_IDS.get(action_key, set())
+        for action_key in external_action_keys
+    )
     evidence_rows = _collect_evidence_texts(
         request_message=request_message,
         executed_steps=executed_steps,
@@ -375,45 +381,51 @@ def build_deterministic_contract_check(
         required_facts=required_facts,
         evidence_rows=evidence_rows,
     )
+    lexical_missing_facts = [
+        fact
+        for fact in required_facts
+        if _fact_missing(fact=fact, evidence_rows=evidence_rows)
+    ]
     missing_facts: list[str]
     if isinstance(semantic_missing_facts, list):
-        missing_facts = semantic_missing_facts[:6]
+        semantic_set = {str(item).strip() for item in semantic_missing_facts if str(item).strip()}
+        if semantic_set:
+            missing_facts = [fact for fact in lexical_missing_facts if fact in semantic_set][:6]
+        else:
+            missing_facts = lexical_missing_facts[:6]
     else:
-        missing_facts = []
-        for fact in required_facts:
-            if _fact_missing(fact=fact, evidence_rows=evidence_rows):
-                missing_facts.append(fact)
-    for fact in missing_facts[:6]:
-        missing_items.append(f"Unverified required fact: {fact}")
-    if missing_facts:
-        reason_parts.append("Required facts are not yet verified with evidence.")
-        if target_url:
+        missing_facts = lexical_missing_facts[:6]
+    if not pending_external_action:
+        for fact in missing_facts[:6]:
+            missing_items.append(f"Unverified required fact: {fact}")
+        if missing_facts:
+            reason_parts.append("Required facts are not yet verified with evidence.")
+            if target_url:
+                _append_remediation(
+                    target=remediation,
+                    tool_id="browser.playwright.inspect",
+                    title="Inspect target website for missing required facts",
+                    params={"url": target_url},
+                    allowed_tool_ids=allowed_set,
+                )
             _append_remediation(
                 target=remediation,
-                tool_id="browser.playwright.inspect",
-                title="Inspect target website for missing required facts",
-                params={"url": target_url},
+                tool_id="marketing.web_research",
+                title="Research missing required facts",
+                params={
+                    "query": (
+                        f"site:{target_host} " + ("; ".join(missing_facts[:3]) or request_message)
+                        if target_host
+                        else ("; ".join(missing_facts[:3]) or request_message)
+                    ),
+                    "domain_scope": [target_host] if target_host else [],
+                    "domain_scope_mode": "strict" if target_host else "off",
+                    "target_url": target_url,
+                },
                 allowed_tool_ids=allowed_set,
             )
-        _append_remediation(
-            target=remediation,
-            tool_id="marketing.web_research",
-            title="Research missing required facts",
-            params={
-                "query": (
-                    f"site:{target_host} " + ("; ".join(missing_facts[:3]) or request_message)
-                    if target_host
-                    else ("; ".join(missing_facts[:3]) or request_message)
-                ),
-                "domain_scope": [target_host] if target_host else [],
-                "domain_scope_mode": "strict" if target_host else "off",
-                "target_url": target_url,
-            },
-            allowed_tool_ids=allowed_set,
-        )
 
     successful_tools = _successful_action_tool_ids(actions)
-    clean_pending_action_tool_id = str(pending_action_tool_id or "").strip()
     for action in required_actions:
         action_key = str(action).strip()
         if not action_key:

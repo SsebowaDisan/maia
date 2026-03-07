@@ -15,6 +15,7 @@ from api.services.agent.llm_runtime import call_json_response, env_bool, sanitiz
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 MARKDOWN_LINK_URL_RE = re.compile(r"\[[^\]]+\]\((https?://[^)\s]+)\)", re.IGNORECASE)
+WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 DELIVERY_TARGET_HINT_RE = re.compile(
     r"(?:recipient(?:\s+for\s+(?:the\s+)?)?(?:findings|research report|report)?\s*[:=]\s*([^\n.;]+))",
     re.IGNORECASE,
@@ -51,6 +52,46 @@ def _enforce_contract_constraints(raw: Any) -> list[str]:
 
 def _normalize_for_match(text: str) -> str:
     return " ".join(str(text or "").lower().split()).strip()
+
+
+def _tokenize_for_scope(text: str) -> set[str]:
+    def _canonical_token(raw: str) -> str:
+        token = str(raw or "").strip().lower()
+        for suffix in ("ization", "ation", "ions", "ion", "ments", "ment", "ities", "ity", "ing", "ed", "s"):
+            if token.endswith(suffix) and (len(token) - len(suffix)) >= 4:
+                token = token[: -len(suffix)]
+                break
+        return token
+
+    return {
+        _canonical_token(match.group(0))
+        for match in WORD_RE.finditer(str(text or ""))
+        if len(match.group(0)) >= 4
+    }
+
+
+def _scope_filter_required_facts(
+    *,
+    rows: list[str],
+    message: str,
+    agent_goal: str,
+) -> list[str]:
+    # Scope facts to user-authored request context only; rewritten task text can
+    # expand wording and should not create new mandatory fact dimensions.
+    request_tokens = _tokenize_for_scope(" ".join([message, agent_goal]))
+    if not request_tokens:
+        return rows[:6]
+    filtered: list[str] = []
+    for row in rows:
+        fact_tokens = _tokenize_for_scope(row)
+        if not fact_tokens:
+            continue
+        overlap = fact_tokens.intersection(request_tokens)
+        if len(overlap) >= 1:
+            filtered.append(row)
+            if len(filtered) >= 6:
+                break
+    return filtered
 
 
 def _align_missing_items_with_contract_semantics(
@@ -370,13 +411,64 @@ def _filter_required_facts_for_execution(
     rows = _clean_text_list(required_facts, limit=6)
     if not rows:
         return []
+    action_set = {
+        str(item).strip().lower()
+        for item in required_actions
+        if str(item).strip()
+    }
+    tag_set = {
+        str(item).strip().lower()
+        for item in intent_tags
+        if str(item).strip()
+    }
+    normalized_target_url = _normalize_url_candidate(target_url)
+    request_scope_tokens = _tokenize_for_scope(" ".join([message, agent_goal]))
+    
+    def _target_bound(candidate_rows: list[str]) -> bool:
+        return bool(normalized_target_url) and bool(candidate_rows) and all(
+            normalized_target_url in str(row or "")
+            for row in candidate_rows
+        )
+
+    def _finalize(candidate_rows: list[str]) -> list[str]:
+        scoped_rows = _scope_filter_required_facts(
+            rows=candidate_rows,
+            message=message,
+            agent_goal=agent_goal,
+        )
+        def _is_low_alignment_row(row: str) -> bool:
+            fact_tokens = _tokenize_for_scope(row)
+            if not fact_tokens:
+                return True
+            if not request_scope_tokens:
+                return True
+            overlap = len(fact_tokens.intersection(request_scope_tokens))
+            ratio = overlap / max(1, len(fact_tokens))
+            return ratio < 0.75
+
+        low_alignment_rows = bool(scoped_rows) and all(
+            _is_low_alignment_row(str(row or ""))
+            for row in scoped_rows
+        )
+        # Report-generation email tasks already validate outputs and evidence.
+        # Keep location/contact workflows strict, but avoid generic fact rows
+        # turning into false execution blockers.
+        if (
+            "report_generation" in tag_set
+            and "location_lookup" not in tag_set
+            and "contact_form_submission" not in tag_set
+            and (
+                "send_email" in action_set
+                or "email_delivery" in tag_set
+                or _target_bound(scoped_rows)
+            )
+            and len(scoped_rows) <= 2
+            and low_alignment_rows
+        ):
+            return []
+        return scoped_rows[:6]
 
     def _fallback() -> list[str]:
-        action_set = {
-            str(item).strip().lower()
-            for item in required_actions
-            if str(item).strip()
-        }
         normalized_target = _normalize_for_match(delivery_target)
         filtered: list[str] = []
         for row in rows:
@@ -390,7 +482,7 @@ def _filter_required_facts_for_execution(
             filtered.append(row)
             if len(filtered) >= 6:
                 break
-        return filtered
+        return _finalize(filtered)
 
     if not allow_llm:
         return _fallback()
@@ -448,7 +540,7 @@ def _filter_required_facts_for_execution(
         kept.append(value)
         if len(kept) >= 6:
             break
-    return kept
+    return _finalize(kept)
 
 
 def _classify_missing_requirements(
@@ -478,7 +570,7 @@ def _classify_missing_requirements(
     if needs_target_url and not target_url:
         missing.append("Target website URL")
 
-    needs_required_facts = bool(required_outputs) or "report_generation" in tags or "location_lookup" in tags
+    needs_required_facts = "location_lookup" in tags
     if needs_required_facts and not required_facts:
         missing.append("Required facts to verify in the final answer")
 
@@ -512,9 +604,6 @@ def _derive_required_facts(
 
     if "location_lookup" in tags:
         facts.append("Company location details (city/country and address if available)")
-
-    if "report_generation" in tags and not facts:
-        facts.append("Core factual findings required for the requested report")
 
     return facts[:6]
 
@@ -992,6 +1081,11 @@ def verify_task_contract_fulfillment(
     if not isinstance(response, dict):
         return deterministic_check
     llm_check = parse_llm_contract_check(response=response, allowed_tool_ids=allowed_tool_ids)
+    llm_check["missing_items"] = _align_missing_items_with_contract_semantics(
+        missing_items=_clean_text_list(llm_check.get("missing_items"), limit=8),
+        required_actions=_clean_text_list(normalized_contract.get("required_actions"), limit=8, max_item_len=64),
+        required_facts=_clean_text_list(normalized_contract.get("required_facts"), limit=8),
+    )
     llm_check = _calibrate_llm_contract_gate(
         contract=normalized_contract,
         deterministic_check=deterministic_check,

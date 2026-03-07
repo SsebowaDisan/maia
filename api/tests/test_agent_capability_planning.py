@@ -250,3 +250,37 @@ def test_capability_analysis_does_not_force_workspace_tools_without_workspace_si
 
     assert "workspace.docs.research_notes" not in analysis.preferred_tool_ids
     assert "workspace.sheets.track_step" not in analysis.preferred_tool_ids
+
+
+def test_capability_analysis_filters_ungrounded_llm_analytics_domain() -> None:
+    registry = _RegistryStub(
+        [
+            "marketing.web_research",
+            "report.generate",
+            "gmail.draft",
+            "analytics.ga4.report",
+            "analytics.chart.generate",
+        ]
+    )
+    request = ChatRequest(
+        message='analysis https://axongroup.com/ and send a report to "ops@example.com"',
+        agent_mode="company_agent",
+    )
+    prep = _task_prep(
+        intent_tags=("web_research", "report_generation", "email_delivery"),
+        contract_actions=["send_email"],
+        contract_objective="Analyze website and send report",
+    )
+
+    with patch(
+        "api.services.agent.orchestration.step_planner_sections.capability_planning._infer_domains_with_llm",
+        return_value=["analytics"],
+    ):
+        analysis = analyze_capability_plan(
+            request=request,
+            task_prep=prep,
+            registry=registry,
+        )
+
+    assert "analytics" not in analysis.required_domains
+    assert "analytics.ga4.report" not in analysis.preferred_tool_ids
