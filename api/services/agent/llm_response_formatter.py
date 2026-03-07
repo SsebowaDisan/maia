@@ -10,7 +10,11 @@ from api.services.agent.llm_runtime import (
     env_bool,
     sanitize_json_value,
 )
-from api.services.chat.language import build_response_language_rule, infer_user_language_code
+from api.services.chat.language import (
+    build_response_language_rule,
+    infer_user_language_code,
+    resolve_response_language,
+)
 
 
 def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -71,13 +75,14 @@ def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
 def _plan_response_blueprint(
     *,
     request_message: str,
+    requested_language: str | None,
     answer_text: str,
     verification_report: dict[str, Any],
     preferences: dict[str, Any],
     child_friendly_mode: bool,
 ) -> dict[str, Any]:
     language_rule = build_response_language_rule(
-        requested_language=None,
+        requested_language=requested_language,
         latest_message=request_message,
     )
     simple_section_rule = (
@@ -146,6 +151,7 @@ _INLINE_CODE_RE = re.compile(r"`[^`]+`")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _URL_RE = re.compile(r"https?://\S+")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_EMAIL_RE = re.compile(r"\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b", flags=re.IGNORECASE)
 
 
 def _normalize_for_language_detection(text: str) -> str:
@@ -161,12 +167,17 @@ def _normalize_for_language_detection(text: str) -> str:
     return cleaned[:2400]
 
 
-def _is_language_mismatch(*, request_message: str, candidate_text: str) -> bool:
+def _is_language_mismatch(
+    *,
+    request_message: str,
+    requested_language: str | None,
+    candidate_text: str,
+) -> bool:
     request_clean = _normalize_for_language_detection(request_message)
     candidate_clean = _normalize_for_language_detection(candidate_text)
     if len(candidate_clean) < 80:
         return False
-    expected = infer_user_language_code(request_clean)
+    expected = resolve_response_language(requested_language, request_clean)
     observed = infer_user_language_code(candidate_clean)
     if not expected or not observed:
         return False
@@ -177,6 +188,39 @@ def _is_language_mismatch(*, request_message: str, candidate_text: str) -> bool:
         return True
     # For non-English requests, still guard against clear language flips.
     return True
+
+
+def _strip_wrapping_markdown_fence(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    lines = cleaned.splitlines()
+    while (
+        len(lines) >= 3
+        and lines[0].strip().startswith("```")
+        and lines[-1].strip() == "```"
+    ):
+        lines = lines[1:-1]
+    return "\n".join(lines).strip()
+
+
+def _emails_from_text(*parts: str) -> set[str]:
+    emails: set[str] = set()
+    for part in parts:
+        for match in _EMAIL_RE.findall(str(part or "")):
+            normalized = match.strip().lower()
+            if normalized:
+                emails.add(normalized)
+    return emails
+
+
+def _redact_emails(text: str, *, emails: set[str]) -> str:
+    result = str(text or "")
+    if not result or not emails:
+        return result
+    for email in sorted(emails, key=len, reverse=True):
+        result = re.sub(re.escape(email), "the recipient", result, flags=re.IGNORECASE)
+    return result
 
 
 def _coerce_bool(value: Any) -> bool | None:
@@ -228,17 +272,23 @@ def _requires_child_friendly_mode(
 def polish_final_response(
     *,
     request_message: str,
+    requested_language: str | None = None,
     answer_text: str,
     verification_report: dict[str, Any] | None = None,
     preferences: dict[str, Any] | None = None,
 ) -> str:
-    if not env_bool("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", default=True):
-        return answer_text
-    raw_answer = str(answer_text or "").strip()
+    request_text = str(request_message or "").strip()
+    request_emails = _emails_from_text(request_text)
+    raw_answer = _redact_emails(
+        _strip_wrapping_markdown_fence(str(answer_text or "").strip()),
+        emails=request_emails,
+    )
     if not raw_answer:
         return answer_text
+    if not env_bool("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", default=True):
+        return raw_answer
     language_rule = build_response_language_rule(
-        requested_language=None,
+        requested_language=requested_language,
         latest_message=request_message,
     )
 
@@ -256,6 +306,7 @@ def polish_final_response(
     )
     blueprint = _plan_response_blueprint(
         request_message=str(request_message or "").strip(),
+        requested_language=requested_language,
         answer_text=raw_answer,
         verification_report=verification_payload if isinstance(verification_payload, dict) else {},
         preferences=preferences_payload if isinstance(preferences_payload, dict) else {},
@@ -312,7 +363,7 @@ def polish_final_response(
     )
     cleaned = str(polished or "").strip()
     if not cleaned:
-        return answer_text
+        return raw_answer
     if deep_research_mode:
         minimum_length = max(900, int(len(raw_answer) * 0.6))
         if len(cleaned) < minimum_length:
@@ -320,6 +371,12 @@ def polish_final_response(
     citation_tail = _extract_citation_tail(raw_answer)
     if citation_tail and not _contains_citation_markers(cleaned):
         cleaned = f"{cleaned}\n\n{citation_tail}".strip()
-    if _is_language_mismatch(request_message=request_message, candidate_text=cleaned):
+    cleaned = _strip_wrapping_markdown_fence(cleaned)
+    cleaned = _redact_emails(cleaned, emails=request_emails)
+    if _is_language_mismatch(
+        request_message=request_message,
+        requested_language=requested_language,
+        candidate_text=cleaned,
+    ):
         return raw_answer
-    return cleaned
+    return cleaned or raw_answer

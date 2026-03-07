@@ -245,7 +245,9 @@ export default function App() {
     webSummaryHasUrl(activeTurn?.webSummary) ||
     /(?:href=['"]https?:\/\/|https?:\/\/)/i.test(String(activeTurn?.info || "")) ||
     /https?:\/\//i.test(String(activeTurn?.user || ""));
-  const hasInfoPanelContent = Boolean(chatState.citationFocus) || hasMindmapPayload || hasSourceUrl;
+  const hasEvidenceHtml = String(activeTurn?.info || "").replace(/<[^>]+>/g, " ").trim().length > 0;
+  const hasInfoPanelContent =
+    Boolean(chatState.citationFocus) || hasMindmapPayload || hasSourceUrl || hasEvidenceHtml;
   const isInfoPanelVisible = layout.isInfoPanelOpen && hasInfoPanelContent;
   const toggleInfoPanel = () => {
     if (!hasInfoPanelContent) {

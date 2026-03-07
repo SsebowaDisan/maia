@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import time
 from collections.abc import Callable, Generator
 from typing import Any
@@ -23,6 +24,20 @@ from .models import ExecutionState, TaskPreparation
 from .web_evidence import summarize_web_evidence
 from .web_kpi import evaluate_web_kpi_gate, summarize_web_kpi
 
+_ARTIFACT_URL_PATH_SEGMENTS = {
+    "extract",
+    "source",
+    "link",
+    "evidence",
+    "citation",
+    "title",
+    "markdown",
+    "content",
+    "published",
+    "time",
+    "url",
+}
+
 
 def _source_metadata(source: Any) -> dict[str, Any]:
     payload = getattr(source, "metadata", {})
@@ -38,16 +53,133 @@ def _source_page_label(source: Any) -> str:
     return ""
 
 
+def _compact_text(value: str, *, max_chars: int) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars]
+    if " " in clipped:
+        clipped = clipped.rsplit(" ", 1)[0]
+    return f"{clipped.strip()}..."
+
+
+def _normalize_source_url(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip()
+    if not value:
+        return ""
+    if len(value) > 2048:
+        value = value[:2048]
+    value = value.strip(" <>\"'`")
+    value = value.rstrip(".,;:!?")
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    path_segments = [
+        segment.strip().lower()
+        for segment in str(parsed.path or "").split("/")
+        if segment.strip()
+    ]
+    if len(path_segments) == 1 and path_segments[0].rstrip(":") in _ARTIFACT_URL_PATH_SEGMENTS:
+        return ""
+    return parsed.geturl()
+
+
+def _clean_source_label(raw_value: Any) -> str:
+    text = " ".join(str(raw_value or "").split()).strip()
+    if not text:
+        return ""
+    text = re.sub(r"\bURL\s*Source\s*:\s*https?://[^\s<>'\")\]]+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bPublished\s*Time\s*:\s*[^|]+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bMarkdown\s*Content\s*:\s*", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" |:-")
+    return _compact_text(text, max_chars=180)
+
+
 def _source_extract(source: Any) -> str:
     metadata = _source_metadata(source)
     for key in ("extract", "excerpt", "snippet", "quote", "text_excerpt", "text"):
         value = " ".join(str(metadata.get(key) or "").split()).strip()
         if value:
-            return value[:1200]
-    source_label = " ".join(str(getattr(source, "label", "") or "").split()).strip()
-    if source_label and str(getattr(source, "source_type", "") or "").strip().lower() == "web":
-        return source_label[:300]
+            return _compact_text(value, max_chars=1200)
+    source_label = _clean_source_label(getattr(source, "label", ""))
+    source_type = str(getattr(source, "source_type", "") or "").strip().lower()
+    if source_label and source_type in {"file", "document", "pdf"}:
+        return _compact_text(source_label, max_chars=260)
     return ""
+
+
+def _source_url(source: Any) -> str:
+    metadata = _source_metadata(source)
+    label = " ".join(str(getattr(source, "label", "") or "").split()).strip()
+    url_candidates = [
+        getattr(source, "url", ""),
+        metadata.get("source_url"),
+        metadata.get("page_url"),
+        metadata.get("url"),
+        metadata.get("link"),
+        label if label.lower().startswith(("http://", "https://")) else "",
+    ]
+    for candidate in url_candidates:
+        normalized = _normalize_source_url(candidate)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _source_display_label(source: Any, *, source_url: str, fallback_id: int) -> str:
+    label = _clean_source_label(getattr(source, "label", ""))
+    if label and not label.lower().startswith(("http://", "https://")):
+        return label
+    if source_url:
+        return source_url
+    return f"Indexed source {fallback_id}"
+
+
+def _source_match_quality(source: Any) -> str:
+    metadata = _source_metadata(source)
+    raw = " ".join(str(metadata.get("match_quality") or "").split()).strip().lower()
+    if not raw:
+        return ""
+    return raw[:32]
+
+
+def _source_unit_id(source: Any) -> str:
+    metadata = _source_metadata(source)
+    for key in ("unit_id", "chunk_id", "span_id"):
+        value = " ".join(str(metadata.get(key) or "").split()).strip()
+        if value:
+            return value[:160]
+    return ""
+
+
+def _source_char_span(source: Any) -> tuple[int, int]:
+    metadata = _source_metadata(source)
+    try:
+        char_start = int(metadata.get("char_start", 0) or 0)
+    except Exception:
+        char_start = 0
+    try:
+        char_end = int(metadata.get("char_end", 0) or 0)
+    except Exception:
+        char_end = 0
+    if char_start <= 0 or char_end <= char_start:
+        return 0, 0
+    return char_start, char_end
+
+
+def _source_strength_score(source: Any) -> float:
+    metadata = _source_metadata(source)
+    for key in ("strength_score", "score"):
+        try:
+            value = float(metadata.get(key, 0.0) or 0.0)
+        except Exception:
+            continue
+        if value > 0:
+            return max(0.0, min(1.0, value))
+    return 0.0
 
 
 def _source_file_id(source: Any) -> str:
@@ -136,6 +268,99 @@ def _filter_sources_for_response_scope(
         )
     ]
     return scoped if scoped else sources
+
+
+def _strength_tier_from_score(strength_score: float) -> int:
+    if strength_score >= 0.7:
+        return 3
+    if strength_score >= 0.42:
+        return 2
+    return 1
+
+
+def _build_info_html_from_sources(response_sources: list[Any]) -> str:
+    if not response_sources:
+        return ""
+    info_blocks: list[str] = ["<div class='evidence-list' data-layout='kotaemon'>"]
+    for idx, source in enumerate(response_sources, start=1):
+        source_url = _source_url(source)
+        source_label = _source_display_label(source, source_url=source_url, fallback_id=idx)
+        page_label = _source_page_label(source)
+        source_extract = _source_extract(source)
+        file_id = _source_file_id(source)
+        source_boxes = _source_highlight_boxes(source)
+        source_unit_id = _source_unit_id(source)
+        source_match_quality = _source_match_quality(source)
+        char_start, char_end = _source_char_span(source)
+        strength_score = _source_strength_score(source)
+        strength_tier = _strength_tier_from_score(strength_score) if strength_score > 0 else 0
+
+        summary_label = f"Evidence [{idx}]"
+        if page_label:
+            summary_label += f" - page {page_label}"
+
+        details_attrs = [f"class='evidence'", f"id='evidence-{idx}'", f"data-evidence-id='evidence-{idx}'"]
+        if file_id:
+            details_attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
+        if page_label:
+            details_attrs.append(f"data-page='{html.escape(page_label, quote=True)}'")
+        if source_url:
+            details_attrs.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
+        if source_unit_id:
+            details_attrs.append(f"data-unit-id='{html.escape(source_unit_id, quote=True)}'")
+        if source_match_quality:
+            details_attrs.append(f"data-match-quality='{html.escape(source_match_quality, quote=True)}'")
+        if char_start > 0:
+            details_attrs.append(f"data-char-start='{char_start}'")
+        if char_end > char_start:
+            details_attrs.append(f"data-char-end='{char_end}'")
+        if strength_score > 0:
+            details_attrs.append(f"data-strength='{strength_score:.6f}'")
+            details_attrs.append(f"data-strength-tier='{strength_tier}'")
+        if source_boxes:
+            details_attrs.append(
+                "data-boxes='"
+                + html.escape(
+                    json.dumps(source_boxes, separators=(",", ":"), ensure_ascii=True),
+                    quote=True,
+                )
+                + "'"
+            )
+        if idx == 1:
+            details_attrs.append("open")
+
+        if source_url:
+            source_label_block = (
+                f"<a href='{html.escape(source_url, quote=True)}' target='_blank' rel='noopener noreferrer'>"
+                f"{html.escape(source_label)}"
+                "</a>"
+            )
+            link_block = (
+                "<div class='evidence-content'><b>Link:</b> "
+                f"<a href='{html.escape(source_url, quote=True)}' target='_blank' rel='noopener noreferrer'>"
+                f"{html.escape(source_url)}"
+                "</a></div>"
+            )
+        else:
+            source_label_block = html.escape(source_label)
+            link_block = ""
+
+        extract_block = (
+            f"<div class='evidence-content'><b>Extract:</b> {html.escape(source_extract)}</div>"
+            if source_extract
+            else ""
+        )
+        info_block = (
+            f"<details {' '.join(details_attrs)}>"
+            f"<summary>{html.escape(summary_label)}</summary>"
+            f"<div><b>Source:</b> [{idx}] {source_label_block}</div>"
+            f"{extract_block}"
+            f"{link_block}"
+            "</details>"
+        )
+        info_blocks.append(info_block)
+    info_blocks.append("</div>")
+    return "".join(info_blocks)
 
 
 def finalize_run(
@@ -340,8 +565,13 @@ def finalize_run(
         runtime_settings=state.execution_context.settings,
         verification_report=verification_report,
     )
+    requested_language = " ".join(str(request.language or "").split()).strip()
+    if requested_language in {"", "(default)"}:
+        requested_language = None
+
     answer = polish_final_response(
         request_message=request.message,
+        requested_language=requested_language,
         answer_text=answer,
         verification_report=verification_report,
         preferences={
@@ -415,49 +645,7 @@ def finalize_run(
         )
         yield emit_event(critic_ok_event)
 
-    info_blocks: list[str] = []
-    for idx, source in enumerate(response_sources, start=1):
-        label = html.escape(source.label)
-        raw_url = " ".join(str(source.url or "").split()).strip()
-        url = html.escape(raw_url)
-        page_label = html.escape(_source_page_label(source))
-        source_extract = html.escape(_source_extract(source))
-        file_id = html.escape(_source_file_id(source), quote=True)
-        source_boxes = _source_highlight_boxes(source)
-        detail = (
-            f"<a href='{url}' target='_blank' rel='noopener noreferrer'>{url}</a>"
-            if url
-            else "Internal source"
-        )
-        details_file_attr = f" data-file-id='{file_id}'" if file_id else ""
-        details_page_attr = f" data-page='{page_label}'" if page_label else ""
-        details_source_url_attr = (
-            f" data-source-url='{html.escape(raw_url, quote=True)}'"
-            if raw_url.startswith(("http://", "https://"))
-            else ""
-        )
-        details_boxes_attr = (
-            f" data-boxes='{html.escape(json.dumps(source_boxes, separators=(',', ':'), ensure_ascii=True), quote=True)}'"
-            if source_boxes
-            else ""
-        )
-        extract_block = (
-            f"<div class='evidence-content'><b>Extract:</b> {source_extract}</div>"
-            if source_extract
-            else ""
-        )
-        info_block = (
-            f"<details class='evidence' id='evidence-{idx}'{details_file_attr}{details_source_url_attr}{details_page_attr}{details_boxes_attr} {'open' if idx == 1 else ''}>"
-            f"<summary><i>Evidence [{idx}]</i></summary>"
-            f"<div><b>Source:</b> [{idx}] {label}</div>"
-            f"{extract_block}"
-            f"<div class='evidence-content'><b>Link:</b> {detail}</div>"
-            "</details>"
-        )
-        info_blocks.append(
-            info_block
-        )
-    info_html = "".join(info_blocks)
+    info_html = _build_info_html_from_sources(response_sources)
 
     result = AgentRunResult(
         run_id=run_id,

@@ -26,20 +26,35 @@ def _required_external_actions(ctx: AnswerBuildContext) -> list[str]:
     ][:4]
 
 
+def _external_action_contract_status(ctx: AnswerBuildContext) -> tuple[bool | None, str]:
+    contract_check = ctx.runtime_settings.get("__task_contract_check")
+    if not isinstance(contract_check, dict):
+        return None, ""
+    ready_actions = bool(contract_check.get("ready_for_external_actions"))
+    reason = compact(str(contract_check.get("reason") or ""), 180)
+    return ready_actions, reason
+
+
 def append_delivery_status(lines: list[str], ctx: AnswerBuildContext) -> None:
     lines.append("")
     lines.append("## Delivery Status")
     send_actions = [item for item in ctx.actions if item.tool_id in EXTERNAL_ACTION_TOOL_IDS]
+    ready_actions, gate_reason = _external_action_contract_status(ctx)
     if send_actions:
         latest_send = send_actions[-1]
-        status = "completed" if latest_send.status == "success" else "not completed"
+        gate_blocks_success = latest_send.status == "success" and ready_actions is False
+        status = "completed" if latest_send.status == "success" and not gate_blocks_success else "not completed"
         lines.append(f"- External action: {status}.")
-        if latest_send.status == "success":
+        if latest_send.status == "success" and not gate_blocks_success:
             lines.append("- External action attempt: executed successfully.")
+        elif gate_blocks_success:
+            lines.append("- External action attempt: executed but blocked by contract gate.")
         else:
             lines.append("- External action attempt: executed but failed.")
         lines.append(f"- Tool: `{latest_send.tool_id}`.")
         lines.append(f"- Detail: {compact(latest_send.summary, 180)}")
+        if gate_blocks_success and gate_reason:
+            lines.append(f"- Contract gate reason: {gate_reason}")
         if latest_send.status != "success":
             hint = issue_fix_hint(latest_send.summary)
             if hint:

@@ -4,11 +4,23 @@ import { toast } from "sonner";
 
 import { buildRawFileUrl } from "../../api/client";
 import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
-import type { AgentSourceRecord, CitationFocus, SourceUsageRecord } from "../types";
+import { renderRichText } from "../utils/richText";
+import type {
+  AgentSourceRecord,
+  ChatTurn,
+  CitationFocus,
+  SourceUsageRecord,
+} from "../types";
 import { parseEvidence } from "../utils/infoInsights";
+import type { EvidenceCard } from "../utils/infoInsights";
 import { CitationPdfPreview } from "./CitationPdfPreview";
 import { MindmapViewer } from "./MindmapViewer";
 import { getMindmapPayload } from "./infoPanelDerived";
+import {
+  CITATION_ANCHOR_SELECTOR,
+  resolveCitationFocusFromAnchor,
+  resolveStrengthTier,
+} from "./chatMain/citationFocus";
 
 interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
@@ -35,25 +47,35 @@ interface InfoPanelProps {
   width?: number;
 }
 
-type ViewerHeightKey = "mindmap" | "website" | "citation";
+type ViewerHeightKey = "mindmap" | "citation";
 
 type ViewerHeights = {
   mindmap: number;
-  website: number;
   citation: number;
 };
 
-const VIEWER_HEIGHT_STORAGE_KEY = "maia.info-panel.viewer-heights.v1";
+const VIEWER_HEIGHT_STORAGE_KEY = "maia.info-panel.viewer-heights.v2";
 const DEFAULT_VIEWER_HEIGHTS: ViewerHeights = {
   mindmap: 520,
-  website: 280,
   citation: 420,
 };
 const VIEWER_HEIGHT_LIMITS: Record<ViewerHeightKey, { min: number; max: number }> = {
   mindmap: { min: 260, max: 1000 },
-  website: { min: 180, max: 900 },
   citation: { min: 220, max: 1000 },
 };
+const ARTIFACT_URL_PATH_SEGMENTS = new Set([
+  "extract",
+  "source",
+  "link",
+  "evidence",
+  "citation",
+  "title",
+  "markdown",
+  "content",
+  "published",
+  "time",
+  "url",
+]);
 
 function clampViewerHeight(viewer: ViewerHeightKey, rawValue: unknown): number {
   const limits = VIEWER_HEIGHT_LIMITS[viewer];
@@ -74,7 +96,6 @@ function loadViewerHeights(): ViewerHeights {
       | null;
     return {
       mindmap: clampViewerHeight("mindmap", parsed?.mindmap),
-      website: clampViewerHeight("website", parsed?.website),
       citation: clampViewerHeight("citation", parsed?.citation),
     };
   } catch {
@@ -82,17 +103,106 @@ function loadViewerHeights(): ViewerHeights {
   }
 }
 
+function normalizeHttpUrl(rawValue: unknown): string {
+  const value = String(rawValue || "").split(/\s+/).join(" ").trim();
+  if (!value) {
+    return "";
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeUrlToken(rawValue: unknown): string {
+  const value = String(rawValue || "")
+    .trim()
+    .replace(/^[("'`<\[]+/, "")
+    .replace(/[>"'`)\],.;:!?]+$/, "");
+  return normalizeHttpUrl(value);
+}
+
+function isLikelyLabelArtifactUrl(rawValue: unknown): boolean {
+  const candidate = normalizeHttpUrl(rawValue);
+  if (!candidate) {
+    return false;
+  }
+  try {
+    const parsed = new URL(candidate);
+    const segments = String(parsed.pathname || "")
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => segment.trim().toLowerCase());
+    if (segments.length !== 1) {
+      return false;
+    }
+    const token = segments[0].replace(/[:]+$/, "");
+    return ARTIFACT_URL_PATH_SEGMENTS.has(token);
+  } catch {
+    return false;
+  }
+}
+
+function extractExplicitSourceUrl(rawText: unknown): string {
+  const text = String(rawText || "");
+  const patterns = [
+    /\bURL\s*Source\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bpage_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
+    /\bsource\s*url\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = normalizeUrlToken(match?.[1] || "");
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function choosePreferredSourceUrl(candidates: Array<string | null | undefined>): string {
+  for (const rawCandidate of candidates) {
+    const normalized = normalizeHttpUrl(rawCandidate);
+    if (!normalized) {
+      continue;
+    }
+    if (isLikelyLabelArtifactUrl(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return "";
+}
+
+function normalizeEvidenceId(rawValue: unknown): string {
+  return String(rawValue || "").trim().toLowerCase();
+}
+
+function sourceLooksImage(nameOrUrl: string): boolean {
+  return /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(String(nameOrUrl || "").toLowerCase());
+}
+
+function evidenceSourceLabel(card: EvidenceCard): string {
+  return String(card.source || card.sourceUrl || card.fileId || "Indexed source").trim() || "Indexed source";
+}
+
 export function InfoPanel({
   citationFocus = null,
   selectedConversationId = null,
   userPrompt = "",
+  assistantHtml = "",
   infoHtml = "",
   infoPanel = {},
   mindmap = {},
-  sourcesUsed = [],
-  webSummary = {},
   indexId = null,
   onClearCitationFocus,
+  onSelectCitationFocus,
   onAskMindmapNode,
   width = 340,
 }: InfoPanelProps) {
@@ -101,6 +211,7 @@ export function InfoPanel({
   const dragStartYRef = useRef(0);
   const dragStartHeightRef = useRef(0);
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const infoHtmlRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -198,182 +309,157 @@ export function InfoPanel({
     );
   };
 
-  const normalizeHttpUrl = (rawValue: unknown): string => {
-    const value = String(rawValue || "").split(/\s+/).join(" ").trim();
-    if (!value) {
-      return "";
+  const evidenceCards = useMemo(() => parseEvidence(String(infoHtml || "")), [infoHtml]);
+  const renderedInfoHtml = useMemo(() => renderRichText(String(infoHtml || "")), [infoHtml]);
+
+  useEffect(() => {
+    const container = infoHtmlRef.current;
+    if (!container) {
+      return;
     }
-    try {
-      const parsed = new URL(value);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return "";
+
+    const citationAnchors = Array.from(container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"));
+    for (const anchor of citationAnchors) {
+      const tier = resolveStrengthTier(
+        Number(anchor.getAttribute("data-strength-tier") || ""),
+        Number(anchor.getAttribute("data-strength") || ""),
+      );
+      if (tier > 0) {
+        anchor.setAttribute("data-strength-tier-resolved", String(tier));
+      } else {
+        anchor.removeAttribute("data-strength-tier-resolved");
       }
-      return parsed.toString();
-    } catch {
-      return "";
+
+      let displayNumber = String(anchor.getAttribute("data-citation-number") || "").trim();
+      if (!/^\d{1,4}$/.test(displayNumber)) {
+        const fallbackMatch = String(anchor.textContent || "").match(/(\d{1,4})/);
+        displayNumber = fallbackMatch?.[1] || "";
+        if (displayNumber) {
+          anchor.setAttribute("data-citation-number", displayNumber);
+        }
+      }
+
+      if (!anchor.hasAttribute("href")) {
+        anchor.setAttribute("tabindex", "0");
+        anchor.setAttribute("role", "button");
+      }
     }
-  };
+  }, [renderedInfoHtml]);
 
-  const normalizeUrlToken = (rawValue: unknown): string => {
-    const value = String(rawValue || "")
-      .trim()
-      .replace(/^[("'`<\[]+/, "")
-      .replace(/[>"'`)\],.;:!?]+$/, "");
-    return normalizeHttpUrl(value);
-  };
-
-  const artifactUrlPathSegments = new Set([
-    "extract",
-    "source",
-    "link",
-    "evidence",
-    "citation",
-    "title",
-    "markdown",
-    "content",
-    "published",
-    "time",
-    "url",
-  ]);
-
-  const isLikelyLabelArtifactUrl = (rawValue: unknown): boolean => {
-    const candidate = normalizeHttpUrl(rawValue);
-    if (!candidate) {
-      return false;
+  useEffect(() => {
+    const container = infoHtmlRef.current;
+    if (!container) {
+      return;
     }
-    try {
-      const parsed = new URL(candidate);
-      const segments = String(parsed.pathname || "")
-        .split("/")
-        .filter(Boolean)
-        .map((segment) => segment.trim().toLowerCase());
-      if (segments.length !== 1) {
+
+    const turnForCitation: ChatTurn = {
+      user: String(userPrompt || ""),
+      assistant: String(assistantHtml || ""),
+      info: String(infoHtml || ""),
+      attachments: [],
+    };
+
+    const isCitationAnchor = (anchor: HTMLAnchorElement): boolean => {
+      const href = String(anchor.getAttribute("href") || "").trim();
+      return (
+        anchor.classList.contains("citation") ||
+        href.startsWith("#evidence-") ||
+        anchor.hasAttribute("data-file-id") ||
+        anchor.hasAttribute("data-source-url") ||
+        anchor.hasAttribute("data-evidence-id")
+      );
+    };
+
+    const findCitationAnchor = (target: EventTarget | null): HTMLAnchorElement | null => {
+      if (!(target instanceof Element)) {
+        if (target instanceof Node && target.parentElement) {
+          return target.parentElement.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+        }
+        return null;
+      }
+      return target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+    };
+
+    const focusEvidenceDetails = (evidenceId: string | undefined) => {
+      const normalizedId = normalizeEvidenceId(evidenceId);
+      if (!normalizedId || !/^evidence-[a-z0-9_-]{1,64}$/i.test(normalizedId)) {
+        return;
+      }
+      const detailsNode = container.querySelector<HTMLElement>(`#${normalizedId}`);
+      if (!detailsNode) {
+        return;
+      }
+      if (detailsNode.tagName === "DETAILS") {
+        (detailsNode as HTMLDetailsElement).open = true;
+      }
+      detailsNode.scrollIntoView({ block: "nearest" });
+    };
+
+    const selectCitationFromAnchor = (anchor: HTMLAnchorElement): boolean => {
+      if (!onSelectCitationFocus || !isCitationAnchor(anchor)) {
         return false;
       }
-      const token = segments[0].replace(/[:]+$/, "");
-      return artifactUrlPathSegments.has(token);
-    } catch {
-      return false;
-    }
-  };
+      const resolved = resolveCitationFocusFromAnchor({
+        turn: turnForCitation,
+        citationAnchor: anchor,
+        evidenceCards,
+      });
+      onSelectCitationFocus(resolved.focus);
+      focusEvidenceDetails(resolved.focus.evidenceId);
+      return true;
+    };
 
-  const extractExplicitSourceUrl = (rawText: unknown): string => {
-    const text = String(rawText || "");
-    const patterns = [
-      /\bURL\s*Source\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
-      /\bsource_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
-      /\bpage_url\s*[:=]\s*(https?:\/\/[^\s<>'")\]]+)/i,
-      /\bsource\s*url\s*:\s*(https?:\/\/[^\s<>'")\]]+)/i,
-    ];
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      const candidate = normalizeUrlToken(match?.[1] || "");
-      if (candidate) {
-        return candidate;
+    const onClick = (event: MouseEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor) {
+        return;
       }
-    }
-    return "";
-  };
-
-  const choosePreferredSourceUrl = (candidates: Array<string | null | undefined>): string => {
-    for (const rawCandidate of candidates) {
-      const normalized = normalizeHttpUrl(rawCandidate);
-      if (!normalized) {
-        continue;
+      if (!isCitationAnchor(anchor)) {
+        return;
       }
-      if (isLikelyLabelArtifactUrl(normalized)) {
-        continue;
+      const selected = selectCitationFromAnchor(anchor);
+      if (!selected) {
+        return;
       }
-      return normalized;
-    }
-    return "";
-  };
+      event.preventDefault();
+      event.stopPropagation();
+    };
 
-  const normalizeWebsiteHighlightText = (rawValue: unknown): string => {
-    let text = String(rawValue || "").replace(/\s+/g, " ").trim();
-    if (!text) {
-      return "";
-    }
-    text = text.replace(/\bURL\s*Source\s*:\s*https?:\/\/[^\s<>'")\]]+/gi, " ");
-    text = text.replace(/\bPublished\s*Time\s*:\s*[^]+?(?=\bMarkdown\s*Content\s*:|$)/i, " ");
-    text = text.replace(/\bMarkdown\s*Content\s*:\s*/i, " ");
-    text = text.replace(/https?:\/\/[^\s<>'")\]]+/gi, " ");
-    text = text.replace(/\[[^\]]+\]\([^)]+\)/g, " ");
-    text = text.replace(/[*#=|_]{2,}/g, " ");
-    text = text.replace(/\s+/g, " ").trim();
-    if (text.length <= 160) {
-      return text;
-    }
-    const clipped = text.slice(0, 160);
-    const sentenceCut = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-    if (sentenceCut >= 40) {
-      return clipped.slice(0, sentenceCut + 1).trim();
-    }
-    const wordCut = clipped.lastIndexOf(" ");
-    if (wordCut >= 40) {
-      return clipped.slice(0, wordCut).trim();
-    }
-    return clipped.trim();
-  };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor) {
+        return;
+      }
+      if (!isCitationAnchor(anchor)) {
+        return;
+      }
+      const selected = selectCitationFromAnchor(anchor);
+      if (!selected) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
 
-  const resolveWebsiteHighlightText = (focus: CitationFocus | null | undefined): string => {
-    const titleMatch = String(focus?.extract || "").match(
-      /\bTitle\s*:\s*([^|]+?)(?=\s+URL\s*Source\s*:|\s+Published\s*Time\s*:|\s+Markdown\s*Content\s*:|$)/i,
-    );
-    const fromTitle = normalizeWebsiteHighlightText(titleMatch?.[1] || "");
-    if (fromTitle.length >= 8) {
-      return fromTitle;
-    }
-    const fromExtract = normalizeWebsiteHighlightText(focus?.extract || "");
-    if (fromExtract.length >= 8) {
-      return fromExtract;
-    }
-    const fromClaim = normalizeWebsiteHighlightText(focus?.claimText || "");
-    if (fromClaim.length >= 8) {
-      return fromClaim;
-    }
-    return "";
-  };
-
-  const buildWebsitePreviewUrl = (params: {
-    url: string;
-    highlightText?: string;
-    claimText?: string;
-    questionText?: string;
-    viewport?: "desktop" | "mobile";
-  }): string => {
-    const normalizedUrl = normalizeHttpUrl(params.url);
-    if (!normalizedUrl) {
-      return "";
-    }
-    const query = new URLSearchParams();
-    query.set("url", normalizedUrl);
-    query.set("viewport", params.viewport || "desktop");
-    const highlight = normalizeWebsiteHighlightText(params.highlightText || "").slice(0, 220);
-    if (highlight.length >= 8) {
-      query.set("highlight", highlight);
-    }
-    const claim = normalizeWebsiteHighlightText(params.claimText || "").slice(0, 220);
-    if (claim.length >= 8) {
-      query.set("claim", claim);
-    }
-    const question = normalizeWebsiteHighlightText(params.questionText || "").slice(0, 260);
-    if (question.length >= 6) {
-      query.set("question", question);
-    }
-    return `/api/web/preview?${query.toString()}`;
-  };
-
-  const evidenceCards = useMemo(() => parseEvidence(String(infoHtml || "")), [infoHtml]);
+    container.addEventListener("click", onClick);
+    container.addEventListener("keydown", onKeyDown);
+    return () => {
+      container.removeEventListener("click", onClick);
+      container.removeEventListener("keydown", onKeyDown);
+    };
+  }, [assistantHtml, evidenceCards, infoHtml, onSelectCitationFocus, userPrompt]);
 
   const citationWebsiteUrl = useMemo(() => {
     const direct = normalizeHttpUrl(citationFocus?.sourceUrl);
     const fromExtract = extractExplicitSourceUrl(citationFocus?.extract || "");
     const sourceNameUrl = normalizeHttpUrl(citationFocus?.sourceName);
     const rankedDirect = choosePreferredSourceUrl([fromExtract, direct, sourceNameUrl]);
-    const evidenceId = String(citationFocus?.evidenceId || "").toLowerCase();
+    const evidenceId = normalizeEvidenceId(citationFocus?.evidenceId);
     if (evidenceId) {
-      const matchedById = evidenceCards.find((card) => String(card.id || "").toLowerCase() === evidenceId);
+      const matchedById = evidenceCards.find((card) => normalizeEvidenceId(card.id) === evidenceId);
       const matchedByIdUrl = choosePreferredSourceUrl([
         extractExplicitSourceUrl(matchedById?.extract || ""),
         normalizeHttpUrl(matchedById?.sourceUrl),
@@ -400,83 +486,6 @@ export function InfoPanel({
     return rankedDirect || "";
   }, [citationFocus, evidenceCards]);
 
-  const websitePreviewUrl = useMemo(() => {
-    const ranked: Array<{ url: string; score: number }> = [];
-    const seen = new Set<string>();
-    const addCandidate = (rawValue: unknown, score: number) => {
-      const normalized = normalizeHttpUrl(rawValue);
-      if (!normalized || seen.has(normalized)) {
-        return;
-      }
-      seen.add(normalized);
-      ranked.push({ url: normalized, score });
-    };
-
-    for (const source of sourcesUsed) {
-      if (!source || typeof source !== "object") {
-        continue;
-      }
-      const sourceType = String(source.source_type || "").toLowerCase();
-      const url = String(source.url || "").trim();
-      if (!url) {
-        continue;
-      }
-      const webTypeScore = /(^|_)(website|web|web_source|url)(_|$)/.test(sourceType) ? 300 : 180;
-      addCandidate(url, webTypeScore);
-    }
-
-    const topSources = (
-      (webSummary as { evidence?: { top_sources?: Array<{ url?: unknown }> } }).evidence?.top_sources || []
-    ) as Array<{ url?: unknown }>;
-    for (const row of topSources) {
-      addCandidate(row?.url, 240);
-    }
-
-    const evidenceItems = (
-      (webSummary as { evidence?: { items?: Array<{ url?: unknown; evidence?: Array<{ url?: unknown }> }> } })
-        .evidence?.items || []
-    ) as Array<{ url?: unknown; evidence?: Array<{ url?: unknown }> }>;
-    for (const item of evidenceItems) {
-      addCandidate(item?.url, 220);
-      const nestedEvidence = Array.isArray(item?.evidence) ? item.evidence : [];
-      for (const evidenceRow of nestedEvidence) {
-        addCandidate(evidenceRow?.url, 210);
-      }
-    }
-
-    const hrefMatches = String(infoHtml || "").match(/href=['"]([^'"]+)['"]/gi) || [];
-    for (const rawMatch of hrefMatches) {
-      const match = rawMatch.match(/href=['"]([^'"]+)['"]/i);
-      addCandidate(match?.[1], 120);
-    }
-
-    const promptUrlMatches = String(userPrompt || "").match(/https?:\/\/[^\s<>'")\]]+/gi) || [];
-    for (const rawUrl of promptUrlMatches) {
-      addCandidate(String(rawUrl || "").replace(/[.,;:!?]+$/, ""), 260);
-    }
-
-    if (!ranked.length) {
-      return "";
-    }
-    ranked.sort((left, right) => right.score - left.score || left.url.localeCompare(right.url));
-    return ranked[0]?.url || "";
-  }, [infoHtml, sourcesUsed, userPrompt, webSummary]);
-
-  const activeWebsiteUrl = citationWebsiteUrl || websitePreviewUrl;
-  const websiteHighlightText = resolveWebsiteHighlightText(citationFocus);
-  const activeWebsiteFrameUrl = useMemo(() => {
-    if (!activeWebsiteUrl) {
-      return "";
-    }
-    return buildWebsitePreviewUrl({
-      url: activeWebsiteUrl,
-      highlightText: citationWebsiteUrl ? websiteHighlightText : "",
-      claimText: citationFocus?.claimText,
-      questionText: userPrompt,
-      viewport: "desktop",
-    });
-  }, [activeWebsiteUrl, citationFocus?.claimText, citationWebsiteUrl, userPrompt, websiteHighlightText]);
-
   const citationRawUrl = useMemo(() => {
     if (!citationFocus?.fileId) {
       return null;
@@ -485,14 +494,17 @@ export function InfoPanel({
       indexId: typeof indexId === "number" ? indexId : undefined,
     });
   }, [citationFocus, indexId]);
+
   const citationUsesWebsite =
     citationFocus?.sourceType === "website" || (Boolean(citationWebsiteUrl) && !citationRawUrl);
-  const citationOpenUrl = citationUsesWebsite
-    ? citationWebsiteUrl || activeWebsiteUrl
-    : citationRawUrl || "";
+  const citationOpenUrl = citationUsesWebsite ? citationWebsiteUrl : citationRawUrl || "";
+
   const citationSourceLower = String(citationFocus?.sourceName || "").toLowerCase();
   const citationHasPageHint = Boolean(String(citationFocus?.page || "").trim());
-  const citationIsImage = /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(citationSourceLower);
+  const citationIsImage =
+    Boolean(citationRawUrl) &&
+    !citationUsesWebsite &&
+    (sourceLooksImage(citationSourceLower) || sourceLooksImage(citationRawUrl));
   const citationIsPdf =
     Boolean(citationRawUrl) &&
     !citationUsesWebsite &&
@@ -509,6 +521,7 @@ export function InfoPanel({
       : [];
     return nodes.length > 0;
   }, [mindmapPayload]);
+
   const mindmapViewerKey = useMemo(() => {
     const payload = mindmapPayload as {
       root_id?: unknown;
@@ -530,6 +543,31 @@ export function InfoPanel({
       .join("|");
     return `${selectedConversationId || "global"}:${mapType}:${root}:${nodes.length}:${edges.length}:${nodeSignature}:${edgeSignature}`;
   }, [mindmapPayload, selectedConversationId]);
+
+  const selectEvidenceCard = (card: EvidenceCard, index: number) => {
+    if (!onSelectCitationFocus) {
+      return;
+    }
+    const sourceUrl = normalizeHttpUrl(card.sourceUrl);
+    onSelectCitationFocus({
+      fileId: card.fileId,
+      sourceUrl: sourceUrl || undefined,
+      sourceType: sourceUrl && !sourceLooksImage(sourceUrl) ? "website" : "file",
+      sourceName: evidenceSourceLabel(card),
+      page: card.page,
+      extract: String(card.extract || card.title || "No extract available for this citation.")
+        .replace(/\s+/g, " ")
+        .trim(),
+      evidenceId: normalizeEvidenceId(card.id) || `evidence-${index + 1}`,
+      highlightBoxes: card.highlightBoxes,
+      strengthScore: card.strengthScore,
+      strengthTier: card.strengthTier,
+      matchQuality: card.matchQuality,
+      unitId: card.unitId,
+      charStart: card.charStart,
+      charEnd: card.charEnd,
+    });
+  };
 
   return (
     <div
@@ -581,54 +619,64 @@ export function InfoPanel({
         <div className="rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
           <div className="mb-2 flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Website preview</p>
-              <p
-                className="truncate text-[13px] text-[#1d1d1f]"
-                title={activeWebsiteUrl || "No website URL found for this answer"}
-              >
-                {activeWebsiteUrl || "No website URL found for this answer"}
+              <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Citations and evidence</p>
+              <p className="truncate text-[13px] text-[#1d1d1f]" title={`${evidenceCards.length} evidence entries`}>
+                {evidenceCards.length ? `${evidenceCards.length} evidence entries indexed` : "No evidence entries found"}
               </p>
             </div>
-            {activeWebsiteUrl ? (
-              <a
-                href={activeWebsiteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#1d1d1f] px-2.5 py-1.5 text-[10px] text-white transition-colors hover:bg-[#3a3a3c]"
-              >
-                <ExternalLink className="h-3 w-3" />
-                Open
-              </a>
-            ) : null}
           </div>
-          {citationUsesWebsite && websiteHighlightText ? (
-            <div className="mb-2 rounded-lg border border-[#f1d589] bg-[#fff7de] px-2.5 py-2 text-[11px] text-[#5f4b12]">
-              <p className="mb-1 text-[10px] uppercase tracking-wide text-[#91720f]">Citation highlight</p>
-              <p className="line-clamp-3">{websiteHighlightText}</p>
-            </div>
-          ) : null}
-          {activeWebsiteUrl ? (
-            <>
+
+          {renderedInfoHtml.trim() ? (
+            <div
+              ref={infoHtmlRef}
+              className="max-h-[500px] overflow-auto rounded-xl border border-black/[0.08] bg-white p-3"
+            >
               <div
-                className="overflow-hidden rounded-xl border border-black/[0.08] bg-white"
-                style={{ height: `${viewerHeights.website}px` }}
-              >
-                <iframe
-                  key={`${activeWebsiteFrameUrl || activeWebsiteUrl}:${websiteHighlightText.slice(0, 96)}`}
-                  src={activeWebsiteFrameUrl || activeWebsiteUrl}
-                  title="Website preview"
-                  className="h-full w-full border-0"
-                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
-              </div>
-              {renderViewerResizeHandle("website", "website")}
-            </>
+                className="chat-answer-html assistantAnswerBody info-panel-answer-html text-[13px] leading-[1.5] text-[#1d1d1f]"
+                dangerouslySetInnerHTML={{ __html: renderedInfoHtml }}
+              />
+            </div>
           ) : (
             <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-              Website preview becomes available when this answer includes a browsable source URL.
+              This run did not provide rendered evidence HTML.
             </div>
           )}
+
+          {evidenceCards.length ? (
+            <div className="mt-3 space-y-2">
+              {evidenceCards.slice(0, 8).map((card, index) => {
+                const refLabel = String(index + 1);
+                const sourceLabel = evidenceSourceLabel(card);
+                const snippet = String(card.extract || card.title || "No extract available for this citation.")
+                  .replace(/\s+/g, " ")
+                  .trim();
+                const trimmedSnippet =
+                  snippet.length > 210 ? `${snippet.slice(0, 210).trimEnd()}...` : snippet;
+                return (
+                  <button
+                    key={`${card.id || `evidence-${index + 1}`}:${sourceLabel}`}
+                    type="button"
+                    onClick={() => selectEvidenceCard(card, index)}
+                    className="w-full rounded-xl border border-black/[0.06] bg-white px-3 py-2 text-left hover:bg-[#f8f9fc] transition-colors"
+                    title={sourceLabel}
+                  >
+                    <div className="mb-1 flex items-center gap-2 text-[11px] text-[#5f6472]">
+                      <span className="rounded-full border border-[#ccd3e2] bg-[#f5f7fb] px-2 py-0.5 font-semibold text-[#2f3a51]">
+                        [{refLabel}]
+                      </span>
+                      <span className="truncate">{sourceLabel}</span>
+                      {card.page ? (
+                        <span className="shrink-0 rounded-full border border-black/[0.08] bg-white px-1.5 py-0.5 text-[#6e6e73]">
+                          p. {card.page}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-[12px] leading-[1.45] text-[#1e2532]">{trimmedSnippet || "No extract available."}</p>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         {citationFocus ? (
@@ -640,16 +688,16 @@ export function InfoPanel({
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">
-                    {citationUsesWebsite ? "Website citation" : "PDF preview"}
+                    {citationUsesWebsite ? "Website citation" : "Citation preview"}
                   </p>
                   <p className="text-[13px] text-[#1d1d1f] truncate" title={citationFocus.sourceName}>
                     {citationFocus.sourceName}
                   </p>
                 </div>
               </div>
-              {citationOpenUrl || citationWebsiteUrl ? (
+              {citationOpenUrl ? (
                 <a
-                  href={citationOpenUrl || activeWebsiteFrameUrl || citationWebsiteUrl}
+                  href={citationOpenUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#1d1d1f] text-white text-[10px] hover:bg-[#3a3a3c] transition-colors shrink-0"
@@ -685,19 +733,35 @@ export function InfoPanel({
               </div>
             ) : null}
 
-            {citationUsesWebsite && !citationRawUrl ? (
-              <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-                This citation points to a website source. The website preview above is focused on this evidence.
+            {citationUsesWebsite ? (
+              <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#3a3a3c] space-y-2">
+                <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Website extract</p>
+                <p className="leading-[1.45]">
+                  {String(citationFocus.extract || citationFocus.claimText || "Website citation selected.")
+                    .replace(/\s+/g, " ")
+                    .trim()}
+                </p>
+                {citationWebsiteUrl ? (
+                  <a
+                    href={citationWebsiteUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-[#0a66d9] hover:text-[#0750ab]"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Open website source
+                  </a>
+                ) : null}
               </div>
             ) : null}
 
             {!citationUsesWebsite && !citationRawUrl ? (
               <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-                Source preview is unavailable for this file.
+                Source preview is unavailable for this citation.
               </div>
             ) : null}
 
-            {(citationIsPdf || citationIsImage) ? renderViewerResizeHandle("citation", "citation") : null}
+            {citationIsPdf || citationIsImage ? renderViewerResizeHandle("citation", "citation") : null}
 
             {onClearCitationFocus ? (
               <button

@@ -387,6 +387,33 @@
   border-radius: 12px;
 }
 
+.info-panel-answer-html details.evidence {
+  margin: 0.55rem 0;
+  border: 1px solid rgba(31, 47, 73, 0.14);
+  border-radius: 10px;
+  background: #fbfcfe;
+  padding: 0.4rem 0.62rem;
+}
+
+.info-panel-answer-html details.evidence[open] {
+  background: #f8fbff;
+}
+
+.info-panel-answer-html details.evidence > summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  font-weight: 620;
+  color: #2f3a51;
+}
+
+.info-panel-answer-html details.evidence .evidence-content {
+  margin-top: 0.45rem;
+  font-size: 0.76rem;
+  line-height: 1.48;
+  color: #334056;
+}
+
 .chat-answer-html a:not(.citation) {
   color: #0a66d9;
   font-weight: 500;
