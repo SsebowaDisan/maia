@@ -246,7 +246,10 @@ def build_execution_steps(
             )
         )
 
-    delivery_email = extract_first_email(request.message, request.agent_goal or "")
+    delivery_email = extract_first_email(
+        request.message,
+        request.agent_goal if request.agent_mode == "company_agent" else "",
+    )
     yield emit_event(
         plan_candidate_event(
             activity_event_factory=activity_event_factory,

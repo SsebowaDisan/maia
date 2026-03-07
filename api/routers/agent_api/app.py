@@ -9,12 +9,14 @@ from .oauth import router as oauth_router
 from .playbooks import router as playbooks_router
 from .runs import router as runs_router
 from .schedules import router as schedules_router
+from .work_graph import router as work_graph_router
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 router.include_router(connectors_router)
 router.include_router(oauth_router)
 router.include_router(events_router)
 router.include_router(runs_router)
+router.include_router(work_graph_router)
 router.include_router(playbooks_router)
 router.include_router(schedules_router)
 router.include_router(governance_router)

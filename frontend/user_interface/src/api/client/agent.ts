@@ -1,5 +1,11 @@
 import { API_BASE, request, withUserIdQuery } from "./core";
-import type { AgentLiveEvent, ConnectorCredentialRecord, ConnectorPluginManifest } from "./types";
+import type {
+  AgentLiveEvent,
+  ConnectorCredentialRecord,
+  ConnectorPluginManifest,
+  WorkGraphPayloadResponse,
+  WorkGraphReplayStateResponse,
+} from "./types";
 
 function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
   return `${API_BASE}/api/agent/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(eventId)}/snapshot`;
@@ -8,6 +14,60 @@ function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
 function getAgentRunEvents(runId: string) {
   return request<Array<{ type: string; payload: unknown }>>(
     `/api/agent/runs/${encodeURIComponent(runId)}/events`,
+  );
+}
+
+function getAgentRunWorkGraph(
+  runId: string,
+  filters?: {
+    agent_role?: string;
+    status?: string;
+    event_index_min?: number;
+    event_index_max?: number;
+  },
+) {
+  const query = new URLSearchParams();
+  if (filters?.agent_role) {
+    query.set("agent_role", filters.agent_role);
+  }
+  if (filters?.status) {
+    query.set("status", filters.status);
+  }
+  if (typeof filters?.event_index_min === "number") {
+    query.set("event_index_min", String(filters.event_index_min));
+  }
+  if (typeof filters?.event_index_max === "number") {
+    query.set("event_index_max", String(filters.event_index_max));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkGraphPayloadResponse>(`/api/agent/runs/${encodeURIComponent(runId)}/work-graph${suffix}`);
+}
+
+function getAgentRunWorkGraphReplayState(
+  runId: string,
+  filters?: {
+    agent_role?: string;
+    status?: string;
+    event_index_min?: number;
+    event_index_max?: number;
+  },
+) {
+  const query = new URLSearchParams();
+  if (filters?.agent_role) {
+    query.set("agent_role", filters.agent_role);
+  }
+  if (filters?.status) {
+    query.set("status", filters.status);
+  }
+  if (typeof filters?.event_index_min === "number") {
+    query.set("event_index_min", String(filters.event_index_min));
+  }
+  if (typeof filters?.event_index_max === "number") {
+    query.set("event_index_max", String(filters.event_index_max));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkGraphReplayStateResponse>(
+    `/api/agent/runs/${encodeURIComponent(runId)}/work-graph/replay-state${suffix}`,
   );
 }
 
@@ -109,6 +169,8 @@ export {
   exportAgentRunEvents,
   getAgentEventSnapshotUrl,
   getAgentRunEvents,
+  getAgentRunWorkGraph,
+  getAgentRunWorkGraphReplayState,
   getConnectorPlugin,
   listAgentTools,
   listConnectorCredentials,

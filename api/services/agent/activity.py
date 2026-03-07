@@ -254,12 +254,70 @@ class ActivityStore:
         rows = self.load_events(run_id)
         return self._load_snapshots(rows=rows, snapshot_type="artifact_snapshot")
 
+    def append_work_graph_snapshot(
+        self,
+        *,
+        run_id: str,
+        event_index: int,
+        graph_payload: dict[str, Any],
+        schema_version: str = "work_graph.v2",
+    ) -> dict[str, Any]:
+        file_path = _run_file_path(run_id)
+        event_index_value = _positive_int(event_index)
+        row_payload = {
+            "snapshot_id": new_id("graph_snapshot"),
+            "run_id": run_id,
+            "event_index": event_index_value,
+            "schema_version": _clean_text(schema_version) or "work_graph.v2",
+            "storage_backend": "jsonl",
+            "created_at": utc_now().isoformat(),
+            "graph": dict(graph_payload or {}),
+        }
+        row = {
+            "type": "work_graph_snapshot",
+            "payload": row_payload,
+        }
+        with self._lock:
+            with file_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row))
+                handle.write("\n")
+        return dict(row_payload)
+
+    def load_work_graph_snapshots(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.load_events(run_id)
+        snapshots: list[dict[str, Any]] = []
+        fallback_index = 0
+        for row in rows:
+            if row.get("type") != "work_graph_snapshot":
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            snapshot = dict(payload)
+            event_index = _positive_int(snapshot.get("event_index"))
+            if event_index <= 0:
+                fallback_index += 1
+                event_index = fallback_index
+            else:
+                fallback_index = max(fallback_index, event_index)
+            snapshot["event_index"] = event_index
+            snapshots.append(snapshot)
+        snapshots.sort(
+            key=lambda item: (
+                _positive_int(item.get("event_index")),
+                _clean_text(item.get("created_at")),
+                _clean_text(item.get("snapshot_id")),
+            )
+        )
+        return snapshots
+
     def load_replay_state(self, run_id: str) -> dict[str, Any]:
         rows = self.load_events(run_id)
         event_index_by_event_id = self._event_index_lookup(rows)
         graph_snapshots = self._load_snapshots(rows=rows, snapshot_type="graph_snapshot")
         evidence_snapshots = self._load_snapshots(rows=rows, snapshot_type="evidence_snapshot")
         artifact_snapshots = self._load_snapshots(rows=rows, snapshot_type="artifact_snapshot")
+        work_graph_snapshots = self.load_work_graph_snapshots(run_id)
         latest_event_index = max(event_index_by_event_id.values()) if event_index_by_event_id else 0
         return {
             "run_id": run_id,
@@ -267,6 +325,7 @@ class ActivityStore:
             "graph_snapshots": graph_snapshots,
             "evidence_snapshots": evidence_snapshots,
             "artifact_snapshots": artifact_snapshots,
+            "work_graph_snapshots": work_graph_snapshots,
         }
 
     @staticmethod

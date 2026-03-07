@@ -157,6 +157,18 @@ def test_stream_bridge_adds_cursor_for_interactive_scene_events() -> None:
     assert 0.0 <= float(payload.get("cursor_y") or 0.0) <= 100.0
 
 
+def test_stream_bridge_keeps_browser_events_on_website_surface_for_docs_google_urls() -> None:
+    payload = _emit_single_trace(
+        tool_id="marketing.web_research",
+        trace=ToolTraceEvent(
+            event_type="browser_navigate",
+            title="Open result",
+            data={"source_url": "https://docs.google.com/document/d/123/edit"},
+        ),
+    )
+    assert payload["scene_surface"] == "website"
+
+
 def test_stream_bridge_keeps_existing_cursor_values() -> None:
     payload = _emit_single_trace(
         tool_id="marketing.web_research",

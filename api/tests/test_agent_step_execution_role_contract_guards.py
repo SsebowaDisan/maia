@@ -178,7 +178,11 @@ def test_run_guard_checks_blocks_when_planned_role_cannot_use_tool() -> None:
         conversation_id="c1",
         run_id="r1",
         mode="company_agent",
-        settings={"__role_owned_steps": [{"step": 1, "owner_role": "browser"}]},
+        settings={
+            "__role_owned_steps": [
+                {"step": 1, "owner_role": "browser", "tool_id": "report.generate"}
+            ]
+        },
     )
     state = ExecutionState(execution_context=execution_context)
     outcome = _consume(
@@ -203,3 +207,49 @@ def test_run_guard_checks_blocks_when_planned_role_cannot_use_tool() -> None:
     assert "role_contract_blocked" in blocked_event.detail
     assert state.executed_steps[-1]["status"] == "failed"
     assert state.all_actions[-1].status == "failed"
+
+
+def test_run_guard_checks_ignores_mismatched_planned_tool_row() -> None:
+    events, emit_event, activity_event_factory = _event_factory()
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search web",
+        params={},
+    )
+    execution_context = ToolExecutionContext(
+        user_id="u1",
+        tenant_id="t1",
+        conversation_id="c1",
+        run_id="r1",
+        mode="company_agent",
+        settings={
+            "__role_owned_steps": [
+                {
+                    "step": 1,
+                    "owner_role": "writer",
+                    "tool_id": "report.generate",
+                }
+            ]
+        },
+    )
+    state = ExecutionState(execution_context=execution_context)
+    outcome = _consume(
+        run_guard_checks(
+            run_id="r1",
+            request=ChatRequest(message="research web", agent_mode="company_agent"),
+            task_prep=_task_prep(),
+            state=state,
+            registry=_RegistryStub("marketing.web_research", action_class="read"),
+            steps=[step],
+            step_cursor=0,
+            index=1,
+            step_started="2026-03-07T00:00:00+00:00",
+            step=step,
+            params={},
+            emit_event=emit_event,
+            activity_event_factory=activity_event_factory,
+        )
+    )
+    assert outcome.decision == "execute"
+    check_event = next(event for event in events if event.event_type == "role_contract_check")
+    assert check_event.data.get("owner_role") == "research"

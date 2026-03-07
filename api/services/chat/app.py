@@ -1504,12 +1504,10 @@ def stream_chat_turn(
         existing_goal = " ".join(str(request.agent_goal or "").split()).strip()
         if existing_goal:
             agent_goal_parts.append(existing_goal)
-        if context_summary:
+        if requested_mode == "company_agent" and context_summary:
             agent_goal_parts.append(f"Conversation context: {context_summary}")
         contextual_goal = " ".join(agent_goal_parts).strip()[:900]
         agent_request = request
-        if requested_mode == _DEEP_SEARCH_MODE:
-            agent_request = _request_with_updates(agent_request, {"agent_mode": "company_agent"})
         if contextual_goal and contextual_goal != existing_goal:
             try:
                 agent_request = agent_request.model_copy(update={"agent_goal": contextual_goal})

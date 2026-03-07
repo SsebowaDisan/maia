@@ -66,6 +66,18 @@ _CORE_FLOW_TOOL_IDS = {
     "report.generate",
 }
 
+_RESEARCH_ONLY_BLOCKED_TOOL_IDS = {
+    "email.draft",
+    "email.send",
+    "gmail.draft",
+    "gmail.send",
+    "business.cloud_incident_digest_email",
+    "invoice.create",
+    "invoice.send",
+    "slack.post_message",
+    "calendar.create_event",
+}
+
 DEFAULT_WEB_RESEARCH_PROVIDER = "brave_search"
 DEFAULT_WEB_PROVIDER = "playwright_browser"
 
@@ -408,6 +420,12 @@ def _normalize_steps(
             for step in normalized
             if step.tool_id not in ("gmail.draft", "gmail.send", "email.draft", "email.send")
         ]
+    if deep_research_mode:
+        normalized = [
+            step
+            for step in normalized
+            if step.tool_id not in _RESEARCH_ONLY_BLOCKED_TOOL_IDS
+        ]
 
     deduped: list[PlannedStep] = []
     seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
@@ -585,7 +603,7 @@ def _build_semantic_fallback_steps(request: ChatRequest) -> list[PlannedStep]:
             )
         )
 
-    if requires_delivery and not company_agent_mode:
+    if requires_delivery and not company_agent_mode and not is_deep_research_request(request):
         steps.append(
             PlannedStep(
                 tool_id="gmail.draft",
@@ -735,7 +753,7 @@ def build_plan(
             params={"summary": request.message},
         )
     )
-    if recipient and not company_agent_mode:
+    if recipient and not company_agent_mode and not is_deep_research_request(request):
         steps.append(
             PlannedStep(
                 tool_id="gmail.draft",

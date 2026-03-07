@@ -208,6 +208,19 @@ def _force_deep_search_profile(
     )
 
 
+def _scoped_agent_goal_for_execution(
+    *,
+    request: ChatRequest,
+    settings: dict[str, Any],
+) -> str:
+    requested_mode = " ".join(str(request.agent_mode or "").split()).strip().lower()
+    if requested_mode != "company_agent":
+        return ""
+    if truthy(settings.get("__research_web_only"), default=False):
+        return ""
+    return " ".join(str(request.agent_goal or "").split()).strip()
+
+
 def prepare_task_context(
     *,
     run_id: str,
@@ -218,6 +231,10 @@ def prepare_task_context(
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, TaskPreparation]:
+    scoped_agent_goal = _scoped_agent_goal_for_execution(
+        request=request,
+        settings=settings,
+    )
     task_understanding_started = activity_event_factory(
         event_type="task_understanding_started",
         title="Understanding requested outcome",
@@ -227,7 +244,7 @@ def prepare_task_context(
     yield emit_event(task_understanding_started)
     task_intelligence = derive_task_intelligence(
         message=request.message,
-        agent_goal=request.agent_goal,
+        agent_goal=scoped_agent_goal,
     )
 
     preference_store = get_user_preference_store()
@@ -243,7 +260,7 @@ def prepare_task_context(
     )
     depth_profile = derive_research_depth_profile(
         message=request.message,
-        agent_goal=request.agent_goal,
+        agent_goal=scoped_agent_goal,
         user_preferences=user_preferences,
         agent_mode=request.agent_mode,
     )
@@ -327,7 +344,7 @@ def prepare_task_context(
         session_query = " ".join(
             [
                 str(request.message or "").strip(),
-                str(request.agent_goal or "").strip(),
+                scoped_agent_goal,
                 conversation_summary_text,
             ]
         ).strip()
@@ -355,7 +372,7 @@ def prepare_task_context(
         memory_query = " ".join(
             [
                 str(request.message or "").strip(),
-                str(request.agent_goal or "").strip(),
+                scoped_agent_goal,
                 conversation_summary_text,
             ]
         ).strip()
@@ -428,12 +445,12 @@ def prepare_task_context(
         event_type="llm.task_rewrite_started",
         title="Rewriting task into detailed brief",
         detail=compact(request.message, 200),
-        metadata={"agent_goal": str(request.agent_goal or "").strip()[:240]},
+        metadata={"agent_goal": scoped_agent_goal[:240]},
     )
     yield emit_event(rewrite_started_event)
     rewrite_payload = rewrite_task_for_execution(
         message=request.message,
-        agent_goal=request.agent_goal,
+        agent_goal=scoped_agent_goal,
         conversation_summary=conversation_summary,
     )
     rewritten_task = " ".join(
@@ -441,7 +458,7 @@ def prepare_task_context(
     ).strip()
     rewritten_task = _normalize_rewritten_task_scope(
         message=request.message,
-        agent_goal=str(request.agent_goal or ""),
+        agent_goal=scoped_agent_goal,
         rewritten_task=rewritten_task,
     )
     planned_deliverables = [
@@ -475,7 +492,7 @@ def prepare_task_context(
     yield emit_event(contract_started_event)
     task_contract = build_task_contract(
         message=request.message,
-        agent_goal=request.agent_goal,
+        agent_goal=scoped_agent_goal,
         rewritten_task=rewritten_task,
         deliverables=planned_deliverables,
         constraints=planned_constraints,
@@ -533,7 +550,7 @@ def prepare_task_context(
     contract_missing_slots = classify_missing_requirement_slots(
         missing_requirements=contract_missing_requirements,
         message=request.message,
-        agent_goal=str(request.agent_goal or ""),
+        agent_goal=scoped_agent_goal,
         rewritten_task=rewritten_task,
         intent_tags=list(task_intelligence.intent_tags),
         conversation_summary=conversation_summary,
@@ -638,7 +655,7 @@ def prepare_task_context(
     working_context = compile_working_context(
         seed={
             "message": request.message,
-            "agent_goal": request.agent_goal,
+            "agent_goal": scoped_agent_goal,
             "rewritten_task": rewritten_task,
             "intent_tags": list(task_intelligence.intent_tags),
             "task_contract": task_contract,

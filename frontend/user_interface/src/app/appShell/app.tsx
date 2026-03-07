@@ -4,7 +4,6 @@ import { ChatSidebar } from "../components/ChatSidebar";
 import { FilesView } from "../components/FilesView";
 import { HelpView } from "../components/HelpView";
 import { InfoPanel } from "../components/InfoPanel";
-import { LeftExecutionRail } from "../components/LeftExecutionRail";
 import { ResourcesView } from "../components/ResourcesView";
 import { SettingsView } from "../components/SettingsView";
 import { TopNav } from "../components/TopNav";
@@ -235,7 +234,6 @@ export default function App() {
     ? chatState.chatTurns[chatState.chatTurns.length - 1] || null
     : null;
   const activeTurn = selectedTurn || latestTurn;
-  const pendingSteps = Array.isArray(activeTurn?.nextRecommendedSteps) ? activeTurn.nextRecommendedSteps : [];
   const selectedTurnMindmap =
     activeTurn?.mindmap && Object.keys(activeTurn.mindmap || {}).length > 0
       ? activeTurn.mindmap
@@ -377,7 +375,6 @@ export default function App() {
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={openWorkspaceModal}
             />
-            <LeftExecutionRail activityEvents={chatState.activityEvents} pendingSteps={pendingSteps} />
 
             {!layout.isSidebarCollapsed ? (
               <ResizeHandle
@@ -453,6 +450,7 @@ export default function App() {
                 infoPanel={activeTurn?.infoPanel || {}}
                 mindmap={effectiveMindmapPayload}
                 activityEvents={chatState.activityEvents}
+                activityRunId={activeTurn?.activityRunId || null}
                 sourcesUsed={activeTurn?.sourcesUsed || []}
                 webSummary={activeTurn?.webSummary || {}}
                 sourceUsage={activeTurn?.sourceUsage || []}

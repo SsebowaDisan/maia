@@ -29,6 +29,8 @@ interface CitationPdfPreviewProps {
   highlightQuery?: string;
   highlightBoxes?: CitationHighlightBox[];
   viewerHeight?: number;
+  initialZoom?: number;
+  onZoomChange?: (zoom: number) => void;
 }
 
 export function CitationPdfPreview({
@@ -38,12 +40,21 @@ export function CitationPdfPreview({
   highlightQuery,
   highlightBoxes,
   viewerHeight = 420,
+  initialZoom = 1,
+  onZoomChange,
 }: CitationPdfPreviewProps) {
   const effectiveViewerHeight = Math.max(220, Math.min(1200, Math.round(Number(viewerHeight) || 420)));
   const requestedPageSafe = parsePageNumber(page);
   const [numPages, setNumPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(requestedPageSafe);
   const [pageWidth, setPageWidth] = useState(300);
+  const [zoomLevel, setZoomLevel] = useState(() => {
+    const parsed = Number(initialZoom);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 1;
+    }
+    return Math.max(0.75, Math.min(2.25, parsed));
+  });
   const [docReady, setDocReady] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -242,6 +253,16 @@ export function CitationPdfPreview({
   }, [fileUrl, requestedPageSafe]);
 
   useEffect(() => {
+    setZoomLevel(() => {
+      const parsed = Number(initialZoom);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 1;
+      }
+      return Math.max(0.75, Math.min(2.25, parsed));
+    });
+  }, [fileUrl, initialZoom]);
+
+  useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     const updateWidth = () => {
@@ -307,37 +328,80 @@ export function CitationPdfPreview({
   return (
     <div className="citation-pdf rounded-xl border border-black/[0.08] bg-white overflow-hidden">
       <div className="h-8 px-2.5 flex items-center justify-between border-b border-black/[0.06] bg-[#f8f8fa]">
-        <button
-          type="button"
-          onClick={() => {
-            const next = clampPage(currentPage - 1);
-            setActiveTargetPage(next);
-            scrollToPage(next, "smooth");
-            scheduleHighlightFocus(next);
-          }}
-          disabled={currentPage <= 1}
-          className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
-          aria-label="Previous page"
-        >
-          <ChevronLeft className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              const next = clampPage(currentPage - 1);
+              setActiveTargetPage(next);
+              scrollToPage(next, "smooth");
+              scheduleHighlightFocus(next);
+            }}
+            disabled={currentPage <= 1}
+            className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setZoomLevel((previous) => {
+                const next = Math.max(0.75, Number((previous - 0.2).toFixed(2)));
+                onZoomChange?.(next);
+                return next;
+              });
+            }}
+            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
+            aria-label="Zoom out"
+          >
+            -
+          </button>
+        </div>
         <p className="text-[10px] text-[#6e6e73]">
-          Page {currentPage} of {numPages}
+          Page {currentPage} of {numPages} • {Math.round(zoomLevel * 100)}%
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            const next = clampPage(currentPage + 1);
-            setActiveTargetPage(next);
-            scrollToPage(next, "smooth");
-            scheduleHighlightFocus(next);
-          }}
-          disabled={currentPage >= numPages}
-          className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
-          aria-label="Next page"
-        >
-          <ChevronRight className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              setZoomLevel((previous) => {
+                const next = Math.min(2.25, Number((previous + 0.2).toFixed(2)));
+                onZoomChange?.(next);
+                return next;
+              });
+            }}
+            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setZoomLevel(1);
+              onZoomChange?.(1);
+            }}
+            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
+            aria-label="Reset zoom"
+          >
+            1x
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const next = clampPage(currentPage + 1);
+              setActiveTargetPage(next);
+              scrollToPage(next, "smooth");
+              scheduleHighlightFocus(next);
+            }}
+            disabled={currentPage >= numPages}
+            className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
+            aria-label="Next page"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       <div
@@ -386,7 +450,7 @@ export function CitationPdfPreview({
               >
                 <Page
                   pageNumber={pageNumber}
-                  width={pageWidth}
+                  width={Math.round(pageWidth * zoomLevel)}
                   renderAnnotationLayer
                   renderTextLayer
                   onRenderTextLayerSuccess={() => {

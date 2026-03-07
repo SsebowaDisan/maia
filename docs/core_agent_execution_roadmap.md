@@ -1,32 +1,24 @@
 # Maia Core Agent Execution Roadmap
 
+## Focus
+Transform MAIA's mind-map into a live AI Work Graph that shows how micro-agents plan, act, verify, cite evidence, and hand work across theatre, evidence, and chat.
+
 ## Rules For Execution
 - Only one active slice at a time.
 - No file over 500 LOC.
 - Use LLM-semantic reasoning for routing and decisions; no hardcoded words as the primary decision mechanism.
 - No shortcuts: implement the full slice acceptance path (code, tests, checklist update) before moving on.
-- Every user-facing step must meet Apple-level professional quality, with clear and polished "Steve Jobs style" craftsmanship.
-- A slice is complete only when:
-  - acceptance tests pass
-  - regression slice passes
-  - checklist is updated to `done`
+- Every user-facing step must meet Apple-level professional quality with clear, polished craftsmanship.
+- A slice is complete only when acceptance tests pass, regression slice passes, and checklist is updated to `done`.
 - Do not start the next slice until the current slice is complete.
-- After a slice is marked `done`, automatically move the next `todo` slice to `in_progress` without waiting for a separate user prompt.
-- When all slices in a phase are `done`, automatically create/activate the next phase slice and continue execution without waiting for a separate user prompt.
-- At the end of each phase, always run a final full regression (`backend pytest`, `frontend npm test`, `frontend npm run build`) before marking the phase complete.
-- Delete completed stages from the roadmap when the roadmap work is done, so only active planning content remains.
+- After a slice is `done`, automatically move the next `todo` slice to `in_progress`.
+- At the end of each phase, always run full regression: `PYTHONPATH=.:libs/maia pytest`, `cd frontend/user_interface && npm test`, `cd frontend/user_interface && npm run build`.
+- Delete completed stages when the roadmap is done so only active planning content remains.
 
 ## Naming Rule (Mandatory)
-- Scope: these naming rules apply to Maia modules under `api/` and `frontend/user_interface/src/`, not only UI modules.
+- Scope: applies to Maia modules under `api/` and `frontend/user_interface/src/`.
 - Structure must be domain-first, not prefix-first.
-- Do not add new root-level prefix-first modules when an existing Maia domain folder already fits the code.
-- Do not add new root-level catch-all modules such as `agent_*`, `browser_*`, `chat_*`, or `manifest_*` if the code belongs under an existing domain path.
-- Prefer paths like:
-  - `api/services/agent/orchestration/role_router.py`
-  - `api/services/agent/execution/browser_event_contract.py`
-  - `api/services/agent/tools/workspace/research_notes.py`
-  - `frontend/user_interface/src/app/components/agentDesktopScene/InteractionOverlay.tsx`
-  - `frontend/user_interface/src/app/components/chatMain/citationFocus.ts`
+- Do not add new root-level catch-all modules when an existing domain folder fits.
 - Keep names boring and searchable: lowercase folders, snake_case files.
 - Any move/rename must update all imports in the same slice and keep tests green.
 
@@ -36,20 +28,21 @@
 - `done` complete and validated
 - `blocked` needs decision or prerequisite
 
-## Execution Slices
-Current active slice: `none`
+## Current Active Slice
+- None (`done`) - information panel verification roadmap implemented and validated.
 
-Open slice list:
-- none (all listed slices completed and validated)
+## Completion Summary
+- `WG1` complete: backend Work Graph domain, run APIs, snapshot persistence.
+- `WG2` complete: run-scoped store, dedicated viewer, live hydration.
+- `WG3` complete: ELK layout, swimlanes, custom node/edge rendering.
+- `WG4` complete: graph↔theatre sync, evidence/verifier node actions.
+- `WG5` complete: search/filter/collapse/focus UX, collaboration abstraction with presence/comments.
+- `WG6` complete: external ingestion/status/evidence API contract and analytics (critical path, congestion, verifier hotspots, low-confidence clusters).
+- `VP1` complete: end-user information panel reframed around verification with AI Work Graph first and verification surface below.
+- `VP2` complete: source bar added with source type/status, evidence count, and conversation-level memory for source/evidence/zoom.
+- `VP3` complete: review viewer upgraded with deterministic citation jumps, previous/next evidence controls, and PDF zoom controls.
+- `VP4` complete: evidence strip redesigned for compact verification with short snippets and quality signaling.
+- `VP5` complete: trust features added (exact/context evidence mode, semantic find, evidence trail, compare view, trust warnings).
 
-Rule:
-- list only `todo`, `in_progress`, or `blocked` slices in this section
-- remove slices from this section once they are `done`
-
-## Next Roadmap
-All previously defined phases have been completed and removed from this active roadmap.
-
-When a new roadmap is proposed, add only:
-- phases/slices that are not yet done
-- acceptance and regression checks for each slice
-- current active slice and open slice list
+## Next Roadmap Template
+- Add new phases/slices here when a new roadmap is approved.

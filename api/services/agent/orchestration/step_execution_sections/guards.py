@@ -55,10 +55,16 @@ def prepare_step_params(
     return params
 
 
-def _planned_role_for_step(*, settings: dict[str, Any], step_index: int) -> str:
+def _planned_role_for_step(
+    *,
+    settings: dict[str, Any],
+    step_index: int,
+    expected_tool_id: str,
+) -> str:
     rows = settings.get("__role_owned_steps")
     if not isinstance(rows, list):
         return ""
+    normalized_expected_tool_id = " ".join(str(expected_tool_id or "").split()).strip().lower()
     for row in rows[:96]:
         if not isinstance(row, dict):
             continue
@@ -67,6 +73,9 @@ def _planned_role_for_step(*, settings: dict[str, Any], step_index: int) -> str:
         except Exception:
             continue
         if row_step != int(step_index):
+            continue
+        row_tool_id = " ".join(str(row.get("tool_id") or "").split()).strip().lower()
+        if normalized_expected_tool_id and row_tool_id != normalized_expected_tool_id:
             continue
         candidate_role = " ".join(str(row.get("owner_role") or "").split()).strip().lower()
         if is_agent_role(candidate_role):
@@ -93,6 +102,7 @@ def run_guard_checks(
     planned_role = _planned_role_for_step(
         settings=state.execution_context.settings,
         step_index=index,
+        expected_tool_id=step.tool_id,
     )
     inferred_role = resolve_owner_role_for_tool(step.tool_id)
     acting_role = normalize_agent_role(planned_role or inferred_role)

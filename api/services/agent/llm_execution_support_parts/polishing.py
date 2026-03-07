@@ -12,6 +12,9 @@ RESEARCH_INTENT_RE = re.compile(
     r"\b(research|analy(?:s|z)e|report|investigate|study|deep\s*research|overview)\b",
     re.I,
 )
+INTERNAL_CONTEXT_LINE_RE = re.compile(
+    r"(?im)^(?:working context:|active role:|role-scoped context:|role verification obligations:|unresolved slots:).*$"
+)
 
 
 def _sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
@@ -21,6 +24,10 @@ def _sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
     recipient_text = " ".join(str(recipient or "").split()).strip()
     if recipient_text:
         clean = re.sub(re.escape(recipient_text), "the recipient", clean, flags=re.IGNORECASE)
+    clean = INTERNAL_CONTEXT_LINE_RE.sub("", clean)
+    clean = re.sub(r"(?im)^subject:\s*.+$", "", clean)
+    clean = re.sub(r"(?im)^objective:\s*.+$", "", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
     clean = DEAR_PLACEHOLDER_RE.sub("Hello,", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean)
     return clean.strip()

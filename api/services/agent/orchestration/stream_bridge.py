@@ -130,6 +130,11 @@ class LiveRunStream:
                 return "website"
             return ""
 
+        if normalized_event.startswith(("browser_", "browser.", "web_", "web.", "brave.", "bing.")):
+            return "website"
+        if normalized_tool.startswith(("browser.", "marketing.web_research", "web.extract.", "web.dataset.")):
+            return "website"
+
         for key in (
             "spreadsheet_url",
             "document_url",
@@ -157,8 +162,6 @@ class LiveRunStream:
 
         if normalized_event.startswith(("api_", "api.")):
             return "api"
-        if normalized_event.startswith(("browser_", "browser.", "web_", "web.", "brave.", "bing.")):
-            return "website"
         if normalized_event.startswith("role_"):
             return "system"
         if normalized_event.startswith(("email_", "email.", "gmail_", "gmail.")):

@@ -33,6 +33,25 @@ def _contact_form_capability_enabled(settings: dict[str, object]) -> bool:
     )
 
 
+def _is_research_mode_disallowed_tool(tool_id: str) -> bool:
+    normalized = " ".join(str(tool_id or "").split()).strip().lower()
+    if not normalized:
+        return False
+    if normalized in {
+        "email.draft",
+        "email.send",
+        "gmail.draft",
+        "gmail.send",
+        "invoice.create",
+        "invoice.send",
+        "slack.post_message",
+        "calendar.create_event",
+        "browser.contact_form.send",
+    }:
+        return True
+    return normalized.startswith("business.")
+
+
 def apply_intent_enrichment(
     *,
     request: ChatRequest,
@@ -45,9 +64,15 @@ def apply_intent_enrichment(
         message=request.message,
         agent_goal=request.agent_goal,
     )
+    explicit_message_signals = infer_intent_signals_from_text(
+        message=request.message,
+        agent_goal="",
+    )
     deep_search_mode = str(request.agent_mode or "").strip().lower() == "deep_search" or bool(
         settings.get("__deep_search_enabled")
     )
+    web_only_mode = _coerce_bool(settings.get("__research_web_only"), default=False)
+    research_only_mode = deep_search_mode or web_only_mode
     if deep_search_mode:
         deep_file_scope = bool(settings.get("__deep_search_prompt_scoped_pdfs")) or bool(
             settings.get("__deep_search_user_selected_files")
@@ -97,6 +122,9 @@ def apply_intent_enrichment(
         or ("sheets_update" in intent_tags)
         or bool(inferred_signals.get("wants_sheets_output"))
     )
+    if research_only_mode:
+        docs_requested = bool(explicit_message_signals.get("wants_docs_output"))
+        sheets_requested = bool(explicit_message_signals.get("wants_sheets_output"))
     contact_form_requested = (
         ("submit_contact_form" in contract_actions)
         or ("contact_form_submission" in intent_tags)
@@ -105,7 +133,25 @@ def apply_intent_enrichment(
             and "browser.contact_form.send" in capability_preferred_tool_ids
         )
     )
+    if research_only_mode:
+        contact_form_requested = False
     contact_form_enabled = _contact_form_capability_enabled(settings)
+
+    if research_only_mode:
+        filtered_steps: list[PlannedStep] = []
+        for step in steps:
+            tool_id = " ".join(str(step.tool_id or "").split()).strip().lower()
+            if _is_research_mode_disallowed_tool(tool_id):
+                continue
+            if not docs_requested and (
+                tool_id == "docs.create"
+                or tool_id.startswith("workspace.docs.")
+            ):
+                continue
+            if not sheets_requested and tool_id.startswith("workspace.sheets."):
+                continue
+            filtered_steps.append(step)
+        steps = filtered_steps
 
     if highlight_requested and not any(
         step.tool_id == "documents.highlight.extract" for step in steps

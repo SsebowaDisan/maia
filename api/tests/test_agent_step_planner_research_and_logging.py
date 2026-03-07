@@ -587,6 +587,62 @@ def test_intent_enrichment_can_use_contract_planning_signals_for_contact_step(mo
     assert any(step.tool_id == "browser.contact_form.send" for step in enriched)
 
 
+def test_intent_enrichment_research_only_prunes_delivery_and_workspace_steps(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import intent_enrichment as enrichment_module
+
+    def _fake_signals(**kwargs):
+        agent_goal = " ".join(str(kwargs.get("agent_goal") or "").split()).strip()
+        if agent_goal:
+            return {
+                "url": "https://axongroup.com/",
+                "wants_contact_form": True,
+                "wants_highlight_words": False,
+                "wants_docs_output": True,
+                "wants_sheets_output": True,
+            }
+        return {
+            "url": "https://axongroup.com/",
+            "wants_contact_form": False,
+            "wants_highlight_words": False,
+            "wants_docs_output": False,
+            "wants_sheets_output": False,
+        }
+
+    monkeypatch.setattr(enrichment_module, "infer_intent_signals_from_text", _fake_signals)
+    request = ChatRequest(
+        message="Deep research machine learning trends from web sources.",
+        agent_mode="deep_search",
+        agent_goal="Conversation context: send to stale@example.com and update docs",
+    )
+    task_prep = _task_prep(
+        contract_actions=["create_document", "update_sheet", "submit_contact_form"],
+        intent_tags=("docs_write", "sheets_update", "contact_form_submission"),
+    )
+    steps = [
+        PlannedStep(tool_id="marketing.web_research", title="Search online sources", params={"query": "x"}),
+        PlannedStep(tool_id="workspace.docs.research_notes", title="Write notes", params={}),
+        PlannedStep(tool_id="workspace.sheets.track_step", title="Track step", params={}),
+        PlannedStep(tool_id="gmail.send", title="Send email", params={"to": "stale@example.com"}),
+        PlannedStep(tool_id="browser.contact_form.send", title="Send outreach", params={"url": "https://axongroup.com/"}),
+        PlannedStep(tool_id="report.generate", title="Generate report", params={"summary": "x"}),
+    ]
+
+    enriched = apply_intent_enrichment(
+        request=request,
+        settings={"__deep_search_enabled": True, "__contact_form_capability_enabled": True},
+        task_prep=task_prep,
+        steps=steps,
+    )
+
+    tool_ids = [step.tool_id for step in enriched]
+    assert "marketing.web_research" in tool_ids
+    assert "report.generate" in tool_ids
+    assert "workspace.docs.research_notes" not in tool_ids
+    assert "workspace.sheets.track_step" not in tool_ids
+    assert "gmail.send" not in tool_ids
+    assert "browser.contact_form.send" not in tool_ids
+
+
 def test_workspace_roadmap_steps_marked_for_optional_skip() -> None:
     request = ChatRequest(message="Research online", agent_mode="company_agent")
     task_prep = _task_prep(contract_actions=[], intent_tags=())

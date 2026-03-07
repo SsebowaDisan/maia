@@ -141,3 +141,73 @@ def test_prepare_delivery_content_uses_existing_report_body_without_draft_fallba
 
     assert report_title == "Existing Report"
     assert report_body == "## Executive Summary\n\nExisting report body."
+
+
+def test_prepare_delivery_content_redrafts_when_existing_body_leaks_internal_context(monkeypatch) -> None:
+    state = _state()
+    state.execution_context.settings["__latest_report_title"] = "Existing Report"
+    state.execution_context.settings["__latest_report_content"] = (
+        "Subject: Existing Report\n\n"
+        "Working Context:\n- Unresolved Slots: 1\n\n"
+        "Active Role: Writer\n"
+        "Role-Scoped Context: internal data"
+    )
+    task_prep = _task_prep()
+    runtime = DeliveryRuntime(step=1, started_at="2026-03-07T00:00:00Z")
+
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.delivery_sections.decisioning.draft_delivery_report_content",
+        lambda **kwargs: {
+            "subject": "Machine Learning Research Report",
+            "body_text": (
+                "## Machine Learning Research Overview\n\n"
+                "Machine learning models learn patterns from data and improve outcomes."
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.delivery_sections.decisioning.polish_email_content",
+        lambda **kwargs: {"subject": kwargs.get("subject", ""), "body_text": kwargs.get("body_text", "")},
+    )
+
+    report_title, report_body, _ = prepare_delivery_content(
+        request=ChatRequest(message="send report", agent_mode="company_agent"),
+        task_prep=task_prep,
+        state=state,
+        runtime=runtime,
+        activity_event_factory=_event_factory,
+    )
+
+    assert report_title == "Machine Learning Research Report"
+    assert "Working Context:" not in report_body
+    assert report_body.startswith("## Machine Learning Research Overview")
+
+
+def test_prepare_delivery_content_normalizes_inline_markdown_headings(monkeypatch) -> None:
+    state = _state()
+    state.execution_context.settings["__latest_report_title"] = "Existing Report"
+    state.execution_context.settings["__latest_report_content"] = (
+        "## Website Analysis Report ### Executive Summary Content line. ### Detailed Analysis More."
+    )
+    task_prep = _task_prep()
+    runtime = DeliveryRuntime(step=1, started_at="2026-03-07T00:00:00Z")
+
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.delivery_sections.decisioning.draft_delivery_report_content",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("should not be called")),
+    )
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.delivery_sections.decisioning.polish_email_content",
+        lambda **kwargs: {"subject": kwargs.get("subject", ""), "body_text": kwargs.get("body_text", "")},
+    )
+
+    _, report_body, _ = prepare_delivery_content(
+        request=ChatRequest(message="send report", agent_mode="company_agent"),
+        task_prep=task_prep,
+        state=state,
+        runtime=runtime,
+        activity_event_factory=_event_factory,
+    )
+
+    assert "\n\n### Executive Summary" in report_body
+    assert "\n\n### Detailed Analysis" in report_body

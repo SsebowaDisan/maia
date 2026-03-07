@@ -25,7 +25,7 @@ def maybe_send_server_delivery(
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, None]:
-    if not should_attempt_delivery(task_prep=task_prep, state=state):
+    if not should_attempt_delivery(request=request, task_prep=task_prep, state=state):
         return
 
     runtime = build_delivery_runtime(state=state)

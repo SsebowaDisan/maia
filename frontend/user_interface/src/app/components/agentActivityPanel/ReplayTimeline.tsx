@@ -1,7 +1,14 @@
-import type { RefObject } from "react";
+import { useEffect, type RefObject } from "react";
 import type { AgentActivityEvent } from "../../types";
 import { styleForEvent } from "../agentActivityMeta";
 import { filmstripRowsForMode, readReplayMode, timelineRowsForMode } from "./replayModePolicy";
+import { useWorkGraphStore } from "../workGraph/useWorkGraphStore";
+import {
+  deriveActiveNodeIdsForEvent,
+  findTimelineIndexForJumpTarget,
+  readActivityEventIndex,
+  subscribeWorkGraphJumpTarget,
+} from "../workGraph/theatreSync";
 
 interface ReplayTimelineProps {
   streaming: boolean;
@@ -117,6 +124,40 @@ function ReplayTimeline({
   onSelectEvent,
   listRef,
 }: ReplayTimelineProps) {
+  useEffect(() => {
+    const unsubscribe = subscribeWorkGraphJumpTarget((jumpTarget) => {
+      let nextIndex = -1;
+      if (typeof jumpTarget.eventIndexStart === "number" && jumpTarget.eventIndexStart > 0) {
+        nextIndex = Math.max(0, Math.min(totalEvents - 1, Math.round(jumpTarget.eventIndexStart) - 1));
+      } else {
+        nextIndex = findTimelineIndexForJumpTarget(visibleEvents, jumpTarget);
+      }
+      if (nextIndex < 0) {
+        return;
+      }
+      setCursor(nextIndex);
+      setIsPlaying(false);
+    });
+    return () => unsubscribe();
+  }, [setCursor, setIsPlaying, totalEvents, visibleEvents]);
+
+  useEffect(() => {
+    if (!activeEvent) {
+      useWorkGraphStore.setState({ activeNodeIds: [] });
+      return;
+    }
+    const graphState = useWorkGraphStore.getState();
+    if (!graphState.nodes.length) {
+      return;
+    }
+    const activeNodeIds = deriveActiveNodeIdsForEvent(graphState.nodes, activeEvent);
+    const eventIndex = readActivityEventIndex(activeEvent);
+    useWorkGraphStore.setState((state) => ({
+      activeNodeIds,
+      replayCursor: eventIndex > 0 ? eventIndex : state.replayCursor,
+    }));
+  }, [activeEvent?.event_id, activeEvent?.event_index, safeCursor]);
+
   const activeStyle = styleForEvent(activeEvent);
   const ActiveIcon = activeStyle.icon;
   const replayMode = readReplayMode(visibleEvents);

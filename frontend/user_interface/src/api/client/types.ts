@@ -348,6 +348,63 @@ type AgentLiveEvent = {
   user_id?: string;
 };
 
+type WorkGraphNodeRecord = {
+  id: string;
+  title: string;
+  detail?: string;
+  node_type?: string;
+  status?: "queued" | "running" | "completed" | "failed" | "blocked";
+  agent_id?: string | null;
+  agent_role?: string | null;
+  agent_label?: string | null;
+  agent_color?: string | null;
+  confidence?: number | null;
+  progress?: number | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  event_index_start?: number | null;
+  event_index_end?: number | null;
+  evidence_refs?: string[];
+  artifact_refs?: string[];
+  scene_refs?: string[];
+  event_refs?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+type WorkGraphEdgeRecord = {
+  id: string;
+  source: string;
+  target: string;
+  edge_family: "hierarchy" | "dependency" | "evidence" | "verification" | "handoff";
+  relation?: string;
+  event_index?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+type WorkGraphPayloadResponse = {
+  version?: number;
+  map_type?: string;
+  kind?: string;
+  schema?: string;
+  run_id: string;
+  title?: string;
+  root_id: string;
+  nodes: WorkGraphNodeRecord[];
+  edges: WorkGraphEdgeRecord[];
+  graph?: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+};
+
+type WorkGraphReplayStateResponse = {
+  run_id: string;
+  latest_event_index?: number;
+  graph_snapshots?: Array<Record<string, unknown>>;
+  evidence_snapshots?: Array<Record<string, unknown>>;
+  artifact_snapshots?: Array<Record<string, unknown>>;
+  work_graph?: Record<string, unknown>;
+};
+
 export type {
   AgentActionRecord,
   AgentActivityEvent,
@@ -381,6 +438,8 @@ export type {
   MindmapShareResponse,
   SourceUsageRecord,
   SettingsResponse,
+  WorkGraphPayloadResponse,
+  WorkGraphReplayStateResponse,
   UploadItem,
   UrlActionResult,
   UploadResponse,

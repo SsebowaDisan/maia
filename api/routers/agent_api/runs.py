@@ -59,6 +59,14 @@ def get_agent_run_artifact_snapshots(run_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+@router.get("/runs/{run_id}/work-graph-snapshots")
+def get_agent_run_work_graph_snapshots(run_id: str) -> list[dict[str, Any]]:
+    rows = get_activity_store().load_work_graph_snapshots(run_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Run work-graph snapshots not found.")
+    return rows
+
+
 @router.get("/runs/{run_id}/replay-state")
 def get_agent_run_replay_state(run_id: str) -> dict[str, Any]:
     rows = get_activity_store().load_events(run_id)
@@ -132,6 +140,7 @@ def export_agent_run_events(run_id: str) -> dict[str, Any]:
     graph_snapshots = store.load_graph_snapshots(run_id)
     evidence_snapshots = store.load_evidence_snapshots(run_id)
     artifact_snapshots = store.load_artifact_snapshots(run_id)
+    work_graph_snapshots = store.load_work_graph_snapshots(run_id)
     replay_state = store.load_replay_state(run_id)
     return {
         "run_id": run_id,
@@ -142,9 +151,11 @@ def export_agent_run_events(run_id: str) -> dict[str, Any]:
         "total_graph_snapshots": len(graph_snapshots),
         "total_evidence_snapshots": len(evidence_snapshots),
         "total_artifact_snapshots": len(artifact_snapshots),
+        "total_work_graph_snapshots": len(work_graph_snapshots),
         "graph_snapshots": graph_snapshots,
         "evidence_snapshots": evidence_snapshots,
         "artifact_snapshots": artifact_snapshots,
+        "work_graph_snapshots": work_graph_snapshots,
         "replay_state": replay_state,
         "events": events,
     }

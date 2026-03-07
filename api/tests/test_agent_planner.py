@@ -329,6 +329,44 @@ def test_company_agent_with_deep_search_override_keeps_web_research(monkeypatch)
     assert "report.generate" in tool_ids
 
 
+def test_deep_search_prunes_delivery_tools_from_llm_rows(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "online_research", "llm_used": True},
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Search online sources",
+                "params": {"query": "machine learning"},
+            },
+            {
+                "tool_id": "gmail.send",
+                "title": "Send report",
+                "params": {"to": "user@example.com"},
+            },
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": "machine learning"},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Deep research machine learning and send it to user@example.com",
+        agent_mode="deep_search",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+    assert "marketing.web_research" in tool_ids
+    assert "report.generate" in tool_ids
+    assert "gmail.send" not in tool_ids
+
+
 def test_contact_form_request_adds_contact_form_send_step(monkeypatch) -> None:
     monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
     monkeypatch.setattr(planner_module, "enrich_task_intelligence", lambda **kwargs: {

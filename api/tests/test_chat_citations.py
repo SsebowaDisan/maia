@@ -63,6 +63,55 @@ def test_enforce_required_citations_injects_inline_citation_when_only_tail_exist
     assert "data-phrase='test evidence extract'" in answer
 
 
+def test_enforce_required_citations_uses_evidence_section_refs_when_info_html_missing() -> None:
+    answer = enforce_required_citations(
+        answer=(
+            "## Delivery Attempt Overview\n"
+            "- mailer.report_send attempted delivery for the prepared report.\n\n"
+            "## Evidence Citations\n"
+            "- [1] mailer.report_send | internal evidence | Note: Server-side Mailer Service attempted to send the report.\n"
+        ),
+        info_html="",
+        citation_mode="inline",
+    )
+    assert "mailer.report_send attempted delivery for the prepared report." in answer
+    assert "class='citation'" in answer
+    assert "data-phrase='Server-side Mailer Service attempted to send the report.'" in answer
+    assert "Evidence: internal execution trace" not in answer
+
+
+def test_enforce_required_citations_parses_source_url_from_evidence_section_when_info_html_missing() -> None:
+    answer = enforce_required_citations(
+        answer=(
+            "## Findings\n"
+            "Website evidence was used to ground the summary details.\n\n"
+            "## Evidence Citations\n"
+            "- [1] Axon Group | https://axongroup.com/ | Note: Industrial solutions summary captured.\n"
+        ),
+        info_html="",
+        citation_mode="inline",
+    )
+    assert "class='citation'" in answer
+    assert "data-source-url='https://axongroup.com/'" in answer
+    assert "Evidence: internal execution trace" not in answer
+
+
+def test_enforce_required_citations_keeps_inline_code_tokens_intact() -> None:
+    answer = enforce_required_citations(
+        answer=(
+            "## Delivery Attempt Overview\n"
+            "- Tool used: `mailer.report_send`.\n\n"
+            "## Evidence Citations\n"
+            "- [1] mailer.report_send | internal evidence | Note: Server-side Mailer Service sent report.\n"
+        ),
+        info_html="",
+        citation_mode="inline",
+    )
+    assert "`mailer.report_send`" in answer
+    assert "`mailer.report_send`. <a " in answer
+    assert "class='citation'" in answer
+
+
 def test_append_required_citation_suffix_converts_plain_brackets_to_clickable_links() -> None:
     info_html = (
         "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='3' open>"

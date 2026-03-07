@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -16,11 +17,61 @@ from ..text_helpers import compact
 from .models import DeliveryRuntime
 
 
+_REPORT_LEAK_MARKERS = (
+    "working context:",
+    "active role:",
+    "role-scoped context:",
+    "role verification obligations:",
+    "unresolved slots:",
+    "copied highlights",
+)
+_INLINE_HEADING_MARKER_RE = re.compile(r"(?<!\n)\s+(#{1,6}\s+)")
+
+
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    token = " ".join(str(value or "").split()).strip().lower()
+    return token in {"1", "true", "yes", "on"}
+
+
+def _report_requires_redraft(report_body: str) -> bool:
+    clean = str(report_body or "").strip()
+    if not clean:
+        return True
+    lowered = clean.lower()
+    if lowered.startswith("no dedicated report draft was generated"):
+        return True
+    if any(marker in lowered for marker in _REPORT_LEAK_MARKERS):
+        return True
+    if lowered.startswith("subject:") and "objective:" in lowered and "working context" in lowered:
+        return True
+    if len(clean) < 180 and "http" not in lowered and not clean.startswith("#"):
+        return True
+    return False
+
+
+def _normalize_delivery_markdown(report_body: str) -> str:
+    text = str(report_body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    text = _INLINE_HEADING_MARKER_RE.sub(r"\n\n\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def should_attempt_delivery(
     *,
+    request: ChatRequest,
     task_prep: TaskPreparation,
     state: ExecutionState,
 ) -> bool:
+    requested_mode = " ".join(str(request.agent_mode or "").split()).strip().lower()
+    if requested_mode != "company_agent":
+        return False
+    if _truthy_flag(state.execution_context.settings.get("__research_web_only")):
+        return False
+
     task_intelligence = task_prep.task_intelligence
     delivery_requested = bool(
         task_intelligence.requires_delivery
@@ -72,7 +123,7 @@ def prepare_delivery_content(
     report_body = str(
         state.execution_context.settings.get("__latest_report_content") or ""
     ).strip()
-    if report_body.lower().startswith("no dedicated report draft was generated"):
+    if _report_requires_redraft(report_body):
         report_body = ""
     if not report_body:
         drafted_report = draft_delivery_report_content(
@@ -207,6 +258,7 @@ def prepare_delivery_content(
         or report_body
         or "Report requested, but no body content was generated."
     ).strip()
+    report_body = _normalize_delivery_markdown(report_body)
     state.execution_context.settings["__latest_report_title"] = report_title
     state.execution_context.settings["__latest_report_content"] = report_body
     return report_title, report_body, pre_send_events

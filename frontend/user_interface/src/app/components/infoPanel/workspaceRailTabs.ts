@@ -1,4 +1,4 @@
-export type WorkspaceRailTab = "work_graph" | "theatre" | "evidence" | "artifacts" | "logs";
+export type WorkspaceRailTab = "work_graph" | "theatre" | "evidence" | "artifacts";
 
 type WorkspaceRailTabMeta = {
   id: WorkspaceRailTab;
@@ -10,7 +10,6 @@ const WORKSPACE_RAIL_TABS: WorkspaceRailTabMeta[] = [
   { id: "theatre", label: "Theatre" },
   { id: "evidence", label: "Evidence" },
   { id: "artifacts", label: "Artifacts" },
-  { id: "logs", label: "Logs" },
 ];
 
 function normalizeWorkspaceRailTab(raw: unknown): WorkspaceRailTab {

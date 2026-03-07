@@ -6,6 +6,7 @@ from api.services.agent.contract_verification import build_deterministic_contrac
 from api.services.agent.orchestration.delivery_sections.decisioning import should_attempt_delivery
 from api.services.agent.orchestration.models import ExecutionState
 from api.services.agent.tools.base import ToolExecutionContext
+from api.schemas import ChatRequest
 
 
 def _state() -> ExecutionState:
@@ -68,6 +69,7 @@ def test_contract_check_allows_completed_side_effect_without_success_action_row(
 
 
 def test_should_attempt_delivery_respects_side_effect_status() -> None:
+    request = ChatRequest(message="send report", agent_mode="company_agent")
     state = _state()
     state.execution_context.settings["__side_effect_status"] = {
         "send_email": {"status": "completed"}
@@ -79,7 +81,34 @@ def test_should_attempt_delivery_respects_side_effect_status() -> None:
             delivery_email="recipient@example.com",
         ),
     )
-    assert should_attempt_delivery(task_prep=task_prep, state=state) is False
+    assert should_attempt_delivery(request=request, task_prep=task_prep, state=state) is False
 
     state.execution_context.settings["__side_effect_status"] = {}
-    assert should_attempt_delivery(task_prep=task_prep, state=state) is True
+    assert should_attempt_delivery(request=request, task_prep=task_prep, state=state) is True
+
+
+def test_should_attempt_delivery_blocked_for_deep_search_mode() -> None:
+    request = ChatRequest(message="research and send", agent_mode="deep_search")
+    state = _state()
+    task_prep = SimpleNamespace(
+        clarification_blocked=False,
+        task_intelligence=SimpleNamespace(
+            requires_delivery=True,
+            delivery_email="recipient@example.com",
+        ),
+    )
+    assert should_attempt_delivery(request=request, task_prep=task_prep, state=state) is False
+
+
+def test_should_attempt_delivery_blocked_for_web_only_variant() -> None:
+    request = ChatRequest(message="research and send", agent_mode="company_agent")
+    state = _state()
+    state.execution_context.settings["__research_web_only"] = True
+    task_prep = SimpleNamespace(
+        clarification_blocked=False,
+        task_intelligence=SimpleNamespace(
+            requires_delivery=True,
+            delivery_email="recipient@example.com",
+        ),
+    )
+    assert should_attempt_delivery(request=request, task_prep=task_prep, state=state) is False

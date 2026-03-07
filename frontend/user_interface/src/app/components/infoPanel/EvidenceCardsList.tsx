@@ -5,7 +5,10 @@ import { choosePreferredSourceUrl, evidenceSourceLabel } from "./urlHelpers";
 type EvidenceCardsListProps = {
   cards: EvidenceCard[];
   selectedEvidenceId?: string;
+  evidenceMode?: "exact" | "context";
+  maxCards?: number;
   onSelectCard: (card: EvidenceCard, index: number) => void;
+  onHoverCard?: (card: EvidenceCard, index: number) => void;
 };
 
 function qualityLabel(matchQuality: string): string {
@@ -39,7 +42,14 @@ function strengthLabel(tier: number | undefined): string {
   return "weak";
 }
 
-function EvidenceCardsList({ cards, selectedEvidenceId = "", onSelectCard }: EvidenceCardsListProps) {
+function EvidenceCardsList({
+  cards,
+  selectedEvidenceId = "",
+  evidenceMode = "exact",
+  maxCards = 24,
+  onSelectCard,
+  onHoverCard,
+}: EvidenceCardsListProps) {
   if (!cards.length) {
     return (
       <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
@@ -50,14 +60,15 @@ function EvidenceCardsList({ cards, selectedEvidenceId = "", onSelectCard }: Evi
 
   return (
     <div className="space-y-2.5">
-      {cards.slice(0, 12).map((card, index) => {
+      {cards.slice(0, maxCards).map((card, index) => {
         const refLabel = String(index + 1);
         const sourceLabel = evidenceSourceLabel(card);
         const sourceUrl = choosePreferredSourceUrl([card.sourceUrl]);
         const snippet = String(card.extract || card.title || "No extract available for this citation.")
           .replace(/\s+/g, " ")
           .trim();
-        const trimmedSnippet = snippet.length > 230 ? `${snippet.slice(0, 230).trimEnd()}...` : snippet;
+        const snippetLimit = evidenceMode === "exact" ? 220 : 420;
+        const trimmedSnippet = snippet.length > snippetLimit ? `${snippet.slice(0, snippetLimit).trimEnd()}...` : snippet;
         const selected = selectedEvidenceId && selectedEvidenceId === String(card.id || "").trim().toLowerCase();
         const quality = qualityLabel(card.matchQuality || "");
         const strength = strengthLabel(card.strengthTier);
@@ -68,7 +79,12 @@ function EvidenceCardsList({ cards, selectedEvidenceId = "", onSelectCard }: Evi
               selected ? "border-[#0a84ff]/40 bg-[#f1f7ff]" : "border-black/[0.06] hover:bg-[#f8f9fc]"
             }`}
           >
-            <button type="button" onClick={() => onSelectCard(card, index)} className="w-full text-left">
+            <button
+              type="button"
+              onClick={() => onSelectCard(card, index)}
+              onMouseEnter={() => onHoverCard?.(card, index)}
+              className="w-full text-left"
+            >
               <div className="mb-1.5 flex items-center gap-2 text-[11px] text-[#5f6472]">
                 <span className="rounded-full border border-[#ccd3e2] bg-[#f5f7fb] px-2 py-0.5 font-semibold text-[#2f3a51]">
                   [{refLabel}]

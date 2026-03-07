@@ -68,6 +68,7 @@ _ARTIFACT_URL_PATH_SEGMENTS = {
 }
 _SENTENCE_SEGMENT_RE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 _INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|】|ã€‘|\})")
+_CITATION_LIST_ITEM_RE = re.compile(r"^\s*-\s*\[(\d{1,4})\]\s*(.+?)\s*$")
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
 _URL_TOKEN_RE = re.compile(r"https?://", flags=re.IGNORECASE)
 _CONTEXT_TOKEN_STOPWORDS = {
@@ -513,6 +514,26 @@ def _inject_claim_citations_in_line(
     }
     if not ref_by_id:
         return line
+
+    # Inline code fragments frequently include dotted identifiers (for example
+    # `mailer.report_send`) that should not be split by sentence-level injection.
+    if "`" in line:
+        already_cited = bool(
+            re.search(r"(?:\[|【|\{)\s*\d{1,3}\s*(?:\]|】|\})", line)
+            or "class='citation'" in line
+            or 'class="citation"' in line
+        )
+        if already_cited:
+            return line
+        context_without_code = _clean_text(line.replace("`", " "))
+        if not _is_claim_like_fragment(line) or not context_without_code:
+            return line
+        best_ref_id, _score = _best_ref_for_context(context_without_code, refs)
+        if best_ref_id is None or best_ref_id not in ref_by_id:
+            return line
+        line_stripped = line.rstrip()
+        marker = f"[{best_ref_id}]"
+        return f"{line_stripped} {marker}{line[len(line_stripped):]}"
 
     # URL/link lines should receive citation markers only at the end so markdown
     # links remain valid (no split at dots inside URLs).
@@ -1908,6 +1929,145 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
     return refs
 
 
+def _extract_refs_from_answer_citation_section(answer: str) -> list[dict[str, Any]]:
+    text = str(answer or "")
+    if not text.strip():
+        return []
+    section_match = _CITATION_SECTION_RE.search(text)
+    if not section_match:
+        return []
+
+    section_text = text[section_match.start() :]
+    refs: list[dict[str, Any]] = []
+    seen_ref_ids: set[int] = set()
+    heading_seen = False
+    for raw_line in section_text.splitlines():
+        line = str(raw_line or "")
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("## "):
+            if heading_seen:
+                break
+            heading_seen = True
+            continue
+        item_match = _CITATION_LIST_ITEM_RE.match(stripped)
+        if not item_match:
+            continue
+        ref_id = int(item_match.group(1))
+        if ref_id <= 0 or ref_id in seen_ref_ids:
+            continue
+        seen_ref_ids.add(ref_id)
+        content = " ".join(str(item_match.group(2) or "").split()).strip()
+        if not content:
+            continue
+        parts = [part.strip() for part in content.split("|") if part.strip()]
+        label = parts[0] if parts else f"Evidence {ref_id}"
+        source_url = _normalize_source_url(label)
+        note = ""
+        page_label = ""
+        source_name = label
+        for part in parts[1:]:
+            normalized_part = " ".join(str(part or "").split()).strip()
+            if not normalized_part:
+                continue
+            part_url = _normalize_source_url(normalized_part)
+            if part_url and not source_url:
+                source_url = part_url
+                continue
+            note_match = re.match(r"^note\s*:\s*(.+)$", normalized_part, flags=re.IGNORECASE)
+            if note_match:
+                note_candidate = _clean_text(note_match.group(1))
+                if note_candidate:
+                    note = note_candidate
+                continue
+            page_match = re.search(r"\bpage\s+(\d{1,4})\b", normalized_part, flags=re.IGNORECASE)
+            if page_match and not page_label:
+                page_label = page_match.group(1)
+            lower_part = normalized_part.lower()
+            if not note and lower_part not in {"internal evidence", "internal"}:
+                note = _clean_text(normalized_part)
+        if not source_url:
+            inline_url_match = re.search(r"https?://[^\s<>'\")\]]+", content, flags=re.IGNORECASE)
+            if inline_url_match:
+                source_url = _normalize_source_url(inline_url_match.group(0))
+
+        refs.append(
+            {
+                "id": ref_id,
+                "source_id": "",
+                "source_url": source_url,
+                "page_label": page_label,
+                "label": label,
+                "source_name": source_name,
+                "phrase": note[:CITATION_PHRASE_MAX_CHARS] if note else "",
+                "highlight_boxes": [],
+                "unit_id": "",
+                "match_quality": "estimated",
+                "char_start": 0,
+                "char_end": 0,
+                "strength_score": 0.0,
+            }
+        )
+    refs.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return refs
+
+
+def _merge_refs(
+    primary_refs: list[dict[str, Any]],
+    fallback_refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not primary_refs:
+        return list(fallback_refs or [])
+    if not fallback_refs:
+        return list(primary_refs or [])
+
+    merged: list[dict[str, Any]] = [dict(row) for row in primary_refs if isinstance(row, dict)]
+    by_id: dict[int, dict[str, Any]] = {
+        int(row.get("id", 0) or 0): row
+        for row in merged
+        if int(row.get("id", 0) or 0) > 0
+    }
+    for row in fallback_refs:
+        if not isinstance(row, dict):
+            continue
+        ref_id = int(row.get("id", 0) or 0)
+        if ref_id <= 0:
+            continue
+        existing = by_id.get(ref_id)
+        if not existing:
+            copied = dict(row)
+            merged.append(copied)
+            by_id[ref_id] = copied
+            continue
+        for key in (
+            "source_url",
+            "page_label",
+            "label",
+            "source_name",
+            "phrase",
+            "source_id",
+            "unit_id",
+            "match_quality",
+        ):
+            current = str(existing.get(key, "") or "").strip()
+            if current:
+                continue
+            candidate = row.get(key)
+            if isinstance(candidate, str):
+                cleaned = candidate.strip()
+                if cleaned:
+                    existing[key] = cleaned
+    merged.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return merged
+
+
+def _resolve_citation_refs(*, info_html: str, answer: str) -> list[dict[str, Any]]:
+    info_refs = _extract_info_refs(info_html)
+    answer_refs = _extract_refs_from_answer_citation_section(answer)
+    return _merge_refs(info_refs, answer_refs)
+
+
 def enforce_required_citations(
     *,
     answer: str,
@@ -1919,7 +2079,7 @@ def enforce_required_citations(
         return text
 
     mode = resolve_required_citation_mode(citation_mode)
-    refs = _extract_info_refs(info_html)
+    refs = _resolve_citation_refs(info_html=info_html, answer=text)
     layout_seed = text
     if "class='citation'" in layout_seed or 'class="citation"' in layout_seed:
         layout_seed = _anchors_to_bracket_markers(layout_seed)
@@ -1941,7 +2101,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     if not raw_text.strip():
         return ""
 
-    refs = _extract_info_refs(info_html)
+    refs = _resolve_citation_refs(info_html=info_html, answer=raw_text)
     if refs:
         layout_seed = raw_text
         if "class='citation'" in layout_seed or 'class="citation"' in layout_seed:
