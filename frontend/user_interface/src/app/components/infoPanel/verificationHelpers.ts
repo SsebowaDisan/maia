@@ -26,6 +26,7 @@ function toCitationFromEvidence(card: EvidenceCard, index: number): CitationFocu
     strengthTier: card.strengthTier,
     matchQuality: card.matchQuality,
     unitId: card.unitId,
+    selector: card.selector,
     charStart: card.charStart,
     charEnd: card.charEnd,
     graphNodeIds: card.graphNodeIds,
@@ -81,7 +82,25 @@ function resolveCitationOpenUrl(params: {
         })
       : null;
   const citationUsesWebsite = citation.sourceType === "website" || (Boolean(citationWebsiteUrl) && !citationRawUrl);
-  const citationOpenUrl = citationUsesWebsite ? citationWebsiteUrl : citationRawUrl || "";
+
+  // Build a text-fragment URL so "Open" jumps the browser directly to the cited passage.
+  // Text Fragments (#:~:text=) are supported in Chrome 80+, Edge 83+, Safari 16.1+.
+  let citationOpenUrl = citationUsesWebsite ? citationWebsiteUrl : citationRawUrl || "";
+  if (citationUsesWebsite && citationOpenUrl && citation.extract) {
+    const extract = String(citation.extract || "").replace(/\s+/g, " ").trim();
+    // Use up to first 120 chars of the extract, trimmed to a word boundary.
+    const raw = extract.length > 120 ? extract.slice(0, 120).replace(/\s\S*$/, "") : extract;
+    if (raw.length >= 16 && !citationOpenUrl.includes("#:~:text=")) {
+      try {
+        // Strip any existing fragment before appending text fragment.
+        const urlObj = new URL(citationOpenUrl);
+        urlObj.hash = "";
+        citationOpenUrl = `${urlObj.toString()}#:~:text=${encodeURIComponent(raw)}`;
+      } catch {
+        // Leave URL unchanged if parsing fails.
+      }
+    }
+  }
   const citationSourceLower = String(citation.sourceName || "").toLowerCase();
   const citationHasPageHint = Boolean(String(citation.page || "").trim());
   const citationIsImage =

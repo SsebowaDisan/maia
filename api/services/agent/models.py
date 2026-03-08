@@ -91,6 +91,7 @@ class AgentSource:
     url: str | None = None
     file_id: str | None = None
     score: float | None = None
+    credibility_score: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +101,7 @@ class AgentSource:
             "url": self.url,
             "file_id": self.file_id,
             "score": self.score,
+            "credibility_score": self.credibility_score,
             "metadata": self.metadata,
         }
 

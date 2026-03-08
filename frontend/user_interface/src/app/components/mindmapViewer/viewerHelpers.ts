@@ -1,10 +1,10 @@
 import type { MindmapPayload } from "./types";
 import { computeDepths } from "./utils";
 
-export const ROOT_X = 96;
-export const TOP_PADDING = 46;
-export const DEPTH_GAP = 312;
-export const LEAF_GAP = 84;
+export const ROOT_X = 80;
+export const TOP_PADDING = 40;
+export const DEPTH_GAP = 260;
+export const LEAF_GAP = 54;
 
 const GENERIC_PAGE_TITLE_RE = /^(?:page|p)\s*\.?\s*\d+\s*$/i;
 const CODEY_TITLE_RE = /(->|=>|::|[{}\[\]|`]|(?:\bconst\b|\blet\b|\bvar\b|\bfunction\b|\breturn\b))/i;
@@ -126,7 +126,7 @@ export function computeInitialCollapsedFromPayload(
   });
 }
 
-type NotebookLayoutParams = {
+export type NotebookLayoutParams = {
   rootId: string;
   nodeIds: Set<string>;
   childrenByParent: Map<string, string[]>;
@@ -186,6 +186,121 @@ export function computeNotebookLayout(
       x: ROOT_X + depth * DEPTH_GAP,
       y: leafCursor + index * LEAF_GAP,
     };
+  });
+
+  return positions;
+}
+
+// ─── Radial layout (Google NotebookLM style) ───────────────────────────────
+
+/** Approximate half-width/height of a pill node — used to convert center→top-left position. */
+export const NODE_HALF_W = 80;
+export const NODE_HALF_H = 18;
+
+/** Radius from root center to depth-1 branch nodes (px). */
+export const RADIAL_BASE = 200;
+
+/** Additional radius per depth level (px). */
+export const RADIAL_FACTOR = 185;
+
+function countSubtreeLeaves(
+  nodeId: string,
+  childrenByParent: Map<string, string[]>,
+  nodeIds: Set<string>,
+  collapsedSet: Set<string>,
+  depthMap: Record<string, number>,
+  maxDepth: number,
+  cache: Map<string, number>,
+): number {
+  const cached = cache.get(nodeId);
+  if (cached !== undefined) return cached;
+  const children = (childrenByParent.get(nodeId) || []).filter(
+    (c) => nodeIds.has(c) && (depthMap[c] ?? 99) <= maxDepth,
+  );
+  if (!children.length || collapsedSet.has(nodeId)) {
+    cache.set(nodeId, 1);
+    return 1;
+  }
+  const total = children.reduce(
+    (sum, c) => sum + countSubtreeLeaves(c, childrenByParent, nodeIds, collapsedSet, depthMap, maxDepth, cache),
+    0,
+  );
+  cache.set(nodeId, total);
+  return total;
+}
+
+function placeRadialSubtree(
+  nodeId: string,
+  depth: number,
+  centerAngle: number,
+  halfSector: number,
+  nodeIds: Set<string>,
+  childrenByParent: Map<string, string[]>,
+  collapsedSet: Set<string>,
+  depthMap: Record<string, number>,
+  maxDepth: number,
+  leafCache: Map<string, number>,
+  positions: Record<string, { x: number; y: number }>,
+): void {
+  if (!nodeIds.has(nodeId)) return;
+  const radius = RADIAL_BASE + (depth - 1) * RADIAL_FACTOR;
+  positions[nodeId] = {
+    x: Math.round(Math.cos(centerAngle) * radius),
+    y: Math.round(Math.sin(centerAngle) * radius),
+  };
+  const children = (childrenByParent.get(nodeId) || []).filter(
+    (c) => nodeIds.has(c) && (depthMap[c] ?? 99) <= maxDepth,
+  );
+  if (!children.length || collapsedSet.has(nodeId) || depth >= maxDepth) return;
+
+  const leafCounts = children.map((c) =>
+    countSubtreeLeaves(c, childrenByParent, nodeIds, collapsedSet, depthMap, maxDepth, leafCache),
+  );
+  const totalLeaves = Math.max(1, leafCounts.reduce((a, b) => a + b, 0));
+  // Cap spread so children stay in front of their parent (not wrapping around the root)
+  const spread = Math.min(halfSector * 2, Math.PI);
+  let childAngle = centerAngle - spread / 2;
+  children.forEach((childId, i) => {
+    const sector = (leafCounts[i] / totalLeaves) * spread;
+    placeRadialSubtree(
+      childId, depth + 1, childAngle + sector / 2, sector / 2,
+      nodeIds, childrenByParent, collapsedSet, depthMap, maxDepth, leafCache, positions,
+    );
+    childAngle += sector;
+  });
+}
+
+/**
+ * Computes a radial (NotebookLM-style) layout.
+ * Returns CENTER positions keyed by node id.
+ * Root is placed at (0, 0); branches radiate outward proportionally by leaf count.
+ */
+export function computeRadialLayout(params: NotebookLayoutParams): Record<string, { x: number; y: number }> {
+  const { rootId, nodeIds, childrenByParent, depthMap, collapsedSet, maxDepth } = params;
+  const positions: Record<string, { x: number; y: number }> = {};
+  if (!nodeIds.has(rootId)) return positions;
+
+  positions[rootId] = { x: 0, y: 0 };
+
+  const topChildren = (childrenByParent.get(rootId) || []).filter(
+    (c) => nodeIds.has(c) && (depthMap[c] ?? 99) <= maxDepth,
+  );
+  if (!topChildren.length) return positions;
+
+  const leafCache = new Map<string, number>();
+  const leafCounts = topChildren.map((c) =>
+    countSubtreeLeaves(c, childrenByParent, nodeIds, collapsedSet, depthMap, maxDepth, leafCache),
+  );
+  const total = Math.max(1, leafCounts.reduce((a, b) => a + b, 0));
+
+  let angle = -Math.PI / 2; // start from top (12 o'clock)
+  topChildren.forEach((childId, i) => {
+    const sector = (leafCounts[i] / total) * (2 * Math.PI);
+    placeRadialSubtree(
+      childId, 1, angle + sector / 2, sector / 2,
+      nodeIds, childrenByParent, collapsedSet, depthMap, maxDepth, leafCache, positions,
+    );
+    angle += sector;
   });
 
   return positions;

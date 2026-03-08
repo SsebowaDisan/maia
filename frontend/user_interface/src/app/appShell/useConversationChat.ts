@@ -24,7 +24,7 @@ import type {
 type AgentMode = "ask" | "company_agent" | "deep_search";
 type AccessMode = "restricted" | "full_access";
 const MINDMAP_SETTINGS_STORAGE_KEY = "maia.conversation-mindmap-settings";
-type MindmapMapType = "structure" | "evidence" | "work_graph";
+type MindmapMapType = "structure" | "evidence" | "work_graph" | "context_mindmap";
 type ConversationMindmapSettings = {
   enabled: boolean;
   maxDepth: number;
@@ -63,6 +63,9 @@ type SendMessageOptions = {
 
 function normalizeMindmapMapType(raw: unknown): MindmapMapType {
   const value = String(raw || "").trim().toLowerCase();
+  if (value === "context_mindmap") {
+    return "context_mindmap";
+  }
   if (value === "work_graph") {
     return "work_graph";
   }

@@ -1,18 +1,18 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 
+import { ClickRipple } from "./ClickRipple";
+import type { ClickRippleEntry } from "./ClickRipple";
+import { GhostCursor } from "./GhostCursor";
+import { ThoughtBubble } from "./ThoughtBubble";
 import { InteractionOverlay } from "./InteractionOverlay";
 import {
-  BrowserMiniMap,
   ComparePanel,
   CopyPulse,
   FindOverlay,
   HighlightOverlay,
-  SceneFooter,
-  ScrollMeter,
   TargetFocusRing,
   VerifierConflictBadge,
   ZoomBadge,
-  ZoomHistoryPanel,
 } from "./browser_scene_panels";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
@@ -55,6 +55,13 @@ type BrowserSceneProps = {
   zoomEscalationRequested: boolean;
   showFindOverlay: boolean;
   snapshotUrl: string;
+  // T1: Ghost Cursor + Click Ripple + Interaction Trace
+  cursorX?: number | null;
+  cursorY?: number | null;
+  isClickEvent?: boolean;
+  clickRipples?: ClickRippleEntry[];
+  // T5: Thought Bubble narration
+  narration?: string | null;
 };
 
 function BrowserScene({
@@ -96,8 +103,44 @@ function BrowserScene({
   zoomEscalationRequested,
   showFindOverlay,
   snapshotUrl,
+  cursorX = null,
+  cursorY = null,
+  isClickEvent = false,
+  clickRipples = [],
+  narration = null,
 }: BrowserSceneProps) {
   const showSnapshotPrimary = Boolean(snapshotUrl);
+
+  // Track whether the current snapshot image has successfully loaded.
+  // Reset to false whenever the URL changes so we never flash the broken-image icon.
+  const [snapshotReady, setSnapshotReady] = useState(false);
+  useEffect(() => {
+    setSnapshotReady(false);
+  }, [snapshotUrl]);
+
+  // Scroll impulse: when scrollPercent changes, briefly translate the scene to give
+  // a physical sense of the page moving, then spring back to resting position.
+  const prevScrollRef = useRef<number | null>(null);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const scrollSettledRef = useRef(true);
+  useEffect(() => {
+    const prev = prevScrollRef.current;
+    prevScrollRef.current = scrollPercent;
+    if (prev === null || scrollPercent === null) return;
+    const delta = scrollPercent - prev;
+    if (Math.abs(delta) < 1.5) return;
+    // Scroll down → content moves up (negative offset); scroll up → positive
+    const direction = delta > 0 ? -1 : 1;
+    const magnitude = Math.min(Math.abs(delta) * 0.45, 26);
+    scrollSettledRef.current = false;
+    setScrollOffset(direction * magnitude);
+    const t = setTimeout(() => {
+      setScrollOffset(0);
+      scrollSettledRef.current = true;
+    }, 80);
+    return () => clearTimeout(t);
+  }, [scrollPercent]);
+
   return (
     <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
@@ -137,13 +180,41 @@ function BrowserScene({
       </div>
 
       {showSnapshotPrimary ? (
-        <div className="relative flex-1 bg-[#0a0c10]">
+        <div className="relative flex-1 overflow-hidden bg-white">
+          {/* Skeleton shown while loading — prevents the native broken-image icon */}
+          {!snapshotReady ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-[#f5f5f7]">
+              <div className="space-y-2.5 w-[55%]">
+                <div className="h-2 rounded-full bg-black/10 animate-pulse" />
+                <div className="h-2 rounded-full bg-black/8 animate-pulse w-[82%]" />
+                <div className="h-2 rounded-full bg-black/10 animate-pulse w-[90%]" />
+              </div>
+            </div>
+          ) : null}
           <img
+            key={snapshotUrl}
             src={snapshotUrl}
             alt="Live browser capture"
-            className="h-full w-full object-contain"
-            onError={onSnapshotError}
+            className={`h-full w-full object-cover ${snapshotReady ? "opacity-100" : "opacity-0"}`}
+            style={{
+              transform: `translateY(${scrollOffset}px)`,
+              transition: scrollOffset === 0
+                ? "opacity 150ms, transform 420ms cubic-bezier(0.25,0.46,0.45,0.94)"
+                : "opacity 150ms",
+            }}
+            onLoad={() => setSnapshotReady(true)}
+            onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}
           />
+          {/* Slim scroll rail — only shown when scroll position is known */}
+          {scrollPercent !== null ? (
+            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] z-10">
+              <div className="absolute inset-0 bg-black/[0.06]" />
+              <div
+                className="absolute inset-x-0 rounded-full bg-black/30 transition-all duration-300"
+                style={{ height: "16%", top: `${Math.max(0, Math.min(84, scrollPercent))}%` }}
+              />
+            </div>
+          ) : null}
           <VerifierConflictBadge
             verifierConflict={verifierConflict}
             verifierConflictReason={verifierConflictReason}
@@ -153,13 +224,11 @@ function BrowserScene({
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-image" />
           <TargetFocusRing targetRegion={targetRegion} />
           <ZoomBadge zoomLevel={zoomLevel} zoomReason={zoomReason} />
-          <ZoomHistoryPanel zoomHistory={zoomHistory} />
           <ComparePanel
             compareLeft={compareLeft}
             compareRight={compareRight}
             compareVerdict={compareVerdict}
           />
-          <BrowserMiniMap highlightRegions={highlightRegions} scrollPercent={scrollPercent} />
           <InteractionOverlay
             sceneSurface="website"
             activeEventType={activeEventType}
@@ -179,8 +248,9 @@ function BrowserScene({
             />
           ) : null}
           <CopyPulse copyPulseText={copyPulseText} copyPulseVisible={copyPulseVisible} />
-          <SceneFooter activeDetail={activeDetail} activeTitle={activeTitle} sceneText={sceneText} />
-          <ScrollMeter scrollPercent={scrollPercent} />
+          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+          <ClickRipple ripples={clickRipples} />
+          <ThoughtBubble text={narration} />
         </div>
       ) : canRenderLiveUrl ? (
         <div className="relative flex-1 bg-white">
@@ -200,13 +270,11 @@ function BrowserScene({
           <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-iframe" />
           <TargetFocusRing targetRegion={targetRegion} />
           <ZoomBadge zoomLevel={zoomLevel} zoomReason={zoomReason} />
-          <ZoomHistoryPanel zoomHistory={zoomHistory} />
           <ComparePanel
             compareLeft={compareLeft}
             compareRight={compareRight}
             compareVerdict={compareVerdict}
           />
-          <BrowserMiniMap highlightRegions={highlightRegions} scrollPercent={scrollPercent} />
           <InteractionOverlay
             sceneSurface="website"
             activeEventType={activeEventType}
@@ -226,8 +294,9 @@ function BrowserScene({
             />
           ) : null}
           <CopyPulse copyPulseText={copyPulseText} copyPulseVisible={copyPulseVisible} />
-          <SceneFooter activeDetail={activeDetail} activeTitle={activeTitle} sceneText={sceneText} />
-          <ScrollMeter scrollPercent={scrollPercent} />
+          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+          <ClickRipple ripples={clickRipples} />
+          <ThoughtBubble text={narration} />
         </div>
       ) : (
         <div className="relative flex-1 space-y-3 p-4">
@@ -266,12 +335,12 @@ function BrowserScene({
               Copied: {copyPulseText}
             </div>
           ) : null}
-          {snapshotUrl ? (
+          {snapshotUrl && snapshotReady ? (
             <img
               src={snapshotUrl}
               alt="Browser capture"
               className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-white/20 object-contain bg-black/25"
-              onError={onSnapshotError}
+              onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}
             />
           ) : null}
         </div>

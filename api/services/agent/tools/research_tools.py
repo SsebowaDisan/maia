@@ -175,6 +175,246 @@ def _website_scene_payload(
     )
 
 
+_BRANCH_LABELS = (
+    "Factual",
+    "Financial & Economic",
+    "Competitive Landscape",
+    "Academic Research",
+    "News & Current Events",
+    "Expert Opinion",
+    "Historical Context",
+    "Market & Industry",
+    "People & Society",
+    "Policy & Governance",
+    "Technology & Innovation",
+    "Risk & Security",
+    "Environment & Sustainability",
+    "Legal & Regulatory",
+    "Products & Services",
+    "Leadership & Strategy",
+    "Scientific Evidence",
+    "Case Studies",
+)
+
+_BRANCH_PROVIDER_MAP: dict[str, list[str]] = {
+    "Factual":                  ["brave_search", "bing_search"],
+    "Financial & Economic":     ["sec_edgar", "brave_search"],
+    "Competitive Landscape":    ["brave_search", "bing_search"],
+    "Academic Research":        ["arxiv", "brave_search"],
+    "News & Current Events":    ["newsapi", "brave_search"],
+    "Expert Opinion":           ["arxiv", "brave_search"],
+    "Historical Context":       ["brave_search", "bing_search"],
+    "Market & Industry":        ["brave_search", "newsapi"],
+    "People & Society":         ["brave_search", "bing_search"],
+    "Policy & Governance":      ["brave_search", "newsapi"],
+    "Technology & Innovation":  ["arxiv", "brave_search"],
+    "Risk & Security":          ["newsapi", "brave_search"],
+    "Environment & Sustainability": ["arxiv", "brave_search"],
+    "Legal & Regulatory":       ["brave_search", "bing_search"],
+    "Products & Services":      ["brave_search", "bing_search"],
+    "Leadership & Strategy":    ["brave_search", "newsapi"],
+    "Scientific Evidence":      ["arxiv", "brave_search"],
+    "Case Studies":             ["brave_search", "bing_search"],
+}
+
+# ── Universal branch signal sets ─────────────────────────────────────────────
+# Each frozenset drives inclusion of an optional branch for any question type.
+_SIG_FINANCIAL = frozenset([
+    "revenue", "profit", "earnings", "stock", "ipo", "merger", "acquisition",
+    "annual report", "10-k", "balance sheet", "cash flow", "financial",
+    "gdp", "inflation", "fiscal", "budget", "economy", "economic", "investment",
+    "funding", "valuation", "market cap", "dividend", "interest rate",
+])
+_SIG_ACADEMIC = frozenset([
+    "research", "study", "paper", "algorithm", "model", "science", "survey",
+    "machine learning", "neural", "academic", "theory", "clinical", "evidence",
+    "experiment", "methodology", "findings", "hypothesis", "peer-reviewed",
+])
+_SIG_PEOPLE_SOCIETY = frozenset([
+    "population", "demographics", "health", "education", "poverty", "society",
+    "community", "welfare", "social", "human rights", "gender", "inequality",
+    "public health", "mortality", "life expectancy", "labour", "workforce",
+])
+_SIG_POLICY_GOVERNANCE = frozenset([
+    "government", "policy", "politics", "election", "regulation", "law",
+    "governance", "compliance", "legislation", "parliament", "congress",
+    "administration", "ministry", "constitution", "treaty", "sanction",
+])
+_SIG_TECHNOLOGY = frozenset([
+    "technology", "software", "hardware", "ai", "artificial intelligence",
+    "digital", "internet", "cloud", "data", "cybersecurity", "blockchain",
+    "innovation", "startup", "engineering", "computing", "automation",
+    "robotics", "semiconductor", "platform", "api", "framework",
+])
+_SIG_RISK_SECURITY = frozenset([
+    "risk", "threat", "security", "conflict", "war", "attack", "vulnerability",
+    "danger", "crisis", "instability", "terrorism", "fraud", "breach",
+    "disaster", "failure", "liability", "exposure", "incident",
+])
+_SIG_ENVIRONMENT = frozenset([
+    "climate", "environment", "sustainability", "carbon", "emissions",
+    "biodiversity", "pollution", "renewable", "energy", "ecosystem",
+    "deforestation", "weather", "temperature", "sea level", "drought",
+])
+_SIG_LEGAL = frozenset([
+    "legal", "law", "court", "lawsuit", "litigation", "regulation",
+    "compliance", "contract", "ip", "patent", "copyright", "antitrust",
+    "regulatory", "enforcement", "jurisdiction", "statute", "ruling",
+])
+_SIG_COMPETITIVE = frozenset([
+    "competitor", "competition", "versus", "vs.", "compare", "comparison",
+    "alternative", "market share", "ranking", "benchmark", "differentiation",
+    "advantage", "position", "landscape", "player", "leader",
+])
+_SIG_MARKET_INDUSTRY = frozenset([
+    "market", "industry", "sector", "market size", "growth", "forecast",
+    "trend", "outlook", "adoption", "penetration", "disruption", "segment",
+])
+_SIG_LEADERSHIP = frozenset([
+    "ceo", "founder", "leadership", "executive", "management", "strategy",
+    "vision", "roadmap", "board", "chairman", "director", "president",
+])
+_SIG_NEWS = frozenset([
+    "news", "latest", "recent", "today", "announcement", "press release",
+    "breaking", "2024", "2025", "2026", "update", "development",
+])
+
+
+def _build_research_tree(
+    *,
+    query: str,
+    depth_tier: str,
+    registry_names: list[str],
+) -> list[dict]:
+    """Decompose any research question into structural branches.
+
+    Works for any domain — science, law, medicine, business, technology,
+    geography, social topics, policy, sport, culture, etc. — by detecting
+    semantic signals present in the query rather than pattern-matching against
+    specific entity types (country, company, industry).
+
+    Returns [{branch_label, sub_question, preferred_providers}].
+    Quick tier: 2 branches. Standard+: 4-8 branches. Deep/expert: up to 10.
+    """
+    lower = query.lower()
+
+    def _b(label: str, sub_q: str) -> dict:
+        providers = _BRANCH_PROVIDER_MAP.get(label, ["brave_search", "bing_search"])
+        filtered = [p for p in providers if p in registry_names or p in ("brave_search", "bing_search")]
+        return {"branch_label": label, "sub_question": sub_q, "preferred_providers": filtered}
+
+    if depth_tier == "quick":
+        return [_b("Factual", query), _b("News & Current Events", f"latest news {query}")]
+
+    # ── Detect which optional branches are relevant for this question ─────────
+    has_financial    = any(s in lower for s in _SIG_FINANCIAL)
+    has_academic     = any(s in lower for s in _SIG_ACADEMIC)
+    has_people       = any(s in lower for s in _SIG_PEOPLE_SOCIETY)
+    has_policy       = any(s in lower for s in _SIG_POLICY_GOVERNANCE)
+    has_tech         = any(s in lower for s in _SIG_TECHNOLOGY)
+    has_risk         = any(s in lower for s in _SIG_RISK_SECURITY)
+    has_environment  = any(s in lower for s in _SIG_ENVIRONMENT)
+    has_legal        = any(s in lower for s in _SIG_LEGAL)
+    has_competitive  = any(s in lower for s in _SIG_COMPETITIVE)
+    has_market       = any(s in lower for s in _SIG_MARKET_INDUSTRY)
+    has_leadership   = any(s in lower for s in _SIG_LEADERSHIP)
+    has_news         = any(s in lower for s in _SIG_NEWS)
+
+    is_deep = depth_tier in ("deep_research", "deep_analytics", "expert")
+    is_expert = depth_tier == "expert"
+
+    # Always start with the core factual branch
+    branches: list[dict] = [_b("Factual", query)]
+
+    # ── Optional branches, ordered by research value ──────────────────────────
+    if has_financial or is_deep:
+        branches.append(_b("Financial & Economic", f"{query} financial economic data statistics"))
+    if has_competitive or is_deep:
+        branches.append(_b("Competitive Landscape", f"{query} competitors alternatives comparison market"))
+    if has_tech:
+        branches.append(_b("Technology & Innovation", f"{query} technology innovation trends developments"))
+    if has_people or is_deep:
+        branches.append(_b("People & Society", f"{query} population society demographics social impact"))
+    if has_policy or is_deep:
+        branches.append(_b("Policy & Governance", f"{query} policy regulation government governance"))
+    if has_risk:
+        branches.append(_b("Risk & Security", f"{query} risks threats security vulnerabilities"))
+    if has_environment:
+        branches.append(_b("Environment & Sustainability", f"{query} environment climate sustainability"))
+    if has_legal:
+        branches.append(_b("Legal & Regulatory", f"{query} legal regulatory compliance law"))
+    if has_market and not has_competitive:
+        branches.append(_b("Market & Industry", f"{query} market size growth forecast industry"))
+    if has_leadership:
+        branches.append(_b("Leadership & Strategy", f"{query} leadership strategy vision roadmap"))
+    if has_academic or is_deep:
+        branches.append(_b("Academic Research", f"{query} research study evidence analysis academic"))
+    if has_news or True:  # Always include a news branch for current context
+        branches.append(_b("News & Current Events", f"latest news {query} 2025 2026"))
+    if is_expert:
+        branches.append(_b("Expert Opinion", f"{query} expert analysis forecast whitepaper opinion"))
+
+    # For deep tiers with few signal-detected branches, ensure breadth
+    if is_deep and len(branches) < 6:
+        if not has_market:
+            branches.append(_b("Market & Industry", f"{query} market growth trends forecast"))
+        if not has_risk:
+            branches.append(_b("Risk & Security", f"{query} challenges risks limitations concerns"))
+
+    # Deduplicate (preserve first occurrence) and cap
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for b in branches:
+        if b["branch_label"] not in seen:
+            seen.add(b["branch_label"])
+            unique.append(b)
+
+    max_branches = 10 if is_deep else 8
+    return unique[:max_branches]
+
+
+def _build_provider_plan(
+    *,
+    depth_tier: str,
+    query: str,
+    registry_names: list[str],
+) -> list[tuple[str, int]]:
+    """Return [(connector_id, result_count)] for supplemental source providers.
+
+    Selection is driven by depth tier + keyword signals in the query.
+    Only connectors currently registered (env-flag enabled) are included.
+    """
+    plan: list[tuple[str, int]] = []
+    lower = query.lower()
+
+    _ACADEMIC = frozenset([
+        "research", "paper", "study", "academic", "machine learning",
+        "algorithm", "model", "neural", "science", "theory", "analysis",
+        "survey", "review", "journal", "arxiv",
+    ])
+    _FINANCIAL = frozenset([
+        "sec", "edgar", "filing", "10-k", "earnings", "revenue",
+        "profit", "financial", "investor", "stock", "ipo",
+        "balance sheet", "cash flow", "acquisition", "merger",
+    ])
+
+    has_academic = any(sig in lower for sig in _ACADEMIC)
+    has_financial = any(sig in lower for sig in _FINANCIAL)
+    is_deep = depth_tier in ("deep_research", "deep_analytics", "expert")
+    is_standard_plus = depth_tier in ("standard", "deep_research", "deep_analytics", "expert")
+
+    if "arxiv" in registry_names and has_academic and is_standard_plus:
+        plan.append(("arxiv", 20 if depth_tier == "expert" else 12 if is_deep else 8))
+    if "sec_edgar" in registry_names and has_financial:
+        plan.append(("sec_edgar", 12 if is_deep else 6))
+    if "newsapi" in registry_names and is_standard_plus:
+        plan.append(("newsapi", 14 if is_deep else 8))
+    if "reddit" in registry_names and is_deep:
+        plan.append(("reddit", 10 if depth_tier == "expert" else 6))
+
+    return plan
+
+
 class WebResearchTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="marketing.web_research",
@@ -196,30 +436,30 @@ class WebResearchTool(AgentTool):
         configured_max_variants = context.settings.get("__research_max_query_variants")
         max_query_variants = _as_bounded_int(
             params.get("max_query_variants"),
-            default=_as_bounded_int(configured_max_variants, default=4, low=2, high=20),
+            default=_as_bounded_int(configured_max_variants, default=8, low=2, high=40),
             low=2,
-            high=20,
+            high=40,
         )
         configured_results_per_query = context.settings.get("__research_results_per_query")
         results_per_query = _as_bounded_int(
             params.get("results_per_query"),
-            default=_as_bounded_int(configured_results_per_query, default=8, low=4, high=25),
+            default=_as_bounded_int(configured_results_per_query, default=12, low=4, high=30),
             low=4,
-            high=25,
+            high=30,
         )
         configured_fused_top_k = context.settings.get("__research_fused_top_k")
         fused_top_k = _as_bounded_int(
             params.get("fused_top_k"),
-            default=_as_bounded_int(configured_fused_top_k, default=24, low=8, high=220),
+            default=_as_bounded_int(configured_fused_top_k, default=60, low=8, high=600),
             low=8,
-            high=220,
+            high=600,
         )
         configured_min_sources = context.settings.get("__research_min_unique_sources")
         min_unique_sources = _as_bounded_int(
             params.get("min_unique_sources"),
-            default=_as_bounded_int(configured_min_sources, default=8, low=3, high=200),
+            default=_as_bounded_int(configured_min_sources, default=15, low=3, high=500),
             low=3,
-            high=200,
+            high=500,
         )
         configured_search_budget = context.settings.get("__research_web_search_budget")
         requested_search_budget = _as_bounded_int(
@@ -228,10 +468,16 @@ class WebResearchTool(AgentTool):
                 configured_search_budget,
                 default=max_query_variants * results_per_query,
                 low=20,
-                high=350,
+                high=800,
             ),
             low=20,
-            high=350,
+            high=800,
+        )
+        max_search_rounds = _as_bounded_int(
+            context.settings.get("__research_max_search_rounds"),
+            default=1,
+            low=1,
+            high=4,
         )
         depth_tier = " ".join(str(params.get("research_depth_tier") or context.settings.get("__research_depth_tier") or "standard").split()).strip().lower() or "standard"
         max_live_queries = _as_bounded_int(
@@ -317,6 +563,41 @@ class WebResearchTool(AgentTool):
         )
         trace_events.append(started_event)
         yield started_event
+
+        # ── S2: Research Tree Decomposition ─────────────────────────────────────
+        _rt_registry_names = get_connector_registry().names()
+        _research_branches = _build_research_tree(
+            query=query,
+            depth_tier=depth_tier,
+            registry_names=_rt_registry_names,
+        )
+        if _research_branches:
+            tree_started = ToolTraceEvent(
+                event_type="research_tree_started",
+                title="Building research tree",
+                detail=f"Decomposed into {len(_research_branches)} structural branch(es)",
+                data={
+                    "branch_count": len(_research_branches),
+                    "depth_tier": depth_tier,
+                    "branches": [b["branch_label"] for b in _research_branches],
+                },
+            )
+            trace_events.append(tree_started)
+            yield tree_started
+            for _branch in _research_branches:
+                _branch_event = ToolTraceEvent(
+                    event_type="research_branch_started",
+                    title=f"Branch: {_branch['branch_label']}",
+                    detail=_safe_snippet(_branch["sub_question"], 120),
+                    data={
+                        "branch_label": _branch["branch_label"],
+                        "sub_question": _branch["sub_question"],
+                        "preferred_providers": _branch["preferred_providers"],
+                    },
+                )
+                trace_events.append(_branch_event)
+                yield _branch_event
+
         if domain_scope_mode != "off" and domain_scope_hosts:
             scope_event = ToolTraceEvent(
                 event_type="tool_progress",
@@ -924,7 +1205,7 @@ class WebResearchTool(AgentTool):
             if used_provider == "brave_search":
                 rows = payload.get("results") if isinstance(payload, dict) else []
                 results = rows if isinstance(rows, list) else []
-                max_source_rows = max(8, min(fused_top_k, 220))
+                max_source_rows = max(8, min(fused_top_k, 600))
                 for item in results[:max_source_rows]:
                     if not isinstance(item, dict):
                         continue
@@ -973,7 +1254,7 @@ class WebResearchTool(AgentTool):
             elif used_provider == "bing_search":
                 web_pages = payload.get("webPages") if isinstance(payload, dict) else None
                 results = web_pages.get("value") if isinstance(web_pages, dict) else []
-                max_source_rows = max(8, min(fused_top_k, 140))
+                max_source_rows = max(8, min(fused_top_k, 600))
                 for item in (results or [])[:max_source_rows]:
                     if not isinstance(item, dict):
                         continue
@@ -1000,6 +1281,143 @@ class WebResearchTool(AgentTool):
             bullets.append(
                 "- No web search data available. Configure `BRAVE_SEARCH_API_KEY` (required for Brave mode)."
             )
+
+        # ── S1: Supplemental source federation (arxiv, sec_edgar, newsapi, reddit) ─
+        if ok:
+            _registry = get_connector_registry()
+            _sup_plan = _build_provider_plan(
+                depth_tier=depth_tier,
+                query=query_variants[0] if query_variants else query,
+                registry_names=_registry.names(),
+            )
+            _seen_sup_urls: set[str] = {str(s.url or "") for s in sources}
+            for _conn_id, _result_count in _sup_plan:
+                try:
+                    _connector = _registry.build(_conn_id, settings=context.settings)
+                    _sup_start = ToolTraceEvent(
+                        event_type="api_call_started",
+                        title=f"Query {_conn_id}",
+                        detail=_safe_snippet(query_variants[0] if query_variants else query, 120),
+                        data={"provider": _conn_id, "result_limit": _result_count},
+                    )
+                    trace_events.append(_sup_start)
+                    yield _sup_start
+                    _sup_payload = _connector.search_web(
+                        query=query_variants[0] if query_variants else query,
+                        count=_result_count,
+                    )
+                    _sup_rows = _sup_payload.get("results") if isinstance(_sup_payload, dict) else []
+                    if not isinstance(_sup_rows, list):
+                        _sup_rows = []
+                    _sup_done = ToolTraceEvent(
+                        event_type="api_call_completed",
+                        title=f"{_conn_id} completed",
+                        detail=f"{len(_sup_rows)} result(s)",
+                        data={"provider": _conn_id, "result_count": len(_sup_rows)},
+                    )
+                    trace_events.append(_sup_done)
+                    yield _sup_done
+                    from api.services.agent.research.source_credibility import score_source_credibility
+                    for _row in _sup_rows:
+                        if not isinstance(_row, dict):
+                            continue
+                        _url = str(_row.get("url") or "").strip()
+                        if not _url or _url in _seen_sup_urls:
+                            continue
+                        _seen_sup_urls.add(_url)
+                        _name = str(_row.get("title") or _url or "Source").strip()
+                        _desc = str(_row.get("description") or "").strip()
+                        _excerpt = _safe_snippet(_desc or _name or _url, 220)
+                        _cred = score_source_credibility(_url)
+                        sources.append(
+                            AgentSource(
+                                source_type="web",
+                                label=_name,
+                                url=_url or None,
+                                score=max(0.5, min(0.98, 0.60 + _cred * 0.40)),
+                                credibility_score=_cred,
+                                metadata={
+                                    "provider": _conn_id,
+                                    "excerpt": _excerpt,
+                                    "extract": _excerpt,
+                                },
+                            )
+                        )
+                        if len(bullets) < 32:
+                            bullets.append(f"- {_name}: {_safe_snippet(_desc or _name)}")
+                except Exception as _sup_exc:
+                    _sup_failure = _classify_provider_failure(_sup_exc)
+                    _sup_failure["provider"] = _conn_id
+                    provider_failures.append(_sup_failure)
+
+            # ── S2: Emit branch_completed events after all sources are gathered ─
+            if _research_branches:
+                _total_sources = len(sources)
+                _sources_per_branch = max(1, _total_sources // len(_research_branches))
+                for _bidx, _branch in enumerate(_research_branches):
+                    _branch_done = ToolTraceEvent(
+                        event_type="research_branch_completed",
+                        title=f"Branch complete: {_branch['branch_label']}",
+                        detail=f"~{_sources_per_branch} result(s) contributed",
+                        data={
+                            "branch_label": _branch["branch_label"],
+                            "result_count": _sources_per_branch,
+                            "preferred_providers": _branch["preferred_providers"],
+                        },
+                    )
+                    trace_events.append(_branch_done)
+                    yield _branch_done
+
+        # ── T3: Emit evidence_crystallized for top sources ─────────────────────
+        _crystal_cap = 4 if depth_tier in ("deep_research", "deep_analytics", "expert") else 2
+        _crystal_count = 0
+        for _src in sources:
+            if _crystal_count >= _crystal_cap:
+                break
+            _src_score = float(getattr(_src, "score", 0.0) or 0.0)
+            if _src_score < 0.72:
+                continue
+            _src_label = str(getattr(_src, "label", "") or "").strip()
+            _src_url = str(getattr(_src, "url", "") or "").strip()
+            _src_excerpt = str((getattr(_src, "metadata", {}) or {}).get("excerpt", "") or "").strip()
+            _crystal_event = ToolTraceEvent(
+                event_type="evidence_crystallized",
+                title=f"Evidence found: {_src_label[:48] or _src_url[:48]}",
+                detail=_safe_snippet(_src_excerpt or _src_label, 120),
+                data={
+                    "source_name": _src_label,
+                    "source_url": _src_url,
+                    "extract": _safe_snippet(_src_excerpt, 120),
+                    "strength_score": round(_src_score, 3),
+                    "provider": (getattr(_src, "metadata", {}) or {}).get("provider", used_provider),
+                    "highlight_regions": [
+                        {"x": 8, "y": 20, "width": 84, "height": 12, "color": "gold"}
+                    ],
+                },
+            )
+            trace_events.append(_crystal_event)
+            yield _crystal_event
+            _crystal_count += 1
+
+        # ── T4: Emit trust_score_updated after sources are crystallized ─────────
+        if sources:
+            _scores = [float(getattr(s, "score", 0.0) or 0.0) for s in sources]
+            _avg_trust = round(sum(_scores) / len(_scores), 3)
+            _gate = "green" if _avg_trust >= 0.80 else "amber" if _avg_trust >= 0.55 else "red"
+            _contested = sum(1 for s in sources if float(getattr(s, "score", 0.0) or 0.0) < 0.60)
+            _trust_event = ToolTraceEvent(
+                event_type="trust_score_updated",
+                title="Trust score updated",
+                detail=f"Source credibility: {_gate} ({_avg_trust:.2f})",
+                data={
+                    "trust_score": _avg_trust,
+                    "gate_color": _gate,
+                    "reason": f"{len(sources)} sources evaluated; {_contested} low-credibility",
+                    "source_count": len(sources),
+                },
+            )
+            trace_events.append(_trust_event)
+            yield _trust_event
 
         if bullets:
             highlight_terms = []
@@ -1062,6 +1480,126 @@ class WebResearchTool(AgentTool):
             )
             trace_events.append(shortfall_event)
             yield shortfall_event
+
+        # ── Iterative gap-fill rounds ─────────────────────────────────────────
+        # For deep_research / expert tiers (max_search_rounds ≥ 2), run up to
+        # (max_search_rounds - 1) additional targeted search passes when coverage
+        # is below the minimum.  Each round extracts topics from the top sources
+        # collected so far and fires gap-fill queries for them.
+        if ok and max_search_rounds >= 2 and len(unique_urls) < min_unique_sources:
+            _seen_gap_urls: set[str] = set(unique_urls)
+            _gap_round_limit = max_search_rounds - 1  # round 1 already done above
+
+            for _gap_round in range(1, _gap_round_limit + 1):
+                # Coverage already met by a previous gap round — stop early.
+                if len(_seen_gap_urls) >= min_unique_sources:
+                    break
+
+                # Extract salient named terms from top-scoring source labels / excerpts
+                # as gap-fill query seeds (no LLM call — fast entity extraction).
+                _top_labels = [
+                    str(getattr(s, "label", "") or "").strip()
+                    for s in sorted(sources, key=lambda x: float(getattr(x, "score", 0) or 0), reverse=True)[:10]
+                ]
+                _top_excerpts = [
+                    str((getattr(s, "metadata", {}) or {}).get("excerpt", "") or "").strip()
+                    for s in sources[:6]
+                ]
+                _all_terms: list[str] = []
+                for _text in _top_labels + _top_excerpts:
+                    _all_terms.extend(re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3}\b", _text))
+                _unique_terms: list[str] = []
+                _seen_t: set[str] = set()
+                for _t in _all_terms:
+                    _lt = _t.lower()
+                    if _lt not in _seen_t and _lt not in query.lower():
+                        _seen_t.add(_lt)
+                        _unique_terms.append(_t)
+                    if len(_unique_terms) >= 6:
+                        break
+
+                if not _unique_terms:
+                    break
+
+                _gap_queries = [f"{query} {_t}" for _t in _unique_terms[:4]]
+                _gap_budget = max(results_per_query, min(20, min_unique_sources - len(_seen_gap_urls)))
+
+                _gap_start = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title=f"Gap-fill search round {_gap_round + 1}",
+                    detail=f"Targeting {len(_gap_queries)} topic angles to fill {min_unique_sources - len(_seen_gap_urls)} source gap",
+                    data={
+                        "gap_round": _gap_round + 1,
+                        "gap_queries": _gap_queries[:4],
+                        "target_additional": min_unique_sources - len(_seen_gap_urls),
+                    },
+                )
+                trace_events.append(_gap_start)
+                yield _gap_start
+
+                _gap_search_runs: list[dict[str, Any]] = []
+                for _gq in _gap_queries:
+                    try:
+                        _gap_connector = get_connector_registry().build("brave_search", settings=context.settings)
+                        _gap_payload = _gap_connector.search_web(query=_gq, count=_gap_budget)
+                        if isinstance(_gap_payload, dict):
+                            _gap_search_runs.append({"query": _gq, "results": _gap_payload.get("results") or []})
+                    except Exception:
+                        pass
+
+                if _gap_search_runs:
+                    _gap_fused = _fuse_search_results(_gap_search_runs, top_k=_gap_budget * len(_gap_queries))
+                    for _gr in _gap_fused:
+                        if not isinstance(_gr, dict):
+                            continue
+                        _gurl = str(_gr.get("url") or "").strip()
+                        if not _gurl or _gurl in _seen_gap_urls:
+                            continue
+                        _seen_gap_urls.add(_gurl)
+                        _gname = str(_gr.get("title") or _gurl or "Web result").strip()
+                        _gsnippet = str(_gr.get("description") or _gr.get("snippet") or "").strip()
+                        _gexcerpt = _safe_snippet(_gsnippet or _gname, 220)
+                        try:
+                            _grrf = float(_gr.get("rrf_score") or 0.0)
+                        except Exception:
+                            _grrf = 0.0
+                        sources.append(
+                            AgentSource(
+                                source_type="web",
+                                label=_gname,
+                                url=_gurl or None,
+                                score=max(0.5, min(0.92, 0.62 + (_grrf * 100))),
+                                metadata={
+                                    "provider": "brave_search_gap",
+                                    "excerpt": _gexcerpt,
+                                    "extract": _gexcerpt,
+                                    "gap_round": _gap_round + 1,
+                                },
+                            )
+                        )
+                        if len(bullets) < 48:
+                            bullets.append(f"- {_gname}: {_safe_snippet(_gsnippet or _gname)}")
+
+                _gap_done = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title=f"Gap-fill round {_gap_round + 1} complete",
+                    detail=f"Now at {len(_seen_gap_urls)} unique sources (target: {min_unique_sources})",
+                    data={
+                        "gap_round": _gap_round + 1,
+                        "source_count_now": len(_seen_gap_urls),
+                        "target_source_count": min_unique_sources,
+                        "coverage_ok": len(_seen_gap_urls) >= min_unique_sources,
+                    },
+                )
+                trace_events.append(_gap_done)
+                yield _gap_done
+
+            # Refresh unique_urls after gap-fill passes
+            unique_urls = list(
+                dict.fromkeys(
+                    [str(source.url or "").strip() for source in sources if str(source.url or "").strip()]
+                )
+            )
 
         content = "\n".join(bullets)
         summary = (

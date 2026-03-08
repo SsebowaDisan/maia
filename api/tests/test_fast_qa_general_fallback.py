@@ -4,6 +4,7 @@ from typing import Any
 
 from api.schemas import ChatRequest
 from api.services.chat.fast_qa import call_openai_fast_qa, run_fast_chat_turn
+from api.services.chat.verification_contract import VERIFICATION_CONTRACT_VERSION
 
 
 def test_call_openai_fast_qa_general_fallback_prompt(monkeypatch) -> None:
@@ -99,3 +100,4 @@ def test_run_fast_chat_turn_falls_back_to_llm_without_indexed_snippets(monkeypat
     info_panel = result.get("info_panel", {})
     assert isinstance(info_panel, dict)
     assert info_panel.get("answer_origin") == "llm_general_knowledge"
+    assert info_panel.get("verification_contract_version") == VERIFICATION_CONTRACT_VERSION

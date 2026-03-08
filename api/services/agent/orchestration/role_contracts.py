@@ -183,6 +183,27 @@ _FALLBACK_ROLE_BY_TOOL_PREFIX: tuple[tuple[str, AgentRole], ...] = (
 )
 
 
+# S5: Semi-agent name mapping — maps existing roles to named semi-agents
+# These are specializations of existing roles, not new orchestration actors.
+SEMI_AGENT_NAMES: dict[str, str] = {
+    "research": "SCOUT",
+    "analyst": "ORACLE",
+    "verifier": "JUDGE",
+    "writer": "SCRIBE",
+    "safety": "SENTINEL",
+    "browser": "SCOUT",   # browser actions are SCOUT's live-inspection sub-role
+    "document": "SCOUT",  # document extraction is SCOUT's file-source sub-role
+    "conductor": "SENTINEL",
+    "planner": "SENTINEL",
+}
+
+
+def semi_agent_name(role: str | None) -> str:
+    """Return the named semi-agent for a given role, or empty string if unmapped."""
+    normalized = normalize_agent_role(role, default=DEFAULT_AGENT_ROLE)
+    return SEMI_AGENT_NAMES.get(normalized, "")
+
+
 def list_role_contracts() -> tuple[AgentRoleContract, ...]:
     return tuple(_ROLE_CONTRACTS[role] for role in list_agent_roles())
 

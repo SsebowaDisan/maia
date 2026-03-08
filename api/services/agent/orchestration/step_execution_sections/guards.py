@@ -375,3 +375,53 @@ def run_guard_checks(
             yield emit_event(approval_event)
 
     return StepGuardOutcome(decision="execute", params=params)
+
+
+def evaluate_trust_gate(
+    *,
+    trust_score: float,
+    contested_claim_count: int = 0,
+    resolved_claim_count: int = 0,
+    depth_tier: str = "standard",
+) -> dict[str, Any]:
+    """SENTINEL trust gate evaluation.
+
+    Returns {gate_color, trust_score, should_block, reason}.
+    - green (≥0.80): proceed automatically
+    - amber (≥0.55): surface warning but proceed
+    - red (<0.55): emit approval_required event and pause
+
+    For deep_research/expert tiers the amber threshold is raised to 0.65.
+    """
+    score = max(0.0, min(1.0, float(trust_score or 0.0)))
+    is_deep = depth_tier in ("deep_research", "expert")
+    amber_threshold = 0.65 if is_deep else 0.55
+
+    if score >= 0.80:
+        gate_color = "green"
+        should_block = False
+        reason = "High confidence — all claims well-corroborated."
+    elif score >= amber_threshold:
+        gate_color = "amber"
+        should_block = False
+        reason = (
+            f"{contested_claim_count} contested claim(s) — moderate confidence. "
+            "Proceeding with caution."
+        )
+    else:
+        gate_color = "red"
+        should_block = True
+        reason = (
+            f"Low trust score ({score:.2f}). "
+            f"{contested_claim_count} contested, {resolved_claim_count} resolved claim(s). "
+            "Manual review recommended before delivery."
+        )
+
+    return {
+        "gate_color": gate_color,
+        "trust_score": round(score, 3),
+        "should_block": should_block,
+        "reason": reason,
+        "contested_claim_count": contested_claim_count,
+        "resolved_claim_count": resolved_claim_count,
+    }

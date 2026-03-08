@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { useShallow } from "zustand/react/shallow";
 
 import type { AgentActivityEvent, AgentSourceRecord, CitationFocus, SourceUsageRecord } from "../types";
 import { parseEvidence } from "../utils/infoInsights";
@@ -9,28 +8,19 @@ import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { MindmapViewer } from "./MindmapViewer";
 import { getMindmapPayload } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
-import { EvidenceCardsList } from "./infoPanel/EvidenceCardsList";
-import { VerificationComparePanel } from "./infoPanel/VerificationComparePanel";
-import { VerificationFooter } from "./infoPanel/VerificationFooter";
-import { VerificationSourceBar } from "./infoPanel/VerificationSourceBar";
-import { VerificationSourceList } from "./infoPanel/VerificationSourceList";
-import { VerificationTabBar } from "./infoPanel/VerificationTabBar";
-import { VerificationTrailPanel } from "./infoPanel/VerificationTrailPanel";
+import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
+import { parseWebReviewSourceMap, resolveWebReviewSource } from "./infoPanel/review/webReviewContent";
 import { useResizableViewers } from "./infoPanel/useResizableViewers";
-import { type VerificationTab, useVerificationMemory } from "./infoPanel/useVerificationMemory";
+import { useVerificationMemory } from "./infoPanel/useVerificationMemory";
 import { resolveCitationOpenUrl, sourceIdForCitation, toCitationFromEvidence } from "./infoPanel/verificationHelpers";
 import {
   buildVerificationSources,
-  filterEvidenceByConcept,
   inferPreferredSourceId,
-  summarizeEvidenceQuality,
   type VerificationSourceItem,
 } from "./infoPanel/verificationModels";
 import {
   normalizeEvidenceId,
 } from "./infoPanel/urlHelpers";
-import { WorkGraphViewer } from "./workGraph/WorkGraphViewer";
-import { buildWorkGraphMindmapPayload, startWorkGraphRunSync, useWorkGraphStore } from "./workGraph/useWorkGraphStore";
 
 interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
@@ -76,7 +66,6 @@ export function InfoPanel({
   activityEvents = [],
   sourcesUsed = [],
   sourceUsage = [],
-  activityRunId = null,
   indexId = null,
   onClearCitationFocus,
   onSelectCitationFocus,
@@ -85,7 +74,6 @@ export function InfoPanel({
 }: InfoPanelProps) {
   const { viewerHeights, renderViewerResizeHandle } = useResizableViewers();
   const { memory, updateMemory } = useVerificationMemory(selectedConversationId);
-  const [searchQuery, setSearchQuery] = useState("");
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [pdfZoom, setPdfZoom] = useState(1);
 
@@ -145,20 +133,28 @@ export function InfoPanel({
     return evidenceBySource[selectedSource.id] || [];
   }, [evidenceBySource, evidenceCards, selectedSource?.id]);
 
-  const filteredEvidence = useMemo(() => filterEvidenceByConcept(sourceEvidence, searchQuery), [searchQuery, sourceEvidence]);
-  const visibleEvidence = filteredEvidence.length || !searchQuery ? filteredEvidence : [];
-  const evidenceRows = useMemo(() => (searchQuery ? visibleEvidence : sourceEvidence), [searchQuery, sourceEvidence, visibleEvidence]);
-
   const activeEvidenceId = normalizeEvidenceId(citationFocus?.evidenceId || memory.selectedEvidenceId || "");
   const activeEvidenceIndex = useMemo(() => {
     if (!activeEvidenceId) {
-      return evidenceRows.length ? 0 : -1;
+      return evidenceCards.length ? 0 : -1;
     }
-    return evidenceRows.findIndex((card) => normalizeEvidenceId(card.id) === activeEvidenceId);
-  }, [activeEvidenceId, evidenceRows]);
+    return evidenceCards.findIndex((card) => normalizeEvidenceId(card.id) === activeEvidenceId);
+  }, [activeEvidenceId, evidenceCards]);
 
-  const activeEvidenceCard = activeEvidenceIndex >= 0 ? evidenceRows[activeEvidenceIndex] : evidenceRows[0];
+  const activeEvidenceCard = activeEvidenceIndex >= 0 ? evidenceCards[activeEvidenceIndex] : evidenceCards[0];
   const activeCitation = citationFocus || (activeEvidenceCard ? toCitationFromEvidence(activeEvidenceCard, activeEvidenceIndex >= 0 ? activeEvidenceIndex : 0) : null);
+  const activeCitationSourceKey = useMemo(() => sourceIdForCitation(activeCitation), [activeCitation]);
+
+  const preferredCitationPage = useMemo(() => {
+    if (!activeCitationSourceKey) {
+      return undefined;
+    }
+    const remembered = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
+    if (!Number.isFinite(remembered) || remembered <= 0) {
+      return undefined;
+    }
+    return String(Math.floor(remembered));
+  }, [activeCitationSourceKey, memory.reviewPageBySource]);
 
   const citationOpenState = useMemo(
     () =>
@@ -170,74 +166,37 @@ export function InfoPanel({
     [activeCitation, evidenceCards, indexId],
   );
 
-  const qualitySummary = useMemo(() => summarizeEvidenceQuality(evidenceRows.length ? evidenceRows : evidenceCards), [evidenceCards, evidenceRows]);
+  const webReviewSourceMap = useMemo(
+    () => parseWebReviewSourceMap(infoPanel as Record<string, unknown>),
+    [infoPanel],
+  );
+  const activeWebReviewSource = useMemo(
+    () =>
+      resolveWebReviewSource({
+        sourceMap: webReviewSourceMap,
+        sourceId: selectedSource?.id || activeCitationSourceKey || "",
+        sourceUrl: citationOpenState.citationWebsiteUrl || selectedSource?.url || activeCitation?.sourceUrl || "",
+        sourceTitle: activeCitation?.sourceName || selectedSource?.title || "Website source",
+        evidenceCards: sourceEvidence,
+      }),
+    [
+      activeCitation?.sourceName,
+      activeCitation?.sourceUrl,
+      activeCitationSourceKey,
+      citationOpenState.citationWebsiteUrl,
+      selectedSource?.id,
+      selectedSource?.title,
+      selectedSource?.url,
+      sourceEvidence,
+      webReviewSourceMap,
+    ],
+  );
 
   const mindmapPayload = useMemo(() => getMindmapPayload(infoPanel, mindmap), [infoPanel, mindmap]);
-  const inferredRunId = useMemo(() => {
-    const direct = String(activityRunId || "").trim();
-    if (direct) {
-      return direct;
-    }
-    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
-      const candidate = String(activityEvents[index]?.run_id || "").trim();
-      if (candidate) {
-        return candidate;
-      }
-    }
-    return "";
-  }, [activityEvents, activityRunId]);
-
-  const workGraphSlice = useWorkGraphStore(
-    useShallow((state) => ({
-      runId: state.runId,
-      title: state.title,
-      rootId: state.rootId,
-      schema: state.schema,
-      nodes: state.nodes,
-      edges: state.edges,
-      filters: state.filters,
-      error: state.error,
-    })),
-  );
-  const applyWorkGraphActivityEvents = useWorkGraphStore((state) => state.applyActivityEvents);
-  const resetWorkGraph = useWorkGraphStore((state) => state.reset);
-
-  useEffect(() => {
-    if (!inferredRunId) {
-      resetWorkGraph();
-      return;
-    }
-    const stopSync = startWorkGraphRunSync(inferredRunId);
-    return () => stopSync();
-  }, [inferredRunId, resetWorkGraph]);
-
-  useEffect(() => {
-    if (activityEvents.length) {
-      applyWorkGraphActivityEvents(activityEvents);
-    }
-  }, [activityEvents, applyWorkGraphActivityEvents]);
-
-  const workGraphPayload = useMemo(
-    () =>
-      buildWorkGraphMindmapPayload({
-        runId: workGraphSlice.runId,
-        title: workGraphSlice.title,
-        rootId: workGraphSlice.rootId,
-        schema: workGraphSlice.schema,
-        nodes: workGraphSlice.nodes,
-        edges: workGraphSlice.edges,
-        filters: workGraphSlice.filters,
-      }),
-    [workGraphSlice.edges, workGraphSlice.filters, workGraphSlice.nodes, workGraphSlice.rootId, workGraphSlice.runId, workGraphSlice.schema, workGraphSlice.title],
-  );
-  const hasWorkGraphPayload = Boolean(workGraphPayload && workGraphPayload.nodes.length > 0);
   const hasMindmapPayload = Array.isArray((mindmapPayload as { nodes?: unknown[] }).nodes)
     ? ((mindmapPayload as { nodes?: unknown[] }).nodes as unknown[]).length > 0
     : false;
-  const workspaceGraphPayload = workGraphPayload || mindmapPayload;
-
-  const setVerificationTab = (nextTab: VerificationTab) => updateMemory({ verificationTab: nextTab });
-  const setEvidenceMode = (nextMode: "exact" | "context") => updateMemory({ evidenceMode: nextMode });
+  const workspaceGraphPayload = mindmapPayload;
 
   const selectEvidence = (card: EvidenceCard, index: number) => {
     const nextCitation = toCitationFromEvidence(card, index);
@@ -248,7 +207,6 @@ export function InfoPanel({
     }
     updateMemory({
       selectedEvidenceId: normalizeEvidenceId(card.id) || `evidence-${index + 1}`,
-      verificationTab: "review",
     });
     onSelectCitationFocus?.(nextCitation);
   };
@@ -263,91 +221,57 @@ export function InfoPanel({
   };
 
   const jumpToNeighborEvidence = (offset: number) => {
-    if (!evidenceRows.length) {
+    if (!evidenceCards.length) {
       return;
     }
     const current = activeEvidenceIndex >= 0 ? activeEvidenceIndex : 0;
-    const next = Math.max(0, Math.min(evidenceRows.length - 1, current + offset));
-    const target = evidenceRows[next];
+    const next = Math.max(0, Math.min(evidenceCards.length - 1, current + offset));
+    const target = evidenceCards[next];
     if (!target) {
       return;
     }
     selectEvidence(target, next);
   };
 
-  const inspectWorkGraphEvidence = (payload: { nodeId: string; title: string; evidenceIds: string[]; sceneRefs: string[]; eventRefs: string[] }) => {
-    setVerificationTab("evidence");
-    const preferredEvidenceId = payload.evidenceIds.find((rawId) => {
-      const normalized = normalizeEvidenceId(rawId);
-      return normalized ? evidenceCards.some((card) => normalizeEvidenceId(card.id) === normalized) : false;
-    });
-    if (preferredEvidenceId) {
-      const normalized = normalizeEvidenceId(preferredEvidenceId);
-      const index = evidenceCards.findIndex((card) => normalizeEvidenceId(card.id) === normalized);
-      if (index >= 0) {
-        selectEvidence(evidenceCards[index], index);
-        return;
-      }
-    }
-    onSelectCitationFocus?.({
-      sourceName: payload.title || "Work graph evidence",
-      extract: `Inspect evidence linked to node "${payload.title || payload.nodeId}".`,
-      evidenceId: normalizeEvidenceId(preferredEvidenceId || "") || undefined,
-      graphNodeIds: [payload.nodeId],
-      sceneRefs: payload.sceneRefs,
-      eventRefs: payload.eventRefs,
-    });
-  };
-
-  const inspectWorkGraphVerifier = (payload: {
+  const handleMindmapFocus = (payload: {
     nodeId: string;
     title: string;
-    detail: string;
-    status: string;
-    confidence: number | null;
-    riskReason: string;
-    sceneRefs: string[];
-    eventRefs: string[];
+    text: string;
+    pageRef?: string;
+    sourceId?: string;
+    sourceName?: string;
   }) => {
-    setVerificationTab("evidence");
-    const confidenceLabel = typeof payload.confidence === "number" && Number.isFinite(payload.confidence) ? `${Math.round(payload.confidence * 100)}%` : "n/a";
-    const reason = payload.riskReason || payload.detail || "Verifier review requested for this node.";
-    toast.info(`Verifier focus - ${payload.title}: ${reason} (confidence ${confidenceLabel}).`);
-    onSelectCitationFocus?.({
-      sourceName: `Verifier - ${payload.title}`,
-      extract: reason,
-      graphNodeIds: [payload.nodeId],
-      sceneRefs: payload.sceneRefs,
-      eventRefs: payload.eventRefs,
+    const resolved = resolveMindmapFocus({
+      node: payload,
+      sources,
+      evidenceBySource,
     });
+    if (resolved.sourceId) {
+      selectSource(resolved.sourceId);
+    }
+    if (resolved.evidenceCard) {
+      selectEvidence(resolved.evidenceCard, resolved.evidenceIndex);
+    }
   };
 
   return (
     <div className="flex min-h-0 flex-col overflow-hidden border-l border-black/[0.06] bg-white/80 backdrop-blur-xl" style={{ width: `${Math.round(width)}px` }}>
       <div className="border-b border-black/[0.06] px-5 py-4">
-        <h3 className="text-[15px] tracking-tight text-[#1d1d1f]">Information panel</h3>
+        <h3 className="text-[15px] tracking-tight text-[#1d1d1f]">Sources</h3>
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        {/* Mindmap */}
         <section className="space-y-2 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-          <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">AI Work Graph</p>
-          {hasWorkGraphPayload ? (
-            <div>
-              <WorkGraphViewer
-                viewerHeight={viewerHeights.mindmap}
-                onAskNode={onAskMindmapNode}
-                onInspectEvidence={inspectWorkGraphEvidence}
-                onInspectVerifier={inspectWorkGraphVerifier}
-              />
-              {renderViewerResizeHandle("mindmap", "mindmap")}
-            </div>
-          ) : hasMindmapPayload ? (
+          <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Context Mindmap</p>
+          {hasMindmapPayload ? (
             <div>
               <MindmapViewer
                 payload={workspaceGraphPayload as Record<string, unknown>}
                 conversationId={selectedConversationId}
                 viewerHeight={viewerHeights.mindmap}
                 onAskNode={onAskMindmapNode}
+                onFocusNode={handleMindmapFocus}
                 onSaveMap={(payload) => {
                   const storageKey = "maia.saved-mindmaps";
                   try {
@@ -372,84 +296,58 @@ export function InfoPanel({
             </div>
           ) : (
             <div className="rounded-xl bg-[#f5f5f7] p-3 text-[12px] text-[#6e6e73]">
-              {workGraphSlice.error ? `Work graph unavailable: ${workGraphSlice.error}` : "Work graph is not available for this answer."}
+              Context mindmap is not available for this answer yet.
             </div>
           )}
         </section>
 
-        <section className="space-y-3">
-          <VerificationSourceBar sources={sources} selectedSourceId={selectedSource?.id || ""} onSelectSource={selectSource} />
-          <VerificationTabBar
-            activeTab={memory.verificationTab}
-            onChangeTab={setVerificationTab}
-            evidenceMode={memory.evidenceMode}
-            onChangeEvidenceMode={setEvidenceMode}
-            searchQuery={searchQuery}
-            onChangeSearchQuery={setSearchQuery}
+
+        {/* Citation page preview */}
+        {activeCitation ? (
+          <CitationPreviewPanel
+            citationFocus={activeCitation}
+            citationOpenUrl={citationOpenState.citationOpenUrl}
+            citationRawUrl={citationOpenState.citationRawUrl}
+            citationUsesWebsite={citationOpenState.citationUsesWebsite}
+            citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
+            citationIsPdf={citationOpenState.citationIsPdf}
+            citationIsImage={citationOpenState.citationIsImage}
+            citationViewerHeight={viewerHeights.citation}
+            reviewQuery=""
+            preferredPage={preferredCitationPage}
+            webReviewSource={activeWebReviewSource}
+            hasPreviousEvidence={activeEvidenceIndex > 0}
+            hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
+            onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
+            onNextEvidence={() => jumpToNeighborEvidence(1)}
+            pdfZoom={pdfZoom}
+            onPdfZoomChange={(next) => {
+              setPdfZoom(next);
+              updateMemory({ reviewZoom: next });
+            }}
+            onPdfPageChange={(nextPage) => {
+              if (!activeCitationSourceKey || nextPage <= 0) {
+                return;
+              }
+              const previous = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
+              if (previous === nextPage) {
+                return;
+              }
+              updateMemory({
+                reviewPageBySource: {
+                  ...memory.reviewPageBySource,
+                  [activeCitationSourceKey]: nextPage,
+                },
+              });
+            }}
+            onClear={onClearCitationFocus}
+            renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
           />
-
-          {memory.verificationTab === "sources" ? (
-            <VerificationSourceList sources={sources} selectedSourceId={selectedSource?.id || ""} onSelectSource={selectSource} />
-          ) : null}
-
-          {memory.verificationTab === "review" ? (
-            activeCitation ? (
-              <CitationPreviewPanel
-                citationFocus={activeCitation}
-                citationOpenUrl={citationOpenState.citationOpenUrl}
-                citationRawUrl={citationOpenState.citationRawUrl}
-                citationUsesWebsite={citationOpenState.citationUsesWebsite}
-                citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
-                citationIsPdf={citationOpenState.citationIsPdf}
-                citationIsImage={citationOpenState.citationIsImage}
-                citationViewerHeight={viewerHeights.citation}
-                evidenceMode={memory.evidenceMode}
-                sourceEvidence={sourceEvidence}
-                hasPreviousEvidence={activeEvidenceIndex > 0}
-                hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceRows.length - 1}
-                onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
-                onNextEvidence={() => jumpToNeighborEvidence(1)}
-                onSelectEvidence={selectEvidence}
-                pdfZoom={pdfZoom}
-                onPdfZoomChange={(next) => {
-                  setPdfZoom(next);
-                  updateMemory({ reviewZoom: next });
-                }}
-                onClear={onClearCitationFocus}
-                renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
-              />
-            ) : (
-              <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-                Choose a source or citation to start review.
-              </div>
-            )
-          ) : null}
-
-          {memory.verificationTab === "evidence" ? (
-            <div className="rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Evidence</p>
-                <p className="text-[11px] text-[#6e6e73]">{evidenceRows.length} snippets</p>
-              </div>
-              <EvidenceCardsList
-                cards={evidenceRows}
-                selectedEvidenceId={activeEvidenceId}
-                evidenceMode={memory.evidenceMode}
-                onSelectCard={selectEvidence}
-              />
-            </div>
-          ) : null}
-
-          {memory.verificationTab === "trail" ? (
-            <VerificationTrailPanel cards={evidenceRows.length ? evidenceRows : evidenceCards} onSelectCard={selectEvidence} />
-          ) : null}
-
-          {memory.verificationTab === "compare" ? (
-            <VerificationComparePanel cards={evidenceRows.length ? evidenceRows : evidenceCards} onSelectCard={selectEvidence} />
-          ) : null}
-
-          <VerificationFooter quality={qualitySummary} sourceCount={sources.length} evidenceCount={evidenceRows.length || evidenceCards.length} />
-        </section>
+        ) : sources.length > 0 ? (
+          <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6e6e73]">
+            Click any citation in the answer to preview the source page here.
+          </div>
+        ) : null}
       </div>
     </div>
   );

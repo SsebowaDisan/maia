@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { renderRichText } from "../../utils/richText";
 import { ApiScene } from "./ApiScene";
 import { BrowserScene } from "./BrowserScene";
+import type { ClickRippleEntry } from "./ClickRipple";
+import type { TracePoint } from "./InteractionTrace";
 import { DocsScene } from "./DocsScene";
 import { DocumentFallbackScene, DocumentPdfScene } from "./DocumentScenes";
 import { EmailScene } from "./EmailScene";
@@ -215,6 +218,39 @@ function AgentDesktopScene({
     !Boolean(docsFrameUrl) &&
     !Boolean(sheetsFrameUrl);
 
+  // T1: Ghost Cursor + Click Ripple + Interaction Trace
+  const cursorX = parsePercent(activeSceneData["cursor_x"]);
+  const cursorY = parsePercent(activeSceneData["cursor_y"]);
+  const isClickEvent = /browser_(left_|right_|double_)?click/i.test(activeEventType);
+  const traceBufferRef = useRef<TracePoint[]>([]);
+  const rippleCounterRef = useRef(0);
+  const prevEventTypeRef = useRef<string>("");
+  const [interactionTrace, setInteractionTrace] = useState<TracePoint[]>([]);
+  const [clickRipples, setClickRipples] = useState<ClickRippleEntry[]>([]);
+
+  useEffect(() => {
+    if (cursorX !== null && cursorY !== null) {
+      const last = traceBufferRef.current[traceBufferRef.current.length - 1];
+      if (!last || last.x !== cursorX || last.y !== cursorY) {
+        const updated = [...traceBufferRef.current, { x: cursorX, y: cursorY }].slice(-5);
+        traceBufferRef.current = updated;
+        setInteractionTrace(updated);
+      }
+    }
+  }, [cursorX, cursorY]);
+
+  useEffect(() => {
+    if (activeEventType === prevEventTypeRef.current) return;
+    prevEventTypeRef.current = activeEventType;
+    if (!isClickEvent || cursorX === null || cursorY === null) return;
+    const id = String(++rippleCounterRef.current);
+    setClickRipples((prev) => [...prev, { id, x: cursorX, y: cursorY, type: "click" as const }]);
+    const timer = setTimeout(() => {
+      setClickRipples((prev) => prev.filter((r) => r.id !== id));
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [activeEventType, isClickEvent, cursorX, cursorY]);
+
   if (isBrowserScene) {
     return (
       <BrowserScene
@@ -256,6 +292,12 @@ function AgentDesktopScene({
         zoomEscalationRequested={zoomEscalationRequested}
         showFindOverlay={showFindOverlay}
         snapshotUrl={snapshotUrl}
+        cursorX={cursorX}
+        cursorY={cursorY}
+        isClickEvent={isClickEvent}
+        clickRipples={clickRipples}
+        interactionTrace={interactionTrace}
+        narration={compactValue(activeSceneData["narration"]) || null}
       />
     );
   }
@@ -386,6 +428,10 @@ function AgentDesktopScene({
   }
 
   if (isDocumentScene) {
+    const roadmapSteps = Array.isArray(activeSceneData["__roadmap_steps"])
+      ? (activeSceneData["__roadmap_steps"] as Array<{ toolId: string; title: string; whyThisStep: string }>)
+      : [];
+    const roadmapActiveIdx = Number(activeSceneData["__roadmap_active_index"] ?? -1);
     return (
       <DocumentFallbackScene
         activeEventType={activeEventType}
@@ -398,6 +444,8 @@ function AgentDesktopScene({
         documentHighlights={documentHighlights}
         sceneText={sceneText}
         stageFileName={stageFileName}
+        roadmapSteps={roadmapSteps}
+        roadmapActiveIndex={roadmapActiveIdx}
       />
     );
   }

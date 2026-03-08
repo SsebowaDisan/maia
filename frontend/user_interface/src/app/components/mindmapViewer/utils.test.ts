@@ -13,6 +13,16 @@ describe("mindmap viewer canvas state", () => {
     expect(parsed?.activeMapType).toBe("work_graph");
   });
 
+  it("preserves context_mindmap as the active map type", () => {
+    const parsed = parseCanvasState(
+      JSON.stringify({
+        collapsedNodeIds: ["node-2"],
+        activeMapType: "context_mindmap",
+      }),
+    );
+    expect(parsed?.activeMapType).toBe("context_mindmap");
+  });
+
   it("falls back to structure for unknown map types", () => {
     const parsed = parseCanvasState(
       JSON.stringify({

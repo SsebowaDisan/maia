@@ -72,6 +72,10 @@ class _RegistryStub:
         self._brave = brave
         self._bing = bing
 
+    def names(self) -> list[str]:
+        # Supplemental connectors disabled in test stubs
+        return ["brave_search", "bing_search"]
+
     def build(self, connector_id: str, settings: dict | None = None):
         del settings
         if connector_id == "brave_search":

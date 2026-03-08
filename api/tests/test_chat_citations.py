@@ -8,6 +8,7 @@ from api.services.chat.citations import (
     build_fast_info_html,
     collect_cited_ref_ids,
     enforce_required_citations,
+    normalize_fast_answer,
     normalize_info_evidence_html,
     resolve_required_citation_mode,
 )
@@ -60,7 +61,7 @@ def test_enforce_required_citations_injects_inline_citation_when_only_tail_exist
     assert "The answer body has no citation markers. <a " in answer
     assert "data-file-id='file-1'" in answer
     assert "href='#evidence-1'" in answer
-    assert "data-phrase='test evidence extract'" in answer
+    assert "data-phrase=" not in answer
 
 
 def test_enforce_required_citations_uses_evidence_section_refs_when_info_html_missing() -> None:
@@ -76,7 +77,7 @@ def test_enforce_required_citations_uses_evidence_section_refs_when_info_html_mi
     )
     assert "mailer.report_send attempted delivery for the prepared report." in answer
     assert "class='citation'" in answer
-    assert "data-phrase='Server-side Mailer Service attempted to send the report.'" in answer
+    assert "data-phrase=" not in answer
     assert "Evidence: internal execution trace" not in answer
 
 
@@ -110,6 +111,25 @@ def test_enforce_required_citations_keeps_inline_code_tokens_intact() -> None:
     assert "`mailer.report_send`" in answer
     assert "`mailer.report_send`. <a " in answer
     assert "class='citation'" in answer
+
+
+def test_normalize_fast_answer_strips_operational_sections_for_end_user_prompt() -> None:
+    normalized = normalize_fast_answer(
+        "## Executive Summary\nGrounded answer.\n\n## Delivery Status\n- blocked.\n\n## Contract Gate\n- waiting.",
+        question="summarize machine learning findings",
+    )
+    assert "## Executive Summary" in normalized
+    assert "## Delivery Status" not in normalized
+    assert "## Contract Gate" not in normalized
+
+
+def test_normalize_fast_answer_keeps_operational_sections_for_debug_prompt() -> None:
+    normalized = normalize_fast_answer(
+        "## Execution Summary\n- step one.\n\n## Delivery Status\n- blocked.",
+        question="show debug logs for delivery status",
+    )
+    assert "## Execution Summary" in normalized
+    assert "## Delivery Status" in normalized
 
 
 def test_append_required_citation_suffix_converts_plain_brackets_to_clickable_links() -> None:
@@ -305,7 +325,7 @@ def test_enforce_required_citations_augments_existing_anchor_attributes() -> Non
     )
     assert "data-file-id='file-1'" in answer
     assert "data-page='4'" in answer
-    assert "data-phrase='exact evidence phrase'" in answer
+    assert "data-phrase=" not in answer
 
 
 def test_enforce_required_citations_adds_source_url_from_details_attribute() -> None:
@@ -541,6 +561,21 @@ def test_assign_fast_source_refs_merges_duplicate_excerpt_boxes() -> None:
     highlight_boxes = refs[0].get("highlight_boxes") or []
     assert isinstance(highlight_boxes, list)
     assert len(highlight_boxes) == 2
+
+
+def test_assign_fast_source_refs_preserves_selector_metadata() -> None:
+    snippets = [
+        {
+            "source_id": "url:https://example.com/report",
+            "source_name": "https://example.com/report",
+            "page_label": "",
+            "text": "selected paragraph",
+            "selector": "article p:nth-of-type(4)",
+        }
+    ]
+    _enriched, refs = assign_fast_source_refs(snippets)
+    assert len(refs) == 1
+    assert refs[0].get("selector") == "article p:nth-of-type(4)"
 
 
 def test_build_fast_info_html_emits_data_boxes_attribute() -> None:

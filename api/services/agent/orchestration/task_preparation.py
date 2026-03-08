@@ -286,8 +286,9 @@ def prepare_task_context(
         settings.get("__research_web_search_budget"),
         default=depth_profile.max_query_variants * depth_profile.results_per_query,
         low=20,
-        high=350,
+        high=800,
     )
+    settings["__research_max_search_rounds"] = depth_profile.max_search_rounds
     settings["__research_min_keywords"] = depth_profile.min_keywords
     settings["__file_research_source_budget_min"] = depth_profile.file_source_budget_min
     settings["__file_research_source_budget_max"] = depth_profile.file_source_budget_max

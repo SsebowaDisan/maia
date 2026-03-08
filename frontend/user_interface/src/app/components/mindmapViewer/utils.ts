@@ -1,6 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 
-export type MindmapMapType = "structure" | "evidence" | "work_graph";
+export type MindmapMapType = "structure" | "evidence" | "work_graph" | "context_mindmap";
 
 export type CanvasState = {
   collapsedNodeIds: string[];
@@ -20,6 +20,7 @@ export type MindNodeData = {
   isRoot?: boolean;
   depth?: number;
   isSelected?: boolean;
+  branchColorIndex?: number;
   onToggle: (nodeId: string) => void;
   onAsk?: (nodeId: string) => void;
   onFocus?: (nodeId: string) => void;
@@ -81,6 +82,8 @@ export function parseCanvasState(value: string | null): CanvasState | null {
       activeMapType:
         rawMapType === "work_graph"
           ? "work_graph"
+          : rawMapType === "context_mindmap"
+            ? "context_mindmap"
           : rawMapType === "evidence"
             ? "evidence"
             : "structure",

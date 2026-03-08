@@ -31,6 +31,7 @@ interface CitationPdfPreviewProps {
   viewerHeight?: number;
   initialZoom?: number;
   onZoomChange?: (zoom: number) => void;
+  onPageChange?: (page: number) => void;
 }
 
 export function CitationPdfPreview({
@@ -42,6 +43,7 @@ export function CitationPdfPreview({
   viewerHeight = 420,
   initialZoom = 1,
   onZoomChange,
+  onPageChange,
 }: CitationPdfPreviewProps) {
   const effectiveViewerHeight = Math.max(220, Math.min(1200, Math.round(Number(viewerHeight) || 420)));
   const requestedPageSafe = parsePageNumber(page);
@@ -324,6 +326,13 @@ export function CitationPdfPreview({
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
   }, [currentPage, docReady, numPages]);
+
+  useEffect(() => {
+    if (!docReady) {
+      return;
+    }
+    onPageChange?.(currentPage);
+  }, [currentPage, docReady, onPageChange]);
 
   return (
     <div className="citation-pdf rounded-xl border border-black/[0.08] bg-white overflow-hidden">

@@ -53,12 +53,10 @@ def compose_professional_answer(
     deep_research_mode = _is_deep_research_mode(runtime_settings)
     diagnostics_setting = runtime_settings.get("__show_response_diagnostics")
     if diagnostics_setting is None:
-        show_response_diagnostics = not deep_research_mode
+        show_response_diagnostics = False
     else:
         show_response_diagnostics = bool(diagnostics_setting)
-    include_execution_trace = bool(runtime_settings.get("__include_execution_why")) and (
-        show_response_diagnostics or not deep_research_mode
-    )
+    include_execution_trace = bool(runtime_settings.get("__include_execution_why")) and show_response_diagnostics
 
     # Deep research responses should lead with the report itself, not planner/ops metadata.
     if deep_research_mode:

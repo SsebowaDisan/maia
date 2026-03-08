@@ -58,4 +58,59 @@ describe("parseEvidence", () => {
     expect(cards[0].sceneRefs).toEqual(["scene.pdf.reader"]);
     expect(cards[0].eventRefs).toEqual(["evt-5"]);
   });
+
+  it("parses nested verification contract fields", () => {
+    const cards = parseEvidence("", {
+      infoPanel: {
+        evidence_items: [
+          {
+            id: "evidence-4",
+            source: {
+              id: "src-4",
+              type: "pdf",
+              title: "Q4 Financials",
+              file_id: "file-4",
+              page: "9",
+            },
+            citation: {
+              quote: "Operating margin expanded to 21%.",
+            },
+            review_location: {
+              surface: "pdf",
+              file_id: "file-4",
+              page: "9",
+            },
+            highlight_target: {
+              boxes: [{ x: 0.1, y: 0.12, width: 0.42, height: 0.08 }],
+              unit_id: "unit-4",
+              selector: "article p:nth-of-type(3)",
+              char_start: 33,
+              char_end: 79,
+            },
+            evidence_quality: {
+              score: 0.81,
+              tier: 3,
+              confidence: 0.73,
+              match_quality: "exact",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].sourceType).toBe("pdf");
+    expect(cards[0].fileId).toBe("file-4");
+    expect(cards[0].page).toBe("9");
+    expect(cards[0].extract).toContain("Operating margin");
+    expect(cards[0].strengthScore).toBe(0.81);
+    expect(cards[0].strengthTier).toBe(3);
+    expect(cards[0].confidence).toBe(0.73);
+    expect(cards[0].matchQuality).toBe("exact");
+    expect(cards[0].unitId).toBe("unit-4");
+    expect(cards[0].selector).toBe("article p:nth-of-type(3)");
+    expect(cards[0].charStart).toBe(33);
+    expect(cards[0].charEnd).toBe(79);
+    expect(cards[0].highlightBoxes?.length).toBe(1);
+  });
 });

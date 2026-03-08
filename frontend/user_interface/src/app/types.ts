@@ -12,6 +12,37 @@ export type ClarificationPrompt = {
   accessMode: "restricted" | "full_access";
 };
 
+export type TrustVerdict = {
+  trust_score: number;
+  gate_color: "green" | "amber" | "red";
+  reason: string;
+  contested_claim_count: number;
+  resolved_claim_count: number;
+};
+
+export type ClaimMatrixSummary = {
+  overall_trust_score: number;
+  overall_gate_color: "green" | "amber" | "red";
+  claim_count: number;
+  contested_count: number;
+  claims: Array<{
+    claim: string;
+    trust_score: number;
+    gate_color: "green" | "amber" | "red";
+    corroboration_score: number;
+    credibility_score: number;
+    source_diversity_score: number;
+    contradictions: Record<string, unknown>[];
+  }>;
+};
+
+export type ResearchTreeBranch = {
+  branch_label: string;
+  sub_question: string;
+  preferred_providers: string[];
+  result_count?: number;
+};
+
 export type ChatTurn = {
   user: string;
   assistant: string;
@@ -30,6 +61,9 @@ export type ChatTurn = {
   webSummary?: Record<string, unknown>;
   infoPanel?: Record<string, unknown>;
   mindmap?: Record<string, unknown>;
+  trustVerdict?: TrustVerdict | null;
+  claimMatrix?: ClaimMatrixSummary | null;
+  researchTree?: ResearchTreeBranch[] | null;
 };
 
 export type AgentActionRecord = {
@@ -106,6 +140,7 @@ export type CitationFocus = {
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
   unitId?: string;
+  selector?: string;
   charStart?: number;
   charEnd?: number;
   graphNodeIds?: string[];

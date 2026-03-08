@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from api.services.agent.auth.credentials import get_credential_store
@@ -24,9 +25,13 @@ from .plugin_manifest import connector_plugin_manifest
 from .slack_connector import SlackConnector
 
 
+def _env_flag(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class ConnectorRegistry:
     def __init__(self) -> None:
-        self._factories = {
+        self._factories: dict[str, type] = {
             "slack": SlackConnector,
             "google_ads": GoogleAdsConnector,
             "google_workspace": GoogleWorkspaceConnector,
@@ -44,6 +49,19 @@ class ConnectorRegistry:
             "m365": M365Connector,
             "invoice": InvoiceConnector,
         }
+        # Source federation connectors — enabled via environment flags (S1)
+        if _env_flag("MAIA_ARXIV_ENABLED"):
+            from .arxiv_connector import ArXivConnector
+            self._factories["arxiv"] = ArXivConnector
+        if _env_flag("MAIA_SEC_EDGAR_ENABLED"):
+            from .sec_edgar_connector import SecEdgarConnector
+            self._factories["sec_edgar"] = SecEdgarConnector
+        if _env_flag("MAIA_NEWSAPI_ENABLED"):
+            from .newsapi_connector import NewsAPIConnector
+            self._factories["newsapi"] = NewsAPIConnector
+        if _env_flag("MAIA_REDDIT_ENABLED"):
+            from .reddit_connector import RedditConnector
+            self._factories["reddit"] = RedditConnector
 
     def names(self) -> list[str]:
         return sorted(self._factories.keys())

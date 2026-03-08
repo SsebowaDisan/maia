@@ -1,4 +1,4 @@
-export type MindmapMapType = "structure" | "evidence" | "work_graph";
+export type MindmapMapType = "structure" | "evidence" | "work_graph" | "context_mindmap";
 
 export type MindmapNode = {
   id: string;
@@ -65,6 +65,7 @@ export type MindMapViewerProps = {
   maxDepth?: number;
   viewerHeight?: number;
   onAskNode?: (payload: FocusNodePayload) => void;
+  onFocusNode?: (payload: FocusNodePayload) => void;
   onSaveMap?: (payload: MindmapPayload) => void;
   onShareMap?: (payload: MindmapPayload) => Promise<string | void> | string | void;
   onMapTypeChange?: (mapType: MindmapMapType) => void;

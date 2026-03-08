@@ -1,5 +1,6 @@
 import { Monitor, MousePointer2 } from "lucide-react";
 import { AgentDesktopScene } from "../AgentDesktopScene";
+import { DiffViewer } from "./DiffViewer";
 
 interface DesktopViewerProps {
   fullscreen?: boolean;
@@ -193,6 +194,12 @@ function DesktopViewer({
             onSnapshotError={onSnapshotError}
           />
         </div>
+        {activeEventType === "doc_insert_text" && activeSceneData["content_before"] ? (
+          <DiffViewer
+            before={String(activeSceneData["content_before"] || "")}
+            after={String(activeSceneData["content_after"] || "")}
+          />
+        ) : null}
         {sceneTransitionLabel ? (
           <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/20 bg-black/58 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/85 backdrop-blur-sm">
             {sceneTransitionLabel}
@@ -214,9 +221,6 @@ function DesktopViewer({
               </div>
             </div>
           </>
-        ) : null}
-        {!(fullscreen && isFocusMode) ? (
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
         ) : null}
 
         {activeTitle && !(fullscreen && isFocusMode) && !isDocsScene ? (

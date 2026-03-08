@@ -147,8 +147,80 @@ class BrowserConnector(BaseConnector):
                 "characters": characters,
             }
 
+        # Stealth JS injected before every page navigation to mask automation signals.
+        # Hides webdriver flag, spoofs plugin list, adds a realistic chrome runtime,
+        # and removes the CDP-exposed automation strings that Cloudflare checks.
+        _STEALTH_INIT_SCRIPT = """
+() => {
+  // Hide webdriver
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+  // Spoof plugins (headless Chrome has 0 plugins, real Chrome has several)
+  const _pluginData = [
+    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+  ];
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+      const arr = _pluginData.map((p) => Object.assign(new Plugin(), p));
+      arr.length = _pluginData.length;
+      return arr;
+    }
+  });
+
+  // Spoof MIME types
+  Object.defineProperty(navigator, 'mimeTypes', {
+    get: () => ({ length: 4 })
+  });
+
+  // Realistic language settings
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+  // Add chrome runtime (missing in headless mode)
+  if (!window.chrome) {
+    window.chrome = { runtime: {} };
+  }
+
+  // Remove Automation-related properties exposed by CDP
+  const _override = (obj, prop) => {
+    try { delete obj[prop]; } catch (_) {}
+    try { Object.defineProperty(obj, prop, { get: () => undefined }); } catch (_) {}
+  };
+  _override(window, '__webdriver_evaluate');
+  _override(window, '__selenium_evaluate');
+  _override(window, '__webdriver_script_function');
+  _override(window, '__webdriver_script_func');
+  _override(window, '__webdriver_script_fn');
+  _override(window, '__fxdriver_evaluate');
+  _override(window, '__driver_unwrapped');
+  _override(window, '__webdriver_unwrapped');
+  _override(window, '__driver_evaluate');
+  _override(window, '__selenium_unwrapped');
+  _override(window, '__fxdriver_unwrapped');
+  _override(document, '$cdc_asdjflasutopfhvcZLmcfl_');
+  _override(window, '_Selenium_IDE_Recorder');
+  _override(window, '_selenium');
+  _override(window, 'calledSelenium');
+}
+"""
+
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-accelerated-2d-canvas",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--disable-gpu",
+                    "--window-size=1366,768",
+                ],
+            )
             trusted_site = build_trusted_site_overrides(settings=self.settings, url=url)
             trusted_headers = (
                 dict(trusted_site.get("headers") or {})
@@ -157,8 +229,17 @@ class BrowserConnector(BaseConnector):
             )
             browser_context = browser.new_context(
                 viewport={"width": 1366, "height": 768},
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+                timezone_id="America/New_York",
                 extra_http_headers=trusted_headers or None,
             )
+            # Inject stealth script before every navigation
+            browser_context.add_init_script(_STEALTH_INIT_SCRIPT)
             trusted_cookies = (
                 list(trusted_site.get("cookies") or [])
                 if isinstance(trusted_site.get("cookies"), list)

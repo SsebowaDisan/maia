@@ -138,6 +138,8 @@ class DocumentCreateTool(AgentTool):
             context.settings["__latest_report_title"] = title
 
         trace_events: list[ToolTraceEvent] = []
+        # T7: Capture content_before snapshot for DiffViewer
+        _content_before = str(context.settings.get("__latest_report_content") or "").strip()[:500]
         trace_events.append(
             ToolTraceEvent(
                 event_type="doc_open",
@@ -146,7 +148,11 @@ class DocumentCreateTool(AgentTool):
                 data=_doc_scene_payload(
                     provider=provider,
                     lane="doc-open",
-                    payload={"provider": provider, "title": title},
+                    payload={
+                        "provider": provider,
+                        "title": title,
+                        "content_before": _content_before,
+                    },
                 ),
             )
         )
@@ -194,6 +200,7 @@ class DocumentCreateTool(AgentTool):
                     ),
                 )
             )
+        _content_after_snippet = body[:500] if body else ""
         trace_events.append(
             ToolTraceEvent(
                 event_type="doc_insert_text",
@@ -205,6 +212,8 @@ class DocumentCreateTool(AgentTool):
                     payload={
                         "body_length": len(body),
                         "provider": provider,
+                        "content_before": _content_before,
+                        "content_after": _content_after_snippet,
                     },
                 ),
             )

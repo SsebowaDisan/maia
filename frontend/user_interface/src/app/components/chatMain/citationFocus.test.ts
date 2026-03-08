@@ -34,6 +34,7 @@ describe("citationFocus", () => {
         sourceUrl: "https://example.com/report",
         extract: "Quarterly revenue increased by 11 percent.",
         page: "3",
+        selector: "article p:nth-of-type(1)",
         strengthTier: 3,
         matchQuality: "exact",
       },
@@ -42,6 +43,7 @@ describe("citationFocus", () => {
       {
         "data-evidence-id": "evidence-1",
         "data-source-url": "https://example.com/report",
+        "data-selector": "article p:nth-of-type(4)",
         "data-citation-number": "1",
       },
       "[1]",
@@ -53,6 +55,7 @@ describe("citationFocus", () => {
     });
     expect(resolved.focus.evidenceId).toBe("evidence-1");
     expect(resolved.focus.sourceUrl).toBe("https://example.com/report");
+    expect(resolved.focus.selector).toBe("article p:nth-of-type(4)");
     expect(resolved.focus.extract.toLowerCase()).toContain("revenue");
     expect(resolved.strengthTierResolved).toBe(3);
   });

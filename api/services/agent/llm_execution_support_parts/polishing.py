@@ -15,12 +15,19 @@ RESEARCH_INTENT_RE = re.compile(
 INTERNAL_CONTEXT_LINE_RE = re.compile(
     r"(?im)^(?:working context:|active role:|role-scoped context:|role verification obligations:|unresolved slots:).*$"
 )
+CITATION_ANCHOR_RE = re.compile(
+    r"<a\b[^>]*class=['\"][^'\"]*\bcitation\b[^'\"]*['\"][^>]*>\s*\[(\d{1,4})\]\s*</a>",
+    re.I,
+)
+GENERIC_ANCHOR_RE = re.compile(r"</?a\b[^>]*>", re.I)
 
 
 def _sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
     clean = str(body_text or "").strip()
     if not clean:
         return ""
+    clean = CITATION_ANCHOR_RE.sub(lambda match: f"[{match.group(1)}]", clean)
+    clean = GENERIC_ANCHOR_RE.sub("", clean)
     recipient_text = " ".join(str(recipient or "").split()).strip()
     if recipient_text:
         clean = re.sub(re.escape(recipient_text), "the recipient", clean, flags=re.IGNORECASE)
@@ -122,6 +129,18 @@ def _fallback_template_recommendation(
         "sections": sections,
         "detail_target": detail_target,
     }
+
+
+def _delivery_length_target(*, detail_target: str, source_count: int) -> tuple[int, int]:
+    if detail_target == "detailed":
+        if source_count >= 12:
+            return 4200, 9800
+        if source_count >= 6:
+            return 3200, 8600
+        return 2200, 7000
+    if source_count >= 6:
+        return 1400, 3600
+    return 900, 2800
 
 
 def _recommend_delivery_template(
@@ -347,6 +366,10 @@ def draft_delivery_report_content(
         objective=objective,
         sources=sources,
     ) else "standard"
+    target_min_chars, target_max_chars = _delivery_length_target(
+        detail_target=detail_target,
+        source_count=len(normalized_sources),
+    )
     template_recommendation = _recommend_delivery_template(
         request_message=request_message,
         objective=objective,
@@ -373,11 +396,13 @@ def draft_delivery_report_content(
         "- Do not use a fixed reusable template; structure the report for this specific request.\n"
         "- Use request-specific section titles instead of boilerplate labels.\n"
         "- Follow the recommended_template as the primary structure guide for this prompt.\n"
+        "- Keep 4-6 sections with clear hierarchy and premium readability.\n"
         "- Include a clear explanation, key mechanisms, practical implications, and risks/limitations where relevant.\n"
         "- Explicitly connect findings to the provided execution steps and source evidence.\n"
         "- Cite sources inline as markdown links whenever URLs are available.\n"
         "- If evidence is limited, state the limitation clearly without inventing facts.\n"
         "- Keep language professional, clear, and premium in tone (Apple-style clarity: simple, precise, confident).\n"
+        f"- Target approximately {target_min_chars}-{target_max_chars} characters for the body.\n"
         "- Do not include recipient email addresses or internal system commentary.\n"
         "- Keep subject concise and relevant to the user request.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
@@ -404,9 +429,11 @@ def draft_delivery_report_content(
 
     clean_body = _sanitize_delivery_body(body_text=body_text, recipient="")
     clean_body = _safe_trim_body(clean_body, max_chars=12000)
-    min_chars = 900 if detail_target == "detailed" else 220
+    min_chars = target_min_chars
     if len(clean_body) < min_chars:
         clean_body = fallback["body_text"]
+    elif len(clean_body) > int(target_max_chars * 1.35):
+        clean_body = _safe_trim_body(clean_body, max_chars=target_max_chars)
     return {"subject": subject, "body_text": clean_body}
 
 

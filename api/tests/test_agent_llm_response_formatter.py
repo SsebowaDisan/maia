@@ -167,3 +167,106 @@ def test_polish_final_response_strips_wrapping_fence_and_redacts_request_email(m
     assert "```" not in polished
     assert "ssebowadisan1@gmail.com" not in polished
     assert "the recipient" in polished.lower()
+
+
+def test_polish_final_response_normalizes_citation_anchor_noise(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_json_response",
+        lambda **kwargs: {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Answer", "purpose": "Respond", "format": "paragraphs"}],
+        },
+    )
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_text_response",
+        lambda **kwargs: (
+            "## Summary\n"
+            "Claim <a class='citation' href='#evidence-4' id='citation-4' data-evidence-id='evidence-4' "
+            "data-phrase='very long phrase' data-match-quality='estimated'>[1]</a>.\n\n"
+            "## Evidence Citations\n"
+            "- [1] Example | https://example.com\n\n"
+            "## Evidence Citations\n"
+            "- [1] Duplicate\n\n"
+            "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
+        ),
+    )
+    polished = polish_final_response(
+        request_message="analyze source and cite it",
+        answer_text="## Findings\n- Item\n\n## Evidence Citations\n- [1] Example | https://example.com",
+    )
+    assert "data-phrase=" not in polished
+    assert "data-match-quality=" not in polished
+    assert polished.count("## Evidence Citations") == 1
+    assert "Evidence: internal execution trace" not in polished
+
+
+def test_polish_final_response_strips_operational_noise_sections_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_json_response",
+        lambda **kwargs: {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Answer", "purpose": "Respond", "format": "mixed"}],
+        },
+    )
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_text_response",
+        lambda **kwargs: (
+            "## Executive Summary\n"
+            "Primary result text.\n\n"
+            "## Delivery Attempt Overview\n"
+            "- Internal tool status.\n\n"
+            "## Verification and Quality Assessment\n"
+            "- Check details.\n\n"
+            "## Evidence Citations\n"
+            "- [1] Example | https://example.com"
+        ),
+    )
+    polished = polish_final_response(
+        request_message="analyze this website and summarize findings",
+        answer_text="## Executive Summary\nPrimary result text.\n\n## Evidence Citations\n- [1] Example | https://example.com",
+    )
+    assert "## Delivery Attempt Overview" not in polished
+    assert "## Verification and Quality Assessment" not in polished
+    assert "## Evidence Citations" in polished
+
+
+def test_polish_final_response_keeps_operational_sections_for_debug_requests(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_json_response",
+        lambda **kwargs: {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Answer", "purpose": "Respond", "format": "mixed"}],
+        },
+    )
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_text_response",
+        lambda **kwargs: (
+            "## Execution Summary\n"
+            "- step details.\n\n"
+            "## Delivery Status\n"
+            "- sent.\n\n"
+            "## Evidence Citations\n"
+            "- [1] Example | https://example.com"
+        ),
+    )
+    polished = polish_final_response(
+        request_message="debug log trace for delivery status",
+        answer_text="## Execution Summary\n- step details.\n\n## Evidence Citations\n- [1] Example | https://example.com",
+    )
+    assert "## Delivery Status" in polished
+    assert "## Execution Summary" in polished

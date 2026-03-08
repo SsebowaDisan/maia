@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from .constants import (
     MAIA_CITATION_ANCHOR_INDEX_ENABLED,
     MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED,
+    MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED,
     MAIA_CITATION_STRENGTH_BADGES_ENABLED,
     MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
     MAIA_CITATION_STRENGTH_WEIGHT_LLM,
@@ -71,6 +72,7 @@ _INLINE_REF_TOKEN_RE = re.compile(r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|�
 _CITATION_LIST_ITEM_RE = re.compile(r"^\s*-\s*\[(\d{1,4})\]\s*(.+?)\s*$")
 _MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\([^)]+\)")
 _URL_TOKEN_RE = re.compile(r"https?://", flags=re.IGNORECASE)
+_TOP_LEVEL_MD_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", flags=re.IGNORECASE | re.MULTILINE)
 _CONTEXT_TOKEN_STOPWORDS = {
     "a",
     "an",
@@ -115,6 +117,27 @@ _CONTEXT_TOKEN_STOPWORDS = {
     "your",
 }
 _MIN_CONTEXT_MATCH_SCORE = 0.2
+_FAST_QA_NOISE_SECTION_TITLES = {
+    "delivery status",
+    "delivery attempt overview",
+    "contract gate",
+    "contract gate summary",
+    "verification",
+    "verification and quality assessment",
+    "research execution status",
+    "execution summary",
+    "execution issues",
+    "files and documents",
+}
+_FAST_QA_NOISE_SECTION_SUBSTRINGS = (
+    "delivery status",
+    "delivery attempt",
+    "contract gate",
+    "verification and quality",
+    "execution summary",
+    "execution issues",
+    "files and documents",
+)
 
 
 def _upsert_html_attr(tag: str, attr_name: str, attr_value: str) -> str:
@@ -692,6 +715,7 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     source_url = _normalize_source_url(ref.get("source_url"))
     page_label = str(ref.get("page_label", "") or "").strip()
     unit_id = str(ref.get("unit_id", "") or "").strip()
+    selector = str(ref.get("selector", "") or "").strip()
     phrase = str(ref.get("phrase", "") or "").strip()
     match_quality = str(ref.get("match_quality", "") or "").strip()
     try:
@@ -717,15 +741,17 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
         attrs.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
     if page_label:
         attrs.append(f"data-page='{html.escape(page_label, quote=True)}'")
-    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id:
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id:
         attrs.append(f"data-unit-id='{html.escape(unit_id[:160], quote=True)}'")
-    if phrase:
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and MAIA_CITATION_ANCHOR_INDEX_ENABLED and selector:
+        attrs.append(f"data-selector='{html.escape(selector[:280], quote=True)}'")
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and phrase:
         attrs.append(f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'")
-    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality:
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality:
         attrs.append(f"data-match-quality='{html.escape(match_quality[:32], quote=True)}'")
-    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0:
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0:
         attrs.append(f"data-char-start='{char_start}'")
-    if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start:
+    if MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED and MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start:
         attrs.append(f"data-char-end='{char_end}'")
     if strength_score > 0:
         attrs.append(f"data-strength='{html.escape(f'{strength_score:.6f}', quote=True)}'")
@@ -1021,24 +1047,48 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
             additions.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
         if page_label and not re.search(r"\bdata-page=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-page='{html.escape(page_label, quote=True)}'")
-        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and unit_id and not re.search(
+        if (
+            MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED
+            and MAIA_CITATION_ANCHOR_INDEX_ENABLED
+            and unit_id
+            and not re.search(
             r"\bdata-unit-id=['\"]", normalized_open, flags=re.IGNORECASE
+            )
         ):
             additions.append(f"data-unit-id='{html.escape(unit_id[:160], quote=True)}'")
-        if phrase and not re.search(r"\bdata-phrase=['\"]", normalized_open, flags=re.IGNORECASE):
+        if (
+            MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED
+            and phrase
+            and not re.search(r"\bdata-phrase=['\"]", normalized_open, flags=re.IGNORECASE)
+        ):
             additions.append(
                 f"data-phrase='{html.escape(phrase[:CITATION_PHRASE_MAX_CHARS], quote=True)}'"
             )
-        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and match_quality and not re.search(
+        if (
+            MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED
+            and MAIA_CITATION_ANCHOR_INDEX_ENABLED
+            and match_quality
+            and not re.search(
             r"\bdata-match-quality=['\"]", normalized_open, flags=re.IGNORECASE
+            )
         ):
             additions.append(f"data-match-quality='{html.escape(match_quality[:32], quote=True)}'")
-        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_start > 0 and not re.search(
+        if (
+            MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED
+            and MAIA_CITATION_ANCHOR_INDEX_ENABLED
+            and char_start > 0
+            and not re.search(
             r"\bdata-char-start=['\"]", normalized_open, flags=re.IGNORECASE
+            )
         ):
             additions.append(f"data-char-start='{char_start}'")
-        if MAIA_CITATION_ANCHOR_INDEX_ENABLED and char_end > char_start and not re.search(
+        if (
+            MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED
+            and MAIA_CITATION_ANCHOR_INDEX_ENABLED
+            and char_end > char_start
+            and not re.search(
             r"\bdata-char-end=['\"]", normalized_open, flags=re.IGNORECASE
+            )
         ):
             additions.append(f"data-char-end='{char_end}'")
         if strength_score > 0 and not re.search(r"\bdata-strength=['\"]", normalized_open, flags=re.IGNORECASE):
@@ -1281,6 +1331,50 @@ def _looks_like_structured_response(body: str) -> bool:
     return False
 
 
+def _section_title_key(value: str) -> str:
+    return " ".join(str(value or "").lower().split()).strip()
+
+
+def _diagnostics_requested_in_question(question: str) -> bool:
+    prompt = " ".join(str(question or "").split()).strip().lower()
+    if not prompt:
+        return False
+    return bool(
+        re.search(
+            r"\b(debug|diagnostic|logs?|trace|contract gate|delivery status|verification checks)\b",
+            prompt,
+        )
+    )
+
+
+def _strip_fast_qa_noise_sections(answer: str, *, question: str = "") -> str:
+    text = str(answer or "")
+    if not text.strip() or _diagnostics_requested_in_question(question):
+        return text
+    matches = list(_TOP_LEVEL_MD_HEADING_RE.finditer(text))
+    if not matches:
+        return text
+
+    kept_chunks: list[str] = []
+    cursor = 0
+    for idx, match in enumerate(matches):
+        section_start = match.start()
+        section_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        kept_chunks.append(text[cursor:section_start])
+        title_key = _section_title_key(match.group(1))
+        noisy = (
+            title_key in _FAST_QA_NOISE_SECTION_TITLES
+            or any(token in title_key for token in _FAST_QA_NOISE_SECTION_SUBSTRINGS)
+        )
+        if not noisy:
+            kept_chunks.append(text[section_start:section_end])
+        cursor = section_end
+    kept_chunks.append(text[cursor:])
+    normalized = "".join(kept_chunks)
+    normalized = re.sub(r"\n{4,}", "\n\n\n", normalized)
+    return normalized.strip()
+
+
 def _format_notebook_style_layout(answer: str) -> str:
     text = str(answer or "")
     if not text.strip():
@@ -1355,6 +1449,7 @@ def assign_fast_source_refs(
         )
         page_label = str(snippet.get("page_label", "") or "").strip()
         unit_id = str(snippet.get("unit_id", "") or "").strip()
+        snippet_selector = str(snippet.get("selector", "") or "").strip()
         match_quality = str(snippet.get("match_quality", "") or "").strip() or "estimated"
         try:
             char_start = int(snippet.get("char_start", 0) or 0) if str(snippet.get("char_start", "")).strip() else 0
@@ -1367,7 +1462,11 @@ def assign_fast_source_refs(
         snippet_boxes = _normalize_highlight_boxes(snippet.get("highlight_boxes"))
         phrase = _snippet_signature_text(snippet.get("text", ""))
         snippet_strength = _snippet_strength_score(snippet)
-        dedup_span = unit_id if (MAIA_CITATION_UNIFIED_REFS_ENABLED and unit_id) else phrase
+        dedup_span = (
+            unit_id
+            if (MAIA_CITATION_UNIFIED_REFS_ENABLED and unit_id)
+            else snippet_selector or phrase
+        )
         key = (source_id or source_name, page_label, dedup_span)
         ref_id = ref_by_key.get(key)
         if ref_id is None:
@@ -1387,6 +1486,7 @@ def assign_fast_source_refs(
                     "phrase": phrase,
                     "source_url": source_url,
                     "unit_id": unit_id,
+                    "selector": snippet_selector,
                     "char_start": char_start,
                     "char_end": char_end,
                     "match_quality": match_quality,
@@ -1415,6 +1515,8 @@ def assign_fast_source_refs(
                 )
                 if unit_id and not str(existing_ref.get("unit_id", "")).strip():
                     existing_ref["unit_id"] = unit_id
+                if snippet_selector and not str(existing_ref.get("selector", "")).strip():
+                    existing_ref["selector"] = snippet_selector
                 if match_quality and str(existing_ref.get("match_quality", "")).strip() in {"", "estimated"}:
                     existing_ref["match_quality"] = match_quality
                 if char_start > 0 and int(existing_ref.get("char_start", 0) or 0) <= 0:
@@ -1426,6 +1528,8 @@ def assign_fast_source_refs(
         enriched_item["ref_id"] = ref_id
         enriched_item["strength_score"] = snippet_strength
         enriched_item["unit_id"] = unit_id
+        if snippet_selector:
+            enriched_item["selector"] = snippet_selector
         if char_start > 0:
             enriched_item["char_start"] = char_start
         if char_end > char_start:
@@ -2127,7 +2231,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     )
 
 
-def normalize_fast_answer(answer: str) -> str:
+def normalize_fast_answer(answer: str, *, question: str = "") -> str:
     text = (answer or "").strip()
     if not text:
         return ""
@@ -2136,6 +2240,7 @@ def normalize_fast_answer(answer: str) -> str:
     text = re.sub(r"(?<!\n)(#{2,6}\s+)", r"\n\n\1", text)
     # Collapse duplicated heading markers like "### ## Title" into a single heading.
     text = re.sub(r"(^|\n)\s*#{1,6}\s*#{1,6}\s*", r"\1## ", text)
+    text = _strip_fast_qa_noise_sections(text, question=question)
 
     # Remove malformed bold markers that often break markdown rendering.
     malformed_bold = bool(re.search(r"#{2,6}\s*\*\*|\*\*[^*]+-\s*\*\*", text))

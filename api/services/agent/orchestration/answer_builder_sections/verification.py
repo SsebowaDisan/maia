@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from .models import AnswerBuildContext
 from ..text_helpers import compact
 
@@ -28,10 +30,32 @@ def append_verification(lines: list[str], ctx: AnswerBuildContext) -> None:
 
 
 def append_recommended_next_steps(lines: list[str], ctx: AnswerBuildContext) -> None:
+    def _is_internal_step(text: str) -> bool:
+        clean = str(text or "").strip()
+        if not clean:
+            return True
+        if re.search(r"\b[A-Z][A-Z0-9_]{8,}\b", clean):
+            return True
+        if re.search(r"`[^`\n]{3,}`", clean):
+            return True
+        lowered = clean.lower()
+        if re.search(r"\b(?:pip|npm|pnpm|yarn|brew|apt|uv|poetry|playwright)\s+install\b", lowered):
+            return True
+        if re.search(r"\b(?:set|export)\s+[A-Z][A-Z0-9_]{4,}\b", clean):
+            return True
+        if re.search(r"\bgoogle_analytics_property_id\b", lowered):
+            return True
+        if lowered.startswith(("extract specific", "extract key", "analyze collected sources", "set ")):
+            return True
+        return False
+
+    show_diagnostics = bool(ctx.runtime_settings.get("__show_response_diagnostics"))
     unique_next_steps: list[str] = []
     for step in ctx.next_steps:
         cleaned = str(step or "").strip()
         if not cleaned or cleaned in unique_next_steps:
+            continue
+        if not show_diagnostics and _is_internal_step(cleaned):
             continue
         unique_next_steps.append(cleaned)
 
@@ -40,5 +64,6 @@ def append_recommended_next_steps(lines: list[str], ctx: AnswerBuildContext) -> 
 
     lines.append("")
     lines.append("## Recommended Next Steps")
-    for item in unique_next_steps[:6]:
+    max_items = 6 if show_diagnostics else 3
+    for item in unique_next_steps[:max_items]:
         lines.append(f"- {item}")

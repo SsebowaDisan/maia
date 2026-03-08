@@ -74,3 +74,58 @@ class ExecutionState:
     retry_trace: list[dict[str, Any]] = field(default_factory=list)
     remediation_trace: list[dict[str, Any]] = field(default_factory=list)
     parallel_research_trace: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class TrustVerdict:
+    """JUDGE trust gate output for a research response."""
+    trust_score: float  # 0.0–1.0
+    gate_color: str     # "green" | "amber" | "red"
+    reason: str         # human-readable explanation
+    contested_claim_count: int = 0
+    resolved_claim_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trust_score": round(self.trust_score, 3),
+            "gate_color": self.gate_color,
+            "reason": self.reason,
+            "contested_claim_count": self.contested_claim_count,
+            "resolved_claim_count": self.resolved_claim_count,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class ResearchOutputContract:
+    """Typed output contract for SCOUT research results."""
+    source_count: int
+    unique_url_count: int
+    depth_tier: str
+    providers_used: list[str]
+    coverage_ok: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_count": self.source_count,
+            "unique_url_count": self.unique_url_count,
+            "depth_tier": self.depth_tier,
+            "providers_used": self.providers_used,
+            "coverage_ok": self.coverage_ok,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class ClaimMatrixContract:
+    """Typed output contract for ORACLE claim-matrix results."""
+    claim_count: int
+    overall_trust_score: float
+    overall_gate_color: str
+    contested_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "claim_count": self.claim_count,
+            "overall_trust_score": round(self.overall_trust_score, 3),
+            "overall_gate_color": self.overall_gate_color,
+            "contested_count": self.contested_count,
+        }

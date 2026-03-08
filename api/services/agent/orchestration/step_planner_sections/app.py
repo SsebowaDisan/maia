@@ -155,6 +155,7 @@ def build_execution_steps(
     settings["__file_research_max_chunks"] = research_plan.max_file_chunks
     settings["__file_research_max_scan_pages"] = research_plan.max_file_scan_pages
     settings["__simple_explanation_required"] = research_plan.simple_explanation_required
+    settings["__research_max_search_rounds"] = getattr(research_plan, "max_search_rounds", 1)
     steps = normalize_step_parameters(
         steps=steps,
         planned_search_terms=research_plan.planned_search_terms,

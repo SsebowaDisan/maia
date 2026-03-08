@@ -15,6 +15,7 @@ from theflow.settings import settings as flowsettings
 from tzlocal import get_localzone
 
 from maia.base import Document
+from maia.mindmap.indexer import build_knowledge_map as _build_knowledge_map
 
 from ktem.db.models import engine
 from ktem.pages.chat.common import STATE
@@ -49,6 +50,11 @@ from .streaming import (
     build_agent_context_window,
     chunk_text_for_stream,
     make_activity_stream_event,
+)
+from .verification_contract import (
+    VERIFICATION_CONTRACT_VERSION,
+    build_web_review_content,
+    normalize_verification_evidence_items,
 )
 
 _HTTP_URL_RE = re.compile(r"https?://[^\s\])>\"']+", flags=re.IGNORECASE)
@@ -1636,10 +1642,10 @@ def stream_chat_turn(
             except Exception:
                 requested_mindmap_depth = 4
             requested_map_type = str(
-                agent_mindmap_settings.get("map_type", "work_graph") or "work_graph"
+                agent_mindmap_settings.get("map_type", "context_mindmap") or "context_mindmap"
             ).strip().lower()
-            if requested_map_type not in {"structure", "evidence", "work_graph"}:
-                requested_map_type = "work_graph"
+            if requested_map_type not in {"structure", "evidence", "work_graph", "context_mindmap"}:
+                requested_map_type = "context_mindmap"
             action_rows = [
                 item.to_dict() if hasattr(item, "to_dict") else dict(item)
                 for item in list(getattr(agent_result, "actions_taken", []) or [])
@@ -1651,14 +1657,81 @@ def stream_chat_turn(
                 if isinstance(item, dict) or hasattr(item, "to_dict")
             ]
             if action_rows or source_rows:
-                mindmap_payload = mindmap_service.build_agent_work_graph(
-                    request_message=message,
-                    actions_taken=action_rows,
-                    sources_used=source_rows,
-                    map_type=requested_map_type,
-                    max_depth=max(2, min(8, requested_mindmap_depth)),
-                    run_id=str(getattr(agent_result, "run_id", "") or ""),
-                )
+                if requested_map_type == "work_graph":
+                    # Work graph: execution-based branched tree (Planning / Research / Evidence)
+                    mindmap_payload = mindmap_service.build_agent_work_graph(
+                        request_message=message,
+                        actions_taken=action_rows,
+                        sources_used=source_rows,
+                        map_type="work_graph",
+                        max_depth=max(2, min(8, requested_mindmap_depth)),
+                        run_id=str(getattr(agent_result, "run_id", "") or ""),
+                    )
+                else:
+                    # NotebookLM approach: LLM-generated conceptual tree from answer content.
+                    # Root = question topic; branches = major themes in the answer;
+                    # leaves = supporting details. Same method as fast_qa and NotebookLM.
+                    source_docs = []
+                    for _si, _row in enumerate(source_rows[:20]):
+                        if not isinstance(_row, dict):
+                            continue
+                        _text = str(
+                            _row.get("text") or _row.get("snippet") or
+                            _row.get("summary") or _row.get("label") or ""
+                        )
+                        source_docs.append({
+                            "doc_id": str(_row.get("file_id") or _row.get("url") or f"src_{_si + 1}"),
+                            "text": _text,
+                            "metadata": {
+                                "source_name": str(_row.get("label") or _row.get("url") or ""),
+                                "source_id": str(_row.get("file_id") or ""),
+                            },
+                        })
+                    _context_text = answer_text or "\n\n".join(
+                        d["text"] for d in source_docs[:8] if d.get("text")
+                    )
+                    try:
+                        cm_payload = _build_knowledge_map(
+                            question=message,
+                            context=_context_text,
+                            documents=source_docs,
+                            answer_text=answer_text,
+                            max_depth=max(2, min(8, requested_mindmap_depth)),
+                            include_reasoning_map=bool(
+                                agent_mindmap_settings.get("include_reasoning_map", True)
+                            ),
+                            source_type_hint="",
+                            focus={},
+                            map_type="structure",
+                        )
+                        # Apply the requested map_type label
+                        cm_payload["map_type"] = requested_map_type
+                        cm_payload["kind"] = requested_map_type
+                        if isinstance(cm_payload.get("settings"), dict):
+                            cm_payload["settings"]["map_type"] = requested_map_type
+                        # Always include the work graph as a switchable variant
+                        _wg = mindmap_service.build_agent_work_graph(
+                            request_message=message,
+                            actions_taken=action_rows,
+                            sources_used=source_rows,
+                            map_type="work_graph",
+                            max_depth=max(2, min(8, requested_mindmap_depth)),
+                            run_id=str(getattr(agent_result, "run_id", "") or ""),
+                        )
+                        _variants = dict(cm_payload.get("variants") or {})
+                        _variants["work_graph"] = _wg
+                        cm_payload["variants"] = _variants
+                        mindmap_payload = cm_payload
+                    except Exception:
+                        # Fallback: use the execution graph if LLM concept extraction fails
+                        mindmap_payload = mindmap_service.build_agent_work_graph(
+                            request_message=message,
+                            actions_taken=action_rows,
+                            sources_used=source_rows,
+                            map_type=requested_map_type,
+                            max_depth=max(2, min(8, requested_mindmap_depth)),
+                            run_id=str(getattr(agent_result, "run_id", "") or ""),
+                        )
         info_panel = build_info_panel_copy(
             request_message=message,
             answer_text=answer_text,
@@ -1667,15 +1740,15 @@ def stream_chat_turn(
             next_steps=list(getattr(agent_result, "next_recommended_steps", []) or []),
             web_summary=agent_web_summary,
         )
+        info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
         raw_agent_evidence_items = getattr(agent_result, "evidence_items", [])
         if isinstance(raw_agent_evidence_items, list):
-            normalized_evidence_items: list[dict[str, Any]] = []
-            for row in raw_agent_evidence_items[:32]:
-                if not isinstance(row, dict):
-                    continue
-                normalized_evidence_items.append(dict(row))
+            normalized_evidence_items = normalize_verification_evidence_items(raw_agent_evidence_items)
             if normalized_evidence_items:
                 info_panel["evidence_items"] = normalized_evidence_items
+                web_review_content = build_web_review_content(normalized_evidence_items)
+                if web_review_content:
+                    info_panel["web_review_content"] = web_review_content
         if mode_variant:
             info_panel["mode_variant"] = mode_variant
         if mindmap_payload:
@@ -1786,7 +1859,7 @@ def stream_chat_turn(
     except Exception:
         requested_mindmap_depth = 4
     requested_map_type = str(mindmap_settings.get("map_type", "structure") or "structure").strip().lower()
-    if requested_map_type not in {"structure", "evidence", "work_graph"}:
+    if requested_map_type not in {"structure", "evidence", "work_graph", "context_mindmap"}:
         requested_map_type = "structure"
     try:
         for response in pipeline.stream(
@@ -1878,6 +1951,7 @@ def stream_chat_turn(
         next_steps=[],
         web_summary={},
     )
+    info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
 
@@ -2049,6 +2123,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             next_steps=[],
             web_summary={},
         )
+        timeout_info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
         if timeout_mode_variant:
             timeout_info_panel["mode_variant"] = timeout_mode_variant
 

@@ -118,8 +118,15 @@ def extract_search_variants(
     return deduped or ["web research request"]
 
 
-def fuse_search_results(search_runs: list[dict[str, Any]], *, top_k: int = 8) -> list[dict[str, Any]]:
-    # Reciprocal Rank Fusion (RRF): robust ranking across query rewrites.
+def fuse_search_results(
+    search_runs: list[dict[str, Any]],
+    *,
+    top_k: int = 8,
+    source_weights: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    # Reciprocal Rank Fusion (RRF): robust ranking across query rewrites and providers.
+    # source_weights: optional {domain: credibility_score} map that scales RRF scores.
+    # Callers that omit source_weights get identical behaviour to the original.
     k = 60.0
     by_url: dict[str, dict[str, Any]] = {}
     for run in search_runs:
@@ -135,7 +142,18 @@ def fuse_search_results(search_runs: list[dict[str, Any]], *, top_k: int = 8) ->
             title = str(row.get("title") or url).strip()
             description = str(row.get("description") or "").strip()
             source = str(row.get("source") or "").strip()
-            score = 1.0 / (k + float(rank))
+            base_score = 1.0 / (k + float(rank))
+            if source_weights:
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    domain = _urlparse(url).netloc.lower()
+                    if domain.startswith("www."):
+                        domain = domain[4:]
+                    weight = float(source_weights.get(domain, 0.62))
+                    # weight in [0,1] → factor in [0.5, 1.5]
+                    base_score = base_score * (0.5 + weight)
+                except Exception:
+                    pass
             current = by_url.get(url)
             if current is None:
                 by_url[url] = {
@@ -143,11 +161,11 @@ def fuse_search_results(search_runs: list[dict[str, Any]], *, top_k: int = 8) ->
                     "title": title,
                     "description": description,
                     "source": source or None,
-                    "rrf_score": score,
+                    "rrf_score": base_score,
                     "best_rank": rank,
                 }
                 continue
-            current["rrf_score"] = float(current.get("rrf_score", 0.0)) + score
+            current["rrf_score"] = float(current.get("rrf_score", 0.0)) + base_score
             if rank < int(current.get("best_rank", rank)):
                 current["best_rank"] = rank
                 current["title"] = title

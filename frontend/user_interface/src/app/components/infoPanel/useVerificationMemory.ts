@@ -9,6 +9,7 @@ type VerificationMemory = {
   evidenceMode: EvidenceMode;
   verificationTab: VerificationTab;
   reviewZoom: number;
+  reviewPageBySource: Record<string, number>;
 };
 
 const STORAGE_KEY = "maia.info-panel.verification-memory.v1";
@@ -31,12 +32,29 @@ function sanitizeMemory(raw: unknown): VerificationMemory {
       : "review";
   const reviewZoomRaw = Number(value.reviewZoom || 1);
   const reviewZoom = Number.isFinite(reviewZoomRaw) ? Math.max(0.75, Math.min(2.25, reviewZoomRaw)) : 1;
+  const rawReviewPageBySource =
+    value.reviewPageBySource && typeof value.reviewPageBySource === "object"
+      ? (value.reviewPageBySource as Record<string, unknown>)
+      : {};
+  const reviewPageBySource: Record<string, number> = {};
+  for (const [rawKey, rawPage] of Object.entries(rawReviewPageBySource)) {
+    const key = String(rawKey || "").trim().toLowerCase();
+    const parsedPage = Number(rawPage);
+    if (!key || !Number.isFinite(parsedPage) || parsedPage <= 0) {
+      continue;
+    }
+    reviewPageBySource[key] = Math.floor(parsedPage);
+    if (Object.keys(reviewPageBySource).length >= 64) {
+      break;
+    }
+  }
   return {
     selectedSourceId: String(value.selectedSourceId || "").trim().toLowerCase(),
     selectedEvidenceId: String(value.selectedEvidenceId || "").trim().toLowerCase(),
     evidenceMode,
     verificationTab,
     reviewZoom,
+    reviewPageBySource,
   };
 }
 

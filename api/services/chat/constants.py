@@ -15,13 +15,13 @@ PLACEHOLDER_KEYS = {
     "null",
 }
 API_CHAT_FAST_PATH = config("MAIA_API_CHAT_FAST_PATH", default=True, cast=bool)
-API_FAST_QA_MAX_IMAGES = config("MAIA_FAST_QA_MAX_IMAGES", default=2, cast=int)
-API_FAST_QA_MAX_SNIPPETS = config("MAIA_FAST_QA_MAX_SNIPPETS", default=14, cast=int)
-API_FAST_QA_SOURCE_SCAN = config("MAIA_FAST_QA_SOURCE_SCAN", default=120, cast=int)
-API_FAST_QA_MAX_SOURCES = config("MAIA_FAST_QA_MAX_SOURCES", default=18, cast=int)
+API_FAST_QA_MAX_IMAGES = config("MAIA_FAST_QA_MAX_IMAGES", default=4, cast=int)
+API_FAST_QA_MAX_SNIPPETS = config("MAIA_FAST_QA_MAX_SNIPPETS", default=24, cast=int)
+API_FAST_QA_SOURCE_SCAN = config("MAIA_FAST_QA_SOURCE_SCAN", default=220, cast=int)
+API_FAST_QA_MAX_SOURCES = config("MAIA_FAST_QA_MAX_SOURCES", default=35, cast=int)
 API_FAST_QA_MAX_CHUNKS_PER_SOURCE = config(
     "MAIA_FAST_QA_MAX_CHUNKS_PER_SOURCE",
-    default=3,
+    default=4,
     cast=int,
 )
 API_FAST_QA_TEMPERATURE = config("MAIA_FAST_QA_TEMPERATURE", default=0.2, cast=float)
@@ -33,6 +33,11 @@ MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
 MAIA_CITATION_ANCHOR_INDEX_ENABLED = config(
     "MAIA_CITATION_ANCHOR_INDEX_ENABLED",
     default=True,
+    cast=bool,
+)
+MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED = config(
+    "MAIA_CITATION_RICH_ANCHOR_METADATA_ENABLED",
+    default=False,
     cast=bool,
 )
 MAIA_CITATION_FUZZY_MATCH_ENABLED = config(
@@ -80,3 +85,10 @@ MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD = config(
     default=0.60,
     cast=float,
 )
+# Source federation feature flags (S1)
+MAIA_ARXIV_ENABLED = config("MAIA_ARXIV_ENABLED", default=False, cast=bool)
+MAIA_SEC_EDGAR_ENABLED = config("MAIA_SEC_EDGAR_ENABLED", default=False, cast=bool)
+MAIA_NEWSAPI_ENABLED = config("MAIA_NEWSAPI_ENABLED", default=False, cast=bool)
+MAIA_REDDIT_ENABLED = config("MAIA_REDDIT_ENABLED", default=False, cast=bool)
+MAIA_EXPERT_MODE_ENABLED = config("MAIA_EXPERT_MODE_ENABLED", default=False, cast=bool)
+MAIA_SOURCE_CREDIBILITY_ENABLED = config("MAIA_SOURCE_CREDIBILITY_ENABLED", default=True, cast=bool)

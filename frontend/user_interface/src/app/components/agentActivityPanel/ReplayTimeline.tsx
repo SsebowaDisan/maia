@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { AgentActivityEvent } from "../../types";
 import { styleForEvent } from "../agentActivityMeta";
 import { filmstripRowsForMode, readReplayMode, timelineRowsForMode } from "./replayModePolicy";
@@ -158,6 +158,18 @@ function ReplayTimeline({
     }));
   }, [activeEvent?.event_id, activeEvent?.event_index, safeCursor]);
 
+  // T2: Timeline Scrub Preview
+  const scrubTrackRef = useRef<HTMLDivElement>(null);
+  const [scrubHover, setScrubHover] = useState<{ index: number; x: number } | null>(null);
+
+  const scrubEventAt = (clientX: number): number | null => {
+    const track = scrubTrackRef.current;
+    if (!track || totalEvents < 2) return null;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return Math.round(ratio * (totalEvents - 1));
+  };
+
   const activeStyle = styleForEvent(activeEvent);
   const ActiveIcon = activeStyle.icon;
   const replayMode = readReplayMode(visibleEvents);
@@ -197,17 +209,58 @@ function ReplayTimeline({
               {progressPercent}% {replayMode === "fast" ? "- compressed" : replayMode === "full_theatre" ? "- full" : ""}
             </span>
           </div>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(totalEvents - 1, 0)}
-            value={safeCursor}
-            onChange={(event) => {
-              setCursor(Number(event.target.value));
-              setIsPlaying(false);
+          <div
+            ref={scrubTrackRef}
+            className="relative"
+            onMouseMove={(e) => {
+              const idx = scrubEventAt(e.clientX);
+              if (idx !== null) setScrubHover({ index: idx, x: e.clientX });
             }}
-            className="w-full accent-[#2f2f34]"
-          />
+            onMouseLeave={() => setScrubHover(null)}
+          >
+            <input
+              type="range"
+              min={0}
+              max={Math.max(totalEvents - 1, 0)}
+              value={safeCursor}
+              onChange={(event) => {
+                setCursor(Number(event.target.value));
+                setIsPlaying(false);
+              }}
+              className="w-full accent-[#2f2f34]"
+            />
+            {scrubHover !== null && (() => {
+              const hoverEvent = visibleEvents[scrubHover.index] ?? null;
+              const payload = ((hoverEvent?.data ?? hoverEvent?.metadata) ?? {}) as Record<string, unknown>;
+              const snapshotUrl =
+                String(payload.snapshot_url ?? payload.snapshot_ref ?? "").trim() || null;
+              const track = scrubTrackRef.current;
+              const rect = track?.getBoundingClientRect();
+              const leftPx = rect ? scrubHover.x - rect.left : 0;
+              return (
+                <div
+                  className="pointer-events-none absolute bottom-8 z-50 -translate-x-1/2 rounded-xl border border-black/[0.1] bg-white shadow-lg"
+                  style={{ left: leftPx }}
+                >
+                  {snapshotUrl ? (
+                    <img
+                      src={snapshotUrl}
+                      alt="preview"
+                      className="h-20 w-32 rounded-t-xl object-cover"
+                    />
+                  ) : null}
+                  <div className="px-2 py-1">
+                    <p className="max-w-[128px] truncate text-[10px] font-medium text-[#1d1d1f]">
+                      {hoverEvent?.title ?? `Event ${scrubHover.index + 1}`}
+                    </p>
+                    <p className="text-[9px] text-[#86868b]">
+                      {scrubHover.index + 1} / {totalEvents}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 

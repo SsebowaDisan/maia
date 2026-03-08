@@ -52,8 +52,8 @@
   --citation-tier-1: #9ca8bf;
   --citation-tier-2: #1e88e5;
   --citation-tier-3: #198754;
-  --citation-highlight-fill: rgba(255, 210, 61, 0.44);
-  --citation-highlight-stroke: rgba(145, 102, 4, 0.62);
+  --citation-highlight-fill: rgba(255, 210, 61, 0.58);
+  --citation-highlight-stroke: rgba(145, 102, 4, 0.78);
 }
 
 .dark {

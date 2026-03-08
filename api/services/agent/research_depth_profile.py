@@ -6,7 +6,7 @@ from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
-DEPTH_TIERS = ("quick", "standard", "deep_research", "deep_analytics")
+DEPTH_TIERS = ("quick", "standard", "deep_research", "deep_analytics", "expert")
 
 
 @dataclass(slots=True, frozen=True)
@@ -28,6 +28,9 @@ class ResearchDepthProfile:
     max_file_scan_pages: int
     simple_explanation_required: bool
     include_execution_why: bool
+    # Number of iterative search rounds (quick=1, standard=2, deep=3, expert=4).
+    # Round 1: broad coverage; round 2+: gap-fill queries on under-covered topics.
+    max_search_rounds: int = 1
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +51,7 @@ class ResearchDepthProfile:
             "max_file_scan_pages": self.max_file_scan_pages,
             "simple_explanation_required": self.simple_explanation_required,
             "include_execution_why": self.include_execution_why,
+            "max_search_rounds": self.max_search_rounds,
         }
 
 
@@ -79,66 +83,88 @@ def _coerce_optional_int(value: Any) -> int | None:
 def _profile_for_tier(tier: str) -> dict[str, int]:
     if tier == "quick":
         return {
-            "max_query_variants": 2,
-            "results_per_query": 4,
-            "fused_top_k": 8,
-            "max_live_inspections": 2,
-            "min_unique_sources": 3,
-            "source_budget_min": 3,
-            "source_budget_max": 8,
-            "min_keywords": 4,
-            "file_source_budget_min": 3,
-            "file_source_budget_max": 8,
-            "max_file_sources": 8,
-            "max_file_chunks": 80,
-            "max_file_scan_pages": 10,
+            "max_query_variants": 3,
+            "results_per_query": 6,
+            "fused_top_k": 20,
+            "max_live_inspections": 4,
+            "min_unique_sources": 5,
+            "source_budget_min": 5,
+            "source_budget_max": 15,
+            "min_keywords": 6,
+            "file_source_budget_min": 5,
+            "file_source_budget_max": 15,
+            "max_file_sources": 15,
+            "max_file_chunks": 120,
+            "max_file_scan_pages": 15,
+            "max_search_rounds": 1,
         }
     if tier == "deep_research":
         return {
-            "max_query_variants": 12,
-            "results_per_query": 10,
-            "fused_top_k": 120,
-            "max_live_inspections": 24,
-            "min_unique_sources": 50,
-            "source_budget_min": 60,
-            "source_budget_max": 100,
-            "min_keywords": 18,
-            "file_source_budget_min": 100,
-            "file_source_budget_max": 200,
-            "max_file_sources": 200,
-            "max_file_chunks": 1200,
-            "max_file_scan_pages": 140,
+            "max_query_variants": 20,
+            "results_per_query": 15,
+            "fused_top_k": 250,
+            "max_live_inspections": 50,
+            "min_unique_sources": 80,
+            "source_budget_min": 100,
+            "source_budget_max": 200,
+            "min_keywords": 24,
+            "file_source_budget_min": 150,
+            "file_source_budget_max": 300,
+            "max_file_sources": 300,
+            "max_file_chunks": 2000,
+            "max_file_scan_pages": 200,
+            "max_search_rounds": 3,
         }
     if tier == "deep_analytics":
         return {
-            "max_query_variants": 8,
-            "results_per_query": 10,
-            "fused_top_k": 60,
-            "max_live_inspections": 14,
-            "min_unique_sources": 20,
-            "source_budget_min": 20,
-            "source_budget_max": 60,
-            "min_keywords": 14,
-            "file_source_budget_min": 40,
-            "file_source_budget_max": 120,
-            "max_file_sources": 120,
-            "max_file_chunks": 700,
-            "max_file_scan_pages": 90,
+            "max_query_variants": 12,
+            "results_per_query": 12,
+            "fused_top_k": 100,
+            "max_live_inspections": 24,
+            "min_unique_sources": 35,
+            "source_budget_min": 35,
+            "source_budget_max": 90,
+            "min_keywords": 18,
+            "file_source_budget_min": 60,
+            "file_source_budget_max": 180,
+            "max_file_sources": 180,
+            "max_file_chunks": 1200,
+            "max_file_scan_pages": 140,
+            "max_search_rounds": 2,
         }
+    if tier == "expert":
+        return {
+            "max_query_variants": 35,
+            "results_per_query": 25,
+            "fused_top_k": 500,
+            "max_live_inspections": 100,
+            "min_unique_sources": 150,
+            "source_budget_min": 200,
+            "source_budget_max": 500,
+            "min_keywords": 40,
+            "file_source_budget_min": 300,
+            "file_source_budget_max": 600,
+            "max_file_sources": 600,
+            "max_file_chunks": 5000,
+            "max_file_scan_pages": 500,
+            "max_search_rounds": 4,
+        }
+    # standard (default)
     return {
-        "max_query_variants": 4,
-        "results_per_query": 8,
-        "fused_top_k": 24,
-        "max_live_inspections": 4,
-        "min_unique_sources": 8,
-        "source_budget_min": 8,
-        "source_budget_max": 24,
-        "min_keywords": 10,
-        "file_source_budget_min": 12,
-        "file_source_budget_max": 40,
-        "max_file_sources": 40,
-        "max_file_chunks": 260,
-        "max_file_scan_pages": 40,
+        "max_query_variants": 8,
+        "results_per_query": 12,
+        "fused_top_k": 60,
+        "max_live_inspections": 12,
+        "min_unique_sources": 15,
+        "source_budget_min": 15,
+        "source_budget_max": 50,
+        "min_keywords": 14,
+        "file_source_budget_min": 20,
+        "file_source_budget_max": 70,
+        "max_file_sources": 70,
+        "max_file_chunks": 500,
+        "max_file_scan_pages": 60,
+        "max_search_rounds": 2,
     }
 
 
@@ -149,6 +175,8 @@ def _default_rationale(tier: str) -> str:
         return "Deep research profile selected for broad evidence collection."
     if tier == "deep_analytics":
         return "Deep analytics profile selected for data-heavy analysis."
+    if tier == "expert":
+        return "Expert profile selected for maximum source coverage and credibility verification."
     return "Balanced coverage profile selected."
 
 
@@ -177,26 +205,29 @@ def _classify_depth_with_llm(
         user_prompt=(
             "Return JSON only with this schema:\n"
             "{\n"
-            '  "tier": "quick|standard|deep_research|deep_analytics",\n'
+            '  "tier": "quick|standard|deep_research|deep_analytics|expert",\n'
             '  "rationale": "short reason",\n'
-            '  "source_budget_min": 8,\n'
-            '  "source_budget_max": 24,\n'
-            '  "max_query_variants": 4,\n'
-            '  "results_per_query": 8,\n'
-            '  "fused_top_k": 24,\n'
-            '  "max_live_inspections": 4,\n'
-            '  "min_unique_sources": 8,\n'
-            '  "min_keywords": 10,\n'
-            '  "file_source_budget_min": 12,\n'
-            '  "file_source_budget_max": 40,\n'
-            '  "max_file_sources": 40,\n'
-            '  "max_file_chunks": 260,\n'
-            '  "max_file_scan_pages": 40,\n'
+            '  "source_budget_min": 15,\n'
+            '  "source_budget_max": 50,\n'
+            '  "max_query_variants": 8,\n'
+            '  "results_per_query": 12,\n'
+            '  "fused_top_k": 60,\n'
+            '  "max_live_inspections": 12,\n'
+            '  "min_unique_sources": 15,\n'
+            '  "min_keywords": 14,\n'
+            '  "file_source_budget_min": 20,\n'
+            '  "file_source_budget_max": 70,\n'
+            '  "max_file_sources": 70,\n'
+            '  "max_file_chunks": 500,\n'
+            '  "max_file_scan_pages": 60,\n'
+            '  "max_search_rounds": 2,\n'
             '  "simple_explanation_required": false,\n'
             '  "include_execution_why": false\n'
             "}\n"
             "Rules:\n"
             "- Infer depth from user intent and requested rigor.\n"
+            "- deep_research: 100-200 sources, 20 query variants, 3 rounds.\n"
+            "- expert: 200-500 sources, 35 query variants, 4 rounds.\n"
             "- Keep source budgets realistic and internally consistent.\n"
             "- If unsure, choose `standard`.\n\n"
             f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
@@ -240,8 +271,8 @@ def derive_research_depth_profile(
     if source_budget_min_raw is not None or source_budget_max_raw is not None:
         candidate_min = source_budget_min_raw if source_budget_min_raw is not None else source_budget_min
         candidate_max = source_budget_max_raw if source_budget_max_raw is not None else source_budget_max
-        low = _clamp(candidate_min, low=3, high=200)
-        high = _clamp(candidate_max, low=3, high=220)
+        low = _clamp(candidate_min, low=3, high=500)
+        high = _clamp(candidate_max, low=3, high=600)
         if high < low:
             low, high = high, low
         source_budget_min = low
@@ -250,62 +281,67 @@ def derive_research_depth_profile(
     max_query_variants = _clamp(
         _coerce_optional_int(llm_profile.get("max_query_variants")) or int(base["max_query_variants"]),
         low=2,
-        high=20,
+        high=40,
     )
     results_per_query = _clamp(
         _coerce_optional_int(llm_profile.get("results_per_query")) or int(base["results_per_query"]),
         low=4,
-        high=25,
+        high=30,
     )
     fused_top_k = _clamp(
         _coerce_optional_int(llm_profile.get("fused_top_k")) or int(base["fused_top_k"]),
         low=8,
-        high=220,
+        high=600,
     )
     max_live_inspections = _clamp(
         _coerce_optional_int(llm_profile.get("max_live_inspections"))
         or int(base["max_live_inspections"]),
         low=2,
-        high=40,
+        high=120,
     )
     min_unique_sources = _clamp(
         _coerce_optional_int(llm_profile.get("min_unique_sources")) or int(base["min_unique_sources"]),
         low=3,
-        high=200,
+        high=500,
     )
     min_keywords = _clamp(
         _coerce_optional_int(llm_profile.get("min_keywords")) or int(base["min_keywords"]),
         low=4,
-        high=40,
+        high=50,
     )
     file_source_budget_min = _clamp(
         _coerce_optional_int(llm_profile.get("file_source_budget_min"))
         or int(base["file_source_budget_min"]),
         low=3,
-        high=220,
+        high=600,
     )
     file_source_budget_max = _clamp(
         _coerce_optional_int(llm_profile.get("file_source_budget_max"))
         or int(base["file_source_budget_max"]),
         low=3,
-        high=240,
+        high=700,
     )
     if file_source_budget_max < file_source_budget_min:
         file_source_budget_min, file_source_budget_max = file_source_budget_max, file_source_budget_min
     max_file_sources = _clamp(
         _coerce_optional_int(llm_profile.get("max_file_sources")) or int(base["max_file_sources"]),
         low=3,
-        high=240,
+        high=700,
     )
     max_file_chunks = _clamp(
         _coerce_optional_int(llm_profile.get("max_file_chunks")) or int(base["max_file_chunks"]),
         low=40,
-        high=3000,
+        high=6000,
     )
     max_file_scan_pages = _clamp(
         _coerce_optional_int(llm_profile.get("max_file_scan_pages")) or int(base["max_file_scan_pages"]),
         low=8,
-        high=300,
+        high=600,
+    )
+    max_search_rounds = _clamp(
+        _coerce_optional_int(llm_profile.get("max_search_rounds")) or int(base.get("max_search_rounds", 1)),
+        low=1,
+        high=4,
     )
 
     fused_top_k = max(fused_top_k, source_budget_max)
@@ -330,8 +366,8 @@ def derive_research_depth_profile(
         fused_top_k=fused_top_k,
         max_live_inspections=max_live_inspections,
         min_unique_sources=min_unique_sources,
-        source_budget_min=_clamp(source_budget_min, low=3, high=200),
-        source_budget_max=_clamp(source_budget_max, low=source_budget_min, high=220),
+        source_budget_min=_clamp(source_budget_min, low=3, high=500),
+        source_budget_max=_clamp(source_budget_max, low=source_budget_min, high=600),
         min_keywords=min_keywords,
         file_source_budget_min=file_source_budget_min,
         file_source_budget_max=file_source_budget_max,
@@ -344,6 +380,7 @@ def derive_research_depth_profile(
         include_execution_why=(
             explain_from_llm if explain_from_llm is not None else bool(explain_pref)
         ),
+        max_search_rounds=max_search_rounds,
     )
 
 

@@ -25,6 +25,7 @@ type EvidenceCard = {
   strengthTier?: number;
   matchQuality?: string;
   unitId?: string;
+  selector?: string;
   charStart?: number;
   charEnd?: number;
 };

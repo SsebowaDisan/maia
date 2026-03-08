@@ -70,15 +70,18 @@ def append_evidence_citations(lines: list[str], ctx: AnswerBuildContext) -> None
         )
         return
 
-    for idx, row in enumerate(citations[:12], start=1):
+    external_rows = [row for row in citations if row.get("url")]
+    internal_rows = [row for row in citations if not row.get("url")]
+    ordered_rows = external_rows[:10] + internal_rows[:2]
+
+    for idx, row in enumerate(ordered_rows, start=1):
         label = row["label"]
         url = row["url"]
-        note = row["note"]
-        entry = f"- [{idx}] {label}"
+        note = compact(row["note"], 96)
         if url:
-            entry += f" | {url}"
+            entry = f"- [{idx}] [{label}]({url})"
         else:
-            entry += " | internal evidence"
-        if note:
-            entry += f" | Note: {note}"
+            entry = f"- [{idx}] {label} | internal evidence"
+        if note and not url:
+            entry += f" | {note}"
         lines.append(entry)

@@ -1,3 +1,5 @@
+import { TrustMeter } from "./TrustMeter";
+
 type VerificationTab = "sources" | "review" | "evidence" | "trail" | "compare";
 type EvidenceMode = "exact" | "context";
 
@@ -8,6 +10,10 @@ type VerificationTabBarProps = {
   onChangeEvidenceMode: (mode: EvidenceMode) => void;
   searchQuery: string;
   onChangeSearchQuery: (next: string) => void;
+  showTabs?: boolean;
+  trustScore?: number | null;
+  trustGateColor?: "green" | "amber" | "red" | null;
+  trustReason?: string | null;
 };
 
 const VERIFICATION_TABS: Array<{ id: VerificationTab; label: string }> = [
@@ -25,28 +31,34 @@ function VerificationTabBar({
   onChangeEvidenceMode,
   searchQuery,
   onChangeSearchQuery,
+  showTabs = true,
+  trustScore = null,
+  trustGateColor = null,
+  trustReason = null,
 }: VerificationTabBarProps) {
   return (
     <div className="space-y-2 rounded-2xl border border-[#d2d2d7] bg-white px-3 py-3 shadow-sm">
-      <div className="flex gap-1 overflow-x-auto">
-        {VERIFICATION_TABS.map((tab) => {
-          const active = tab.id === activeTab;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onChangeTab(tab.id)}
-              className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] transition ${
-                active
-                  ? "border-[#1d1d1f] bg-[#1d1d1f] text-white"
-                  : "border-black/[0.08] bg-white text-[#4c4c50] hover:bg-[#f3f3f5]"
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      {showTabs ? (
+        <div className="flex gap-1 overflow-x-auto">
+          {VERIFICATION_TABS.map((tab) => {
+            const active = tab.id === activeTab;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onChangeTab(tab.id)}
+                className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] transition ${
+                  active
+                    ? "border-[#1d1d1f] bg-[#1d1d1f] text-white"
+                    : "border-black/[0.08] bg-white text-[#4c4c50] hover:bg-[#f3f3f5]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between gap-2">
         <div className="inline-flex rounded-full border border-black/[0.08] bg-[#f6f7fb] p-0.5">
@@ -77,6 +89,14 @@ function VerificationTabBar({
           className="h-8 min-w-0 flex-1 rounded-lg border border-black/[0.08] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none focus:border-[#0a84ff]/60"
         />
       </div>
+
+      {trustScore !== null && trustGateColor ? (
+        <TrustMeter
+          score={trustScore}
+          gateColor={trustGateColor}
+          reason={trustReason ?? undefined}
+        />
+      ) : null}
     </div>
   );
 }

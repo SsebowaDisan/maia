@@ -1,7 +1,9 @@
-import { ExternalLink, FileText } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-react";
 import type { CitationFocus } from "../../types";
 import type { EvidenceCard } from "../../utils/infoInsights";
 import { CitationPdfPreview } from "../CitationPdfPreview";
+import { WebReviewViewer } from "./review/WebReviewViewer";
+import type { WebReviewSource } from "./review/webReviewContent";
 
 type CitationPreviewPanelProps = {
   citationFocus: CitationFocus;
@@ -12,15 +14,16 @@ type CitationPreviewPanelProps = {
   citationIsPdf: boolean;
   citationIsImage: boolean;
   citationViewerHeight: number;
-  evidenceMode: "exact" | "context";
-  sourceEvidence: EvidenceCard[];
+  reviewQuery?: string;
+  preferredPage?: string;
+  webReviewSource?: WebReviewSource | null;
   hasPreviousEvidence: boolean;
   hasNextEvidence: boolean;
   onPreviousEvidence: () => void;
   onNextEvidence: () => void;
-  onSelectEvidence: (card: EvidenceCard, index: number) => void;
   pdfZoom: number;
   onPdfZoomChange: (next: number) => void;
+  onPdfPageChange?: (nextPage: number) => void;
   onClear?: () => void;
   renderResizeHandle: () => React.ReactNode;
 };
@@ -34,148 +37,132 @@ function CitationPreviewPanel({
   citationIsPdf,
   citationIsImage,
   citationViewerHeight,
-  evidenceMode,
-  sourceEvidence,
+  reviewQuery = "",
+  preferredPage,
+  webReviewSource = null,
   hasPreviousEvidence,
   hasNextEvidence,
   onPreviousEvidence,
   onNextEvidence,
-  onSelectEvidence,
   pdfZoom,
   onPdfZoomChange,
+  onPdfPageChange,
   onClear,
   renderResizeHandle,
 }: CitationPreviewPanelProps) {
-  const visibleEvidence = sourceEvidence.slice(0, evidenceMode === "exact" ? 3 : 8);
   return (
-    <div className="rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-      <div className="mb-2 flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-black/[0.06] bg-[#f2f2f7]">
-            <FileText className="h-4 w-4 text-[#3a3a3c]" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">
-              {citationUsesWebsite ? "Website citation" : "Citation preview"}
-            </p>
-            <p className="truncate text-[13px] text-[#1d1d1f]" title={citationFocus.sourceName}>
-              {citationFocus.sourceName}
-            </p>
-          </div>
+    <div className="overflow-hidden rounded-2xl border border-[#d2d2d7] bg-white shadow-sm">
+      {/* Header: source name + nav + open */}
+      <div className="flex items-center gap-2 border-b border-black/[0.06] bg-[#f8f8fb] px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[12px] font-medium text-[#1d1d1f]" title={citationFocus.sourceName}>
+            {citationFocus.sourceName}
+          </p>
+          {citationFocus.page ? (
+            <p className="text-[10px] text-[#8e8e93]">Page {citationFocus.page}</p>
+          ) : null}
         </div>
-        {citationOpenUrl ? (
-          <a
-            href={citationOpenUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#1d1d1f] px-2.5 py-1.5 text-[10px] text-white transition-colors hover:bg-[#3a3a3c]"
-          >
-            <ExternalLink className="h-3 w-3" />
-            Open
-          </a>
-        ) : null}
-      </div>
 
-      <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-black/[0.06] bg-white px-2 py-1.5">
-        <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Evidence navigation</p>
-        <div className="flex items-center gap-1">
+        {/* Prev / Next */}
+        <div className="flex items-center gap-0.5">
           <button
             type="button"
             onClick={onPreviousEvidence}
             disabled={!hasPreviousEvidence}
-            className="rounded-md border border-black/[0.08] px-2 py-0.5 text-[10px] text-[#4c4c50] hover:bg-[#f3f4f7] disabled:opacity-40"
+            title="Previous citation"
+            className="rounded-md p-1 text-[#4c4c50] hover:bg-black/[0.06] disabled:opacity-30"
           >
-            Previous
+            <ChevronLeft className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
             onClick={onNextEvidence}
             disabled={!hasNextEvidence}
-            className="rounded-md border border-black/[0.08] px-2 py-0.5 text-[10px] text-[#4c4c50] hover:bg-[#f3f4f7] disabled:opacity-40"
+            title="Next citation"
+            className="rounded-md p-1 text-[#4c4c50] hover:bg-black/[0.06] disabled:opacity-30"
           >
-            Next
+            <ChevronRight className="h-3.5 w-3.5" />
           </button>
         </div>
+
+        {/* Open in new tab (with text-fragment deep link) */}
+        {citationOpenUrl ? (
+          <a
+            href={citationOpenUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open source page at this passage"
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#1d1d1f] px-2 py-1 text-[10px] text-white transition-colors hover:bg-[#3a3a3c]"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Open
+          </a>
+        ) : null}
+
+        {/* Close */}
+        {onClear ? (
+          <button
+            type="button"
+            onClick={onClear}
+            title="Close preview"
+            className="rounded-md p-1 text-[#8e8e93] hover:bg-black/[0.06] hover:text-[#3a3a3c]"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
       </div>
 
-      {citationRawUrl && citationIsPdf ? (
-        <CitationPdfPreview
-          key={`${citationFocus.fileId || "file"}:${citationFocus.page || "1"}:${String(citationFocus.extract || "").slice(0, 64)}`}
-          fileUrl={citationRawUrl}
-          page={citationFocus.page}
-          highlightText={citationFocus.extract || citationFocus.claimText || ""}
-          highlightQuery={citationFocus.claimText}
-          highlightBoxes={citationFocus.highlightBoxes}
-          viewerHeight={citationViewerHeight}
-          initialZoom={pdfZoom}
-          onZoomChange={onPdfZoomChange}
-        />
-      ) : null}
-
-      {citationRawUrl && citationIsImage ? (
-        <div
-          className="flex w-full items-center justify-center overflow-hidden rounded-xl border border-black/[0.08] bg-white"
-          style={{ height: `${Math.max(220, citationViewerHeight)}px` }}
-        >
-          <img
-            src={citationRawUrl}
-            alt={citationFocus.sourceName}
-            className="max-h-full max-w-full object-contain"
+      {/* Content */}
+      <div className="p-3">
+        {citationRawUrl && citationIsPdf ? (
+          <CitationPdfPreview
+            key={`${citationFocus.fileId || "file"}:${preferredPage || citationFocus.page || "1"}:${String(citationFocus.extract || "").slice(0, 64)}`}
+            fileUrl={citationRawUrl}
+            page={preferredPage || citationFocus.page}
+            highlightText={citationFocus.extract || citationFocus.claimText || ""}
+            highlightQuery={reviewQuery || citationFocus.claimText}
+            highlightBoxes={citationFocus.highlightBoxes}
+            viewerHeight={citationViewerHeight}
+            initialZoom={pdfZoom}
+            onZoomChange={onPdfZoomChange}
+            onPageChange={onPdfPageChange}
           />
-        </div>
-      ) : null}
+        ) : null}
 
-      {citationUsesWebsite ? (
-        <div className="space-y-2 rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#3a3a3c]">
-          <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Website review</p>
-          <p className="leading-[1.45]">
-            {String(citationFocus.extract || citationFocus.claimText || "Website citation selected.").replace(/\s+/g, " ").trim()}
-          </p>
-          {visibleEvidence.length ? (
-            <div className="space-y-1.5 border-t border-black/[0.06] pt-2">
-              {visibleEvidence.map((card, index) => (
-                <button
-                  key={`${card.id}-${index}`}
-                  type="button"
-                  onClick={() => onSelectEvidence(card, index)}
-                  className="w-full rounded-lg border border-black/[0.08] px-2 py-1.5 text-left text-[11px] text-[#1d1d1f] hover:bg-[#f7f8fc]"
-                >
-                  {String(card.extract || card.title || "").replace(/\s+/g, " ").trim().slice(0, evidenceMode === "exact" ? 140 : 280)}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {citationWebsiteUrl ? (
-            <a
-              href={citationWebsiteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[11px] text-[#0a66d9] hover:text-[#0750ab]"
-            >
-              <ExternalLink className="h-3 w-3" />
-              Open website source
-            </a>
-          ) : null}
-        </div>
-      ) : null}
+        {citationRawUrl && citationIsImage ? (
+          <div
+            className="flex w-full items-center justify-center overflow-hidden rounded-xl border border-black/[0.08] bg-[#f5f5f7]"
+            style={{ height: `${Math.max(220, citationViewerHeight)}px` }}
+          >
+            <img
+              src={citationRawUrl}
+              alt={citationFocus.sourceName}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+        ) : null}
 
-      {!citationUsesWebsite && !citationRawUrl ? (
-        <div className="rounded-xl border border-black/[0.06] bg-white p-3 text-[12px] text-[#6e6e73]">
-          Source preview is unavailable for this citation.
-        </div>
-      ) : null}
+        {citationUsesWebsite ? (
+          <WebReviewViewer
+            sourceTitle={citationFocus.sourceName}
+            sourceUrl={citationWebsiteUrl}
+            reviewQuery={reviewQuery || citationFocus.claimText || ""}
+            focusText={citationFocus.extract || citationFocus.claimText || ""}
+            focusSelector={citationFocus.selector}
+            reviewSource={webReviewSource}
+            viewerHeight={citationViewerHeight}
+          />
+        ) : null}
 
-      {citationIsPdf || citationIsImage ? renderResizeHandle() : null}
+        {!citationUsesWebsite && !citationRawUrl ? (
+          <div className="rounded-xl border border-black/[0.06] bg-[#f5f5f7] p-3 text-[12px] text-[#6e6e73]">
+            Source preview is unavailable for this citation.
+          </div>
+        ) : null}
 
-      {onClear ? (
-        <button
-          type="button"
-          onClick={onClear}
-          className="mt-2 rounded-lg border border-black/[0.08] px-2.5 py-1.5 text-[11px] text-[#6e6e73] transition-colors hover:bg-black/[0.03]"
-        >
-          Close preview
-        </button>
-      ) : null}
+        {citationIsPdf || citationIsImage ? renderResizeHandle() : null}
+
+      </div>
     </div>
   );
 }

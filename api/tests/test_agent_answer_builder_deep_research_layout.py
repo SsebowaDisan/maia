@@ -105,7 +105,11 @@ def test_deep_research_response_strips_operational_sections_from_report_content(
                 "## Delivery Status\n"
                 "- No email\n\n"
                 "## Contract Gate\n"
-                "- Final response ready: no."
+                "- Final response ready: no.\n\n"
+                "## Verification and Quality Assessment\n"
+                "- 4/8 claims supported.\n\n"
+                "## Recommended Next Steps\n"
+                "- Internal action item."
             ),
         },
         verification_report=None,
@@ -116,3 +120,43 @@ def test_deep_research_response_strips_operational_sections_from_report_content(
     assert "### Detailed Analysis" in answer
     assert "noisy ops section" not in answer
     assert "## Delivery Status" not in answer
+    assert "## Contract Gate" not in answer
+    assert "## Verification and Quality Assessment" not in answer
+    assert "## Recommended Next Steps" not in answer
+
+
+def test_deep_research_response_strips_contract_noise_and_low_signal_subsections() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(message="make research online about uganda", agent_mode="deep_search"),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__research_depth_tier": "deep_research",
+            "__latest_report_content": (
+                "## Uganda Report\n"
+                "### Executive Summary\n"
+                "make research online about uganda Contract objective: make the research online about uganda "
+                "Required outputs: summary report.\n\n"
+                "### Detailed Analysis\n"
+                "Uganda has diverse geography and rich cultural traditions.\n\n"
+                "### Highlights\n"
+                "- noisy list entry one\n"
+                "- noisy list entry two\n\n"
+                "### Reference Links\n"
+                "- [Source](https://example.com)\n\n"
+                "### Recommended Next Steps\n"
+                "- Run pip install playwright"
+            ),
+        },
+        verification_report=None,
+    )
+
+    assert "Contract objective:" not in answer
+    assert "Required outputs:" not in answer
+    assert "### Highlights" not in answer
+    assert "### Reference Links" not in answer
+    assert "### Recommended Next Steps" not in answer
+    assert "### Detailed Analysis" in answer

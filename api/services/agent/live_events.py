@@ -10,7 +10,58 @@ from typing import Any
 from api.services.agent.activity import get_activity_store
 from api.services.agent.event_envelope import build_event_envelope, merge_event_envelope_data
 from api.services.agent.events import EVENT_SCHEMA_VERSION, infer_stage, infer_status
+from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 from api.services.agent.zoom_history import enrich_event_data_with_zoom
+
+# T5: Thought bubble narration cache — keyed by (event_type, title_first_60_chars)
+_NARRATION_CACHE: dict[str, str] = {}
+
+_NARRATION_EVENT_TYPES = frozenset({
+    "browser_navigate", "browser_extract", "evidence_crystallized",
+    "trust_score_updated", "retrieval_fused", "verification_started",
+    "verification_completed", "research_branch_completed", "research_tree_started",
+    "tool_progress",
+})
+
+
+def build_event_narration(*, event_type: str, title: str, detail: str = "") -> str:
+    """Generate a short first-person narration for a high-importance theatre event.
+
+    Returns an empty string if LLM narration is disabled or the call fails.
+    Cached by (event_type, title[:60]) so identical events never re-generate.
+    """
+    if not env_bool("MAIA_AGENT_LLM_NARRATION_ENABLED", default=True):
+        return ""
+    if event_type not in _NARRATION_EVENT_TYPES:
+        return ""
+    cache_key = f"{event_type}:{title[:60]}"
+    if cache_key in _NARRATION_CACHE:
+        return _NARRATION_CACHE[cache_key]
+    context = _clean_text(f"{title}. {detail}"[:200])
+    if not context:
+        return ""
+    response = call_json_response(
+        system_prompt=(
+            "You narrate business intelligence agent actions as a first-person thought bubble. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            'Return JSON: {"narration": "..."}\n'
+            "Rules:\n"
+            "- First person: start with 'I' or 'Opening', 'Found', 'Checking', etc.\n"
+            "- Max 12 words. No punctuation at end. Be specific about what is happening.\n"
+            f"- Event: {context}"
+        ),
+        temperature=0.0,
+        timeout_seconds=6,
+        max_tokens=40,
+    )
+    normalized = sanitize_json_value(response) if isinstance(response, dict) else {}
+    narration = ""
+    if isinstance(normalized, dict):
+        narration = _clean_text(str(normalized.get("narration") or ""))[:120]
+    _NARRATION_CACHE[cache_key] = narration
+    return narration
 
 
 def _utc_now_iso() -> str:
@@ -156,6 +207,13 @@ def _normalize_live_event(event: dict[str, Any]) -> dict[str, Any]:
     if not replay_importance:
         replay_importance = _clean_text(data.get("event_replay_importance")) or "normal"
     data["replay_importance"] = replay_importance
+    # T5: Add narration for critical/high importance events
+    if replay_importance in ("critical", "high") and not data.get("narration"):
+        _title = _clean_text(normalized.get("title") or data.get("title") or "")
+        _detail = _clean_text(normalized.get("detail") or data.get("detail") or "")
+        _narration = build_event_narration(event_type=event_type, title=_title, detail=_detail)
+        if _narration:
+            data["narration"] = _narration
     timeline = data.get("timeline")
     if not isinstance(timeline, dict):
         timeline = {}

@@ -222,6 +222,8 @@ function DocumentPdfScene({
   );
 }
 
+type RoadmapStep = { toolId: string; title: string; whyThisStep: string };
+
 type DocumentFallbackSceneProps = {
   activeEventType: string;
   activeDetail: string;
@@ -233,6 +235,8 @@ type DocumentFallbackSceneProps = {
   documentHighlights: DocumentHighlight[];
   sceneText: string;
   stageFileName: string;
+  roadmapSteps?: RoadmapStep[];
+  roadmapActiveIndex?: number;
 };
 
 function isPlannerNarrativeEventType(eventType: string): boolean {
@@ -264,14 +268,17 @@ function DocumentFallbackScene({
   documentHighlights,
   sceneText,
   stageFileName,
+  roadmapSteps = [],
+  roadmapActiveIndex = -1,
 }: DocumentFallbackSceneProps) {
   const suppressPlannerNarrative = isPlannerNarrativeEventType(activeEventType);
   const narrativeText = suppressPlannerNarrative
     ? "Preparing execution roadmap..."
     : sceneText || activeDetail || "Preparing and updating document blocks...";
+  const hasRoadmap = roadmapSteps.length > 0;
 
   return (
-    <div className="absolute inset-0 px-4 py-3 text-white/85">
+    <div className="absolute inset-0 overflow-y-auto px-4 py-3 text-white/85">
       <InteractionOverlay
         sceneSurface="document"
         activeEventType={activeEventType}
@@ -284,36 +291,93 @@ function DocumentFallbackScene({
       />
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[12px] font-medium">{stageFileName}</span>
-        <span className="text-[10px] uppercase tracking-[0.08em] text-white/65">editing</span>
+        <span className="text-[10px] uppercase tracking-[0.08em] text-white/65">
+          {hasRoadmap ? "execution plan" : "editing"}
+        </span>
       </div>
-      <p className="mb-3 text-[11px] text-white/85">{narrativeText}</p>
-      {documentHighlights.length ? (
-        <div className="mb-3 space-y-1.5 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2">
-          {documentHighlights.map((item, index) => (
-            <p key={`${item.word}-inline-${index}`} className="line-clamp-2 text-[10px] text-white/90">
-              <span
-                className="rounded px-1 py-0.5 font-semibold"
-                style={{ backgroundColor: highlightBackground(item.color) }}
+      {!hasRoadmap ? (
+        <>
+          <p className="mb-3 text-[11px] text-white/85">{narrativeText}</p>
+          {documentHighlights.length ? (
+            <div className="mb-3 space-y-1.5 rounded-lg border border-white/20 bg-white/10 px-2.5 py-2">
+              {documentHighlights.map((item, index) => (
+                <p key={`${item.word}-inline-${index}`} className="line-clamp-2 text-[10px] text-white/90">
+                  <span
+                    className="rounded px-1 py-0.5 font-semibold"
+                    style={{ backgroundColor: highlightBackground(item.color) }}
+                  >
+                    {item.word || "highlight"}
+                  </span>{" "}
+                  {item.snippet}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {clipboardPreview ? (
+            <div className="mb-3 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[10px] text-white/90">
+              Clipboard: {clipboardPreview}
+            </div>
+          ) : null}
+          <div className="space-y-2">
+            <div className="h-2 w-[88%] rounded-full bg-white/15" />
+            <div className="h-2 w-[74%] rounded-full bg-white/10" />
+            <div className="h-2 w-[91%] rounded-full bg-white/15" />
+            <div className="h-2 w-[82%] rounded-full bg-white/10" />
+            <div className="h-2 w-[66%] rounded-full bg-white/15" />
+          </div>
+        </>
+      ) : (
+        <div className="space-y-1.5">
+          {roadmapSteps.map((step, index) => {
+            const isDone = index < roadmapActiveIndex;
+            const isActive = index === roadmapActiveIndex;
+            return (
+              <div
+                key={`roadmap-step-${index}`}
+                className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors ${
+                  isActive
+                    ? "border border-white/25 bg-white/15"
+                    : isDone
+                      ? "border border-white/10 bg-white/8"
+                      : "border border-white/[0.06] bg-white/[0.04]"
+                }`}
               >
-                {item.word || "highlight"}
-              </span>{" "}
-              {item.snippet}
-            </p>
-          ))}
+                {/* Checkbox */}
+                <div className="mt-[1px] flex h-4 w-4 shrink-0 items-center justify-center">
+                  {isDone ? (
+                    <div className="flex h-4 w-4 items-center justify-center rounded-full bg-[#34c759]">
+                      <svg viewBox="0 0 10 8" className="h-2.5 w-2.5 fill-none stroke-white stroke-[1.8]">
+                        <polyline points="1,4 3.5,6.5 9,1" />
+                      </svg>
+                    </div>
+                  ) : isActive ? (
+                    <div className="h-4 w-4 rounded-full border-2 border-white/60 border-t-white animate-spin" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border border-white/30" />
+                  )}
+                </div>
+                {/* Label */}
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`text-[11px] leading-tight ${
+                      isDone ? "text-white/45 line-through decoration-white/30" : isActive ? "font-medium text-white" : "text-white/55"
+                    }`}
+                  >
+                    {step.title}
+                  </p>
+                  {isActive && step.whyThisStep ? (
+                    <p className="mt-0.5 line-clamp-1 text-[10px] text-white/55">{step.whyThisStep}</p>
+                  ) : null}
+                </div>
+                {/* Step number */}
+                <span className={`mt-[1px] shrink-0 text-[10px] tabular-nums ${isDone ? "text-white/25" : isActive ? "text-white/60" : "text-white/25"}`}>
+                  {index + 1}
+                </span>
+              </div>
+            );
+          })}
         </div>
-      ) : null}
-      {clipboardPreview ? (
-        <div className="mb-3 rounded-lg border border-white/20 bg-white/10 px-2.5 py-1.5 text-[10px] text-white/90">
-          Clipboard: {clipboardPreview}
-        </div>
-      ) : null}
-      <div className="space-y-2">
-        <div className="h-2 w-[88%] rounded-full bg-white/15" />
-        <div className="h-2 w-[74%] rounded-full bg-white/10" />
-        <div className="h-2 w-[91%] rounded-full bg-white/15" />
-        <div className="h-2 w-[82%] rounded-full bg-white/10" />
-        <div className="h-2 w-[66%] rounded-full bg-white/15" />
-      </div>
+      )}
     </div>
   );
 }

@@ -11,7 +11,7 @@ def test_value_add_section_is_included_when_evidence_support_is_strong() -> None
         actions=[],
         sources=[],
         next_steps=[],
-        runtime_settings={},
+        runtime_settings={"__show_response_diagnostics": True},
         verification_report={
             "score": 92.0,
             "grade": "strong",
@@ -52,7 +52,7 @@ def test_value_add_section_is_hidden_when_contradictions_exist() -> None:
         actions=[],
         sources=[],
         next_steps=[],
-        runtime_settings={},
+        runtime_settings={"__show_response_diagnostics": True},
         verification_report={
             "score": 61.0,
             "grade": "fair",
@@ -89,7 +89,7 @@ def test_value_add_section_is_hidden_when_support_coverage_is_low() -> None:
         actions=[],
         sources=[],
         next_steps=[],
-        runtime_settings={},
+        runtime_settings={"__show_response_diagnostics": True},
         verification_report={
             "score": 55.0,
             "grade": "weak",
@@ -142,7 +142,7 @@ def test_answer_always_includes_evidence_citations_with_deduplicated_sources() -
         verification_report=None,
     )
     assert "## Evidence Citations" in answer
-    assert "- [1] Company About | https://example.com/about" in answer
+    assert "- [1] [Company About](https://example.com/about)" in answer
     assert "Duplicate row should not create a second citation." not in answer
 
 

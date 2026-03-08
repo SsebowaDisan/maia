@@ -54,6 +54,11 @@ from .language import (
     resolve_response_language,
 )
 from .pipeline import is_placeholder_api_key
+from .verification_contract import (
+    VERIFICATION_CONTRACT_VERSION,
+    build_web_review_content,
+    build_verification_evidence_items,
+)
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_URL_PATH_SEGMENTS = {
@@ -1219,9 +1224,11 @@ def _plan_adaptive_outline(
         "Rules:\n"
         "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
         "- Match detail level to user intent; direct questions should stay focused and concise.\n"
-        "- Use 1-6 sections.\n"
+        "- Use 1-5 sections.\n"
+        "- Prefer a NotebookLM-like flow: direct answer first, evidence-backed points next, concise source wrap-up.\n"
         "- Section titles must be specific, professional, and tied to concrete entities in the request/evidence.\n"
         "- Do not default to reusable company-profile or marketing-report skeletons unless explicitly requested.\n"
+        "- Do not include operational headings such as Delivery Status, Contract Gate, Verification, or Execution Issues.\n"
         "- If user intent is unclear/noisy, produce one section focused on a clarifying question instead of assumptions.\n"
         "- Do not invent facts.\n\n"
         f"Question:\n{question}\n\n"
@@ -1385,6 +1392,7 @@ def call_openai_fast_qa(
         "- Follow the provided response blueprint while adapting when evidence is missing.\n"
         "- Keep the answer directly relevant to the user's question.\n"
         "- Start with a direct answer in the first sentence.\n"
+        "- Keep a NotebookLM-style structure: short direct answer, key evidence-backed points, then concise sources.\n"
         "- Render blueprint sections as markdown headings only when there are multiple meaningful sections.\n"
         "- For direct questions, give a direct answer first, then provide evidence-backed supporting detail.\n"
         "- For broad or research-oriented questions, provide richer multi-section depth.\n"
@@ -1394,6 +1402,8 @@ def call_openai_fast_qa(
         "- Prefer complete sentences and coherent paragraphs over stylized snippets.\n"
         "- Keep section titles specific to the request domain; avoid generic reusable labels and reusable report skeletons.\n"
         "- Avoid promotional tone, filler, and repetitive phrasing.\n"
+        "- Keep tone calm and premium: simple, precise, low-noise writing with strong visual hierarchy.\n"
+        "- Do not include internal runtime sections such as Delivery Status, Contract Gate, Verification checks, or tool-failure logs.\n"
         "- Avoid unsupported inference; do not use 'typically', 'may', or similar hedging unless evidence explicitly indicates uncertainty.\n"
         "- For entity/detail lookup questions, provide exact fields from evidence instead of generic summaries.\n"
         "- When adding website links, avoid placeholder anchor text like 'here'; use meaningful link text.\n"
@@ -1456,14 +1466,14 @@ def call_openai_fast_qa(
                             "Never invent citations or pretend to have source evidence when none is provided. "
                             "Adapt structure to the user's question and available context; do not force fixed section templates. "
                             "Use concise sections and bullet points only when useful. "
-                            "Keep output professional and specific. "
+                            "Keep output professional, specific, and low-noise. "
                         )
                         if general_knowledge_mode
                         else (
                             "You are Maia. Provide faithful answers from indexed evidence. "
                             "Adapt structure to the user's question and evidence; do not force fixed section templates. "
                             "Use concise sections and bullet points only when useful. "
-                            "Keep output professional and specific. "
+                            "Keep output professional, specific, and low-noise. "
                         )
                         + f"{build_response_language_rule(requested_language=requested_language, latest_message=question)} "
                         + (
@@ -1764,7 +1774,7 @@ def run_fast_chat_turn(
                 _truncate_for_log(message, 220),
             )
             return None
-        answer = normalize_fast_answer(answer)
+        answer = normalize_fast_answer(answer, question=message)
         used_general_fallback = False
     else:
         logger.warning(
@@ -1784,7 +1794,7 @@ def run_fast_chat_turn(
         )
         used_general_fallback = bool(answer)
         if answer:
-            answer = normalize_fast_answer(answer)
+            answer = normalize_fast_answer(answer, question=message)
         else:
             answer = _build_no_relevant_evidence_answer(
                 message,
@@ -1855,8 +1865,9 @@ def run_fast_chat_turn(
         except Exception:
             map_depth = 4
         map_type = str(map_settings.get("map_type", "structure") or "structure").strip().lower()
-        if map_type not in {"structure", "evidence", "work_graph"}:
+        if map_type not in {"structure", "evidence", "work_graph", "context_mindmap"}:
             map_type = "structure"
+        build_map_type = "structure" if map_type == "context_mindmap" else map_type
         mindmap_payload = build_knowledge_map(
             question=message,
             context="\n\n".join(str(row.get("text", "") or "") for row in snippets[:8]),
@@ -1866,11 +1877,27 @@ def run_fast_chat_turn(
             include_reasoning_map=bool(map_settings.get("include_reasoning_map", True)),
             source_type_hint=str(map_settings.get("source_type_hint", "") or ""),
             focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
-            map_type=map_type,
+            map_type=build_map_type,
         )
+        if map_type == "context_mindmap":
+            mindmap_payload["map_type"] = "context_mindmap"
+            mindmap_payload["kind"] = "context_mindmap"
+            settings_payload = mindmap_payload.get("settings")
+            if isinstance(settings_payload, dict):
+                settings_payload["map_type"] = "context_mindmap"
         info_panel["mindmap"] = mindmap_payload
     if source_usage:
         info_panel["source_usage"] = source_usage
+    info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
+    normalized_evidence_items = build_verification_evidence_items(
+        snippets_with_refs=snippets_with_refs,
+        refs=refs,
+    )
+    if normalized_evidence_items:
+        info_panel["evidence_items"] = normalized_evidence_items
+        web_review_content = build_web_review_content(normalized_evidence_items)
+        if web_review_content:
+            info_panel["web_review_content"] = web_review_content
     if claim_signal_summary:
         info_panel["claim_signal_summary"] = claim_signal_summary
     if citation_quality_metrics:

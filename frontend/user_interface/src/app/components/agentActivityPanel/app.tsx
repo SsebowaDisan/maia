@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Pause, Play, SkipBack, SkipForward, Timer } from "lucide-react";
+import { AlertTriangle, Film, Pause, Play, SkipBack, SkipForward, Timer } from "lucide-react";
+import { ApprovalGateCard } from "./ApprovalGateCard";
 import { exportAgentRunEvents } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
 import { derivePhaseTimeline, resolveEventSourceUrl } from "./helpers";
@@ -10,6 +11,7 @@ import { PreviewTabsCard } from "./PreviewTabsCard";
 import { ReplayTimeline } from "./ReplayTimeline";
 import type { AgentActivityPanelProps } from "./types";
 import { useAgentActivityDerived } from "./useAgentActivityDerived";
+import { ResearchTodoList } from "./ResearchTodoList";
 
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
@@ -63,6 +65,8 @@ export function AgentActivityPanel({
   const [isExporting, setIsExporting] = useState(false);
   const [isTheaterView, setIsTheaterView] = useState(true);
   const [isFullscreenViewer, setIsFullscreenViewer] = useState(false);
+  const [isCinemaMode, setIsCinemaMode] = useState(false);
+  const [approvalDismissed, setApprovalDismissed] = useState<string>("");
   const [isFocusMode, setIsFocusMode] = useState(true);
   const [snapshotFailedEventId, setSnapshotFailedEventId] = useState("");
   const [sceneTransitionLabel, setSceneTransitionLabel] = useState("");
@@ -125,6 +129,8 @@ export function AgentActivityPanel({
     stageFileUrl,
     systemEvents,
     visibleEvents,
+    plannedRoadmapSteps,
+    roadmapActiveIndex,
   } = derived;
 
   const [stableSceneSurfaceKey, setStableSceneSurfaceKey] = useState(sceneSurfaceKey);
@@ -367,12 +373,26 @@ export function AgentActivityPanel({
   }, [jumpTarget?.nonce, orderedEvents]);
 
   useEffect(() => {
-    if (!isFullscreenViewer) {
+    if (!isFullscreenViewer && !isCinemaMode) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsFullscreenViewer(false);
+        setIsCinemaMode(false);
+      }
+      if (!isCinemaMode) return;
+      if (event.key === " " || event.code === "Space") {
+        event.preventDefault();
+        if (!streaming) setIsPlaying((prev) => !prev);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setCursor((prev) => Math.max(0, prev - 1));
+        setIsPlaying(false);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setCursor((prev) => Math.min(orderedEvents.length - 1, prev + 1));
+        setIsPlaying(false);
       }
     };
     const previousOverflow = document.body.style.overflow;
@@ -382,7 +402,7 @@ export function AgentActivityPanel({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [isFullscreenViewer]);
+  }, [isFullscreenViewer, isCinemaMode, streaming, orderedEvents.length]);
 
   useEffect(() => {
     if (!streaming) {
@@ -460,7 +480,9 @@ export function AgentActivityPanel({
     docBodyHint,
     sheetBodyHint,
     activeEventType: activeEvent?.event_type || sceneEvent?.event_type || "",
-    activeSceneData: mergedSceneData,
+    activeSceneData: plannedRoadmapSteps.length
+      ? { ...mergedSceneData, __roadmap_steps: plannedRoadmapSteps, __roadmap_active_index: roadmapActiveIndex }
+      : mergedSceneData,
     sceneDocumentUrl,
     sceneSpreadsheetUrl,
     onSnapshotError: () => {
@@ -492,6 +514,14 @@ export function AgentActivityPanel({
         </div>
 
         <div className="inline-flex items-center gap-1 rounded-xl border border-black/[0.08] bg-white/90 p-1 backdrop-blur">
+          <button
+            type="button"
+            onClick={() => setIsCinemaMode(true)}
+            className="rounded-lg p-2 text-[#6e6e73] transition hover:bg-[#f3f3f5]"
+            title="Cinema mode (Space/←/→/Esc)"
+          >
+            <Film className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -563,6 +593,13 @@ export function AgentActivityPanel({
 
       <PhaseTimeline phases={phaseTimeline} streaming={streaming} />
 
+      <ResearchTodoList
+        visibleEvents={visibleEvents}
+        plannedRoadmapSteps={plannedRoadmapSteps}
+        roadmapActiveIndex={roadmapActiveIndex}
+        streaming={streaming}
+      />
+
       <PreviewTabsCard
         previewTab={previewTab}
         setPreviewTab={setPreviewTab}
@@ -590,6 +627,101 @@ export function AgentActivityPanel({
         listRef={listRef}
       />
 
+      {isCinemaMode ? (
+        <div className="fixed inset-0 z-[9999] flex flex-col bg-[#0d1118]">
+          {/* Three-pane content */}
+          <div className="flex min-h-0 flex-1 gap-0">
+            {/* Left: phase info */}
+            <div className="flex w-[240px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/[0.08] p-4">
+              <p className="text-[10px] uppercase tracking-widest text-white/50">Research Phases</p>
+              {phaseTimeline.map((phase) => (
+                <div key={phase.key} className="space-y-0.5">
+                  <p className={`text-[11px] font-semibold ${
+                    phase.state === "active" ? "text-white" :
+                    phase.state === "completed" ? "text-white/60" :
+                    "text-white/25"
+                  }`}>{phase.label}</p>
+                  {phase.latestEventTitle ? (
+                    <p className="truncate text-[10px] text-white/35">{phase.latestEventTitle}</p>
+                  ) : null}
+                </div>
+              ))}
+              <div className="mt-auto space-y-1 border-t border-white/[0.08] pt-3">
+                <p className="text-[10px] text-white/40">Step {safeCursor + 1} / {orderedEvents.length}</p>
+                <p className="text-[11px] font-medium text-white/70">
+                  {activeEvent?.title ?? "Waiting…"}
+                </p>
+              </div>
+            </div>
+
+            {/* Center: scene */}
+            <div className="relative min-h-0 flex-1">
+              <DesktopViewer
+                {...sharedViewerProps}
+                fullscreen
+                onToggleTheaterView={() => setIsTheaterView((prev) => !prev)}
+                onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
+                onOpenFullscreen={() => {}}
+              />
+            </div>
+
+            {/* Right: events */}
+            <div className="flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-white/[0.08] p-4">
+              <p className="text-[10px] uppercase tracking-widest text-white/50">Evidence Trail</p>
+              <div className="space-y-1.5">
+                {visibleEvents.slice(-20).map((ev, i) => {
+                  const isActive = visibleEvents.indexOf(ev) === safeCursor;
+                  return (
+                    <button
+                      key={ev.event_id || i}
+                      type="button"
+                      onClick={() => { setCursor(visibleEvents.indexOf(ev)); setIsPlaying(false); }}
+                      className={`w-full rounded-lg px-2.5 py-1.5 text-left text-[10px] transition ${
+                        isActive
+                          ? "bg-white/15 text-white"
+                          : "text-white/55 hover:bg-white/10 hover:text-white/80"
+                      }`}
+                    >
+                      <p className="truncate font-medium">{ev.title}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom: scrubber + controls */}
+          <div className="flex shrink-0 items-center gap-3 border-t border-white/[0.08] bg-[#0d1118]/90 px-4 py-3 backdrop-blur">
+            <button
+              type="button"
+              onClick={() => setIsPlaying((prev) => !prev)}
+              disabled={streaming}
+              className="rounded-lg p-1.5 text-white/70 hover:bg-white/10 disabled:opacity-40"
+            >
+              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(orderedEvents.length - 1, 0)}
+              value={safeCursor}
+              onChange={(e) => { setCursor(Number(e.target.value)); setIsPlaying(false); }}
+              className="flex-1 accent-white/80"
+            />
+            <span className="shrink-0 text-[11px] tabular-nums text-white/50">
+              {safeCursor + 1}/{orderedEvents.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsCinemaMode(false)}
+              className="rounded-lg px-2.5 py-1.5 text-[11px] text-white/50 hover:bg-white/10 hover:text-white/80"
+            >
+              Esc
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <FullscreenViewerOverlay
         isOpen={isFullscreenViewer}
         isFocusMode={isFocusMode}
@@ -609,6 +741,31 @@ export function AgentActivityPanel({
         sceneText={sceneText}
         onSelectEvent={handleSelectEvent}
       />
+
+      {/* T7: Approval Gate Spotlight */}
+      {(() => {
+        if (!streaming) return null;
+        const approvalEvent = orderedEvents.slice().reverse().find(
+          (ev) => ev.event_type === "approval_required"
+        );
+        if (!approvalEvent) return null;
+        const eventId = String(approvalEvent.event_id || "");
+        if (approvalDismissed === eventId) return null;
+        const payload = ((approvalEvent.data ?? approvalEvent.metadata) ?? {}) as Record<string, unknown>;
+        const rawGate = String(payload.gate_color ?? payload.trust_gate_color ?? "amber").trim();
+        const gateColor: "amber" | "red" = rawGate === "red" ? "red" : "amber";
+        const trustScore = Number(payload.trust_score ?? 0.5);
+        const reason = String(payload.reason ?? payload.message ?? "").trim();
+        return (
+          <ApprovalGateCard
+            trustScore={trustScore}
+            gateColor={gateColor}
+            reason={reason}
+            onApprove={() => setApprovalDismissed(eventId)}
+            onCancel={() => setApprovalDismissed(eventId)}
+          />
+        );
+      })()}
     </div>
   );
 }

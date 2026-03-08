@@ -64,6 +64,13 @@ _STAGE_OVERRIDES: dict[str, EventStage] = {
     "retrieval_query_rewrite": "plan",
     "retrieval_fused": "tool",
     "retrieval_quality_assessed": "result",
+    "research_tree_started": "plan",
+    "research_branch_started": "plan",
+    "research_branch_completed": "result",
+    "evidence_crystallized": "result",
+    "trust_score_updated": "result",
+    "claim_contradiction_detected": "result",
+    "claim_contradiction_resolved": "result",
     "api_call_started": "tool",
     "api_call_completed": "tool",
     "verification_started": "result",
@@ -290,6 +297,18 @@ EVENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "approval_required": {"description": "Action requires human approval", "user_visible": True},
     "approval_granted": {"description": "Approval granted for action", "user_visible": True},
     "policy_blocked": {"description": "Policy blocked an action", "user_visible": True},
+    # S2: Research Tree
+    "research_tree_started": {"description": "Research tree decomposition started", "user_visible": True},
+    "research_branch_started": {"description": "Research branch activated", "user_visible": True},
+    "research_branch_completed": {"description": "Research branch results collected", "user_visible": True},
+    # S3: Claim-level synthesis
+    "evidence_crystallized": {"description": "High-quality evidence committed to answer", "user_visible": True},
+    "trust_score_updated": {"description": "Trust gate score updated", "user_visible": True},
+    "claim_contradiction_detected": {"description": "Conflicting claims detected across sources", "user_visible": True},
+    "claim_contradiction_resolved": {"description": "Conflicting claim resolved by JUDGE", "user_visible": True},
+    # Browser keyword highlighting
+    "browser_keyword_highlight": {"description": "Search keywords highlighted in page", "user_visible": True},
+    "clipboard_copy": {"description": "Text copied to clipboard", "user_visible": True},
 }
 
 CORE_EVENT_TYPES: tuple[str, ...] = (

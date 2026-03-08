@@ -287,10 +287,37 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
       continue;
     }
     const item = row as Record<string, unknown>;
+    const sourceMap = item.source && typeof item.source === "object" ? (item.source as Record<string, unknown>) : {};
+    const reviewLocation =
+      item.review_location && typeof item.review_location === "object"
+        ? (item.review_location as Record<string, unknown>)
+        : item.reviewLocation && typeof item.reviewLocation === "object"
+          ? (item.reviewLocation as Record<string, unknown>)
+          : {};
+    const highlightTarget =
+      item.highlight_target && typeof item.highlight_target === "object"
+        ? (item.highlight_target as Record<string, unknown>)
+        : item.highlightTarget && typeof item.highlightTarget === "object"
+          ? (item.highlightTarget as Record<string, unknown>)
+          : {};
+    const evidenceQuality =
+      item.evidence_quality && typeof item.evidence_quality === "object"
+        ? (item.evidence_quality as Record<string, unknown>)
+        : item.evidenceQuality && typeof item.evidenceQuality === "object"
+          ? (item.evidenceQuality as Record<string, unknown>)
+          : {};
+    const citationMap =
+      item.citation && typeof item.citation === "object" ? (item.citation as Record<string, unknown>) : {};
     const highlightBoxesRaw = Array.isArray(item.highlight_boxes)
       ? item.highlight_boxes
       : Array.isArray(item.highlightBoxes)
         ? item.highlightBoxes
+        : Array.isArray(highlightTarget.boxes)
+          ? highlightTarget.boxes
+          : highlightTarget.region && typeof highlightTarget.region === "object"
+            ? [highlightTarget.region]
+            : item.region && typeof item.region === "object"
+              ? [item.region]
         : [];
     const highlightBoxes = highlightBoxesRaw
       .map((entry) => normalizeHighlightBox(entry))
@@ -301,20 +328,34 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
     const source = normalizeText(
       String(item.source_name || item.source || item.title || `Indexed source ${index + 1}`),
     );
-    const extract = normalizeText(String(item.extract || item.snippet || item.title || "")).trim();
-    const score = toFiniteNumberOptional(item.strength_score ?? item.strengthScore);
-    const tier = toFiniteNumberOptional(item.strength_tier ?? item.strengthTier);
-    const confidence = toFiniteNumberOptional(item.confidence);
-    const charStart = toFiniteNumberOptional(item.char_start ?? item.charStart);
-    const charEnd = toFiniteNumberOptional(item.char_end ?? item.charEnd);
+    const extract = normalizeText(
+      String(item.extract || item.snippet || citationMap.quote || highlightTarget.phrase || item.title || ""),
+    ).trim();
+    const score = toFiniteNumberOptional(item.strength_score ?? item.strengthScore ?? evidenceQuality.score);
+    const tier = toFiniteNumberOptional(item.strength_tier ?? item.strengthTier ?? evidenceQuality.tier);
+    const confidence = toFiniteNumberOptional(item.confidence ?? evidenceQuality.confidence);
+    const charStart = toFiniteNumberOptional(item.char_start ?? item.charStart ?? highlightTarget.char_start ?? highlightTarget.charStart);
+    const charEnd = toFiniteNumberOptional(item.char_end ?? item.charEnd ?? highlightTarget.char_end ?? highlightTarget.charEnd);
+    const selector = normalizeText(
+      String(
+        item.selector ||
+          highlightTarget.selector ||
+          reviewLocation.selector ||
+          "",
+      ),
+    ).trim();
+    const reviewSurface = normalizeText(String(reviewLocation.surface || "")).trim().toLowerCase();
+    const inferredSourceType =
+      normalizeText(String(item.source_type || item.sourceType || sourceMap.type || "")).trim().toLowerCase() ||
+      (reviewSurface === "web" ? "web" : reviewSurface === "pdf" ? "pdf" : "");
     cards.push({
       id: normalizeId(item.id ?? item.evidence_id ?? item.evidenceId, `evidence-${index + 1}`),
       title: normalizeText(String(item.title || `Evidence [${index + 1}]`)),
       source: source || "Indexed source",
-      sourceType: normalizeText(String(item.source_type || item.sourceType || "")).toLowerCase() || undefined,
-      sourceUrl: normalizeHttpUrl(item.source_url ?? item.sourceUrl) || undefined,
-      page: normalizeText(String(item.page || "")).trim() || undefined,
-      fileId: normalizeText(String(item.file_id || item.fileId || "")).trim() || undefined,
+      sourceType: inferredSourceType || undefined,
+      sourceUrl: normalizeHttpUrl(item.source_url ?? item.sourceUrl ?? sourceMap.url ?? reviewLocation.source_url ?? reviewLocation.sourceUrl) || undefined,
+      page: normalizeText(String(item.page ?? sourceMap.page ?? reviewLocation.page ?? "")).trim() || undefined,
+      fileId: normalizeText(String(item.file_id ?? item.fileId ?? sourceMap.file_id ?? sourceMap.fileId ?? reviewLocation.file_id ?? reviewLocation.fileId ?? "")).trim() || undefined,
       extract: extract || "No extract available for this citation.",
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
       confidence: typeof confidence === "number" ? confidence : undefined,
@@ -324,8 +365,9 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
       eventRefs: eventRefs.length ? eventRefs : undefined,
       strengthScore: typeof score === "number" ? score : undefined,
       strengthTier: typeof tier === "number" ? tier : undefined,
-      matchQuality: normalizeText(String(item.match_quality || item.matchQuality || "")).trim() || undefined,
-      unitId: normalizeText(String(item.unit_id || item.unitId || "")).trim() || undefined,
+      matchQuality: normalizeText(String(item.match_quality || item.matchQuality || evidenceQuality.match_quality || evidenceQuality.matchQuality || "")).trim() || undefined,
+      unitId: normalizeText(String(item.unit_id || item.unitId || highlightTarget.unit_id || highlightTarget.unitId || "")).trim() || undefined,
+      selector: selector || undefined,
       charStart: typeof charStart === "number" ? charStart : undefined,
       charEnd: typeof charEnd === "number" ? charEnd : undefined,
     });
@@ -412,6 +454,7 @@ function parseEvidence(
     const eventRefs = parseStringListAttribute(details, "data-event-refs", "data-event-ref");
     const matchQuality = (details.getAttribute("data-match-quality") || "").trim() || undefined;
     const unitId = (details.getAttribute("data-unit-id") || "").trim() || undefined;
+    const selector = normalizeText(details.getAttribute("data-selector") || "").trim() || undefined;
     const rawCharStart = Number(details.getAttribute("data-char-start") || "");
     const rawCharEnd = Number(details.getAttribute("data-char-end") || "");
     const charStart = Number.isFinite(rawCharStart) ? rawCharStart : undefined;
@@ -437,6 +480,7 @@ function parseEvidence(
       strengthTier,
       matchQuality,
       unitId,
+      selector,
       charStart,
       charEnd,
     };

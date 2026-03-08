@@ -389,6 +389,67 @@ function useAgentActivityDerived({
     return cursorFromEvent(sceneEvent);
   }, [activeEvent, sceneEvent]);
 
+  type RoadmapStep = { toolId: string; title: string; whyThisStep: string };
+
+  const { plannedRoadmapSteps, roadmapActiveIndex } = useMemo(() => {
+    let planSteps: RoadmapStep[] = [];
+    for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
+      const event = visibleEvents[i];
+      const eventType = String(event.event_type || "").toLowerCase();
+      if (eventType === "plan_ready" || eventType === "plan_candidate") {
+        const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
+        if (Array.isArray(payload.steps) && payload.steps.length > 0) {
+          planSteps = (payload.steps as Record<string, unknown>[]).map((s) => ({
+            toolId: String(s.tool_id || ""),
+            title: String(s.title || ""),
+            whyThisStep: String(s.why_this_step || ""),
+          }));
+          break;
+        }
+      }
+    }
+    if (!planSteps.length) {
+      return { plannedRoadmapSteps: [] as RoadmapStep[], roadmapActiveIndex: -1 };
+    }
+    let maxActiveIndex = -1;
+    let hasEnteredExecution = false;
+    for (const event of visibleEvents) {
+      const eventType = String(event.event_type || "").toLowerCase();
+      const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
+      if (eventType === "plan_ready") {
+        hasEnteredExecution = true;
+      }
+      if (hasEnteredExecution && eventType === "workspace.sheets.track_step") {
+        const stepName = String(payload.step_name || "");
+        const stepMatch = stepName.match(/^(\d+)\./);
+        if (stepMatch) {
+          const stepNum = parseInt(stepMatch[1], 10);
+          if (Number.isFinite(stepNum) && stepNum >= 1) {
+            maxActiveIndex = Math.max(maxActiveIndex, stepNum - 1);
+          }
+        }
+      }
+    }
+    if (!hasEnteredExecution) {
+      let maxPlanStepSeen = -1;
+      for (const event of visibleEvents) {
+        const eventType = String(event.event_type || "").toLowerCase();
+        const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
+        if (eventType === "llm.plan_step") {
+          const stepNum = Number(payload.step);
+          if (Number.isFinite(stepNum) && stepNum >= 1) {
+            maxPlanStepSeen = Math.max(maxPlanStepSeen, stepNum - 1);
+          }
+        }
+      }
+      maxActiveIndex = maxPlanStepSeen;
+    }
+    return {
+      plannedRoadmapSteps: planSteps,
+      roadmapActiveIndex: Math.min(maxActiveIndex, planSteps.length - 1),
+    };
+  }, [visibleEvents]);
+
   return {
     activeEvent,
     activeRoleKey,
@@ -436,6 +497,8 @@ function useAgentActivityDerived({
     stageFileUrl,
     systemEvents,
     visibleEvents,
+    plannedRoadmapSteps,
+    roadmapActiveIndex,
   };
 }
 

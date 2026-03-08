@@ -363,6 +363,7 @@ function resolveCitationFocusFromAnchor(params: {
   const strengthTierAttr = Number(strengthTierAttrRaw);
   const matchQualityAttr = (citationAnchor.getAttribute("data-match-quality") || "").trim();
   const unitIdAttr = (citationAnchor.getAttribute("data-unit-id") || "").trim();
+  const selectorAttr = (citationAnchor.getAttribute("data-selector") || "").trim();
   const charStartAttrRaw = (citationAnchor.getAttribute("data-char-start") || "").trim();
   const charEndAttrRaw = (citationAnchor.getAttribute("data-char-end") || "").trim();
   const charStartAttr = Number(charStartAttrRaw);
@@ -460,6 +461,7 @@ function resolveCitationFocusFromAnchor(params: {
     strengthTier,
     matchQuality: matchQualityAttr || matchedEvidence?.matchQuality,
     unitId: unitIdAttr || matchedEvidence?.unitId,
+    selector: selectorAttr || matchedEvidence?.selector,
     charStart: charStartAttrRaw && Number.isFinite(charStartAttr) ? charStartAttr : matchedEvidence?.charStart,
     charEnd: charEndAttrRaw && Number.isFinite(charEndAttr) ? charEndAttr : matchedEvidence?.charEnd,
     graphNodeIds: matchedEvidence?.graphNodeIds,

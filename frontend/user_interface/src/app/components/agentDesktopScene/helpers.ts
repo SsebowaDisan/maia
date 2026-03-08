@@ -128,12 +128,9 @@ function parseBrowserFindState(
     : Math.max(highlightRegions.length, semanticFindResults.length);
   const showFindOverlay =
     isBrowserScene &&
-    Boolean(findQuery || dedupedBrowserKeywords.length || highlightRegions.length || semanticFindResults.length) &&
     (activeEventType === "browser_find_in_page" ||
       activeEventType === "browser_keyword_highlight" ||
-      activeEventType === "browser_copy_selection" ||
-      highlightRegions.length > 0 ||
-      semanticFindResults.length > 0);
+      activeEventType === "browser_copy_selection");
 
   return { dedupedBrowserKeywords, findMatchCount, findQuery, showFindOverlay, semanticFindResults };
 }
