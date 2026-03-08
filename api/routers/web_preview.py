@@ -2,17 +2,31 @@ from __future__ import annotations
 
 import html
 import ipaddress
-import json
 import re
 import threading
 from time import monotonic
 from typing import Any
-from urllib.parse import quote_plus, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from api.routers.web_preview_fetch_helpers import (
+    build_reader_page as _build_reader_page_impl,
+)
+from api.routers.web_preview_fetch_helpers import fetch_html as _fetch_html_impl
+from api.routers.web_preview_fetch_helpers import (
+    is_skeleton_html as _is_skeleton_html_impl,
+)
+from api.routers.web_preview_fetch_helpers import (
+    playwright_available as _playwright_available_impl,
+)
+from api.routers.web_preview_fetch_helpers import (
+    try_playwright_fetch as _try_playwright_fetch_impl,
+)
+from api.routers.web_preview_render_helpers import (
+    sanitize_and_inject_preview_html as _sanitize_and_inject_preview_html_impl,
+)
 from api.services.agent.llm_runtime import call_json_response, env_bool
 
 router = APIRouter(prefix="/api/web", tags=["web"])
@@ -51,7 +65,6 @@ def _should_uncloak_tag(raw_tag: str) -> bool:
     if not class_value:
         return False
 
-    # Keep navigation/overlay containers hidden to avoid showing opened mobile/mega menus.
     hide_tokens = ("popup", "dropdown", "menu", "nav", "header", "fixed", "offcanvas")
     if any(token in class_value for token in hide_tokens):
         return False
@@ -67,7 +80,6 @@ def _should_uncloak_tag(raw_tag: str) -> bool:
     if any(token in class_value for token in show_tokens):
         return True
 
-    # Keep desktop media containers visible when scripts are stripped.
     if "hidden lg:block" in class_value:
         return True
 
@@ -355,239 +367,31 @@ def _preview_fetch_error_html(*, source_url: str, detail: str) -> str:
 
 
 def _fetch_html(url: str) -> tuple[str, str]:
-    now = monotonic()
-    with _PREVIEW_CACHE_LOCK:
-        cached = _PREVIEW_HTML_CACHE.get(url)
-        if cached and now < float(cached[0]):
-            return cached[1], cached[2]
-
-    request = Request(
+    return _fetch_html_impl(
         url,
-        method="GET",
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36 MaiaPreview/1.0"
-            ),
-            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "identity",
-            "Connection": "close",
-        },
+        preview_cache_ttl_seconds=_PREVIEW_CACHE_TTL_SECONDS,
+        preview_max_bytes=_PREVIEW_MAX_BYTES,
+        preview_timeout_seconds=_PREVIEW_TIMEOUT_SECONDS,
+        preview_cache_lock=_PREVIEW_CACHE_LOCK,
+        preview_html_cache=_PREVIEW_HTML_CACHE,
+        preview_error_html_builder=_preview_error_html,
     )
-    try:
-        with urlopen(request, timeout=_PREVIEW_TIMEOUT_SECONDS) as response:
-            content_type = " ".join(str(response.headers.get("Content-Type", "")).split()).lower()
-            if "html" not in content_type and "xhtml" not in content_type:
-                return (
-                    _preview_error_html(
-                        title="Preview unavailable",
-                        detail=(
-                            "This source is not an HTML page. Use Open to view the original "
-                            "resource in a new tab."
-                        ),
-                        source_url=str(response.geturl() or url),
-                    ),
-                    str(response.geturl() or url),
-                )
-            chunks: list[bytes] = []
-            total = 0
-            while True:
-                chunk = response.read(65536)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > _PREVIEW_MAX_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Website preview payload is too large.",
-                    )
-                chunks.append(chunk)
-            payload = b"".join(chunks)
-            charset = str(response.headers.get_content_charset() or "").strip() or "utf-8"
-            try:
-                html_text = payload.decode(charset, errors="replace")
-            except Exception:
-                html_text = payload.decode("utf-8", errors="replace")
-            final_url = str(response.geturl() or url)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Website fetch failed: {exc}") from exc
-
-    with _PREVIEW_CACHE_LOCK:
-        _PREVIEW_HTML_CACHE[url] = (now + _PREVIEW_CACHE_TTL_SECONDS, html_text, final_url)
-        if len(_PREVIEW_HTML_CACHE) > 128:
-            stale_keys = [
-                key
-                for key, (expiry, _html, _final_url) in _PREVIEW_HTML_CACHE.items()
-                if now >= float(expiry)
-            ]
-            for key in stale_keys:
-                _PREVIEW_HTML_CACHE.pop(key, None)
-            overflow = len(_PREVIEW_HTML_CACHE) - 128
-            if overflow > 0:
-                for key in list(_PREVIEW_HTML_CACHE.keys())[:overflow]:
-                    _PREVIEW_HTML_CACHE.pop(key, None)
-    return html_text, final_url
-
-
-# ── Optional Playwright fetch (B) ────────────────────────────────────────────
-
-_PLAYWRIGHT_AVAILABLE: bool | None = None  # None = not yet probed
-_PLAYWRIGHT_TIMEOUT_MS = 20_000  # 20 s — heavy SPAs need time for networkidle
 
 
 def _playwright_available() -> bool:
-    global _PLAYWRIGHT_AVAILABLE
-    if _PLAYWRIGHT_AVAILABLE is None:
-        try:
-            import playwright.sync_api  # noqa: F401
-
-            _PLAYWRIGHT_AVAILABLE = True
-        except ImportError:
-            _PLAYWRIGHT_AVAILABLE = False
-    return bool(_PLAYWRIGHT_AVAILABLE)
+    return _playwright_available_impl()
 
 
 def _try_playwright_fetch(url: str) -> tuple[str, str] | None:
-    """Render *url* with headless Chromium and return (html, final_url).
-
-    Returns None if Playwright is not installed, the page fails, or times out.
-    Caller is responsible for caching the result.
-    """
-    if not _playwright_available():
-        return None
-    try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            try:
-                ctx = browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
-                    ),
-                    viewport={"width": 1280, "height": 900},
-                )
-                page = ctx.new_page()
-                page.goto(url, wait_until="networkidle", timeout=_PLAYWRIGHT_TIMEOUT_MS)
-                return page.content(), page.url or url
-            finally:
-                browser.close()
-    except Exception:
-        return None
-
-
-# ── BeautifulSoup skeleton detection + reader mode (C) ───────────────────────
-
-_SKELETON_MIN_HTML_BYTES = 5_000  # Ignore tiny pages — they're not skeletons
-_SKELETON_TEXT_RATIO = 0.04  # < 4% visible text / raw HTML → JS-rendered skeleton
+    return _try_playwright_fetch_impl(url)
 
 
 def _is_skeleton_html(html_text: str) -> bool:
-    """Return True when the page has almost no visible text (JS has not run yet)."""
-    if len(html_text) < _SKELETON_MIN_HTML_BYTES:
-        return False
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return False
-    soup = BeautifulSoup(html_text, "html.parser")
-    for tag in soup(["script", "style", "noscript", "head"]):
-        tag.decompose()
-    visible = soup.get_text(separator=" ", strip=True)
-    return len(visible) / max(1, len(html_text)) < _SKELETON_TEXT_RATIO
+    return _is_skeleton_html_impl(html_text)
 
 
 def _build_reader_page(*, html_text: str, source_url: str) -> str:
-    """Extract article content and return a minimal, styled reader-mode HTML page.
-
-    Falls back to the original *html_text* when BeautifulSoup is not installed
-    or no main content block can be found, so the caller can still pipe the
-    result through _sanitize_and_inject_preview_html.
-    """
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return html_text
-
-    soup = BeautifulSoup(html_text, "html.parser")
-
-    # Page title
-    title_el = soup.find("title")
-    page_title = (title_el.get_text(strip=True) if title_el else "")[:200]
-    if not page_title:
-        h1 = soup.find("h1")
-        page_title = (h1.get_text(strip=True) if h1 else urlparse(source_url).netloc)[:200]
-
-    # Main content — try semantic selectors from most to least specific
-    content = (
-        soup.find("article")
-        or soup.find(attrs={"role": "main"})
-        or soup.find("main")
-        or soup.find("body")
-    )
-    if not content:
-        return html_text
-
-    for junk in content(
-        ["script", "style", "noscript", "nav", "header", "footer", "aside", "form", "iframe", "svg"]
-    ):
-        junk.decompose()
-
-    # Absolutize img src so images load from the source domain
-    for img in content.find_all("img", src=True):
-        src = str(img.get("src", ""))
-        if src and not src.startswith(("http://", "https://", "data:", "//")):
-            img["src"] = urljoin(source_url, src)
-
-    content_html = str(content)
-    esc_source = html.escape(source_url, quote=True)
-    esc_title = html.escape(page_title, quote=True)
-    display_host = html.escape(urlparse(source_url).netloc or source_url)
-
-    return (
-        "<!doctype html><html><head>"
-        "<meta charset='utf-8'/>"
-        f"<title>{esc_title}</title>"
-        "<style>"
-        "body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;"
-        "background:#fff;color:#1d1d1f;line-height:1.65;font-size:16px;}"
-        ".maia-reader-wrap{max-width:720px;margin:0 auto;padding:24px 20px 60px;}"
-        ".maia-reader-banner{display:flex;align-items:center;gap:8px;padding:7px 12px;"
-        "background:#f5f5f7;border-radius:8px;margin-bottom:20px;font-size:12px;color:#86868b;}"
-        ".maia-reader-banner a{color:#0a60ff;text-decoration:none;flex:1;"
-        "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}"
-        ".maia-reader-badge{flex-shrink:0;background:#e5e5ea;border-radius:4px;"
-        "padding:2px 6px;font-size:10px;font-weight:600;letter-spacing:.02em;color:#636366;}"
-        "h1,h2,h3,h4,h5,h6{line-height:1.3;margin:1.4em 0 .5em;color:#1d1d1f;}"
-        "h1{font-size:1.75em;}h2{font-size:1.4em;}h3{font-size:1.2em;}"
-        "p{margin:.75em 0;}ul,ol{padding-left:1.5em;margin:.75em 0;}"
-        "li{margin:.25em 0;}"
-        "img{max-width:100%;height:auto;border-radius:8px;margin:.5em 0;}"
-        "a{color:#0a60ff;text-decoration:none;}a:hover{text-decoration:underline;}"
-        "blockquote{border-left:3px solid #d2d2d7;margin:1em 0;padding:.5em 1em;"
-        "color:#555;font-style:italic;}"
-        "pre{background:#f5f5f7;border-radius:6px;padding:1em;overflow:auto;font-size:.875em;}"
-        "code{background:#f5f5f7;border-radius:3px;padding:.1em .3em;font-size:.9em;}"
-        "pre code{background:transparent;padding:0;}"
-        "table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.9em;}"
-        "th,td{border:1px solid #d2d2d7;padding:.5em .75em;text-align:left;}"
-        "th{background:#f5f5f7;font-weight:600;}"
-        "figure{margin:1em 0;}figcaption{font-size:.875em;color:#86868b;margin-top:.3em;}"
-        "</style>"
-        "</head><body>"
-        "<div class='maia-reader-wrap'>"
-        "<div class='maia-reader-banner'>"
-        "<span class='maia-reader-badge'>Reader view</span>"
-        f"<a href='{esc_source}' target='_blank' rel='noopener noreferrer'>{display_host}</a>"
-        "</div>"
-        f"{content_html}"
-        "</div>"
-        "</body></html>"
-    )
+    return _build_reader_page_impl(html_text=html_text, source_url=source_url)
 
 
 def _sanitize_and_inject_preview_html(
@@ -598,245 +402,20 @@ def _sanitize_and_inject_preview_html(
     highlight_scope: str = _DEFAULT_HIGHLIGHT_SCOPE,
     preview_viewport: str = _DEFAULT_PREVIEW_VIEWPORT,
 ) -> str:
-    text = str(html_text or "")
-    lower = text.lower()
-    if "<html" not in lower:
-        text = f"<!doctype html><html><head></head><body>{text}</body></html>"
-    if "<head" not in text.lower():
-        text = re.sub(
-            r"(<html\b[^>]*>)",
-            r"\1<head></head>",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    if "<body" not in text.lower():
-        if re.search(r"</head>", text, flags=re.IGNORECASE):
-            text = re.sub(r"</head>", "</head><body>", text, count=1, flags=re.IGNORECASE)
-            if re.search(r"</html>", text, flags=re.IGNORECASE):
-                text = re.sub(r"</html>", "</body></html>", text, count=1, flags=re.IGNORECASE)
-            else:
-                text = f"{text}</body>"
-
-    # Strip only meta-refresh (would navigate the frame away) and the original viewport
-    # (we inject a controlled one). Keep scripts, iframes, embeds, and event handlers so
-    # pages render exactly as the original site intended.
-    text = re.sub(
-        r"<meta\b[^>]*http-equiv\s*=\s*['\"]?refresh['\"]?[^>]*>",
-        "",
-        text,
-        flags=re.IGNORECASE,
+    return _sanitize_and_inject_preview_html_impl(
+        html_text=html_text,
+        source_url=source_url,
+        highlight_phrases=highlight_phrases,
+        highlight_scope=highlight_scope,
+        preview_viewport=preview_viewport,
+        normalize_target_url_fn=_normalize_target_url,
+        should_uncloak_tag_fn=_should_uncloak_tag,
+        strip_cloak_attrs_from_tag_fn=_strip_cloak_attrs_from_tag,
+        normalize_highlight_scope_fn=_normalize_highlight_scope,
+        normalize_preview_viewport_fn=_normalize_preview_viewport,
+        default_highlight_scope=_DEFAULT_HIGHLIGHT_SCOPE,
+        default_preview_viewport=_DEFAULT_PREVIEW_VIEWPORT,
     )
-    text = re.sub(
-        r"<meta\b[^>]*\bname\s*=\s*(?:['\"]viewport['\"]|viewport)(?:\s[^>]*)?>",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    def _rewrite_anchor_href(match: re.Match[str]) -> str:
-        prefix = str(match.group(1) or "")
-        raw_href = " ".join(str(match.group(2) or "").split()).strip()
-        suffix = str(match.group(3) or "")
-        if raw_href.startswith("#"):
-            return f"{prefix}{html.escape(raw_href, quote=True)}{suffix}"
-        absolute = _normalize_target_url(urljoin(source_url, html.unescape(raw_href)))
-        preview_href = f"/api/web/preview?url={quote_plus(absolute)}" if absolute else "#"
-        safe_href = html.escape(preview_href, quote=True)
-        patched_suffix = re.sub(
-            r"\starget\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)",
-            "",
-            suffix,
-            flags=re.IGNORECASE,
-        )
-        patched_suffix = re.sub(
-            r"\srel\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)",
-            "",
-            patched_suffix,
-            flags=re.IGNORECASE,
-        )
-        patched_suffix = patched_suffix[:-1] + " target='_self' rel='noopener noreferrer'>"
-        return f"{prefix}{safe_href}{patched_suffix}"
-
-    text = re.sub(
-        r"(<a\b[^>]*\bhref=['\"])([^'\"]+)(['\"][^>]*>)",
-        _rewrite_anchor_href,
-        text,
-        flags=re.IGNORECASE,
-    )
-    scope = _normalize_highlight_scope(highlight_scope)
-    viewport_mode = _normalize_preview_viewport(preview_viewport)
-    viewport_meta = (
-        "<meta name='viewport' content='width=1280,initial-scale=1'/>"
-        if viewport_mode == "desktop"
-        else "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
-    )
-
-    style_block = (
-        "<style>"
-        ".maia-citation-region{"
-        "background:rgba(255,233,107,.2) !important;"
-        "border-radius:.5em;"
-        "box-shadow:inset 0 0 0 1px rgba(173,121,0,.22);"
-        "padding:.16em .26em;"
-        "}"
-        "mark.maia-citation-highlight{"
-        "background:#ffe96b !important;"
-        "color:inherit !important;"
-        "padding:.14em .24em;"
-        "margin:0 .01em;"
-        "border-radius:.24em;"
-        "line-height:1.45;"
-        "-webkit-box-decoration-break:clone;"
-        "box-decoration-break:clone;"
-        "box-shadow:0 0 0 1px rgba(173,121,0,.25);"
-        "}"
-        "body[data-maia-highlight-scope='tight'] mark.maia-citation-highlight{padding:.06em .14em;border-radius:.16em;line-height:1.25;}"
-        "body[data-maia-highlight-scope='sentence'] mark.maia-citation-highlight{padding:.16em .30em;border-radius:.26em;line-height:1.55;}"
-        "body[data-maia-highlight-scope='context'] mark.maia-citation-highlight,body[data-maia-highlight-scope='block'] mark.maia-citation-highlight{padding:.20em .40em;border-radius:.32em;line-height:1.65;}"
-        ".maia-citation-region mark.maia-citation-highlight{background:#ffe14f !important;}"
-        "mark.maia-citation-highlight.maia-citation-active{"
-        "outline:2px solid rgba(173,121,0,.45);"
-        "outline-offset:1px;"
-        "animation:maia-citation-land 1.8s ease-out 0.5s 1 forwards;"
-        "}"
-        "@keyframes maia-citation-land{"
-        "0%{background:#ffd000 !important;box-shadow:0 0 0 4px rgba(255,200,0,.45),0 0 0 1px rgba(173,121,0,.25);}"
-        "60%{background:#ffe96b !important;box-shadow:0 0 0 2px rgba(255,200,0,.2),0 0 0 1px rgba(173,121,0,.25);}"
-        "100%{background:#ffe96b !important;box-shadow:0 0 0 1px rgba(173,121,0,.25);}"
-        "}"
-        "</style>"
-    )
-    script_block = (
-        "<script>"
-        "(function(){"
-        "function run(attempt){"
-        "const phrases="
-        + json.dumps(highlight_phrases, ensure_ascii=True)
-        + ";"
-        "const highlightScope="
-        + json.dumps(scope, ensure_ascii=True)
-        + ";"
-        "const cleaned=[...new Set((phrases||[]).map((row)=>String(row||'').trim()).filter((row)=>row.length>=8))].slice(0,3);"
-        "if(!cleaned.length){return;}"
-        # Retry up to 4 times if the body isn't ready yet (JS-rendered pages)
-        "if(!document.body){if((attempt||0)<4){setTimeout(()=>run((attempt||0)+1),600);}return;}"
-        "document.body.setAttribute('data-maia-highlight-scope',highlightScope);"
-        "const skipTags=new Set(['SCRIPT','STYLE','NOSCRIPT','MARK','TEXTAREA','TITLE']);"
-        "function nearestBoundary(raw,idx,direction){"
-        "const marks=['.','!','?',String.fromCharCode(10)];"
-        "if(direction<0){let found=-1;for(const mark of marks){const pos=raw.lastIndexOf(mark,idx);if(pos>found){found=pos;}}return found;}"
-        "let found=raw.length;"
-        "for(const mark of marks){const pos=raw.indexOf(mark,idx);if(pos>=0&&pos<found){found=pos;}}"
-        "return found===raw.length?-1:found;"
-        "}"
-        "function expandedRange(raw,idx,queryLength){"
-        "let start=idx;let end=idx+queryLength;"
-        "if(highlightScope==='context'){start=Math.max(0,idx-90);end=Math.min(raw.length,idx+queryLength+90);}"
-        "if(highlightScope==='sentence'||highlightScope==='block'){"
-        "const left=nearestBoundary(raw,idx-1,-1);"
-        "const right=nearestBoundary(raw,idx+queryLength,1);"
-        "start=left>=0?left+1:0;"
-        "end=right>=0?right+1:raw.length;"
-        "}"
-        "while(start<raw.length&&/\\s/.test(raw[start])){start+=1;}"
-        "while(end>start&&/\\s/.test(raw[end-1])){end-=1;}"
-        "if(end<=start){start=idx;end=idx+queryLength;}"
-        "return [start,end];"
-        "}"
-        "function findAndMark(phrase,maxHits){"
-        "const query=String(phrase||'');"
-        "if(!query){return 0;}"
-        "const qLower=query.toLowerCase();"
-        "const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode(node){"
-        "if(!node||!node.parentElement){return NodeFilter.FILTER_REJECT;}"
-        "if(skipTags.has(node.parentElement.tagName)){return NodeFilter.FILTER_REJECT;}"
-        "const value=String(node.nodeValue||'');"
-        "if(!value||value.trim().length<qLower.length){return NodeFilter.FILTER_REJECT;}"
-        "if(String(node.parentElement.className||'').includes('maia-citation-highlight')){return NodeFilter.FILTER_REJECT;}"
-        "return value.toLowerCase().includes(qLower)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;"
-        "}});"
-        "const nodes=[];let current=null;"
-        "while((current=walker.nextNode())){nodes.push(current);}"
-        "let hits=0;"
-        "for(const node of nodes){"
-        "if(hits>=maxHits){break;}"
-        "const raw=String(node.nodeValue||'');"
-        "const idx=raw.toLowerCase().indexOf(qLower);"
-        "if(idx<0){continue;}"
-        "const range=expandedRange(raw,idx,query.length);"
-        "const start=range[0];"
-        "const end=range[1];"
-        "const before=raw.slice(0,start);"
-        "const match=raw.slice(start,end);"
-        "const after=raw.slice(end);"
-        "const frag=document.createDocumentFragment();"
-        "if(before){frag.appendChild(document.createTextNode(before));}"
-        "const mark=document.createElement('mark');"
-        "mark.className='maia-citation-highlight';"
-        "mark.textContent=match;"
-        "frag.appendChild(mark);"
-        "if(after){frag.appendChild(document.createTextNode(after));}"
-        "if(node.parentNode){node.parentNode.replaceChild(frag,node);hits+=1;}"
-        "}"
-        "return hits;"
-        "}"
-        "let total=0;"
-        "for(const phrase of cleaned){"
-        "total+=findAndMark(phrase,total>0?1:3);"
-        "if(total>=3){break;}"
-        "}"
-        "const first=document.querySelector('mark.maia-citation-highlight');"
-        "if(first){first.classList.add('maia-citation-active');"
-        "const region=(first.closest('p,li,blockquote,td,th,h1,h2,h3,h4,h5,h6,figcaption')||first.parentElement);"
-        "if((highlightScope==='context'||highlightScope==='block')&&region&&region!==document.body&&region.classList){region.classList.add('maia-citation-region');}"
-        "const doScroll=()=>{try{first.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'});}catch(_err){}};"
-        "setTimeout(doScroll,500);"
-        "setTimeout(doScroll,1500);}"
-        "}"
-        # Three staggered attempts: immediate (static HTML), 800ms (JS-rendered), 2s (heavy SPAs)
-        "if(document.readyState==='loading'){"
-        "document.addEventListener('DOMContentLoaded',function(){"
-        "run(0);setTimeout(function(){run(1);},800);setTimeout(function(){run(2);},2000);"
-        "});"
-        "}else{"
-        "run(0);setTimeout(function(){run(1);},800);setTimeout(function(){run(2);},2000);"
-        "}"
-        "})();"
-        "</script>"
-    )
-    # <base> and viewport MUST go at the very START of <head> so the browser
-    # resolves all subsequent relative CSS/JS/image URLs against the source domain
-    # before it begins fetching them. Injecting at </head> is too late — the
-    # browser has already started loading linked resources by then.
-    base_early = f"<base href='{html.escape(source_url, quote=True)}'/>{viewport_meta}"
-    head_open_re = re.compile(r"(<head\b[^>]*>)", re.IGNORECASE)
-    if head_open_re.search(text):
-        text = head_open_re.sub(lambda m: f"{m.group(1)}{base_early}", text, count=1)
-    else:
-        text = f"<head>{base_early}</head>{text}"
-
-    # Style overrides go at the END of <head> so they win over site CSS
-    if re.search(r"</head>", text, flags=re.IGNORECASE):
-        text = re.sub(
-            r"</head>",
-            lambda _match: f"{style_block}</head>",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    else:
-        text = f"{text}{style_block}"
-    if re.search(r"</body>", text, flags=re.IGNORECASE):
-        text = re.sub(
-            r"</body>",
-            lambda _match: f"{script_block}</body>",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    else:
-        text = f"{text}{script_block}"
-    return text
 
 
 @router.get("/preview", response_class=HTMLResponse)
@@ -862,13 +441,11 @@ def website_preview(
             content=_preview_fetch_error_html(source_url=normalized_url, detail=str(exc)),
             status_code=200,
         )
-    # B: JS-skeleton detected → try Playwright for a fully-rendered DOM.
-    # C: Still a skeleton (or Playwright unavailable) → fall back to reader mode.
+
     if _is_skeleton_html(html_text):
         pw = _try_playwright_fetch(normalized_url)
         if pw:
             html_text, final_url = pw
-            # Promote the Playwright result into the shared cache.
             now = monotonic()
             with _PREVIEW_CACHE_LOCK:
                 _PREVIEW_HTML_CACHE[normalized_url] = (

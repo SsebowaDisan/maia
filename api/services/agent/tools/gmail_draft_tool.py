@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+from typing import Any, Generator
+
+from api.services.agent.tools.base import (
+    AgentTool,
+    ToolExecutionContext,
+    ToolExecutionError,
+    ToolExecutionResult,
+    ToolMetadata,
+    ToolTraceEvent,
+)
+from api.services.agent.tools.gmail_live_desktop import (
+    desktop_mode_enabled,
+    desktop_mode_required,
+    stream_live_desktop_compose,
+)
+from api.services.agent.tools.gmail_tools_helpers import (
+    _attach_to_gmail_draft,
+    _chunk_text,
+    _extract_email,
+    _extract_subject,
+    _infer_dry_run,
+    _resolve_attachments,
+    _truthy,
+)
+
+class GmailDraftTool(AgentTool):
+    metadata = ToolMetadata(
+        tool_id="gmail.draft",
+        action_class="draft",
+        risk_level="medium",
+        required_permissions=["gmail.draft"],
+        execution_policy="auto_execute",
+        description="Create Gmail draft via Gmail API.",
+    )
+
+    def execute_stream(
+        self,
+        *,
+        context: ToolExecutionContext,
+        prompt: str,
+        params: dict[str, Any],
+    ) -> Generator[ToolTraceEvent, None, ToolExecutionResult]:
+        from api.services.agent.tools import gmail_tools as gmail_tools_module
+
+        to = str(params.get("to") or _extract_email(prompt)).strip()
+        if not to:
+            raise ToolExecutionError("`to` is required for Gmail draft.")
+        report_title = str(context.settings.get("__latest_report_title") or "").strip()
+        report_content = str(context.settings.get("__latest_report_content") or "").strip()
+        subject = str(params.get("subject") or report_title or _extract_subject(prompt)).strip()
+        body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
+        sender = str(params.get("from") or "").strip()
+        attachments = _resolve_attachments(
+            context=context,
+            params=params,
+        )
+        live_desktop = desktop_mode_enabled(context, params)
+        desktop_required = desktop_mode_required(context, params)
+
+        trace_events: list[ToolTraceEvent] = []
+        if attachments and live_desktop:
+            if desktop_required:
+                raise ToolExecutionError(
+                    "Live desktop draft does not support attachments yet. Set `live_desktop=false`."
+                )
+            attachment_fallback = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Attachments require Gmail API draft flow",
+                detail="Switching from live desktop to Gmail API to attach files",
+                data={"attachments": len(attachments)},
+            )
+            trace_events.append(attachment_fallback)
+            yield attachment_fallback
+            live_desktop = False
+        if live_desktop:
+            try:
+                desktop_result = yield from stream_live_desktop_compose(
+                    context=context,
+                    trace_events=trace_events,
+                    to=to,
+                    subject=subject,
+                    body=body,
+                    send=False,
+                )
+                draft_id = str(desktop_result.get("draft_id") or "")
+                compose_url = str(desktop_result.get("url") or "")
+                return ToolExecutionResult(
+                    summary=f"Gmail draft created for {to} via live desktop session.",
+                    content=(
+                        "Created Gmail draft via live browser desktop.\n"
+                        f"- To: {to}\n"
+                        f"- Subject: {subject}\n"
+                        f"- Compose URL: {compose_url or 'unknown'}\n"
+                        f"- Draft ID: {draft_id or 'unknown'}"
+                    ),
+                    data={
+                        "to": to,
+                        "subject": subject,
+                        "draft_id": draft_id,
+                        "compose_url": compose_url,
+                        "delivery_mode": "playwright_desktop",
+                    },
+                    sources=[],
+                    next_steps=["Review draft in Gmail and send when ready."],
+                    events=trace_events,
+                )
+            except Exception as exc:
+                if desktop_required:
+                    raise ToolExecutionError(f"Live Gmail desktop draft failed: {exc}") from exc
+                fallback = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title="Live desktop draft unavailable",
+                    detail="Falling back to Gmail API draft flow",
+                    data={"reason": str(exc)},
+                )
+                trace_events.append(fallback)
+                yield fallback
+
+        open_compose_event = ToolTraceEvent(
+            event_type="email_open_compose",
+            title="Open Gmail compose window",
+            detail="Preparing draft surface",
+        )
+        trace_events.append(open_compose_event)
+        yield open_compose_event
+        draft_create_event = ToolTraceEvent(event_type="email_draft_create", title="Create Gmail draft", detail=to)
+        trace_events.append(draft_create_event)
+        yield draft_create_event
+        recipient_event = ToolTraceEvent(event_type="email_set_to", title="Apply recipient", detail=to)
+        trace_events.append(recipient_event)
+        yield recipient_event
+        subject_event = ToolTraceEvent(event_type="email_set_subject", title="Apply subject", detail=subject)
+        trace_events.append(subject_event)
+        yield subject_event
+        body_chunks = _chunk_text(body, chunk_size=160, max_chunks=10)
+        for chunk_index, chunk in enumerate(body_chunks, start=1):
+            body_event = ToolTraceEvent(
+                event_type="email_type_body",
+                title=f"Type email body {chunk_index}/{len(body_chunks)}",
+                detail=chunk,
+                data={"chunk_index": chunk_index, "chunk_total": len(body_chunks), "typed_preview": chunk},
+            )
+            trace_events.append(body_event)
+            yield body_event
+        composed_event = ToolTraceEvent(
+            event_type="email_set_body",
+            title="Compose body",
+            detail=f"{max(1, len(body))} characters",
+            data={"typed_preview": body_chunks[-1] if body_chunks else body[:140]},
+        )
+        trace_events.append(composed_event)
+        yield composed_event
+
+        connector = gmail_tools_module.get_connector_registry().build("gmail", settings=context.settings)
+        response = connector.create_draft(to=to, subject=subject, body=body, sender=sender)
+        draft = response.get("draft") if isinstance(response, dict) else {}
+        draft_id = str((draft or {}).get("id") or "")
+        message_id = str(((draft or {}).get("message") or {}).get("id") or "")
+        attached_labels = yield from _attach_to_gmail_draft(
+            connector=connector,
+            draft_id=draft_id,
+            attachments=attachments,
+            trace_events=trace_events,
+        )
+        ready_event = ToolTraceEvent(
+            event_type="email_ready_to_send",
+            title="Draft ready in Gmail",
+            detail=(
+                f"Draft ID: {draft_id or 'unknown'}"
+                if not attached_labels
+                else f"Draft ID: {draft_id or 'unknown'} with {len(attached_labels)} attachment(s)"
+            ),
+        )
+        trace_events.append(ready_event)
+        yield ready_event
+
+        attachment_lines = [f"- Attachments: {len(attached_labels)}"] if attached_labels else []
+        if attached_labels:
+            attachment_lines.extend([f"  - {item}" for item in attached_labels[:6]])
+        return ToolExecutionResult(
+            summary=f"Gmail draft created for {to}.",
+            content=(
+                f"Created Gmail draft.\n"
+                f"- To: {to}\n"
+                f"- Subject: {subject}\n"
+                f"- Draft ID: {draft_id or 'unknown'}\n"
+                f"- Message ID: {message_id or 'unknown'}\n"
+                + ("\n".join(attachment_lines) if attachment_lines else "- Attachments: 0")
+            ),
+            data={
+                "to": to,
+                "subject": subject,
+                "draft_id": draft_id,
+                "message_id": message_id,
+                "attachments_count": len(attached_labels),
+                "attachments": attached_labels[:16],
+                "delivery_mode": "gmail_api",
+            },
+            sources=[],
+            next_steps=["Review draft in Gmail and send when ready."],
+            events=trace_events,
+        )
+
+    def execute(
+        self,
+        *,
+        context: ToolExecutionContext,
+        prompt: str,
+        params: dict[str, Any],
+    ) -> ToolExecutionResult:
+        stream = self.execute_stream(context=context, prompt=prompt, params=params)
+        traces: list[ToolTraceEvent] = []
+        while True:
+            try:
+                traces.append(next(stream))
+            except StopIteration as stop:
+                result = stop.value
+                break
+        result.events = traces
+        return result
+

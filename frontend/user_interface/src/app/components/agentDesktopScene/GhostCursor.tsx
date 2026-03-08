@@ -10,38 +10,50 @@ type GhostCursorProps = {
 
 /**
  * T1 Ghost Cursor — animated cursor overlaid on the BrowserScene.
- * Follows cursor_x/cursor_y (0–100% of viewport) with smooth interpolation.
- * Renders as a proper macOS-style arrow cursor with drop shadow.
+ * Follows cursor_x/cursor_y (0–100% of viewport) with spring physics:
+ * natural overshoot and settling rather than a simple exponential lerp.
  */
 export function GhostCursor({ cursorX, cursorY }: GhostCursorProps) {
   const [displayX, setDisplayX] = useState<number>(cursorX ?? 50);
   const [displayY, setDisplayY] = useState<number>(cursorY ?? 50);
+
+  const posRef = useRef({ x: cursorX ?? 50, y: cursorY ?? 50 });
+  const targetRef = useRef({ x: cursorX ?? 50, y: cursorY ?? 50 });
   const rafRef = useRef<number | null>(null);
 
-  // Smooth lerp toward target cursor position
   useEffect(() => {
     if (cursorX == null || cursorY == null) return;
-    const targetX = cursorX;
-    const targetY = cursorY;
-    let currentX = displayX;
-    let currentY = displayY;
-    const SPEED = 0.18;
+    targetRef.current = { x: cursorX, y: cursorY };
+  }, [cursorX, cursorY]);
+
+  useEffect(() => {
+    if (cursorX == null || cursorY == null) return;
+    const SMOOTHING = 0.22;
+    const STOP_THRESHOLD = 0.03;
 
     const animate = () => {
-      currentX += (targetX - currentX) * SPEED;
-      currentY += (targetY - currentY) * SPEED;
-      setDisplayX(currentX);
-      setDisplayY(currentY);
-      if (Math.abs(targetX - currentX) + Math.abs(targetY - currentY) > 0.1) {
-        rafRef.current = requestAnimationFrame(animate);
+      const dx = targetRef.current.x - posRef.current.x;
+      const dy = targetRef.current.y - posRef.current.y;
+      if (Math.abs(dx) < STOP_THRESHOLD && Math.abs(dy) < STOP_THRESHOLD) {
+        posRef.current = { ...targetRef.current };
+      } else {
+        posRef.current.x += dx * SMOOTHING;
+        posRef.current.y += dy * SMOOTHING;
       }
+
+      setDisplayX(posRef.current.x);
+      setDisplayY(posRef.current.y);
+
+      rafRef.current = requestAnimationFrame(animate);
     };
+
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(animate);
+
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursorX, cursorY]);
+  }, [cursorX != null, cursorY != null]);
 
   if (cursorX == null || cursorY == null) return null;
 
@@ -58,7 +70,7 @@ export function GhostCursor({ cursorX, cursorY }: GhostCursorProps) {
         viewBox="0 0 14 20"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        style={{ filter: "drop-shadow(0 1px 4px rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(134,217,255,0.35))" }}
+        style={{ filter: "drop-shadow(0 1px 4px rgba(0,0,0,0.55)) drop-shadow(0 0 7px rgba(255,255,255,0.16))" }}
       >
         {/* Arrow body: tip at (1,1), vertical left side, diagonal right edge, tail */}
         <path

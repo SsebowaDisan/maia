@@ -1,5 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
-
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ClickRipple } from "./ClickRipple";
 import type { ClickRippleEntry } from "./ClickRipple";
 import { GhostCursor } from "./GhostCursor";
@@ -10,10 +9,12 @@ import {
   CopyPulse,
   FindOverlay,
   HighlightOverlay,
+  OpenedPagesRail,
   TargetFocusRing,
   VerifierConflictBadge,
   ZoomBadge,
 } from "./browser_scene_panels";
+import { useBrowserPageQueue } from "./browser_scene_page_queue";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
 type BrowserSceneProps = {
@@ -35,9 +36,6 @@ type BrowserSceneProps = {
   semanticFindResults: Array<{ term: string; confidence: number }>;
   highlightRegions: HighlightRegion[];
   onSnapshotError?: () => void;
-  providerLabel: string;
-  renderQualityLabel: string;
-  contentDensityLabel: string;
   readingMode: boolean;
   sceneText: string;
   scrollDirection: string;
@@ -55,6 +53,9 @@ type BrowserSceneProps = {
   zoomEscalationRequested: boolean;
   showFindOverlay: boolean;
   snapshotUrl: string;
+  renderQuality: string;
+  pageIndex: number | null;
+  openedPages: Array<{ url: string; title: string; pageIndex: number | null; reviewed: boolean }>;
   // T1: Ghost Cursor + Click Ripple + Interaction Trace
   cursorX?: number | null;
   cursorY?: number | null;
@@ -83,9 +84,6 @@ function BrowserScene({
   semanticFindResults,
   highlightRegions,
   onSnapshotError,
-  providerLabel,
-  renderQualityLabel,
-  contentDensityLabel,
   readingMode,
   sceneText,
   scrollDirection,
@@ -103,43 +101,165 @@ function BrowserScene({
   zoomEscalationRequested,
   showFindOverlay,
   snapshotUrl,
+  renderQuality,
+  pageIndex,
+  openedPages,
   cursorX = null,
   cursorY = null,
   isClickEvent = false,
   clickRipples = [],
   narration = null,
 }: BrowserSceneProps) {
-  const showSnapshotPrimary = Boolean(snapshotUrl);
+  const [snapshotErrored, setSnapshotErrored] = useState(false);
+  const statusChipLabel = blockedSignal
+    ? "Needs attention"
+    : readingMode
+      ? "Reading"
+      : action === "navigate"
+        ? "Navigating"
+        : action === "scroll"
+          ? "Scanning"
+          : action === "extract"
+        ? "Extracting"
+        : "";
+  const normalizedRenderQuality = String(renderQuality || "").trim().toLowerCase();
+  const lowQualitySignal =
+    normalizedRenderQuality === "low" ||
+    normalizedRenderQuality === "blocked" ||
+    normalizedRenderQuality === "none" ||
+    normalizedRenderQuality === "empty";
+  const { dedupedOpenedPages, activePageUrl, setSelectedPageUrl } = useBrowserPageQueue({
+    browserUrl,
+    openedPages,
+    pageIndex,
+  });
+  const surfaceHint = (findQuery || actionTargetLabel || activeDetail || "").slice(0, 180);
+  const proxyPreviewUrl = useMemo(() => {
+    const source = String(activePageUrl || "").trim();
+    if (!source || (!source.startsWith("http://") && !source.startsWith("https://"))) {
+      return "";
+    }
+    const params = new URLSearchParams();
+    params.set("url", source);
+    if (surfaceHint) {
+      params.set("highlight", surfaceHint);
+      params.set("claim", surfaceHint);
+      params.set("question", surfaceHint);
+    }
+    params.set("viewport", "desktop");
+    return `/api/web/preview?${params.toString()}`;
+  }, [activePageUrl, surfaceHint]);
+  const preferPreviewProxy =
+    Boolean(proxyPreviewUrl) &&
+    (blockedSignal ||
+      lowQualitySignal ||
+      !snapshotUrl ||
+      action === "navigate" ||
+      action === "scroll" ||
+      action === "extract");
 
-  // Track whether the current snapshot image has successfully loaded.
-  // Reset to false whenever the URL changes so we never flash the broken-image icon.
+  // Cross-fade snapshot transitions:
+  // - `snapshotReady` tracks whether the current URL has loaded.
+  // - `crossFadeUrl` holds the previous URL and is shown as a static underlay while the
+  //   next snapshot loads — giving a smooth dissolve instead of a skeleton flash.
   const [snapshotReady, setSnapshotReady] = useState(false);
+  const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
+  const [proxyLoaded, setProxyLoaded] = useState(false);
+  const prevSnapshotUrlRef = useRef<string>(snapshotUrl);
+  const showSnapshotPrimary = Boolean(snapshotUrl) && !snapshotErrored && !preferPreviewProxy;
+  const showProxyPreview = Boolean(proxyPreviewUrl) && (preferPreviewProxy || !showSnapshotPrimary);
   useEffect(() => {
+    if (!snapshotUrl || snapshotUrl === prevSnapshotUrlRef.current) return;
+    // Preserve the last-known good URL as the cross-fade background layer.
+    if (prevSnapshotUrlRef.current) setCrossFadeUrl(prevSnapshotUrlRef.current);
     setSnapshotReady(false);
+    setSnapshotErrored(false);
   }, [snapshotUrl]);
-
-  // Scroll impulse: when scrollPercent changes, briefly translate the scene to give
-  // a physical sense of the page moving, then spring back to resting position.
-  const prevScrollRef = useRef<number | null>(null);
-  const [scrollOffset, setScrollOffset] = useState(0);
-  const scrollSettledRef = useRef(true);
+  const handleSnapshotLoad = () => {
+    setSnapshotReady(true);
+    prevSnapshotUrlRef.current = snapshotUrl;
+    // Clear underlay after the fade-in transition completes.
+    setTimeout(() => setCrossFadeUrl(""), 400);
+  };
   useEffect(() => {
-    const prev = prevScrollRef.current;
-    prevScrollRef.current = scrollPercent;
-    if (prev === null || scrollPercent === null) return;
-    const delta = scrollPercent - prev;
-    if (Math.abs(delta) < 1.5) return;
-    // Scroll down → content moves up (negative offset); scroll up → positive
-    const direction = delta > 0 ? -1 : 1;
-    const magnitude = Math.min(Math.abs(delta) * 0.45, 26);
-    scrollSettledRef.current = false;
-    setScrollOffset(direction * magnitude);
-    const t = setTimeout(() => {
-      setScrollOffset(0);
-      scrollSettledRef.current = true;
-    }, 80);
-    return () => clearTimeout(t);
-  }, [scrollPercent]);
+    setProxyLoaded(false);
+  }, [proxyPreviewUrl]);
+
+  // Scroll interpolation: map scroll percentage to a subtle frame offset and ease
+  // toward it continuously to avoid jittery jump/kick effects.
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [syntheticScrollPercent, setSyntheticScrollPercent] = useState<number | null>(null);
+  const scrollTargetRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
+  const syntheticRafRef = useRef<number | null>(null);
+  const syntheticTickRef = useRef(0);
+  const effectiveScrollPercent = scrollPercent ?? syntheticScrollPercent;
+
+  useEffect(() => {
+    if (effectiveScrollPercent === null) {
+      return;
+    }
+    scrollTargetRef.current = Math.max(-14, Math.min(14, ((50 - effectiveScrollPercent) / 50) * 10));
+  }, [effectiveScrollPercent]);
+
+  useEffect(() => {
+    if (scrollPercent !== null) {
+      setSyntheticScrollPercent(null);
+      if (syntheticRafRef.current != null) {
+        cancelAnimationFrame(syntheticRafRef.current);
+        syntheticRafRef.current = null;
+      }
+      return;
+    }
+    const shouldSimulate =
+      action === "scroll" ||
+      action === "navigate" ||
+      action === "extract" ||
+      action === "verify" ||
+      readingMode;
+    if (!shouldSimulate) {
+      setSyntheticScrollPercent(null);
+      if (syntheticRafRef.current != null) {
+        cancelAnimationFrame(syntheticRafRef.current);
+        syntheticRafRef.current = null;
+      }
+      return;
+    }
+    const animate = () => {
+      syntheticTickRef.current = (syntheticTickRef.current + 0.55) % 100;
+      setSyntheticScrollPercent(syntheticTickRef.current);
+      syntheticRafRef.current = requestAnimationFrame(animate);
+    };
+    syntheticRafRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (syntheticRafRef.current != null) {
+        cancelAnimationFrame(syntheticRafRef.current);
+        syntheticRafRef.current = null;
+      }
+    };
+  }, [action, readingMode, scrollPercent]);
+
+  const showOverlayCursor = !showSnapshotPrimary;
+
+  useEffect(() => {
+    const animate = () => {
+      setScrollOffset((previous) => {
+        const delta = scrollTargetRef.current - previous;
+        if (Math.abs(delta) < 0.08) {
+          return scrollTargetRef.current;
+        }
+        return previous + delta * 0.16;
+      });
+      scrollRafRef.current = requestAnimationFrame(animate);
+    };
+    scrollRafRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
@@ -148,41 +268,19 @@ function BrowserScene({
         <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
         <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
         <div className="ml-2 flex-1 truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] text-white/85">
-          {browserUrl || "Searching the web and opening result pages..."}
+          {activePageUrl || "Searching the web and opening result pages..."}
         </div>
-        <div className="flex items-center gap-1.5 text-[10px]">
-          {providerLabel ? (
-            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
-              {providerLabel}
-            </span>
-          ) : null}
-          {renderQualityLabel ? (
-            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
-              quality: {renderQualityLabel}
-            </span>
-          ) : null}
-          {contentDensityLabel ? (
-            <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-white/85">
-              density: {contentDensityLabel}
-            </span>
-          ) : null}
-          {readingMode ? (
-            <span className="rounded-full border border-[#86d9ff]/60 bg-[#86d9ff]/20 px-2 py-0.5 text-[#d7f4ff]">
-              reading mode
-            </span>
-          ) : null}
-          {blockedSignal ? (
-            <span className="rounded-full border border-[#ff9b6a]/60 bg-[#ff9b6a]/20 px-2 py-0.5 text-[#ffd7c2]">
-              blocked
-            </span>
-          ) : null}
-        </div>
+        {statusChipLabel ? (
+          <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] text-white/85">
+            {statusChipLabel}
+          </span>
+        ) : null}
       </div>
 
       {showSnapshotPrimary ? (
         <div className="relative flex-1 overflow-hidden bg-white">
-          {/* Skeleton shown while loading — prevents the native broken-image icon */}
-          {!snapshotReady ? (
+          {/* Skeleton shown while loading and no cross-fade underlay is available */}
+          {!snapshotReady && !crossFadeUrl ? (
             <div className="absolute inset-0 flex items-center justify-center bg-[#f5f5f7]">
               <div className="space-y-2.5 w-[55%]">
                 <div className="h-2 rounded-full bg-black/10 animate-pulse" />
@@ -191,27 +289,38 @@ function BrowserScene({
               </div>
             </div>
           ) : null}
+          {/* Previous snapshot underlay — stays fully visible while next image loads,
+              giving a smooth cross-dissolve rather than a skeleton flash. */}
+          {crossFadeUrl && !snapshotReady ? (
+            <img
+              src={crossFadeUrl}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : null}
           <img
-            key={snapshotUrl}
             src={snapshotUrl}
             alt="Live browser capture"
             className={`h-full w-full object-cover ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
               transform: `translateY(${scrollOffset}px)`,
-              transition: scrollOffset === 0
-                ? "opacity 150ms, transform 420ms cubic-bezier(0.25,0.46,0.45,0.94)"
-                : "opacity 150ms",
+              transition: "opacity 320ms ease-in-out",
             }}
-            onLoad={() => setSnapshotReady(true)}
-            onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}
+            onLoad={handleSnapshotLoad}
+            onError={() => {
+              setSnapshotReady(false);
+              setSnapshotErrored(true);
+              onSnapshotError?.();
+            }}
           />
           {/* Slim scroll rail — only shown when scroll position is known */}
-          {scrollPercent !== null ? (
+          {effectiveScrollPercent !== null ? (
             <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] z-10">
               <div className="absolute inset-0 bg-black/[0.06]" />
               <div
                 className="absolute inset-x-0 rounded-full bg-black/30 transition-all duration-300"
-                style={{ height: "16%", top: `${Math.max(0, Math.min(84, scrollPercent))}%` }}
+                style={{ height: "16%", top: `${Math.max(0, Math.min(84, effectiveScrollPercent))}%` }}
               />
             </div>
           ) : null}
@@ -248,19 +357,42 @@ function BrowserScene({
             />
           ) : null}
           <CopyPulse copyPulseText={copyPulseText} copyPulseVisible={copyPulseVisible} />
-          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
-          <ClickRipple ripples={clickRipples} />
+          {showOverlayCursor ? (
+            <>
+              <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+              <ClickRipple ripples={clickRipples} />
+            </>
+          ) : null}
           <ThoughtBubble text={narration} />
         </div>
-      ) : canRenderLiveUrl ? (
+      ) : showProxyPreview || canRenderLiveUrl ? (
         <div className="relative flex-1 bg-white">
+          {!proxyLoaded ? (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#f5f5f7]">
+              <div className="space-y-2.5 w-[52%]">
+                <div className="h-2 rounded-full bg-black/10 animate-pulse" />
+                <div className="h-2 rounded-full bg-black/8 animate-pulse w-[80%]" />
+                <div className="h-2 rounded-full bg-black/10 animate-pulse w-[88%]" />
+              </div>
+            </div>
+          ) : null}
           <iframe
-            src={browserUrl}
+            src={proxyPreviewUrl || activePageUrl}
             title="Live website preview"
             className="h-full w-full border-0"
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
             referrerPolicy="no-referrer-when-downgrade"
+            onLoad={() => setProxyLoaded(true)}
           />
+          {effectiveScrollPercent !== null ? (
+            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] z-10">
+              <div className="absolute inset-0 bg-black/[0.06]" />
+              <div
+                className="absolute inset-x-0 rounded-full bg-black/30 transition-all duration-300"
+                style={{ height: "16%", top: `${Math.max(0, Math.min(84, effectiveScrollPercent))}%` }}
+              />
+            </div>
+          ) : null}
           <VerifierConflictBadge
             verifierConflict={verifierConflict}
             verifierConflictReason={verifierConflictReason}
@@ -331,7 +463,7 @@ function BrowserScene({
             </div>
           ) : null}
           {copyPulseVisible ? (
-            <div className="rounded-lg border border-[#ffdc80]/60 bg-[#fff5cf]/90 px-2.5 py-1.5 text-[11px] text-[#2f250f]">
+            <div className="rounded-lg border border-white/20 bg-white/8 px-2.5 py-1.5 text-[11px] text-white/90">
               Copied: {copyPulseText}
             </div>
           ) : null}
@@ -345,6 +477,22 @@ function BrowserScene({
           ) : null}
         </div>
       )}
+      {pageIndex !== null ? (
+        <div
+          className={`pointer-events-none absolute right-3 rounded-full border border-white/20 bg-black/55 px-2.5 py-1 text-[10px] text-white/85 ${
+            dedupedOpenedPages.length > 1 ? "bottom-12" : "bottom-3"
+          }`}
+        >
+          Page {Math.max(1, pageIndex)}
+        </div>
+      ) : null}
+      {dedupedOpenedPages.length > 1 ? (
+        <OpenedPagesRail
+          openedPages={dedupedOpenedPages}
+          activePageUrl={activePageUrl}
+          onSelectPage={setSelectedPageUrl}
+        />
+      ) : null}
     </div>
   );
 }

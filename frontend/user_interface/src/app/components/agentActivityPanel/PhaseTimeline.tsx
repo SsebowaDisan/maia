@@ -3,6 +3,8 @@ import type { ActivityPhaseRow } from "./helpers";
 interface PhaseTimelineProps {
   phases: ActivityPhaseRow[];
   streaming: boolean;
+  /** Total events processed so far — shown as a live step counter */
+  eventCount?: number;
 }
 
 const phaseStateClass: Record<ActivityPhaseRow["state"], string> = {
@@ -11,33 +13,49 @@ const phaseStateClass: Record<ActivityPhaseRow["state"], string> = {
   completed: "border-[#1d1d1f]/18 bg-[#f0f1f4] text-[#1d1d1f]",
 };
 
-function PhaseTimeline({ phases, streaming }: PhaseTimelineProps) {
+const phaseDotClass: Record<ActivityPhaseRow["state"], string> = {
+  pending: "bg-black/15",
+  active: "animate-pulse bg-white",
+  completed: "bg-[#34c759]",
+};
+
+function PhaseTimeline({ phases, streaming, eventCount }: PhaseTimelineProps) {
   if (!phases.length) {
     return null;
   }
 
   return (
     <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <p className="text-[11px] uppercase tracking-[0.1em] text-[#6e6e73]">
-          Execution Phases
-        </p>
-        <span className="text-[10px] text-[#86868b]">
-          {streaming ? "Live phase stream" : "Replay phase history"}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {phases.map((phase) => (
-          <span
-            key={`phase-${phase.key}`}
-            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.07em] ${phaseStateClass[phase.state]}`}
-            title={phase.latestEventTitle || `${phase.label} phase`}
-          >
-            <span>{phase.label}</span>
-            <span className="opacity-80">
-              {phase.state === "active" ? "Live" : phase.state === "completed" ? "Done" : "Pending"}
-            </span>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-[11px] tracking-[0.04em] text-[#6e6e73]">Execution flow</p>
+        {eventCount != null && eventCount > 0 && streaming ? (
+          <span className="inline-flex items-center gap-1 text-[10px] text-[#86868b]">
+            <span className="h-1 w-1 animate-pulse rounded-full bg-[#34c759]" />
+            <span>Live</span>
           </span>
+        ) : null}
+      </div>
+
+      {/* Phase pills with connecting line */}
+      <div className="relative flex flex-wrap items-center gap-x-0 gap-y-1.5">
+        {phases.map((phase, i) => (
+          <div key={`phase-${phase.key}`} className="inline-flex items-center">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.04em] ${phaseStateClass[phase.state]}`}
+              title={phase.latestEventTitle || `${phase.label} phase`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${phaseDotClass[phase.state]}`} />
+              <span>{phase.label}</span>
+            </span>
+            {/* Connector line between pills */}
+            {i < phases.length - 1 ? (
+              <span
+                className={`mx-1 h-px w-4 shrink-0 rounded-full transition-colors duration-500 ${
+                  phase.state === "completed" ? "bg-[#1d1d1f]/30" : "bg-black/[0.07]"
+                }`}
+              />
+            ) : null}
+          </div>
         ))}
       </div>
     </div>

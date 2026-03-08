@@ -34,7 +34,7 @@ describe("overlayForInteractionEvent", () => {
     expect(overlay?.text).toContain("Human verification");
   });
 
-  it("returns failure overlay for failed action status", () => {
+  it("returns compact retry overlay for failed action status", () => {
     const overlay = overlayForInteractionEvent({
       eventType: "docs.insert_completed",
       sceneSurface: "google_docs",
@@ -46,8 +46,8 @@ describe("overlayForInteractionEvent", () => {
       actionTargetLabel: "Body",
     });
     expect(overlay).not.toBeNull();
-    expect(overlay?.variant).toBe("human-alert");
-    expect(overlay?.text).toContain("failed");
+    expect(overlay?.variant).toBe("left-chip");
+    expect(overlay?.text.toLowerCase()).toContain("retry");
   });
 
   it("maps zoom actions to focused overlay text", () => {

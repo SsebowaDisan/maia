@@ -49,6 +49,14 @@ function mergeLiveSceneData(
   const mergedGraphNodeIds: string[] = [];
   const mergedSceneRefs: string[] = [];
   const mergedEventRefs: string[] = [];
+  const openedPages: Array<{
+    url: string;
+    title: string;
+    page_index: number | null;
+    reviewed: boolean;
+    last_event_type: string;
+  }> = [];
+  const openedPageIndexByUrl = new Map<string, number>();
 
   const appendUniqueTokens = (target: string[], values: string[]) => {
     if (!values.length) {
@@ -68,6 +76,50 @@ function mergeLiveSceneData(
     if (text) {
       merged[key] = text;
     }
+  };
+
+  const appendOpenedPage = ({
+    eventType,
+    sourceUrl,
+    sourceTitle,
+    pageIndex,
+    reviewed,
+  }: {
+    eventType: string;
+    sourceUrl: string;
+    sourceTitle: string;
+    pageIndex: number | null;
+    reviewed: boolean;
+  }) => {
+    const url = readStringField(sourceUrl);
+    if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+      return;
+    }
+    const title = readStringField(sourceTitle);
+    const normalizedType = String(eventType || "").toLowerCase();
+    const existingIndex = openedPageIndexByUrl.get(url);
+    if (existingIndex !== undefined) {
+      const existing = openedPages[existingIndex];
+      if (title) {
+        existing.title = title;
+      }
+      if (pageIndex !== null) {
+        existing.page_index = pageIndex;
+      }
+      existing.reviewed = existing.reviewed || reviewed;
+      if (normalizedType) {
+        existing.last_event_type = normalizedType;
+      }
+      return;
+    }
+    openedPageIndexByUrl.set(url, openedPages.length);
+    openedPages.push({
+      url,
+      title,
+      page_index: pageIndex,
+      reviewed,
+      last_event_type: normalizedType,
+    });
   };
 
   const applyPayload = (payload: Record<string, unknown>, event: AgentActivityEvent) => {
@@ -155,6 +207,40 @@ function mergeLiveSceneData(
         merged[key] = numeric;
       }
     });
+
+    const pageIndexRaw = readNumberField(payload["page_index"]);
+    const pageIndex = pageIndexRaw !== null && Number.isFinite(pageIndexRaw) && pageIndexRaw >= 1
+      ? Math.round(pageIndexRaw)
+      : null;
+    const payloadSceneSurface = readStringField(payload["scene_surface"]).toLowerCase();
+    const browserLikeEvent =
+      normalizedType.startsWith("browser_") ||
+      normalizedType.startsWith("web_") ||
+      payloadSceneSurface === "website" ||
+      payloadSceneSurface === "browser";
+    if (browserLikeEvent) {
+      const sourceUrl =
+        readStringField(payload["url"]) ||
+        readStringField(payload["source_url"]) ||
+        readStringField(payload["target_url"]) ||
+        readStringField(payload["page_url"]) ||
+        readStringField(payload["final_url"]) ||
+        readStringField(payload["link"]);
+      const sourceTitle = readStringField(payload["title"]) || readStringField(event.title);
+      const reviewed =
+        normalizedType === "browser_extract" ||
+        normalizedType === "browser_verify" ||
+        normalizedType.startsWith("verify_") ||
+        readStringField(payload["action"]).toLowerCase() === "extract" ||
+        readStringField(payload["action"]).toLowerCase() === "verify";
+      appendOpenedPage({
+        eventType: normalizedType,
+        sourceUrl,
+        sourceTitle,
+        pageIndex,
+        reviewed,
+      });
+    }
 
     const contentDensity = readNumberField(payload["content_density"]);
     if (contentDensity !== null) {
@@ -318,6 +404,10 @@ function mergeLiveSceneData(
     if (readNumberField(merged["zoom_level"]) === null && latestZoom.zoomLevel !== null) {
       merged["zoom_level"] = latestZoom.zoomLevel;
     }
+  }
+  if (openedPages.length) {
+    merged["opened_pages"] = openedPages.slice(-24);
+    merged["opened_page_count"] = openedPages.length;
   }
 
   return merged;

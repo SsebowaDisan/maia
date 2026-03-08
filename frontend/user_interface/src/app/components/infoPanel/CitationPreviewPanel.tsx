@@ -160,7 +160,7 @@ function CitationPreviewPanel({
           </div>
         ) : null}
 
-        {citationIsPdf || citationIsImage ? renderResizeHandle() : null}
+        {citationIsPdf || citationIsImage || citationUsesWebsite ? renderResizeHandle() : null}
 
       </div>
     </div>

@@ -60,6 +60,7 @@ function findSourceById(sources: VerificationSourceItem[], sourceId: string): Ve
 export function InfoPanel({
   citationFocus = null,
   selectedConversationId = null,
+  userPrompt = "",
   infoHtml = "",
   infoPanel = {},
   mindmap = {},
@@ -313,7 +314,7 @@ export function InfoPanel({
             citationIsPdf={citationOpenState.citationIsPdf}
             citationIsImage={citationOpenState.citationIsImage}
             citationViewerHeight={viewerHeights.citation}
-            reviewQuery=""
+            reviewQuery={userPrompt || activeCitation?.claimText || ""}
             preferredPage={preferredCitationPage}
             webReviewSource={activeWebReviewSource}
             hasPreviousEvidence={activeEvidenceIndex > 0}

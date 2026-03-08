@@ -98,6 +98,16 @@ def _normalize_json_payload(raw_value: Any) -> dict[str, Any]:
     return payload
 
 
+def _decode_b64_json(raw: str, source: str) -> tuple[dict[str, Any] | None, str]:
+    """Decode a base64-encoded service-account JSON string. Returns (None, '') on failure."""
+    import base64
+    try:
+        decoded = base64.b64decode(raw + "==").decode("utf-8")
+        return _normalize_json_payload(decoded), source
+    except Exception:
+        return None, ""
+
+
 def _load_service_account_info(
     *,
     settings: dict[str, Any] | None,
@@ -116,6 +126,23 @@ def _load_service_account_info(
         if not value:
             continue
         return _normalize_json_payload(value), source
+
+    b64_candidates: list[tuple[str, str]] = [
+        (
+            "env.GOOGLE_SERVICE_ACCOUNT_JSON_B64",
+            str(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_B64", "")).strip(),
+        ),
+        (
+            "env.MAIA_GMAIL_SA_JSON_B64",
+            str(os.getenv("MAIA_GMAIL_SA_JSON_B64", "")).strip(),
+        ),
+    ]
+    for source, value in b64_candidates:
+        if not value:
+            continue
+        info, resolved_source = _decode_b64_json(value, source)
+        if info is not None:
+            return info, resolved_source
 
     path_candidates: list[tuple[str, str]] = [
         (

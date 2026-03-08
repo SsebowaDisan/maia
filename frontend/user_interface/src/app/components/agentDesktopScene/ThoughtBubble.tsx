@@ -51,7 +51,7 @@ function ThoughtBubble({ text }: ThoughtBubbleProps) {
           className="pointer-events-none absolute bottom-14 left-1/2 z-40 -translate-x-1/2 thought-bubble-anim"
         >
           <div className="flex items-center gap-2 rounded-full border border-white/25 bg-[#1d1d1f]/80 px-3.5 py-2 shadow-lg backdrop-blur-sm">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-[#86d9ff] opacity-80" />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-white/80" />
             <p className="max-w-[220px] text-[11px] font-medium text-white/95">{displayText}</p>
           </div>
         </div>

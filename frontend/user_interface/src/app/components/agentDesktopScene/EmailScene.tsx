@@ -15,6 +15,92 @@ type EmailSceneProps = {
   copySourceSnippet: string;
 };
 
+const TITLE_CASE_WORD_RE = /^[A-Z][A-Za-z0-9'&/.-]*$/;
+const MIN_PARAGRAPH_CHARS_FOR_SPLIT = 48;
+
+function isTitleCaseHeadingCandidate(value: string): boolean {
+  const words = String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length < 2 || words.length > 6) {
+    return false;
+  }
+  return words.every((word) => TITLE_CASE_WORD_RE.test(word));
+}
+
+function splitLeadingHeading(text: string): { heading: string; body: string } | null {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (normalized.length < MIN_PARAGRAPH_CHARS_FOR_SPLIT) {
+    return null;
+  }
+  const match = normalized.match(/^(.{4,64}?)\s{1,3}([A-Z][\s\S]{32,})$/);
+  if (!match) {
+    return null;
+  }
+  const heading = String(match[1] || "").trim();
+  const body = String(match[2] || "").trim();
+  if (!heading || !body) {
+    return null;
+  }
+  if (/[.!?;:]$/.test(heading)) {
+    return null;
+  }
+  if (!isTitleCaseHeadingCandidate(heading)) {
+    return null;
+  }
+  return { heading, body };
+}
+
+function normalizeEmailBodyHtml(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(raw, "text/html");
+  const { body } = doc;
+  const hasBlockChildren = Array.from(body.children).some((element) =>
+    /^(P|H[1-6]|UL|OL|LI|TABLE|BLOCKQUOTE|PRE|HR|DETAILS|FIGURE|DIV)$/.test(element.tagName),
+  );
+
+  if (!hasBlockChildren) {
+    const plainText = String(body.textContent || "").trim();
+    if (!plainText) {
+      return "";
+    }
+    const sections = plainText
+      .split(/\n{2,}/)
+      .map((section) => section.replace(/\n+/g, " ").trim())
+      .filter(Boolean);
+    body.innerHTML = "";
+    sections.forEach((section) => {
+      const paragraph = doc.createElement("p");
+      paragraph.textContent = section;
+      body.appendChild(paragraph);
+    });
+  }
+
+  Array.from(body.querySelectorAll("p")).forEach((paragraph) => {
+    if (paragraph.childElementCount > 0) {
+      return;
+    }
+    const text = String(paragraph.textContent || "").trim();
+    const split = splitLeadingHeading(text);
+    if (!split) {
+      return;
+    }
+    const heading = doc.createElement("h3");
+    heading.textContent = split.heading;
+    const bodyParagraph = doc.createElement("p");
+    bodyParagraph.textContent = split.body;
+    paragraph.replaceWith(heading, bodyParagraph);
+  });
+
+  return body.innerHTML;
+}
+
 function focusedEmailField({
   eventType,
   action,
@@ -73,16 +159,17 @@ function EmailScene({
     actionTargetLabel,
   });
   const focusPulse = action === "type" && (actionPhase === "start" || actionPhase === "active");
+  const normalizedBodyHtml = normalizeEmailBodyHtml(emailBodyHtml);
   return (
-    <div className="absolute inset-0 bg-[linear-gradient(180deg,#e8eaef_0%,#dfe3ea_100%)] p-4 text-[#1d1d1f]">
-      <div className="mx-auto h-full w-full max-w-[920px] rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
-        <div className="flex items-center gap-2 border-b border-black/[0.08] px-4 py-2.5">
+    <div className="absolute inset-0 bg-[linear-gradient(180deg,#ebecef_0%,#e3e4e8_100%)] p-4 text-[#1d1d1f]">
+      <div className="mx-auto h-full w-full max-w-[920px] rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
+        <div className="flex items-center gap-2 border-b border-black/[0.08] px-5 py-3">
           <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
           <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
           <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-          <span className="ml-2 text-[12px] font-semibold tracking-tight text-[#3a3a3c]">Compose</span>
+          <span className="ml-2 text-[12px] font-semibold tracking-[0.01em] text-[#3a3a3c]">Compose</span>
         </div>
-        <div className="relative space-y-2 p-4 text-[12px]">
+        <div className="relative space-y-3 p-5 pt-12 text-[12px]">
           <InteractionOverlay
             sceneSurface="email"
             activeEventType={activeEventType}
@@ -94,40 +181,47 @@ function EmailScene({
             actionTargetLabel={actionTargetLabel}
           />
           <div
-            className={`rounded-xl border px-3 py-2.5 transition-all duration-300 ${
+            className={`grid grid-cols-[70px_minmax(0,1fr)] items-center rounded-[14px] border px-4 py-2.5 transition-all duration-300 ${
               focus === "to" && focusPulse
-                ? "border-[#0a84ff]/35 bg-[#eaf4ff]"
+                ? "border-black/25 bg-[#f2f2f4]"
                 : "border-black/[0.07] bg-[#fafafc]"
             }`}
           >
-            <span className="font-semibold text-[#6e6e73]">To:</span>{" "}
-            <span className="text-[#1d1d1f]">{emailRecipient}</span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">To</span>
+            <span className="truncate text-[13px] text-[#1d1d1f]">{emailRecipient}</span>
           </div>
           <div
-            className={`rounded-xl border px-3 py-2.5 transition-all duration-300 ${
+            className={`grid grid-cols-[70px_minmax(0,1fr)] items-center rounded-[14px] border px-4 py-2.5 transition-all duration-300 ${
               focus === "subject" && focusPulse
-                ? "border-[#0a84ff]/35 bg-[#eaf4ff]"
+                ? "border-black/25 bg-[#f2f2f4]"
                 : "border-black/[0.07] bg-[#fafafc]"
             }`}
           >
-            <span className="font-semibold text-[#6e6e73]">Subject:</span>{" "}
-            <span className="text-[#1d1d1f]">{emailSubject}</span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">Subject</span>
+            <span className="truncate text-[13px] font-medium text-[#1d1d1f]">{emailSubject}</span>
           </div>
           <div
-            ref={emailBodyScrollRef}
-            className={`h-[320px] overflow-y-auto rounded-xl border px-3 py-3 text-[14px] leading-[1.6] text-[#1f1f22] transition-all duration-300 ${
+            className={`overflow-hidden rounded-[16px] border transition-all duration-300 ${
               focus === "body" && focusPulse
-                ? "border-[#0a84ff]/35 bg-[#fbfdff]"
+                ? "border-black/25 bg-[#f9f9fa]"
                 : "border-black/[0.07] bg-white"
             }`}
           >
+            <div className="border-b border-black/[0.06] px-4 py-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">Message</span>
+            </div>
             <div
-              className="[&_h1]:mb-2 [&_h1]:text-[21px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:text-[18px] [&_h2]:font-semibold [&_h3]:mb-1.5 [&_h3]:text-[16px] [&_h3]:font-semibold [&_p]:mb-2 [&_ul]:mb-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#f2f2f7] [&_pre]:p-2 [&_a]:text-[#0a66d9] hover:[&_a]:underline"
-              dangerouslySetInnerHTML={{ __html: emailBodyHtml }}
-            />
+              ref={emailBodyScrollRef}
+              className="h-[328px] overflow-y-auto px-4 py-3.5 text-[14px] leading-[1.65] text-[#1f1f22]"
+            >
+              <div
+                className="[&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h1]:tracking-[-0.02em] [&_h2]:mb-2.5 [&_h2]:mt-5 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h2]:tracking-[-0.015em] [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[17px] [&_h3]:font-semibold [&_h3]:tracking-[-0.01em] [&_p]:mb-3 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1.5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#f2f2f7] [&_pre]:p-2.5 [&_a]:text-[#1d1d1f] hover:[&_a]:underline"
+                dangerouslySetInnerHTML={{ __html: normalizedBodyHtml }}
+              />
+            </div>
           </div>
           {activeEventType === "email_click_send" ? (
-            <div className="rounded-xl border border-[#0a84ff]/25 bg-[#0a84ff]/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0756a8]">
+            <div className="rounded-xl border border-black/15 bg-[#f2f2f4] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#1d1d1f]">
               Send action confirmed
             </div>
           ) : null}

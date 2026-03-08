@@ -156,7 +156,7 @@ function WebReviewViewer({
         <div className="flex items-center justify-between gap-2 border-b border-black/[0.06] bg-white px-3 py-1.5">
           <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[#6e6e73]">
             <Globe className="h-3 w-3 shrink-0" />
-            <span className="truncate">{new URL(sourceUrl).hostname.replace(/^www\./, "")}</span>
+            <span className="truncate">{(() => { try { return new URL(sourceUrl).hostname.replace(/^www\./, ""); } catch { return sourceUrl; } })()}</span>
           </div>
           {hasExtractedText && (
             <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-black/[0.08] bg-[#f5f5f7] p-0.5">

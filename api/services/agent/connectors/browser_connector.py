@@ -24,6 +24,9 @@ from .browser_live_utils import (
     to_number,
 )
 from .browser_navigation_utils import accept_cookie_banner, extract_same_origin_links
+from .browser_stealth_script import STEALTH_INIT_SCRIPT
+from .browser_stream_stage_initial import run_initial_browser_stage
+from .browser_stream_stage_pages import run_browser_pages_stage
 from .trusted_site_policy import build_trusted_site_overrides
 from .base import BaseConnector, ConnectorError, ConnectorHealth
 
@@ -147,64 +150,6 @@ class BrowserConnector(BaseConnector):
                 "characters": characters,
             }
 
-        # Stealth JS injected before every page navigation to mask automation signals.
-        # Hides webdriver flag, spoofs plugin list, adds a realistic chrome runtime,
-        # and removes the CDP-exposed automation strings that Cloudflare checks.
-        _STEALTH_INIT_SCRIPT = """
-() => {
-  // Hide webdriver
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-  // Spoof plugins (headless Chrome has 0 plugins, real Chrome has several)
-  const _pluginData = [
-    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-  ];
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      const arr = _pluginData.map((p) => Object.assign(new Plugin(), p));
-      arr.length = _pluginData.length;
-      return arr;
-    }
-  });
-
-  // Spoof MIME types
-  Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => ({ length: 4 })
-  });
-
-  // Realistic language settings
-  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-  // Add chrome runtime (missing in headless mode)
-  if (!window.chrome) {
-    window.chrome = { runtime: {} };
-  }
-
-  // Remove Automation-related properties exposed by CDP
-  const _override = (obj, prop) => {
-    try { delete obj[prop]; } catch (_) {}
-    try { Object.defineProperty(obj, prop, { get: () => undefined }); } catch (_) {}
-  };
-  _override(window, '__webdriver_evaluate');
-  _override(window, '__selenium_evaluate');
-  _override(window, '__webdriver_script_function');
-  _override(window, '__webdriver_script_func');
-  _override(window, '__webdriver_script_fn');
-  _override(window, '__fxdriver_evaluate');
-  _override(window, '__driver_unwrapped');
-  _override(window, '__webdriver_unwrapped');
-  _override(window, '__driver_evaluate');
-  _override(window, '__selenium_unwrapped');
-  _override(window, '__fxdriver_unwrapped');
-  _override(document, '$cdc_asdjflasutopfhvcZLmcfl_');
-  _override(window, '_Selenium_IDE_Recorder');
-  _override(window, '_selenium');
-  _override(window, 'calledSelenium');
-}
-"""
-
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 headless=True,
@@ -239,7 +184,7 @@ class BrowserConnector(BaseConnector):
                 extra_http_headers=trusted_headers or None,
             )
             # Inject stealth script before every navigation
-            browser_context.add_init_script(_STEALTH_INIT_SCRIPT)
+            browser_context.add_init_script(STEALTH_INIT_SCRIPT)
             trusted_cookies = (
                 list(trusted_site.get("cookies") or [])
                 if isinstance(trusted_site.get("cookies"), list)
@@ -389,614 +334,93 @@ class BrowserConnector(BaseConnector):
                         "snapshot_ref": str(capture.get("screenshot_path") or ""),
                     }
 
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(max(200, wait_ms))
-            except Exception as exc:
-                browser_context.close()
-                browser.close()
-                raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
+            # Safe defaults so run_initial_browser_stage can accept them as parameters.
+            # The function reassigns both internally and returns the live captures in
+            # stage_one["open_capture"] / stage_one["open_cursor"].
+            open_capture: dict[str, Any] = {}
+            open_cursor: dict[str, float] = {}
 
-            open_x, open_y = _jitter_target(124, 88, spread=14.0)
-            open_cursor = move_cursor(page=page, x=open_x, y=open_y)
-            open_capture = capture_page_state(
+            stage_one = yield from run_initial_browser_stage(
                 page=page,
+                url=url,
+                timeout_ms=timeout_ms,
+                wait_ms=wait_ms,
+                auto_accept_cookies=auto_accept_cookies,
+                actions=actions,
+                trusted_site=trusted_site,
+                trusted_headers=trusted_headers,
+                trusted_cookies=trusted_cookies,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
-                label="open",
+                visited_pages=visited_pages,
+                open_capture=open_capture,
+                open_cursor=open_cursor,
+                movement_rng=movement_rng,
+                _quality_profile=_quality_profile,
+                _safe_selector=_safe_selector,
+                _jitter_target=_jitter_target,
+                _website_payload=_website_payload,
+                _emit_extract_side_events=_emit_extract_side_events,
+                _elapsed_ms=_elapsed_ms,
+                runtime=runtime,
+                accept_cookie_banner=accept_cookie_banner,
+                move_cursor=move_cursor,
+                capture_page_state=capture_page_state,
+                page_metrics=page_metrics,
+                excerpt=excerpt,
             )
-            open_metrics = page_metrics(page=page)
-            yield {
-                "event_type": "browser_open",
-                "title": "Start Playwright browser session",
-                "detail": open_capture["url"],
-                "data": _website_payload(
-                    {
-                        "url": open_capture["url"],
-                        "title": open_capture["title"],
-                        "page_index": 1,
-                        "elapsed_ms": _elapsed_ms(),
-                        **open_cursor,
-                        **open_metrics,
-                    }
-                ),
-                "snapshot_ref": open_capture["screenshot_path"],
-            }
-            if bool(trusted_site.get("trusted")):
-                yield {
-                    "event_type": "browser_trusted_site_mode",
-                    "title": "Apply trusted-site browser policy",
-                    "detail": f"Trusted host: {str(trusted_site.get('host') or '')}",
-                    "data": _website_payload(
-                        {
-                            "trusted_host": str(trusted_site.get("host") or ""),
-                            "trusted_header_count": len(trusted_headers),
-                            "trusted_cookie_count": len(trusted_cookies),
-                            **open_cursor,
-                        }
-                    ),
-                    "snapshot_ref": open_capture["screenshot_path"],
-                }
+            # Retrieve the captures the stage function created internally.
+            if isinstance(stage_one.get("open_capture"), dict):
+                open_capture = stage_one["open_capture"]
+            if isinstance(stage_one.get("open_cursor"), dict):
+                open_cursor = stage_one["open_cursor"]
 
-            if auto_accept_cookies:
-                consent = accept_cookie_banner(page=page, wait_ms=wait_ms)
-                consent_capture = capture_page_state(
-                    page=page,
-                    output_dir=output_dir,
-                    stamp_prefix=stamp_prefix,
-                    label="cookie-accept-1",
-                )
-                consent_cursor = {
-                    key: float(consent.get(key))
-                    for key in ("cursor_x", "cursor_y")
-                    if isinstance(consent.get(key), (int, float))
-                }
-                if consent.get("accepted"):
-                    yield {
-                        "event_type": "browser_cookie_accept",
-                        "title": "Accept website cookies",
-                        "detail": str(consent.get("label") or "Accepted cookie consent banner"),
-                        "data": _website_payload(
-                            {
-                                "url": consent_capture["url"],
-                                "title": consent_capture["title"],
-                                "page_index": 1,
-                                **consent_cursor,
-                            }
-                        ),
-                        "snapshot_ref": consent_capture["screenshot_path"],
-                    }
-                else:
-                    yield {
-                        "event_type": "browser_cookie_check",
-                        "title": "Check website cookies",
-                        "detail": "No cookie banner detected or consent already stored.",
-                        "data": _website_payload(
-                            {
-                                "url": consent_capture["url"],
-                                "title": consent_capture["title"],
-                                "page_index": 1,
-                            }
-                        ),
-                        "snapshot_ref": consent_capture["screenshot_path"],
-                    }
+            current_url = str(stage_one.get("current_url") or str(open_capture.get("url") or url))
+            final_cursor = (
+                dict(stage_one.get("final_cursor"))
+                if isinstance(stage_one.get("final_cursor"), dict)
+                else dict(open_cursor)
+            )
 
-            # Always capture a fast first-pass extract before any scrolling/navigation so
-            # the agent can ground an initial answer from the landing page immediately.
-            quick_x, quick_y = _jitter_target(220, 192, spread=20.0)
-            quick_cursor = move_cursor(page=page, x=quick_x, y=quick_y)
-            quick_capture = capture_page_state(
+            stage_two = yield from run_browser_pages_stage(
                 page=page,
+                browser_context=browser_context,
+                browser=browser,
+                current_url=current_url,
+                final_cursor=final_cursor,
+                open_cursor=open_cursor,
+                follow_same_domain_links=follow_same_domain_links,
+                max_pages=max_pages,
+                max_scroll_steps=max_scroll_steps,
+                timeout_ms=timeout_ms,
+                wait_ms=wait_ms,
+                auto_accept_cookies=auto_accept_cookies,
                 output_dir=output_dir,
                 stamp_prefix=stamp_prefix,
-                label="extract-initial-1",
+                movement_rng=movement_rng,
+                visited_pages=visited_pages,
+                _quality_profile=_quality_profile,
+                _safe_selector=_safe_selector,
+                _jitter_target=_jitter_target,
+                _website_payload=_website_payload,
+                _emit_extract_side_events=_emit_extract_side_events,
+                _elapsed_ms=_elapsed_ms,
+                extract_same_origin_links=extract_same_origin_links,
+                accept_cookie_banner=accept_cookie_banner,
+                safe_focus_point=safe_focus_point,
+                smart_scroll_delta=smart_scroll_delta,
+                move_cursor=move_cursor,
+                capture_page_state=capture_page_state,
+                page_metrics=page_metrics,
+                runtime=runtime,
             )
-            visited_pages.append(
-                {
-                    "url": quick_capture["url"],
-                    "title": quick_capture["title"],
-                    "text_excerpt": quick_capture["text_excerpt"],
-                    "screenshot_path": quick_capture["screenshot_path"],
-                    **_quality_profile(text_excerpt=str(quick_capture["text_excerpt"] or "")),
-                }
+            if isinstance(stage_two.get("final_cursor"), dict):
+                final_cursor = dict(stage_two.get("final_cursor") or final_cursor)
+            targets = (
+                list(stage_two.get("targets"))
+                if isinstance(stage_two.get("targets"), list)
+                else [current_url]
             )
-            quick_quality = _quality_profile(text_excerpt=str(quick_capture["text_excerpt"] or ""))
-            yield {
-                "event_type": "browser_extract",
-                "title": "Fast landing-page analysis",
-                "detail": quick_capture["title"] or quick_capture["url"],
-                "data": _website_payload(
-                    {
-                        "url": quick_capture["url"],
-                        "title": quick_capture["title"],
-                        "page_index": 1,
-                        "extract_pass": "initial",
-                        "extract_stage": "initial_render",
-                        "characters": len(str(quick_capture["text_excerpt"] or "")),
-                        "text_excerpt": str(quick_capture["text_excerpt"] or "")[:1200],
-                        "render_quality": quick_quality["render_quality"],
-                        "content_density": quick_quality["content_density"],
-                        "blocked_signal": quick_quality["blocked_signal"],
-                        "blocked_reason": quick_quality["blocked_reason"],
-                        "elapsed_ms": _elapsed_ms(),
-                        **quick_cursor,
-                        **page_metrics(page=page),
-                    }
-                ),
-                "snapshot_ref": quick_capture["screenshot_path"],
-            }
-            for side_event in _emit_extract_side_events(
-                capture=quick_capture,
-                page_index=1,
-                cursor_payload=quick_cursor,
-            ):
-                yield runtime.normalize(side_event)
-
-            for action_index, action in enumerate(actions[:8], start=1):
-                if not isinstance(action, dict):
-                    continue
-                action_type = str(action.get("type") or "").strip().lower()
-                selector = _safe_selector(action.get("selector"))
-                value = str(action.get("value") or "").strip()
-                if action_type not in {"click", "fill"} or not selector:
-                    yield {
-                        "event_type": "browser_interaction_failed",
-                        "title": f"Skip browser action {action_index}",
-                        "detail": "Invalid action payload",
-                        "data": _website_payload(
-                            {
-                                "action_index": action_index,
-                                "action_type": action_type,
-                                "selector": selector,
-                                "elapsed_ms": _elapsed_ms(),
-                            }
-                        ),
-                    }
-                    continue
-                try:
-                    locator = page.locator(selector).first
-                    locator.wait_for(timeout=min(timeout_ms, 7000), state="visible")
-                    interaction_cursor: dict[str, float] = {}
-                    try:
-                        box = locator.bounding_box()
-                    except Exception:
-                        box = None
-                    if isinstance(box, dict):
-                        center_x = float(box.get("x", 0.0)) + (float(box.get("width", 0.0)) / 2.0)
-                        center_y = float(box.get("y", 0.0)) + min(16.0, float(box.get("height", 0.0)) / 2.0)
-                        center_x, center_y = _jitter_target(center_x, center_y, spread=12.0)
-                        interaction_cursor = move_cursor(page=page, x=center_x, y=center_y)
-                    if not interaction_cursor:
-                        fallback_x, fallback_y = _jitter_target(168.0, 142.0, spread=22.0)
-                        interaction_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
-                    interaction_start_capture = capture_page_state(
-                        page=page,
-                        output_dir=output_dir,
-                        stamp_prefix=stamp_prefix,
-                        label=f"interaction-start-{action_index}",
-                    )
-                    yield {
-                        "event_type": "browser_hover",
-                        "title": f"Hover browser action {action_index}",
-                        "detail": f"{action_type} -> {selector}",
-                        "data": _website_payload(
-                            {
-                                "action_index": action_index,
-                                "action_type": action_type,
-                                "selector": selector,
-                                "elapsed_ms": _elapsed_ms(),
-                                "url": interaction_start_capture["url"],
-                                "title": interaction_start_capture["title"],
-                                **interaction_cursor,
-                                **page_metrics(page=page),
-                            }
-                        ),
-                        "snapshot_ref": interaction_start_capture["screenshot_path"],
-                    }
-                    yield {
-                        "event_type": "browser_interaction_started",
-                        "title": f"Run browser action {action_index}",
-                        "detail": f"{action_type} -> {selector}",
-                        "data": _website_payload(
-                            {
-                                "action_index": action_index,
-                                "action_type": action_type,
-                                "selector": selector,
-                                "elapsed_ms": _elapsed_ms(),
-                                "url": interaction_start_capture["url"],
-                                "title": interaction_start_capture["title"],
-                                **interaction_cursor,
-                                **page_metrics(page=page),
-                            }
-                        ),
-                        "snapshot_ref": interaction_start_capture["screenshot_path"],
-                    }
-                    if action_type == "click":
-                        locator.click(timeout=min(timeout_ms, 7000))
-                    else:
-                        locator.fill(value, timeout=min(timeout_ms, 7000))
-                    page.wait_for_timeout(max(180, wait_ms // 2))
-                    interaction_capture = capture_page_state(
-                        page=page,
-                        output_dir=output_dir,
-                        stamp_prefix=stamp_prefix,
-                        label=f"interaction-{action_index}",
-                    )
-                    yield {
-                        "event_type": "browser_interaction_completed",
-                        "title": f"Completed browser action {action_index}",
-                        "detail": f"{action_type} -> {selector}",
-                        "data": _website_payload(
-                            {
-                                "action_index": action_index,
-                                "action_type": action_type,
-                                "selector": selector,
-                                "value_preview": excerpt(value, limit=80) if action_type == "fill" else "",
-                                "url": interaction_capture["url"],
-                                "title": interaction_capture["title"],
-                                "elapsed_ms": _elapsed_ms(),
-                                **interaction_cursor,
-                                **page_metrics(page=page),
-                            }
-                        ),
-                        "snapshot_ref": interaction_capture["screenshot_path"],
-                    }
-                    if action_type == "click":
-                        yield {
-                            "event_type": "browser_click",
-                            "title": f"Click page element {action_index}",
-                            "detail": selector,
-                            "data": _website_payload(
-                                {
-                                    "action_index": action_index,
-                                    "selector": selector,
-                                    "url": interaction_capture["url"],
-                                    "title": interaction_capture["title"],
-                                    "elapsed_ms": _elapsed_ms(),
-                                    **interaction_cursor,
-                                    **page_metrics(page=page),
-                                }
-                            ),
-                            "snapshot_ref": interaction_capture["screenshot_path"],
-                        }
-                except Exception as exc:
-                    yield {
-                        "event_type": "browser_interaction_failed",
-                        "title": f"Browser action {action_index} failed",
-                        "detail": str(exc)[:180],
-                        "data": _website_payload(
-                            {
-                                "action_index": action_index,
-                                "action_type": action_type,
-                                "selector": selector,
-                                "elapsed_ms": _elapsed_ms(),
-                            }
-                        ),
-                    }
-
-            current_url = str(open_capture["url"] or url)
-            targets = [current_url]
-            final_cursor: dict[str, float] = dict(open_cursor)
-            if follow_same_domain_links:
-                targets.extend(
-                    extract_same_origin_links(
-                        page=page,
-                        origin_url=current_url,
-                        limit=max(0, int(max_pages) - 1),
-                    )
-                )
-
-            for page_index, target_url in enumerate(targets, start=1):
-                last_cursor = dict(open_cursor)
-                final_cursor = dict(last_cursor)
-                link_click_emitted = False
-                if page_index > 1:
-                    target_path = ""
-                    target_match = re.match(r"^https?://[^/]+(?P<path>/[^?#]*)?", str(target_url or ""))
-                    if target_match:
-                        target_path = str(target_match.group("path") or "").strip()
-                    target_url_selector = str(target_url or "").replace("'", "\\'")
-                    selector_candidates = [
-                        _safe_selector(f"a[href='{target_url_selector}']"),
-                    ]
-                    if target_path and target_path not in {"/", ""}:
-                        target_path_selector = target_path.replace("'", "\\'")
-                        selector_candidates.append(
-                            _safe_selector(f"a[href*='{target_path_selector}']")
-                        )
-                    for selector in selector_candidates:
-                        if not selector:
-                            continue
-                        try:
-                            locator = page.locator(selector).first
-                            locator.wait_for(timeout=min(timeout_ms, 2600), state="visible")
-                            click_cursor: dict[str, float] = {}
-                            try:
-                                box = locator.bounding_box()
-                            except Exception:
-                                box = None
-                            if isinstance(box, dict):
-                                center_x = float(box.get("x", 0.0)) + (float(box.get("width", 0.0)) / 2.0)
-                                center_y = float(box.get("y", 0.0)) + min(14.0, float(box.get("height", 0.0)) / 2.0)
-                                center_x, center_y = _jitter_target(center_x, center_y, spread=14.0)
-                                click_cursor = move_cursor(page=page, x=center_x, y=center_y)
-                            if not click_cursor:
-                                fallback_x, fallback_y = _jitter_target(188.0, 142.0, spread=20.0)
-                                click_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
-                            click_capture = capture_page_state(
-                                page=page,
-                                output_dir=output_dir,
-                                stamp_prefix=stamp_prefix,
-                                label=f"same-domain-link-{page_index}",
-                            )
-                            yield {
-                                "event_type": "browser_hover",
-                                "title": f"Hover same-domain link {page_index}",
-                                "detail": selector,
-                                "data": _website_payload(
-                                    {
-                                        "url": click_capture["url"],
-                                        "title": click_capture["title"],
-                                        "page_index": page_index - 1,
-                                        "selector": selector,
-                                        "target_url": target_url,
-                                        "extract_stage": "same_domain_followup",
-                                        "elapsed_ms": _elapsed_ms(),
-                                        **click_cursor,
-                                        **page_metrics(page=page),
-                                    }
-                                ),
-                                "snapshot_ref": click_capture["screenshot_path"],
-                            }
-                            yield {
-                                "event_type": "browser_click",
-                                "title": f"Open same-domain link {page_index}",
-                                "detail": target_url,
-                                "data": _website_payload(
-                                    {
-                                        "url": click_capture["url"],
-                                        "title": click_capture["title"],
-                                        "page_index": page_index - 1,
-                                        "selector": selector,
-                                        "target_url": target_url,
-                                        "extract_stage": "same_domain_followup",
-                                        "elapsed_ms": _elapsed_ms(),
-                                        **click_cursor,
-                                        **page_metrics(page=page),
-                                    }
-                                ),
-                                "snapshot_ref": click_capture["screenshot_path"],
-                            }
-                            link_click_emitted = True
-                            last_cursor = dict(click_cursor)
-                            final_cursor = dict(click_cursor)
-                            break
-                        except Exception:
-                            continue
-                    if not link_click_emitted:
-                        fallback_x, fallback_y = _jitter_target(186.0, 142.0, spread=20.0)
-                        fallback_cursor = move_cursor(page=page, x=fallback_x, y=fallback_y)
-                        last_cursor = dict(fallback_cursor)
-                        final_cursor = dict(fallback_cursor)
-                        try:
-                            page.mouse.click(
-                                fallback_x,
-                                fallback_y,
-                                delay=movement_rng.randint(34, 96),
-                            )
-                        except Exception:
-                            pass
-                        fallback_capture = capture_page_state(
-                            page=page,
-                            output_dir=output_dir,
-                            stamp_prefix=stamp_prefix,
-                            label=f"same-domain-fallback-{page_index}",
-                        )
-                        yield {
-                            "event_type": "browser_click",
-                            "title": f"Open same-domain link {page_index}",
-                            "detail": target_url,
-                            "data": _website_payload(
-                                {
-                                    "url": fallback_capture["url"],
-                                    "title": fallback_capture["title"],
-                                    "page_index": page_index - 1,
-                                    "selector": "same-domain-fallback",
-                                    "target_url": target_url,
-                                    "extract_stage": "same_domain_followup",
-                                    "elapsed_ms": _elapsed_ms(),
-                                    **fallback_cursor,
-                                    **page_metrics(page=page),
-                                }
-                            ),
-                            "snapshot_ref": fallback_capture["screenshot_path"],
-                        }
-                    try:
-                        page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                        page.wait_for_timeout(max(200, wait_ms))
-                    except Exception:
-                        continue
-                    nav_x, nav_y = _jitter_target(138, 106, spread=16.0)
-                    last_cursor = move_cursor(page=page, x=nav_x, y=nav_y)
-                    final_cursor = dict(last_cursor)
-                    nav_capture = capture_page_state(
-                        page=page,
-                        output_dir=output_dir,
-                        stamp_prefix=stamp_prefix,
-                        label=f"nav-{page_index}",
-                    )
-                    nav_metrics = page_metrics(page=page)
-                    yield {
-                        "event_type": "browser_navigate",
-                        "title": f"Navigate to page {page_index}",
-                        "detail": nav_capture["url"],
-                        "data": _website_payload(
-                            {
-                                "url": nav_capture["url"],
-                                "title": nav_capture["title"],
-                                "page_index": page_index,
-                                "extract_stage": "same_domain_followup",
-                                "elapsed_ms": _elapsed_ms(),
-                                **last_cursor,
-                                **nav_metrics,
-                            }
-                        ),
-                        "snapshot_ref": nav_capture["screenshot_path"],
-                    }
-                    if auto_accept_cookies:
-                        consent = accept_cookie_banner(page=page, wait_ms=wait_ms)
-                        consent_capture = capture_page_state(
-                            page=page,
-                            output_dir=output_dir,
-                            stamp_prefix=stamp_prefix,
-                            label=f"cookie-accept-{page_index}",
-                        )
-                        consent_cursor = {
-                            key: float(consent.get(key))
-                            for key in ("cursor_x", "cursor_y")
-                            if isinstance(consent.get(key), (int, float))
-                        }
-                        if consent.get("accepted"):
-                            yield {
-                                "event_type": "browser_cookie_accept",
-                                "title": f"Accept website cookies (page {page_index})",
-                                "detail": str(consent.get("label") or "Accepted cookie consent banner"),
-                                "data": _website_payload(
-                                    {
-                                        "url": consent_capture["url"],
-                                        "title": consent_capture["title"],
-                                        "page_index": page_index,
-                                        **last_cursor,
-                                        **consent_cursor,
-                                    }
-                                ),
-                                "snapshot_ref": consent_capture["screenshot_path"],
-                            }
-                        else:
-                            yield {
-                                "event_type": "browser_cookie_check",
-                                "title": f"Check website cookies (page {page_index})",
-                                "detail": "No cookie banner detected or consent already stored.",
-                                "data": _website_payload(
-                                    {
-                                        "url": consent_capture["url"],
-                                        "title": consent_capture["title"],
-                                        "page_index": page_index,
-                                        **last_cursor,
-                                    }
-                                ),
-                                "snapshot_ref": consent_capture["screenshot_path"],
-                            }
-
-                for scroll_index in range(max(1, int(max_scroll_steps))):
-                    metrics_before = page_metrics(page=page)
-                    viewport_width = int(metrics_before.get("viewport_width") or 1366)
-                    viewport_height = int(metrics_before.get("viewport_height") or 768)
-                    cursor_x_px, cursor_y_px = safe_focus_point(
-                        page=page,
-                        pass_index=scroll_index + page_index,
-                        viewport_width=float(viewport_width),
-                        viewport_height=float(viewport_height),
-                    )
-                    cursor_x_px, cursor_y_px = _jitter_target(cursor_x_px, cursor_y_px, spread=24.0)
-                    last_cursor = move_cursor(page=page, x=cursor_x_px, y=cursor_y_px)
-                    final_cursor = dict(last_cursor)
-                    scroll_delta = smart_scroll_delta(
-                        metrics_before=metrics_before,
-                        pass_index=scroll_index,
-                        total_passes=max(1, int(max_scroll_steps)),
-                    )
-                    if abs(scroll_delta) >= 1:
-                        scroll_delta *= movement_rng.uniform(0.83, 1.19)
-                        max_delta = max(320.0, float(viewport_height) * 1.14)
-                        scroll_delta = max(-max_delta, min(max_delta, scroll_delta))
-                    if abs(scroll_delta) < 1:
-                        if scroll_index == 0:
-                            scroll_delta = max(140.0, float(viewport_height) * 0.36)
-                        elif scroll_index == 1:
-                            scroll_delta = -max(120.0, float(viewport_height) * 0.28)
-                        else:
-                            continue
-                    page.mouse.wheel(0, scroll_delta)
-                    pause_ms = max(180, wait_ms // 2) + movement_rng.randint(0, 220)
-                    page.wait_for_timeout(pause_ms)
-                    metrics_after = page_metrics(page=page)
-                    scroll_capture = capture_page_state(
-                        page=page,
-                        output_dir=output_dir,
-                        stamp_prefix=stamp_prefix,
-                        label=f"scroll-{page_index}-{scroll_index + 1}",
-                    )
-                    yield {
-                        "event_type": "browser_scroll",
-                        "title": f"Scroll page {page_index}",
-                        "detail": f"Viewport pass {scroll_index + 1} ({'down' if scroll_delta >= 0 else 'up'})",
-                        "data": _website_payload(
-                            {
-                                "url": scroll_capture["url"],
-                                "title": scroll_capture["title"],
-                                "page_index": page_index,
-                                "scroll_pass": scroll_index + 1,
-                                "scroll_delta": round(float(scroll_delta), 2),
-                                "scroll_direction": "down" if scroll_delta >= 0 else "up",
-                                "extract_stage": "lazy_load_scroll",
-                                "elapsed_ms": _elapsed_ms(),
-                                **last_cursor,
-                                **metrics_after,
-                            }
-                        ),
-                        "snapshot_ref": scroll_capture["screenshot_path"],
-                    }
-
-                extract_capture = capture_page_state(
-                    page=page,
-                    output_dir=output_dir,
-                    stamp_prefix=stamp_prefix,
-                    label=f"extract-{page_index}",
-                )
-                visited_pages.append(
-                    {
-                        "url": extract_capture["url"],
-                        "title": extract_capture["title"],
-                        "text_excerpt": extract_capture["text_excerpt"],
-                        "screenshot_path": extract_capture["screenshot_path"],
-                        **_quality_profile(text_excerpt=str(extract_capture["text_excerpt"] or "")),
-                    }
-                )
-                extract_quality = _quality_profile(text_excerpt=str(extract_capture["text_excerpt"] or ""))
-                yield {
-                    "event_type": "browser_extract",
-                    "title": f"Extract web evidence (page {page_index})",
-                    "detail": extract_capture["title"] or extract_capture["url"],
-                    "data": _website_payload(
-                        {
-                            "url": extract_capture["url"],
-                            "title": extract_capture["title"],
-                            "page_index": page_index,
-                            "characters": len(str(extract_capture["text_excerpt"] or "")),
-                            "text_excerpt": str(extract_capture["text_excerpt"] or "")[:1200],
-                            "extract_stage": "post_scroll_capture",
-                            "render_quality": extract_quality["render_quality"],
-                            "content_density": extract_quality["content_density"],
-                            "blocked_signal": extract_quality["blocked_signal"],
-                            "blocked_reason": extract_quality["blocked_reason"],
-                            "elapsed_ms": _elapsed_ms(),
-                            **last_cursor,
-                            **page_metrics(page=page),
-                        }
-                    ),
-                    "snapshot_ref": extract_capture["screenshot_path"],
-                }
-                for side_event in _emit_extract_side_events(
-                    capture=extract_capture,
-                    page_index=page_index,
-                    cursor_payload=last_cursor,
-                ):
-                    yield runtime.normalize(side_event)
-
-            browser_context.close()
-            browser.close()
-
         if not visited_pages:
             return {
                 "url": current_url,
@@ -1051,6 +475,3 @@ class BrowserConnector(BaseConnector):
                 "same_domain_followup": max(0, len(targets) - 1),
             },
         }
-
-
-

@@ -1,0 +1,337 @@
+/* Workspace UI aligned to reference */
+body:not(.dark) .gradio-container {
+  background: #f3f4f6 !important;
+}
+
+body:not(.dark) .header-bar {
+  margin: 10px auto 8px !important;
+  padding: 5px !important;
+  gap: 4px !important;
+  background: #eceef2 !important;
+  border: 1px solid #dfe3ea !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+body:not(.dark) .header-bar button {
+  min-height: 34px !important;
+  padding: 0 16px !important;
+  border-radius: 11px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: #6b7280 !important;
+  font-size: 0.96rem !important;
+  font-weight: 600 !important;
+}
+
+body:not(.dark) .header-bar button.selected {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  border-color: #d8dde5 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important;
+}
+
+#chat-area {
+  min-width: 0 !important;
+  background: #f8f9fb !important;
+  border-left: 1px solid #e4e8ee !important;
+  border-right: 1px solid #e4e8ee !important;
+  column-gap: 0 !important;
+}
+
+#main-chat-bot {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+#conv-settings-panel {
+  flex: 0 0 260px !important;
+  max-width: 260px !important;
+  min-width: 260px !important;
+  margin: 0 !important;
+  padding: 14px 12px 14px !important;
+  border: 0 !important;
+  border-right: 1px solid #e4e8ee !important;
+  border-radius: 0 !important;
+  background: #f7f8fa !important;
+  box-shadow: none !important;
+  row-gap: 8px !important;
+}
+
+#chat-info-panel {
+  flex: 0 0 300px !important;
+  max-width: 300px !important;
+  min-width: 300px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-left: 1px solid #e4e8ee !important;
+  border-radius: 0 !important;
+  background: #f7f8fa !important;
+  box-shadow: none !important;
+}
+
+#chat-info-panel #info-expand {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+#chat-info-panel #info-expand > summary {
+  min-height: 58px !important;
+  padding: 0 18px !important;
+  border-bottom: 1px solid #e4e8ee !important;
+  font-size: 1.9rem !important;
+  font-weight: 640 !important;
+  letter-spacing: -0.02em !important;
+  color: #111827 !important;
+}
+
+#html-info-panel {
+  padding: 16px 14px 20px !important;
+}
+
+#conv-settings-panel h2 {
+  margin: 0 !important;
+  font-size: 2.05rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.025em !important;
+  color: #111827 !important;
+}
+
+#toggle-dark-button {
+  position: static !important;
+  top: auto !important;
+  right: auto !important;
+  margin-left: auto !important;
+}
+
+#toggle-dark-button button {
+  width: 22px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  border-radius: 999px !important;
+  border: 0 !important;
+  background: #d8dbe2 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+#toggle-dark-button button svg,
+#toggle-dark-button button img {
+  opacity: 0 !important;
+}
+
+#conversation-dropdown input {
+  min-height: 36px !important;
+  border-radius: 10px !important;
+  border: 1px solid #e2e6ed !important;
+  background: #eef0f4 !important;
+  box-shadow: none !important;
+  font-size: 0.95rem !important;
+  color: #4b5563 !important;
+}
+
+#conv-settings-panel button {
+  min-height: 36px !important;
+  border-radius: 10px !important;
+  border: 1px solid #e1e6ee !important;
+  background: #eceff4 !important;
+  color: #4b5563 !important;
+  box-shadow: none !important;
+  font-size: 0.95rem !important;
+  font-weight: 600 !important;
+}
+
+#conv-settings-panel button.selected {
+  border-color: #1a73e8 !important;
+  background: #1a73e8 !important;
+  color: #ffffff !important;
+}
+
+#conv-settings-panel .no-background button {
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  border-radius: 10px !important;
+  border: 1px solid #e1e6ee !important;
+  background: #f1f3f7 !important;
+  color: #6b7280 !important;
+}
+
+#conv-settings-panel .no-background button:hover {
+  border-color: #d3d9e3 !important;
+  background: #e9edf3 !important;
+  color: #4b5563 !important;
+  transform: none !important;
+}
+
+#new-conv-button button {
+  border-color: #d8deea !important;
+  background: #f1f3f7 !important;
+  color: #10b981 !important;
+}
+
+#suggest-chat-checkbox {
+  top: auto !important;
+  margin: 0 !important;
+  min-height: 36px !important;
+  padding: 0 10px !important;
+  border: 1px solid #e1e6ee !important;
+  border-radius: 10px !important;
+  background: #f1f3f7 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+#suggest-chat-checkbox .switch {
+  width: 14px !important;
+  height: 14px !important;
+  top: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+}
+
+#suggest-chat-checkbox .switch::before {
+  content: "✧";
+  color: #374151;
+  font-size: 14px;
+  line-height: 14px;
+}
+
+#suggest-chat-checkbox .switch div {
+  display: none !important;
+}
+
+#suggest-chat-checkbox span {
+  color: #1f2937 !important;
+  font-weight: 600 !important;
+}
+
+#conv-settings-panel details,
+#conv-settings-panel .gradio-accordion {
+  border: 0 !important;
+  border-top: 1px solid #e4e8ee !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+#conv-settings-panel details > summary {
+  min-height: 38px !important;
+  padding: 8px 0 !important;
+  color: #1f2937 !important;
+  font-size: 1.02rem !important;
+  font-weight: 620 !important;
+}
+
+#conv-settings-panel details > div,
+#conv-settings-panel .gradio-accordion > div {
+  padding: 8px 0 10px !important;
+}
+
+#quick-file {
+  min-height: 194px !important;
+  border: 2px dashed #ccd2dc !important;
+  border-radius: 14px !important;
+  background: #f5f6fa !important;
+}
+
+#quick-url textarea,
+#quick-url-demo textarea {
+  min-height: 42px !important;
+  border-radius: 10px !important;
+  border: 1px solid #dfe4ed !important;
+  background: #f3f5f9 !important;
+  color: #4b5563 !important;
+}
+
+#quick-url textarea::placeholder,
+#quick-url-demo textarea::placeholder {
+  color: #7a8391 !important;
+}
+
+#chat-input {
+  max-width: 900px !important;
+  margin: 0 auto 10px !important;
+}
+
+#chat-input textarea {
+  min-height: 52px !important;
+  border-radius: 16px !important;
+  border: 1px solid #e0e5ee !important;
+  background: #eff2f7 !important;
+  box-shadow: none !important;
+  color: #374151 !important;
+  padding-top: 12px !important;
+}
+
+#chat-input button {
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+#chat-input button:last-child {
+  border-color: #99c4fb !important;
+  background: #99c4fb !important;
+  color: #ffffff !important;
+}
+
+#chat-input button:first-child {
+  border-color: #d7dce6 !important;
+  background: #f0f3f8 !important;
+  color: #6b7280 !important;
+}
+
+#citation-dropdown {
+  position: static !important;
+  width: auto !important;
+  max-width: 190px !important;
+  min-width: 160px !important;
+  margin-left: 8px !important;
+}
+
+#use-mindmap-checkbox {
+  position: static !important;
+  width: auto !important;
+  margin-left: auto !important;
+}
+
+@media (max-width: 1280px) {
+  #conv-settings-panel {
+    flex-basis: 230px !important;
+    max-width: 230px !important;
+    min-width: 230px !important;
+  }
+
+  #chat-info-panel {
+    flex-basis: 270px !important;
+    max-width: 270px !important;
+    min-width: 270px !important;
+  }
+}
+
+@media (max-width: 980px) {
+  #conv-settings-panel,
+  #chat-info-panel {
+    flex-basis: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    border-radius: 12px !important;
+    border: 1px solid #e4e8ee !important;
+    margin-bottom: 8px !important;
+  }
+
+  #chat-area {
+    border-left: 0 !important;
+    border-right: 0 !important;
+  }
+
+  #chat-input {
+    max-width: 100% !important;
+  }
+}
+

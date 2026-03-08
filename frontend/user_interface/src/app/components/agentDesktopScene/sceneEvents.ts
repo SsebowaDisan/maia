@@ -196,9 +196,10 @@ function overlayForInteractionEvent({
   }
   if (status === "failed" || type.endsWith("_failed")) {
     return {
-      text: "Action failed",
-      variant: "human-alert",
-      detail: clean(activeDetail) || "The agent will retry or request help.",
+      text: "Retrying action",
+      variant: "left-chip",
+      pulse: true,
+      detail: clean(activeDetail) || "",
     };
   }
   if (type === "agent.blocked") {

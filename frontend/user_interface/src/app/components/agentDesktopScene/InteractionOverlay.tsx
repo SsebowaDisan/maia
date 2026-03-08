@@ -36,19 +36,19 @@ function InteractionOverlay({
   }
   if (overlay.variant === "human-alert") {
     return (
-      <div className="pointer-events-none absolute inset-x-6 top-14 z-30 rounded-xl border border-[#ff9b6a]/70 bg-[#29160f]/85 px-3 py-2 text-[11px] text-[#ffd8c2] shadow-[0_10px_24px_-18px_rgba(0,0,0,0.75)]">
-        <p className="font-semibold uppercase tracking-[0.07em]">{overlay.text}</p>
-        <p className="mt-0.5 line-clamp-2 text-[#ffe6d7]">{overlay.detail || "Complete verification, then continue."}</p>
+      <div className="pointer-events-none absolute inset-x-6 top-14 z-30 rounded-xl border border-white/30 bg-black/76 px-3 py-2 text-[11px] text-white/92 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.75)]">
+        <p className="font-semibold tracking-[0.01em]">{overlay.text}</p>
+        <p className="mt-0.5 line-clamp-2 text-white/78">{overlay.detail || "Complete verification, then continue."}</p>
       </div>
     );
   }
   if (overlay.variant === "center-pill") {
     return (
       <div
-        className={`pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+        className={`pointer-events-none absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-full border px-3 py-1 text-[10px] font-medium tracking-[0.02em] ${
           overlay.pulse
-            ? "animate-pulse border-[#9ad9ff]/65 bg-[#0f2b3f]/84 text-[#d9f1ff]"
-            : "border-[#8fc4ff]/65 bg-[#13263e]/82 text-[#d8edff]"
+            ? "animate-pulse border-white/35 bg-black/75 text-white"
+            : "border-white/30 bg-black/70 text-white/95"
         }`}
       >
         {overlay.text}
@@ -56,7 +56,7 @@ function InteractionOverlay({
     );
   }
   return (
-    <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-[#a6d4ff]/45 bg-[#142a3e]/84 px-3 py-1.5 text-[11px] text-[#dff0ff]">
+    <div className="pointer-events-none absolute left-4 top-14 z-30 rounded-lg border border-white/30 bg-black/70 px-3 py-1.5 text-[11px] text-white/95">
       {overlay.text}
     </div>
   );

@@ -7,8 +7,10 @@ import {
   findRecentMetadataString,
   sampleFilmstripEvents,
 } from "../agentActivityMeta";
+import { EMAIL_SCENE_EVENT_TYPES, readEventIndex } from "./deriveHelpers";
 import { mergeLiveSceneData, readNumberField, readStringField } from "./helpers";
 import { desktopStatusForEventType } from "./labels";
+import { derivePlannedRoadmap } from "./roadmapDerivation";
 import {
   resolveBrowserUrl,
   resolveDocBodyHint,
@@ -44,35 +46,6 @@ interface UseAgentActivityDerivedParams {
   stageAttachment?: ChatAttachment;
   snapshotFailedEventId: string;
   streaming: boolean;
-}
-
-const EMAIL_SCENE_EVENT_TYPES = new Set([
-  "email_open_compose",
-  "email_draft_create",
-  "email_set_to",
-  "email_set_subject",
-  "email_set_body",
-  "email_type_body",
-  "email_ready_to_send",
-  "email_click_send",
-  "email_sent",
-]);
-
-function readEventIndex(event: AgentActivityEvent, fallback: number): number {
-  const direct = Number(event.event_index);
-  if (Number.isFinite(direct) && direct > 0) {
-    return direct;
-  }
-  const data = event.data || event.metadata || {};
-  const payloadIndex = Number((data as Record<string, unknown>).event_index);
-  if (Number.isFinite(payloadIndex) && payloadIndex > 0) {
-    return payloadIndex;
-  }
-  const seq = Number(event.seq);
-  if (Number.isFinite(seq) && seq > 0) {
-    return seq;
-  }
-  return fallback;
 }
 
 function useAgentActivityDerived({
@@ -251,14 +224,34 @@ function useAgentActivityDerived({
     !hasDocumentUrlSignal &&
     (hasPdfEventSignal || hasPdfDataSignal || !sceneSpreadsheetUrl);
 
+  const docsExplicitlyRequested = useMemo(() => {
+    for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+      const event = visibleEvents[idx];
+      const eventType = String(event.event_type || "").toLowerCase();
+      if (eventType === "llm.intent_tags") {
+        const tags = Array.isArray(event.metadata?.["intent_tags"]) ? event.metadata["intent_tags"] : [];
+        if (tags.some((item) => String(item || "").trim().toLowerCase() === "docs_write")) return true;
+      }
+      if (eventType === "llm.task_contract_completed") {
+        const actions = Array.isArray(event.metadata?.["required_actions"])
+          ? event.metadata["required_actions"]
+          : [];
+        if (actions.some((item) => String(item || "").trim().toLowerCase() === "create_document")) return true;
+      }
+    }
+    return false;
+  }, [visibleEvents]);
+
+  // hasDocumentUrlSignal deliberately excluded: a URL alone (e.g. a planning note
+  // that references a Google Docs link) must not open the Docs iframe.
   const hasDocsEventSignal =
     sceneEventType.startsWith("doc_") ||
     sceneEventType.startsWith("docs.") ||
     sceneEventType === "drive.go_to_doc" ||
-    hasDocumentUrlSignal ||
     sceneToolId.startsWith("workspace.docs.") ||
     sceneToolId === "docs.create";
-  const isDocsScene = isDocumentScene && !isSheetsScene && !isPdfScene && hasDocsEventSignal;
+  const isDocsScene =
+    isDocumentScene && !isSheetsScene && !isPdfScene && hasDocsEventSignal && docsExplicitlyRequested;
 
   const sceneSurfaceKey = isBrowserScene
     ? "website"
@@ -388,67 +381,10 @@ function useAgentActivityDerived({
     }
     return cursorFromEvent(sceneEvent);
   }, [activeEvent, sceneEvent]);
-
-  type RoadmapStep = { toolId: string; title: string; whyThisStep: string };
-
-  const { plannedRoadmapSteps, roadmapActiveIndex } = useMemo(() => {
-    let planSteps: RoadmapStep[] = [];
-    for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
-      const event = visibleEvents[i];
-      const eventType = String(event.event_type || "").toLowerCase();
-      if (eventType === "plan_ready" || eventType === "plan_candidate") {
-        const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
-        if (Array.isArray(payload.steps) && payload.steps.length > 0) {
-          planSteps = (payload.steps as Record<string, unknown>[]).map((s) => ({
-            toolId: String(s.tool_id || ""),
-            title: String(s.title || ""),
-            whyThisStep: String(s.why_this_step || ""),
-          }));
-          break;
-        }
-      }
-    }
-    if (!planSteps.length) {
-      return { plannedRoadmapSteps: [] as RoadmapStep[], roadmapActiveIndex: -1 };
-    }
-    let maxActiveIndex = -1;
-    let hasEnteredExecution = false;
-    for (const event of visibleEvents) {
-      const eventType = String(event.event_type || "").toLowerCase();
-      const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
-      if (eventType === "plan_ready") {
-        hasEnteredExecution = true;
-      }
-      if (hasEnteredExecution && eventType === "workspace.sheets.track_step") {
-        const stepName = String(payload.step_name || "");
-        const stepMatch = stepName.match(/^(\d+)\./);
-        if (stepMatch) {
-          const stepNum = parseInt(stepMatch[1], 10);
-          if (Number.isFinite(stepNum) && stepNum >= 1) {
-            maxActiveIndex = Math.max(maxActiveIndex, stepNum - 1);
-          }
-        }
-      }
-    }
-    if (!hasEnteredExecution) {
-      let maxPlanStepSeen = -1;
-      for (const event of visibleEvents) {
-        const eventType = String(event.event_type || "").toLowerCase();
-        const payload = (event.metadata || event.data || {}) as Record<string, unknown>;
-        if (eventType === "llm.plan_step") {
-          const stepNum = Number(payload.step);
-          if (Number.isFinite(stepNum) && stepNum >= 1) {
-            maxPlanStepSeen = Math.max(maxPlanStepSeen, stepNum - 1);
-          }
-        }
-      }
-      maxActiveIndex = maxPlanStepSeen;
-    }
-    return {
-      plannedRoadmapSteps: planSteps,
-      roadmapActiveIndex: Math.min(maxActiveIndex, planSteps.length - 1),
-    };
-  }, [visibleEvents]);
+  const { plannedRoadmapSteps, roadmapActiveIndex } = useMemo(
+    () => derivePlannedRoadmap(visibleEvents),
+    [visibleEvents],
+  );
 
   return {
     activeEvent,

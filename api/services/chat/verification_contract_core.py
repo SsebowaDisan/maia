@@ -442,7 +442,7 @@ def _normalize_item(*, row: dict[str, Any], fallback_id: str) -> dict[str, Any]:
 def normalize_verification_evidence_items(
     rows: list[dict[str, Any]],
     *,
-    max_items: int = 32,
+    max_items: int = 64,
 ) -> list[dict[str, Any]]:
     if not isinstance(rows, list):
         return []

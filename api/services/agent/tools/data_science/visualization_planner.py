@@ -71,6 +71,23 @@ def _fallback_visualization_plan(
             x_name = non_numeric_columns[0] if non_numeric_columns else (available_columns[0] if available_columns else "")
         if not y_name:
             y_name = numeric_columns[0] if numeric_columns else ""
+    elif chart_type == "heatmap":
+        pass  # uses all numeric columns internally
+    elif chart_type == "box":
+        if not x_name:
+            x_name = non_numeric_columns[0] if non_numeric_columns else ""
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
+    elif chart_type == "pie":
+        if not x_name:
+            x_name = non_numeric_columns[0] if non_numeric_columns else (available_columns[0] if available_columns else "")
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
+    elif chart_type == "area":
+        if not x_name:
+            x_name = non_numeric_columns[0] if non_numeric_columns else ""
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
     else:
         if not x_name:
             x_name = numeric_columns[0] if numeric_columns else ""
@@ -158,13 +175,19 @@ def plan_visualization_with_llm(
         system_prompt=(
             "You are a data-visualization planner.\n"
             "Choose chart_type and columns that best explain the dataset intent.\n"
+            "Prefer: heatmap/scatter for correlation or relationship queries; "
+            "box for distribution or outlier queries; pie for share or proportion queries; "
+            "area for cumulative or stacked trend queries; line/bar for trend comparisons; "
+            "histogram for single-variable distribution.\n"
             "Return strict JSON only."
         ),
         user_prompt=(
             "Create a chart plan for this dataset.\n"
-            "Allowed chart_type values: scatter, line, bar, histogram.\n"
+            "Allowed chart_type values: scatter, line, bar, histogram, heatmap, box, pie, area.\n"
             "Prefer line/bar for trend comparisons, scatter for numeric relationships, "
-            "histogram for distribution.\n"
+            "histogram for single-variable distribution, heatmap for correlation matrices, "
+            "box for quartile/outlier analysis, pie for category proportions, "
+            "area for filled/cumulative time-series.\n"
             "Return JSON schema:\n"
             "{"
             '"chart_type":"line",'

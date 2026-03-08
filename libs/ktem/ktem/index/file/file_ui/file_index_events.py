@@ -1,6 +1,18 @@
 import gradio as gr
 
-from .constants import KH_DEMO_MODE, KH_SSO_ENABLED, chat_input_focus_js_with_submit
+from .constants import KH_DEMO_MODE, KH_SSO_ENABLED
+from .event_helpers import (
+    apply_file_index_change_events,
+    clear_upload_progress_panel,
+    clear_uploaded_selector,
+    close_group_panel_updates,
+    focus_chat_input_event,
+    hide_delete_all_controls,
+    open_group_panel_updates,
+    prepare_group_create_updates,
+    subscribe_signin_signout_events,
+    wait_for_indexing_update,
+)
 
 
 class FileIndexEventMixin:
@@ -19,42 +31,7 @@ class FileIndexEventMixin:
         )
 
         if self._app.f_user_management:
-            self._app.subscribe_event(
-                name="onSignIn",
-                definition={
-                    "fn": self.list_file,
-                    "inputs": [self._app.user_id],
-                    "outputs": [self.file_list_state, self.file_list],
-                    "show_progress": "hidden",
-                },
-            )
-            self._app.subscribe_event(
-                name="onSignIn",
-                definition={
-                    "fn": self.list_group,
-                    "inputs": [self._app.user_id, self.file_list_state],
-                    "outputs": [self.group_list_state, self.group_list],
-                    "show_progress": "hidden",
-                },
-            )
-            self._app.subscribe_event(
-                name="onSignIn",
-                definition={
-                    "fn": self.list_file_names,
-                    "inputs": [self.file_list_state],
-                    "outputs": [self.group_files],
-                    "show_progress": "hidden",
-                },
-            )
-            self._app.subscribe_event(
-                name="onSignOut",
-                definition={
-                    "fn": self.list_file,
-                    "inputs": [self._app.user_id],
-                    "outputs": [self.file_list_state, self.file_list],
-                    "show_progress": "hidden",
-                },
-            )
+            subscribe_signin_signout_events(self)
 
     def on_register_quick_uploads(self):
         try:
@@ -69,10 +46,7 @@ class FileIndexEventMixin:
                 if not KH_DEMO_MODE:
                     quick_uploaded_event = (
                         self._app.chat_page.quick_file_upload.upload(
-                            fn=lambda: gr.update(
-                                value="Please wait for the indexing process "
-                                "to complete before adding your question."
-                            ),
+                            fn=wait_for_indexing_update,
                             outputs=self._app.chat_page.quick_file_upload_status,
                         )
                         .then(
@@ -87,20 +61,17 @@ class FileIndexEventMixin:
                             concurrency_limit=10,
                         )
                         .success(
-                            fn=lambda: [
-                                gr.update(value=None),
-                                gr.update(value="select"),
-                            ],
+                            fn=clear_uploaded_selector,
                             outputs=[
                                 self._app.chat_page.quick_file_upload,
                                 self._app.chat_page._indices_input[0],
                             ],
                         )
                     )
-                    for event in self._app.get_event(
-                        f"onFileIndex{self._index.id}Changed"
-                    ):
-                        quick_uploaded_event = quick_uploaded_event.then(**event)
+                    quick_uploaded_event = apply_file_index_change_events(
+                        self,
+                        quick_uploaded_event,
+                    )
 
                     quick_uploaded_event = (
                         quick_uploaded_event.success(
@@ -118,20 +89,15 @@ class FileIndexEventMixin:
                             outputs=[self.file_list_state, self.file_list],
                             concurrency_limit=20,
                         )
-                        .then(
-                            fn=lambda: True,
-                            inputs=None,
-                            outputs=None,
-                            js=chat_input_focus_js_with_submit,
-                        )
+                    )
+                    quick_uploaded_event = focus_chat_input_event(
+                        self,
+                        quick_uploaded_event,
                     )
 
                 quick_url_uploaded_event = (
                     self._app.chat_page.quick_urls.submit(
-                        fn=lambda: gr.update(
-                            value="Please wait for the indexing process "
-                            "to complete before adding your question."
-                        ),
+                        fn=wait_for_indexing_update,
                         outputs=self._app.chat_page.quick_file_upload_status,
                     )
                     .then(
@@ -146,18 +112,17 @@ class FileIndexEventMixin:
                         concurrency_limit=10,
                     )
                     .success(
-                        fn=lambda: [
-                            gr.update(value=None),
-                            gr.update(value="select"),
-                        ],
+                        fn=clear_uploaded_selector,
                         outputs=[
                             self._app.chat_page.quick_urls,
                             self._app.chat_page._indices_input[0],
                         ],
                     )
                 )
-                for event in self._app.get_event(f"onFileIndex{self._index.id}Changed"):
-                    quick_url_uploaded_event = quick_url_uploaded_event.then(**event)
+                quick_url_uploaded_event = apply_file_index_change_events(
+                    self,
+                    quick_url_uploaded_event,
+                )
 
                 quick_url_uploaded_event = quick_url_uploaded_event.success(
                     fn=lambda x: x,
@@ -176,11 +141,9 @@ class FileIndexEventMixin:
                         concurrency_limit=20,
                     )
 
-                quick_url_uploaded_event = quick_url_uploaded_event.then(
-                    fn=lambda: True,
-                    inputs=None,
-                    outputs=None,
-                    js=chat_input_focus_js_with_submit,
+                quick_url_uploaded_event = focus_chat_input_event(
+                    self,
+                    quick_url_uploaded_event,
                 )
 
         except Exception as exc:
@@ -222,8 +185,7 @@ class FileIndexEventMixin:
                 show_progress="hidden",
             )
         )
-        for event in self._app.get_event(f"onFileIndex{self._index.id}Changed"):
-            on_deleted = on_deleted.then(**event)
+        on_deleted = apply_file_index_change_events(self, on_deleted)
 
         self.deselect_button.click(
             fn=lambda: (None, self.selected_panel_false),
@@ -271,11 +233,7 @@ class FileIndexEventMixin:
             ],
         )
         self.delete_all_button_cancel.click(
-            lambda: [
-                gr.update(visible=True),
-                gr.update(visible=False),
-                gr.update(visible=False),
-            ],
+            hide_delete_all_controls,
             None,
             [
                 self.delete_all_button,
@@ -294,11 +252,7 @@ class FileIndexEventMixin:
             inputs=[self._app.user_id, self.filter],
             outputs=[self.file_list_state, self.file_list],
         ).then(
-            lambda: [
-                gr.update(visible=True),
-                gr.update(visible=False),
-                gr.update(visible=False),
-            ],
+            hide_delete_all_controls,
             None,
             [
                 self.delete_all_button,
@@ -351,8 +305,7 @@ class FileIndexEventMixin:
             outputs=[self.file_list_state, self.file_list],
             concurrency_limit=20,
         )
-        for event in self._app.get_event(f"onFileIndex{self._index.id}Changed"):
-            uploaded_event = uploaded_event.then(**event)
+        uploaded_event = apply_file_index_change_events(self, uploaded_event)
 
         _ = on_uploaded.success(
             fn=lambda: None,
@@ -360,7 +313,7 @@ class FileIndexEventMixin:
         )
 
         self.btn_close_upload_progress_panel.click(
-            fn=lambda: (gr.update(visible=False), "", ""),
+            fn=clear_upload_progress_panel,
             outputs=[self.upload_progress_panel, self.upload_result, self.upload_info],
         )
 
@@ -393,13 +346,7 @@ class FileIndexEventMixin:
             ],
             show_progress="hidden",
         ).then(
-            fn=lambda: (
-                gr.update(visible=True),
-                gr.update(visible=False),
-                gr.update(visible=True),
-                gr.update(visible=True),
-                gr.update(visible=True),
-            ),
+            fn=open_group_panel_updates,
             outputs=[
                 self._group_info_panel,
                 self.group_add_button,
@@ -417,14 +364,7 @@ class FileIndexEventMixin:
         )
 
         self.group_add_button.click(
-            fn=lambda: [
-                gr.update(visible=False),
-                gr.update(value="### Add new group"),
-                gr.update(visible=True),
-                gr.update(value=""),
-                gr.update(value=[]),
-                None,
-            ],
+            fn=prepare_group_create_updates,
             outputs=[
                 self.group_add_button,
                 self.group_label,
@@ -446,14 +386,7 @@ class FileIndexEventMixin:
         )
 
         on_group_closed_event = {
-            "fn": lambda: [
-                gr.update(visible=True),
-                gr.update(visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
-                None,
-            ],
+            "fn": close_group_panel_updates,
             "outputs": [
                 self.group_add_button,
                 self._group_info_panel,
@@ -494,9 +427,8 @@ class FileIndexEventMixin:
             .then(**on_group_closed_event)
         )
 
-        for event in self._app.get_event(f"onFileIndex{self._index.id}Changed"):
-            on_group_deleted = on_group_deleted.then(**event)
-            on_group_saved = on_group_saved.then(**event)
+        on_group_deleted = apply_file_index_change_events(self, on_group_deleted)
+        on_group_saved = apply_file_index_change_events(self, on_group_saved)
 
     def _on_app_created(self):
         if KH_DEMO_MODE:

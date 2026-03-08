@@ -108,31 +108,29 @@ function DesktopViewer({
   onSnapshotError,
 }: DesktopViewerProps) {
   const inlineViewerHeightClass = isTheaterView
-    ? "h-[380px] md:h-[500px] xl:h-[600px]"
-    : "h-[220px] md:h-[280px]";
-  const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-160px)]" : "h-[74vh]";
+    ? "h-[clamp(250px,40vh,410px)]"
+    : "h-[clamp(200px,28vh,285px)]";
+  const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-180px)]" : "h-[74vh]";
   const viewerHeightClass = fullscreen ? fullscreenViewerHeightClass : inlineViewerHeightClass;
+  const viewerWidthClass = fullscreen
+    ? "w-full"
+    : isTheaterView
+      ? "w-full max-w-[860px]"
+      : "w-full max-w-[760px]";
   const suppressOverlayDetail = isPlannerNarrativeEventType(activeEventType) && !isBrowserScene;
-  const shouldRenderCursor = Boolean(eventCursor);
+  const shouldRenderCursor = Boolean(eventCursor) && !isBrowserScene;
 
   return (
     <div
-      className={`mb-3 rounded-2xl border border-black/[0.06] bg-[#0f1115] p-3 text-white shadow-inner ${
+      className={`mx-auto mb-3 w-full max-w-[920px] rounded-2xl border border-black/[0.06] bg-[#0f1115] p-3 text-white shadow-inner ${
         fullscreen ? "mb-0" : ""
       }`}
     >
-      <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-white/75">
-        <span className="inline-flex items-center gap-1.5">
+      <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-white/70">
+        <span className="inline-flex items-center gap-1.5 text-[11px]">
           <Monitor className="h-3.5 w-3.5" />
           Agent desktop
-          {activeRoleLabel ? (
-            <span
-              className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] font-medium text-white"
-              style={{ backgroundColor: `${String(activeRoleColor || "#6b7280")}33`, borderColor: `${String(activeRoleColor || "#6b7280")}99` }}
-            >
-              {activeRoleLabel}
-            </span>
-          ) : null}
+          {activeRoleLabel ? <span className="text-white/45">· {activeRoleLabel}</span> : null}
         </span>
         <div className="inline-flex items-center gap-2">
           {!fullscreen ? (
@@ -142,7 +140,7 @@ function DesktopViewer({
               className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] text-white/85 transition hover:bg-white/10"
               title={isTheaterView ? "Switch to standard viewer size" : "Switch to theater viewer size"}
             >
-              {isTheaterView ? "THEATER" : "STANDARD"}
+              {isTheaterView ? "Theatre" : "Standard"}
             </button>
           ) : null}
           <button
@@ -151,105 +149,94 @@ function DesktopViewer({
             className="rounded-full border border-white/20 px-2 py-0.5 text-[10px] text-white/85 transition hover:bg-white/10"
             title={fullscreen ? "Toggle focus mode" : "Open fullscreen viewer"}
           >
-            {fullscreen ? (isFocusMode ? "FOCUS: ON" : "FOCUS: OFF") : "FULLSCREEN"}
+            {fullscreen ? (isFocusMode ? "Focus on" : "Focus off") : "Fullscreen"}
           </button>
-          <span className="rounded-full border border-white/20 px-2 py-0.5">
-            {streaming ? "LIVE" : "REPLAY"}
+          <span className="inline-flex items-center gap-1 rounded-full border border-white/20 px-2 py-0.5">
+            {streaming ? <span className="h-1.5 w-1.5 rounded-full bg-[#34c759]" /> : null}
+            {streaming ? "Live" : "Replay"}
           </span>
         </div>
       </div>
 
-      <p className="mb-2 text-[13px] font-medium text-white">
+      <p className="mb-2 text-[12px] font-medium text-white/90">
         {roleNarrative || desktopStatus}
       </p>
 
-      <div
-        className={`relative overflow-hidden rounded-xl border border-white/15 bg-[linear-gradient(180deg,#11141b_0%,#0a0c11_100%)] ${viewerHeightClass}`}
-      >
-        <div className="absolute inset-0">
-          <AgentDesktopScene
-            snapshotUrl={effectiveSnapshotUrl}
-            isBrowserScene={isBrowserScene}
-            isEmailScene={isEmailScene}
-            isDocumentScene={isDocumentScene}
-            isDocsScene={isDocsScene}
-            isSheetsScene={isSheetsScene}
-            isSystemScene={isSystemScene}
-            canRenderPdfFrame={canRenderPdfFrame}
-            stageFileUrl={stageFileUrl}
-            stageFileName={stageFileName}
-            browserUrl={browserUrl}
-            emailRecipient={emailRecipient}
-            emailSubject={emailSubject}
-            emailBodyHint={emailBodyHint}
-            docBodyHint={docBodyHint}
-            sheetBodyHint={sheetBodyHint}
-            sceneText={sceneText}
-            activeTitle={activeTitle}
-            activeDetail={activeDetail}
-            activeEventType={activeEventType}
-            activeSceneData={activeSceneData}
-            sceneDocumentUrl={sceneDocumentUrl}
-            sceneSpreadsheetUrl={sceneSpreadsheetUrl}
-            onSnapshotError={onSnapshotError}
-          />
-        </div>
-        {activeEventType === "doc_insert_text" && activeSceneData["content_before"] ? (
-          <DiffViewer
-            before={String(activeSceneData["content_before"] || "")}
-            after={String(activeSceneData["content_after"] || "")}
-          />
-        ) : null}
-        {sceneTransitionLabel ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/20 bg-black/58 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/85 backdrop-blur-sm">
-            {sceneTransitionLabel}
-          </div>
-        ) : null}
-
-        {shouldRenderCursor ? (
-          <>
-            <div
-              className="pointer-events-none absolute left-0 right-0 h-px bg-white/25"
-              style={{ top: `${cursorPoint.y}%` }}
+      <div className={`mx-auto ${viewerWidthClass}`}>
+        <div
+          className={`relative overflow-hidden rounded-xl border border-white/15 bg-[linear-gradient(180deg,#11141b_0%,#0a0c11_100%)] ${viewerHeightClass}`}
+        >
+          <div className="absolute inset-0">
+            <AgentDesktopScene
+              snapshotUrl={effectiveSnapshotUrl}
+              isBrowserScene={isBrowserScene}
+              isEmailScene={isEmailScene}
+              isDocumentScene={isDocumentScene}
+              isDocsScene={isDocsScene}
+              isSheetsScene={isSheetsScene}
+              isSystemScene={isSystemScene}
+              canRenderPdfFrame={canRenderPdfFrame}
+              stageFileUrl={stageFileUrl}
+              stageFileName={stageFileName}
+              browserUrl={browserUrl}
+              emailRecipient={emailRecipient}
+              emailSubject={emailSubject}
+              emailBodyHint={emailBodyHint}
+              docBodyHint={docBodyHint}
+              sheetBodyHint={sheetBodyHint}
+              sceneText={sceneText}
+              activeTitle={activeTitle}
+              activeDetail={activeDetail}
+              activeEventType={activeEventType}
+              activeSceneData={activeSceneData}
+              sceneDocumentUrl={sceneDocumentUrl}
+              sceneSpreadsheetUrl={sceneSpreadsheetUrl}
+              onSnapshotError={onSnapshotError}
             />
+          </div>
+          {activeEventType === "doc_insert_text" && activeSceneData["content_before"] ? (
+            <DiffViewer
+              before={String(activeSceneData["content_before"] || "")}
+              after={String(activeSceneData["content_after"] || "")}
+            />
+          ) : null}
+          {sceneTransitionLabel ? (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/16 bg-black/48 px-3 py-1 text-[10px] font-medium tracking-[0.04em] text-white/80 backdrop-blur-sm">
+              {sceneTransitionLabel}
+            </div>
+          ) : null}
+
+          {shouldRenderCursor ? (
             <div
               className="pointer-events-none absolute z-20 transition-all duration-500 ease-out"
               style={{ left: `${cursorPoint.x}%`, top: `${cursorPoint.y}%` }}
             >
-              <div className="relative">
-                <MousePointer2 className="h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.65)]" />
+              <MousePointer2 className="h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.65)]" />
+            </div>
+          ) : null}
+
+          {activeTitle &&
+          !(fullscreen && isFocusMode) &&
+          !isBrowserScene &&
+          !isDocumentScene &&
+          !isEmailScene &&
+          !isSheetsScene &&
+          !isDocsScene &&
+          !isSystemScene &&
+          !effectiveSnapshotUrl ? (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30">
+              <div className="rounded-xl border border-white/18 bg-black/46 px-3 py-2 backdrop-blur-md">
+                <p className="truncate text-[13px] font-semibold text-white">{activeTitle}</p>
+                {!suppressOverlayDetail ? (
+                  <p className="mt-0.5 line-clamp-2 text-[11px] text-white/85">
+                    {sceneText || roleNarrative || activeDetail || "Processing..."}
+                  </p>
+                ) : null}
               </div>
             </div>
-          </>
-        ) : null}
-
-        {activeTitle && !(fullscreen && isFocusMode) && !isDocsScene ? (
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30">
-            <div className="rounded-xl border border-white/20 bg-black/55 px-3 py-2 backdrop-blur-md">
-              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.08em] text-white/70">
-                <span>{streaming ? "Live scene" : "Current scene"}</span>
-                <span className="inline-flex items-center gap-1">
-                  {streaming ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" /> : null}
-                  Step {safeCursor + 1}/{totalEvents}
-                </span>
-              </div>
-              <p className="truncate text-[13px] font-semibold text-white">{activeTitle}</p>
-              {!suppressOverlayDetail ? (
-                <p className="mt-0.5 line-clamp-2 text-[11px] text-white/85">
-                  {sceneText || roleNarrative || activeDetail || "Processing..."}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      {!(fullscreen && isFocusMode) ? (
-        <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-white/70">
-          <span className="truncate">Opened: {stageFileName}</span>
-          <span className="truncate text-right">{cursorLabel}</span>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

@@ -281,7 +281,7 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
     return [];
   }
   const cards: EvidenceCard[] = [];
-  for (let index = 0; index < rawItems.length && cards.length < 32; index += 1) {
+  for (let index = 0; index < rawItems.length && cards.length < 64; index += 1) {
     const row = rawItems[index];
     if (!row || typeof row !== "object") {
       continue;

@@ -34,7 +34,7 @@ function DocsScene({
   const isTyping = action === "type" && actionStatus !== "failed";
   const typingPulse = isTyping && (actionPhase === "active" || actionPhase === "start");
   return (
-    <div className="absolute inset-0 bg-[linear-gradient(180deg,#e8eaef_0%,#dde1ea_100%)] p-3 text-[#1d1d1f]">
+    <div className="absolute inset-0 bg-[linear-gradient(180deg,#ededf0_0%,#e3e4e8_100%)] p-3 text-[#1d1d1f]">
       <div className="h-full w-full overflow-hidden rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
         <div className="flex items-center gap-2 border-b border-black/[0.08] px-3 py-2">
           <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
@@ -49,7 +49,7 @@ function DocsScene({
             </span>
           ) : null}
         </div>
-        <div className="relative h-[calc(100%-42px)] bg-[#f5f6f8]">
+        <div className="relative h-[calc(100%-42px)] bg-[#f3f3f5]">
           <InteractionOverlay
             sceneSurface="google_docs"
             activeEventType={activeEventType}
@@ -70,7 +70,7 @@ function DocsScene({
                 referrerPolicy="no-referrer-when-downgrade"
               />
               {typingPulse ? (
-                <div className="pointer-events-none absolute bottom-4 left-4 right-4 rounded-lg border border-[#0a84ff]/30 bg-[#0a84ff]/12 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#0c4f94]">
+                <div className="pointer-events-none absolute bottom-4 left-4 right-4 rounded-lg border border-black/20 bg-black/5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#1d1d1f]">
                   Typing focus active
                 </div>
               ) : null}
@@ -80,7 +80,7 @@ function DocsScene({
               <div
                 className={`mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border bg-white px-8 py-6 transition-all duration-300 ${
                   typingPulse
-                    ? "border-[#0a84ff]/35 shadow-[0_0_0_1px_rgba(10,132,255,0.28)]"
+                    ? "border-black/25 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]"
                     : "border-black/[0.08]"
                 }`}
               >

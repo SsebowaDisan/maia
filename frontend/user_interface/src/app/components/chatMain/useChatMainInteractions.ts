@@ -1,27 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { getIngestionJob } from "../../../api/client";
-import type { ChatAttachment, ChatTurn } from "../../types";
-import { formatIngestionJobProgress, formatUploadProgress } from "./ingestionProgress";
+import type { ChatTurn } from "../../types";
 import { buildWorkspaceModeOverride } from "./workspaceModeOverride";
 import type { ChatMainProps, ComposerAttachment } from "./types";
+import {
+  attachDocumentById as attachDocumentByIdAction,
+  attachGroupById as attachGroupByIdAction,
+  attachProjectById as attachProjectByIdAction,
+  mapTurnAttachments,
+} from "./interactions/attachmentActions";
+import { ComposerMode, WEB_SEARCH_SETTING_OVERRIDES } from "./interactions/constants";
+import { handleComposerFileChange } from "./interactions/fileUpload";
 
-const CHAT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
-const CHAT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
-const WEB_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
-  __deep_search_enabled: true,
-  __research_web_only: true,
-  __llm_only_keyword_generation: true,
-  __llm_only_keyword_generation_strict: true,
-  __research_depth_tier: "deep_research",
-  __research_web_search_budget: 200,
-  __research_max_query_variants: 12,
-  __research_results_per_query: 20,
-  __research_fused_top_k: 200,
-  __research_min_unique_sources: 60,
-  __research_max_live_inspections: 12,
-  __deep_search_max_source_ids: 200,
-};
-type ComposerMode = "ask" | "company_agent" | "deep_search" | "web_search";
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
   | "accessMode"
@@ -143,16 +132,6 @@ function useChatMainInteractions({
     return snippets;
   }, [activityEvents]);
 
-  const mapTurnAttachments = (turnAttachments?: ChatAttachment[]) =>
-    (turnAttachments || []).map((attachment, idx) => ({
-      id: `compose-${Date.now()}-${idx}-${attachment.name}`,
-      name: attachment.name,
-      status: "indexed" as const,
-      fileId: attachment.fileId,
-      kind: attachment.fileId ? ("file" as const) : undefined,
-      entityId: attachment.fileId || undefined,
-    }));
-
   const removeAttachment = (attachmentId: string) => {
     setAttachments((previous) => {
       const next: ComposerAttachment[] = [];
@@ -167,121 +146,32 @@ function useChatMainInteractions({
     });
   };
 
-  const createDocumentAttachment = (
-    file: { id: string; name: string },
-    fallbackIdPrefix = "doc",
-  ): ComposerAttachment => ({
-    id: `${fallbackIdPrefix}-${file.id}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`,
-    name: file.name,
-    status: "indexed",
-    fileId: file.id,
-    kind: "file",
-    entityId: file.id,
-  });
-
   const attachDocumentById = (fileId: string) => {
-    const target = availableDocuments.find((item) => item.id === fileId);
-    if (!target) {
-      showActionStatus("Document not found.");
-      return;
-    }
-    let added = false;
-    setAttachments((previous) => {
-      if (previous.some((item) => item.fileId && item.fileId === target.id)) {
-        return previous;
-      }
-      added = true;
-      return [...previous, createDocumentAttachment(target)];
+    attachDocumentByIdAction({
+      fileId,
+      availableDocuments,
+      setAttachments,
+      showActionStatus,
     });
-    if (!added) {
-      showActionStatus(`"${target.name}" is already attached.`);
-      return;
-    }
-    showActionStatus(`Attached "${target.name}".`);
   };
 
   const attachGroupById = (groupId: string) => {
-    const group = availableGroups.find((item) => item.id === groupId);
-    if (!group) {
-      showActionStatus("Group not found.");
-      return;
-    }
-
-    const docsById = new Map(availableDocuments.map((item) => [item.id, item]));
-    const groupDocs = Array.from(new Set(group.file_ids || []))
-      .map((fileId) => docsById.get(fileId))
-      .filter((item): item is NonNullable<typeof item> => Boolean(item));
-    if (!groupDocs.length) {
-      showActionStatus(`"${group.name}" has no available documents.`);
-      return;
-    }
-
-    const ATTACH_LIMIT = 40;
-    const slicedDocs = groupDocs.slice(0, ATTACH_LIMIT);
-    let addedCount = 0;
-    setAttachments((previous) => {
-      const existingFileIds = new Set(
-        previous.map((item) => String(item.fileId || "").trim()).filter(Boolean),
-      );
-      const next = [...previous];
-      for (const doc of slicedDocs) {
-        if (existingFileIds.has(doc.id)) {
-          continue;
-        }
-        next.push(createDocumentAttachment(doc, "group-doc"));
-        existingFileIds.add(doc.id);
-        addedCount += 1;
-      }
-      return next;
+    attachGroupByIdAction({
+      groupId,
+      availableGroups,
+      availableDocuments,
+      setAttachments,
+      showActionStatus,
     });
-
-    if (!addedCount) {
-      showActionStatus(`All documents from "${group.name}" are already attached.`);
-      return;
-    }
-    const remaining = groupDocs.length - slicedDocs.length;
-    if (remaining > 0) {
-      showActionStatus(
-        `Attached ${addedCount} docs from "${group.name}" (limit ${ATTACH_LIMIT}, ${remaining} not added).`,
-      );
-      return;
-    }
-    showActionStatus(`Attached ${addedCount} docs from "${group.name}".`);
   };
 
   const attachProjectById = (projectId: string) => {
-    const project = availableProjects.find((item) => item.id === projectId);
-    if (!project) {
-      showActionStatus("Project not found.");
-      return;
-    }
-    const projectEntityId = `project:${project.id}`;
-    let added = false;
-    setAttachments((previous) => {
-      if (
-        previous.some(
-          (item) => item.kind === "project" && String(item.entityId || "").trim() === projectEntityId,
-        )
-      ) {
-        return previous;
-      }
-      added = true;
-      return [
-        ...previous,
-        {
-          id: `project-${project.id}-${Date.now()}`,
-          name: `Project: ${project.name}`,
-          status: "indexed",
-          kind: "project",
-          entityId: projectEntityId,
-        },
-      ];
+    attachProjectByIdAction({
+      projectId,
+      availableProjects,
+      setAttachments,
+      showActionStatus,
     });
-    if (!added) {
-      showActionStatus(`"${project.name}" is already attached.`);
-      return;
-    }
-    showActionStatus(`Attached project "${project.name}".`);
   };
 
   const submit = async () => {
@@ -294,7 +184,7 @@ function useChatMainInteractions({
       agentMode === "deep_search" && deepSearchProfile === "web_search"
         ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
         : workspaceModeOverride;
-    const turnAttachments: ChatAttachment[] = attachments
+    const turnAttachments = attachments
       .filter((item) => item.status !== "error")
       .map((item) => ({ name: item.name, fileId: item.fileId }));
     setMessage("");
@@ -353,10 +243,7 @@ function useChatMainInteractions({
   };
 
   const saveInlineEdit = async () => {
-    if (editingTurnIndex === null) {
-      return;
-    }
-    if (isSending) {
+    if (editingTurnIndex === null || isSending) {
       return;
     }
     const value = editingText.trim();
@@ -427,9 +314,7 @@ function useChatMainInteractions({
   };
 
   const composerMode: ComposerMode =
-    agentMode === "deep_search" && deepSearchProfile === "web_search"
-      ? "web_search"
-      : agentMode;
+    agentMode === "deep_search" && deepSearchProfile === "web_search" ? "web_search" : agentMode;
 
   const pasteHighlightsToComposer = () => {
     if (!latestHighlightSnippets.length) {
@@ -461,179 +346,14 @@ function useChatMainInteractions({
   };
 
   const onFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = event.target.files;
-    if (!selectedFiles || !selectedFiles.length) {
-      return;
-    }
-    const selectedRows = Array.from(selectedFiles);
-    const overSizeFile = selectedRows.find((file) => file.size > CHAT_MAX_FILE_SIZE_BYTES);
-    if (overSizeFile) {
-      showActionStatus(
-        `File "${overSizeFile.name}" is larger than 512 MB and cannot be uploaded.`,
-      );
-      event.target.value = "";
-      return;
-    }
-    const totalBytes = selectedRows.reduce((total, file) => total + file.size, 0);
-    if (totalBytes > CHAT_MAX_TOTAL_BYTES) {
-      showActionStatus("Selected files exceed the 1 GB total upload limit.");
-      event.target.value = "";
-      return;
-    }
-    const pending = selectedRows.map((file, idx) => ({
-      id: `${Date.now()}-${idx}-${file.name}`,
-      name: file.name,
-      status: "uploading" as const,
-      message: "Uploading 0%",
-      localUrl: URL.createObjectURL(file),
-      mimeType: String(file.type || ""),
-      kind: "file" as const,
-    }));
-    setAttachments((prev) => [...prev, ...pending]);
-    const updatePendingMessage = (text: string) => {
-      setAttachments((prev) =>
-        prev.map((attachment) =>
-          pending.some((item) => item.id === attachment.id)
-            ? {
-                ...attachment,
-                status: "uploading",
-                message: text,
-              }
-            : attachment,
-        ),
-      );
-    };
-
-    const applyUploadResult = (result: {
-      items: { status: string; file_id?: string; message?: string }[];
-      errors: string[];
-      file_ids: string[];
-    }) => {
-      const failedMessages: string[] = [];
-      let successCursor = 0;
-      setAttachments((prev) =>
-        prev.map((attachment) => {
-          const pendingIdx = pending.findIndex((item) => item.id === attachment.id);
-          if (pendingIdx === -1) {
-            return attachment;
-          }
-          const item = result.items[pendingIdx];
-          if (item?.status === "success") {
-            const mappedFileId = item.file_id || result.file_ids[successCursor] || undefined;
-            successCursor += 1;
-            return {
-              ...attachment,
-              status: "indexed",
-              message: undefined,
-              fileId: mappedFileId,
-              entityId: mappedFileId,
-              kind: "file" as const,
-            };
-          }
-          const failureMessage = item?.message || result.errors[0] || "Upload failed.";
-          failedMessages.push(failureMessage);
-          return {
-            ...attachment,
-            status: "error",
-            message: failureMessage,
-          };
-        }),
-      );
-      if (failedMessages.length > 0) {
-        const reason = String(failedMessages[0] || "Upload failed.").trim();
-        const compact = reason.length > 120 ? `${reason.slice(0, 117)}...` : reason;
-        showActionStatus(`Upload failed: ${compact}`);
-      } else {
-        showActionStatus(
-          `Uploaded ${pending.length} file${pending.length === 1 ? "" : "s"} successfully.`,
-        );
-      }
-    };
-
-    const waitForIngestionJob = async (jobId: string) => {
-      const startedAt = Date.now();
-      const timeoutMs = 20 * 60 * 1000;
-      while (true) {
-        const job = await getIngestionJob(jobId);
-        const status = String(job.status || "").toLowerCase();
-        if (status === "completed") {
-          return job;
-        }
-        if (status === "failed" || status === "canceled") {
-          const reason = job.errors[0] || job.message || `Ingestion job ${job.status}`;
-          throw new Error(reason);
-        }
-        updatePendingMessage(formatIngestionJobProgress(job));
-
-        if (Date.now() - startedAt > timeoutMs) {
-          throw new Error("Ingestion timed out while indexing attachments.");
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 1500));
-      }
-    };
-    setIsUploading(true);
-    try {
-      const shouldQueueAsyncJob = Boolean(onCreateFileIngestionJob);
-
-      if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
-        updatePendingMessage("Uploading to server 0%");
-        const queued = await onCreateFileIngestionJob(selectedFiles, {
-          reindex: true,
-          scope: "chat_temp",
-          onUploadProgress: (loadedBytes, totalBytesBytes) => {
-            updatePendingMessage(
-              formatUploadProgress(loadedBytes, totalBytesBytes, "creating indexing job"),
-            );
-          },
-        });
-        updatePendingMessage(formatIngestionJobProgress(queued));
-        showActionStatus(
-          `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
-        );
-        const finalJob = await waitForIngestionJob(queued.id);
-        applyUploadResult({
-          items: finalJob.items,
-          errors: finalJob.errors,
-          file_ids: finalJob.file_ids,
-        });
-      } else {
-        const response = await onUploadFiles(selectedFiles, {
-          onUploadProgress: (loadedBytes, totalBytesBytes) => {
-            updatePendingMessage(
-              formatUploadProgress(
-                loadedBytes,
-                totalBytesBytes,
-                "server indexing in progress (no live server metrics)",
-              ),
-            );
-          },
-        });
-        applyUploadResult({
-          items: response.items,
-          errors: response.errors,
-          file_ids: response.file_ids,
-        });
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error || "Upload failed.");
-      const compact = errorMessage.length > 120 ? `${errorMessage.slice(0, 117)}...` : errorMessage;
-      setAttachments((prev) =>
-        prev.map((attachment) =>
-          pending.some((item) => item.id === attachment.id)
-            ? {
-                ...attachment,
-                status: "error",
-                message: errorMessage,
-              }
-            : attachment,
-        ),
-      );
-      showActionStatus(`Upload failed: ${compact}`);
-    } finally {
-      setIsUploading(false);
-      event.target.value = "";
-    }
+    await handleComposerFileChange({
+      event,
+      onCreateFileIngestionJob,
+      onUploadFiles,
+      setAttachments,
+      setIsUploading,
+      showActionStatus,
+    });
   };
 
   useEffect(() => {
@@ -673,31 +393,31 @@ function useChatMainInteractions({
     attachments,
     beginInlineEdit,
     cancelInlineEdit,
+    clearAttachments,
+    composerMode,
     copyPlainText,
     editingText,
     editingTurnIndex,
     enableAskMode,
     enableAgentMode,
-    enableWebSearch,
     enableDeepResearch,
+    enableWebSearch,
     fileInputRef,
     isUploading,
     latestHighlightSnippets,
     message,
     messageActionStatus,
-    composerMode,
     onFileChange,
     pasteHighlightsToComposer,
     quoteAssistant,
     removeAttachment,
+    retryTurn,
     saveInlineEdit,
-    clearAttachments,
     setAttachments,
     setEditingText,
     setMessage,
     showActionStatus,
     submit,
-    retryTurn,
   };
 }
 

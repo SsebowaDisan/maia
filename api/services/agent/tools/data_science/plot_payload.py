@@ -227,3 +227,145 @@ def build_interactive_plot_payload(
     payload["points"] = points
     payload["y"] = "count"
     return payload
+
+
+def build_heatmap_payload(*, df: Any, title: str) -> dict[str, Any]:
+    numeric_df = df.select_dtypes(include="number")
+    labels = list(numeric_df.columns[:20])
+    payload: dict[str, Any] = {
+        "kind": "chart",
+        "library": "recharts",
+        "chart_type": "heatmap",
+        "title": title,
+        "labels": labels,
+        "matrix": [],
+    }
+    if len(labels) < 2:
+        return payload
+    corr = numeric_df[labels].corr().round(3)
+    payload["matrix"] = corr.values.tolist()
+    return payload
+
+
+def build_box_payload(*, df: Any, title: str, x_col: str, y_col: str, top_n: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": "chart",
+        "library": "recharts",
+        "chart_type": "box",
+        "title": title,
+        "x": x_col,
+        "y": y_col,
+        "groups": [],
+    }
+    if not y_col or y_col not in df.columns:
+        return payload
+    if x_col and x_col in df.columns:
+        top_cats = (
+            df[[x_col, y_col]].dropna().groupby(x_col)[y_col]
+            .count().sort_values(ascending=False).head(max(3, min(top_n, 20))).index
+        )
+        groups_iter = df[[x_col, y_col]].dropna().groupby(x_col)[y_col]
+        groups_data = [(str(cat), groups_iter.get_group(cat)) for cat in top_cats]
+    else:
+        groups_data = [("all", df[y_col].dropna())]
+    groups = []
+    for label, series in groups_data:
+        if series.empty:
+            continue
+        q1 = float(series.quantile(0.25))
+        median = float(series.median())
+        q3 = float(series.quantile(0.75))
+        iqr = q3 - q1
+        wl = max(float(series.min()), q1 - 1.5 * iqr)
+        wh = min(float(series.max()), q3 + 1.5 * iqr)
+        outliers = [round(float(v), 4) for v in series.tolist() if v < wl or v > wh][:40]
+        groups.append({
+            "x": label, "q1": round(q1, 4), "median": round(median, 4),
+            "q3": round(q3, 4), "whisker_low": round(wl, 4), "whisker_high": round(wh, 4),
+            "outliers": outliers,
+        })
+    payload["groups"] = groups
+    return payload
+
+
+def build_pie_payload(*, df: Any, title: str, x_col: str, y_col: str, top_n: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": "chart",
+        "library": "recharts",
+        "chart_type": "pie",
+        "title": title,
+        "x": x_col,
+        "y": y_col,
+        "slices": [],
+    }
+    if not x_col or x_col not in df.columns or not y_col or y_col not in df.columns:
+        return payload
+    bounded_n = max(3, min(top_n, 16))
+    grouped = df[[x_col, y_col]].dropna().groupby(x_col)[y_col].sum().sort_values(ascending=False)
+    total = float(grouped.sum())
+    if total == 0:
+        return payload
+    top = grouped.head(bounded_n)
+    slices = [
+        {"label": str(lbl), "value": round(float(val), 4), "percent": round(float(val) / total * 100, 2)}
+        for lbl, val in top.items()
+    ]
+    other_sum = float(grouped.iloc[bounded_n:].sum())
+    if other_sum > 0:
+        slices.append({"label": "Other", "value": round(other_sum, 4), "percent": round(other_sum / total * 100, 2)})
+    payload["slices"] = slices
+    return payload
+
+
+def build_area_payload(*, df: Any, title: str, x_col: str, y_col: str, series_columns: list[str] | None) -> dict[str, Any]:
+    normalized = _normalize_series_columns(chart_type="line", y_col=y_col, series_columns=series_columns)
+    payload: dict[str, Any] = {
+        "kind": "chart",
+        "library": "recharts",
+        "chart_type": "area",
+        "title": title,
+        "x": x_col,
+        "y": y_col,
+        "x_type": "category",
+        "filled": True,
+        "series": _series_specs(normalized, default_type="area"),
+        "points": [],
+        "interactive": {"brush": True},
+    }
+    if not normalized:
+        return payload
+    if x_col and x_col in df.columns:
+        subset = [x_col, *normalized]
+        rows = df[subset].dropna(subset=normalized).head(800).to_dict(orient="records")
+        points: list[dict[str, Any]] = []
+        for item in rows:
+            point: dict[str, Any] = {"x": _string_or_number(item.get(x_col))}
+            for key in normalized:
+                value = _safe_number(item.get(key))
+                if value is not None:
+                    point[key] = value
+            if len(point) > 1:
+                point["y"] = point.get(normalized[0])
+                points.append(point)
+        payload["x_type"] = (
+            "numeric"
+            if all(_safe_number(pt.get("x")) is not None for pt in points[:120])
+            else "category"
+        )
+        payload["points"] = points
+    else:
+        rows_df = df[normalized].dropna(subset=normalized).head(800)
+        points = []
+        for idx, row in enumerate(rows_df.to_dict(orient="records"), start=1):
+            point = {"x": idx}
+            for key in normalized:
+                value = _safe_number(row.get(key))
+                if value is not None:
+                    point[key] = value
+            if len(point) > 1:
+                point["y"] = point.get(normalized[0])
+                points.append(point)
+        payload["x"] = x_col or "row_index"
+        payload["x_type"] = "numeric"
+        payload["points"] = points
+    return payload

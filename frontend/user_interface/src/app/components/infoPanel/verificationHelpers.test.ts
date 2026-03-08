@@ -73,4 +73,55 @@ describe("verificationHelpers", () => {
     expect(result.citationIsPdf).toBe(false);
     expect(result.citationOpenUrl).toBe("https://axongroup.com/about-axon");
   });
+
+  it("maps web-sourced PDF evidence card with fileId as file type", () => {
+    const card: EvidenceCard = {
+      id: "evidence-5",
+      title: "Evidence [5]",
+      source: "SEC Filing Q3 2023",
+      sourceType: "pdf",
+      sourceUrl: "https://sec.gov/filings/q3-2023.pdf",
+      fileId: "file-99",
+      page: "4",
+      extract: "Revenue reached $12B in Q3.",
+    };
+    const citation = toCitationFromEvidence(card, 0);
+    // fileId present → must be "file", not "website"
+    expect(citation.sourceType).toBe("file");
+    expect(citation.fileId).toBe("file-99");
+  });
+
+  it("resolves open URL to source website for stored PDF with web origin", () => {
+    const result = resolveCitationOpenUrl({
+      citation: {
+        sourceName: "SEC Filing Q3 2023",
+        extract: "Revenue reached $12B.",
+        sourceType: "file" as const,
+        fileId: "file-99",
+        sourceUrl: "https://sec.gov/filings/q3-2023.pdf",
+        evidenceId: "evidence-5",
+      },
+      evidenceCards: [],
+      indexId: null,
+    });
+    // Raw file URL exists (fileId set) + website URL also exists
+    // → PDF viewer shows, "Open" goes to the original source URL
+    expect(result.citationIsPdf).toBe(true);
+    expect(result.citationUsesWebsite).toBe(false);
+    expect(result.citationOpenUrl).toBe("https://sec.gov/filings/q3-2023.pdf");
+  });
+
+  it("maps pure web source without fileId as website type", () => {
+    const card: EvidenceCard = {
+      id: "evidence-6",
+      title: "Evidence [6]",
+      source: "Reuters",
+      sourceType: "web",
+      sourceUrl: "https://reuters.com/article/abc",
+      extract: "Market cap grew 20%.",
+    };
+    const citation = toCitationFromEvidence(card, 0);
+    // No fileId → infer from sourceUrl → "website"
+    expect(citation.sourceType).toBe("website");
+  });
 });

@@ -28,7 +28,7 @@ export function InteractionTrace({ points }: InteractionTraceProps) {
       <polyline
         points={polylinePoints}
         fill="none"
-        stroke="rgba(134,217,255,0.4)"
+        stroke="rgba(255,255,255,0.36)"
         strokeWidth="0.4"
         strokeDasharray="1.5 1"
         strokeLinecap="round"
@@ -43,7 +43,7 @@ export function InteractionTrace({ points }: InteractionTraceProps) {
             cx={p.x}
             cy={p.y}
             r={r}
-            fill={`rgba(134,217,255,${opacity.toFixed(2)})`}
+            fill={`rgba(255,255,255,${opacity.toFixed(2)})`}
           />
         );
       })}

@@ -135,7 +135,7 @@ def _build_safe_paragraph_html(paragraphs: list[str]) -> str:
 def build_web_review_content(
     evidence_items: list[dict[str, Any]],
     *,
-    max_sources: int = 8,
+    max_sources: int = 16,
     max_snippets_per_source: int = 18,
 ) -> dict[str, Any]:
     if not isinstance(evidence_items, list) or not evidence_items:
@@ -239,7 +239,7 @@ def build_verification_evidence_items(
     *,
     snippets_with_refs: list[dict[str, Any]],
     refs: list[dict[str, Any]],
-    max_items: int = 32,
+    max_items: int = 64,
 ) -> list[dict[str, Any]]:
     if not snippets_with_refs and not refs:
         return []

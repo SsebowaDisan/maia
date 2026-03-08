@@ -86,7 +86,11 @@ _ROLE_CONTRACTS: dict[AgentRole, AgentRoleContract] = {
                 "data.science.visualize",
                 "data.science.ml.train",
                 "data.science.deep_learning.train",
+                "data.science.stats",
+                "data.science.feature_importance",
+                "data.science.cluster",
                 "analytics.ga4.report",
+                "analytics.ga4.full_report",
                 "ads.google.performance",
                 "analytics.chart.generate",
             }

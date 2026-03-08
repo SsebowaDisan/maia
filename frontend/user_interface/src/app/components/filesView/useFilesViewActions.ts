@@ -1,10 +1,7 @@
-import type { ChangeEvent, Dispatch, DragEvent, SetStateAction } from "react";
+import type { Dispatch, DragEvent, SetStateAction } from "react";
 import type { FileGroupRecord, FileRecord, IngestionJob } from "../../../api/client";
-import { extractSuccessfulFileIds } from "./helpers";
 import type { DeleteConfirmationState, PendingDeleteJob } from "./types";
-
-const CLIENT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
-const CLIENT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
+import { createUploadActions } from "./uploadActions";
 
 interface UseFilesViewActionsParams {
   onDeleteFiles?: (fileIds: string[]) => Promise<{
@@ -367,137 +364,21 @@ function useFilesViewActions({
       window.setTimeout(() => setActionMessage(""), 2600);
     }
   };
-
-  const handleFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    if (!event.target.files || !event.target.files.length) return;
-    if (!onUploadFiles || !onMoveFilesToGroup) {
-      setActionMessage("Upload action is not available.");
-      window.setTimeout(() => setActionMessage(""), 2400);
-      event.target.value = "";
-      return;
-    }
-    if (!fileGroups.length) {
-      setActionMessage("Create a group first before uploading files.");
-      window.setTimeout(() => setActionMessage(""), 2600);
-      event.target.value = "";
-      return;
-    }
-    if (!uploadGroupId) {
-      setActionMessage("Choose a destination group before uploading.");
-      window.setTimeout(() => setActionMessage(""), 2600);
-      event.target.value = "";
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const selectedFiles = Array.from(event.target.files);
-      const totalBytes = selectedFiles.reduce((total, file) => total + file.size, 0);
-      const overSizeFile = selectedFiles.find((file) => file.size > CLIENT_MAX_FILE_SIZE_BYTES);
-      if (overSizeFile) {
-        setActionMessage(
-          `File "${overSizeFile.name}" is larger than 512 MB and cannot be uploaded in one request.`,
-        );
-        window.setTimeout(() => setActionMessage(""), 3400);
-        return;
-      }
-      if (totalBytes > CLIENT_MAX_TOTAL_BYTES) {
-        setActionMessage("Selected files exceed 1 GB total request limit.");
-        window.setTimeout(() => setActionMessage(""), 3200);
-        return;
-      }
-      if (onCreateFileIngestionJob) {
-        const queued = await onCreateFileIngestionJob(event.target.files, {
-          reindex: forceReindex,
-          groupId: uploadGroupId,
-        });
-        setActionMessage(
-          `Queued ingestion job ${queued.id.slice(0, 8)} for ${queued.total_items} file(s). Files will appear in the selected group after indexing.`,
-        );
-        await onRefreshIngestionJobs?.();
-        await onRefreshFiles?.();
-        window.setTimeout(() => setActionMessage(""), 3200);
-        return;
-      }
-
-      const response = await onUploadFiles(event.target.files, { reindex: forceReindex, scope: "persistent" });
-      const successFileIds = extractSuccessfulFileIds(response);
-      if (!successFileIds.length) {
-        setActionMessage(response.errors[0] || "No files were indexed.");
-        window.setTimeout(() => setActionMessage(""), 2600);
-        return;
-      }
-      const moveResponse = await onMoveFilesToGroup(successFileIds, { groupId: uploadGroupId, mode: "append" });
-      const failedCount = response.items.filter((item) => item.status !== "success").length;
-      setActionMessage(
-        failedCount > 0
-          ? `Uploaded ${successFileIds.length} file(s) to "${moveResponse.group.name}", ${failedCount} failed.`
-          : `Uploaded ${successFileIds.length} file(s) to "${moveResponse.group.name}".`,
-      );
-      await onRefreshIngestionJobs?.();
-      await onRefreshFiles?.();
-      window.setTimeout(() => setActionMessage(""), 2600);
-    } catch (error) {
-      setActionMessage(`Upload failed: ${String(error)}`);
-      window.setTimeout(() => setActionMessage(""), 2600);
-    } finally {
-      setIsSubmitting(false);
-      event.target.value = "";
-    }
-  };
-
-  const handleUrlIndex = async () => {
-    if (!urlText.trim()) return;
-    if (!onUploadUrls || !onMoveFilesToGroup) {
-      setActionMessage("URL indexing is not available.");
-      window.setTimeout(() => setActionMessage(""), 2400);
-      return;
-    }
-    if (!fileGroups.length) {
-      setActionMessage("Create a group first before indexing URLs.");
-      window.setTimeout(() => setActionMessage(""), 2600);
-      return;
-    }
-    if (!uploadGroupId) {
-      setActionMessage("Choose a destination group before indexing URLs.");
-      window.setTimeout(() => setActionMessage(""), 2600);
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const response = await onUploadUrls(urlText, {
-        reindex: forceReindex,
-        web_crawl_depth: 0,
-        web_crawl_max_pages: 0,
-        web_crawl_same_domain_only: true,
-        include_pdfs: true,
-        include_images: true,
-      });
-      const successFileIds = extractSuccessfulFileIds(response);
-      if (!successFileIds.length) {
-        setActionMessage(response.errors[0] || "No URL content was indexed.");
-        window.setTimeout(() => setActionMessage(""), 2600);
-        return;
-      }
-      const moveResponse = await onMoveFilesToGroup(successFileIds, { groupId: uploadGroupId, mode: "append" });
-      const failedCount = response.items.filter((item) => item.status !== "success").length;
-      setActionMessage(
-        failedCount > 0
-          ? `Indexed ${successFileIds.length} source(s) to "${moveResponse.group.name}", ${failedCount} failed.`
-          : `Indexed ${successFileIds.length} source(s) to "${moveResponse.group.name}".`,
-      );
-      await onRefreshIngestionJobs?.();
-      await onRefreshFiles?.();
-      setUrlText("");
-      window.setTimeout(() => setActionMessage(""), 2600);
-    } catch (error) {
-      setActionMessage(`URL indexing failed: ${String(error)}`);
-      window.setTimeout(() => setActionMessage(""), 2600);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const { handleFileInputChange, handleUrlIndex } = createUploadActions({
+    onUploadFiles,
+    onCreateFileIngestionJob,
+    onUploadUrls,
+    onMoveFilesToGroup,
+    onRefreshIngestionJobs,
+    onRefreshFiles,
+    fileGroups,
+    uploadGroupId,
+    urlText,
+    forceReindex,
+    setIsSubmitting,
+    setActionMessage,
+    setUrlText,
+  });
 
   return {
     dropFilesIntoGroup,

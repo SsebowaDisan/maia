@@ -109,6 +109,10 @@ def plan_step_event(
         title=f"Planned step {step_number}",
         detail=detail,
         metadata={
+            "scene_surface": "document",
+            "action": "type",
+            "action_phase": "active",
+            "action_status": "in_progress",
             "step": step_number,
             "title": planned_step.title,
             "tool_id": planned_step.tool_id,
@@ -139,6 +143,10 @@ def plan_candidate_event(
         title="Generated initial execution plan",
         detail=f"Parsed task into {len(steps)} concrete execution step(s).",
         metadata={
+            "scene_surface": "document",
+            "action": "type",
+            "action_phase": "active",
+            "action_status": "in_progress",
             "steps": [step.__dict__ for step in steps],
             "task_understanding": {
                 "objective": task_prep.task_intelligence.objective,
@@ -183,6 +191,10 @@ def plan_refined_event(
         title="Refined execution order",
         detail="Prioritized sequence with search terms and keyword blueprint",
         metadata={
+            "scene_surface": "document",
+            "action": "type",
+            "action_phase": "active",
+            "action_status": "in_progress",
             "step_ids": [step.tool_id for step in steps],
             "search_terms": planned_search_terms[:6],
             "keywords": planned_keywords[:12],
@@ -241,6 +253,10 @@ def plan_ready_event(
         event_type="plan_ready",
         title=f"Prepared {len(steps)} execution steps",
         metadata={
+            "scene_surface": "document",
+            "action": "type",
+            "action_phase": "completed",
+            "action_status": "completed",
             "steps": [step.__dict__ for step in steps],
             "role_owned_steps": (
                 role_owned_steps[:32]

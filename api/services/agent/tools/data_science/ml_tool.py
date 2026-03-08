@@ -352,6 +352,74 @@ class DataScienceModelTrainTool(AgentTool):
             )
         )
 
+        cross_val_results: dict[str, Any] = {}
+        tune_results: dict[str, Any] = {}
+        cross_val_param = str(params.get("cross_val") or "").lower() in {"true", "1", "yes"}
+        tune_param = str(params.get("tune") or "").lower() in {"true", "1", "yes"}
+
+        if cross_val_param:
+            try:
+                from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
+                n_splits = 5
+                cv_scoring = "accuracy" if problem_type == "classification" else "r2"
+                cv = (
+                    StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                    if problem_type == "classification"
+                    else KFold(n_splits=n_splits, shuffle=True, random_state=42)
+                )
+                cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring=cv_scoring)
+                cross_val_results = {
+                    "cv_mean": round(float(cv_scores.mean()), 5),
+                    "cv_std": round(float(cv_scores.std()), 5),
+                    "cv_scores": [round(float(s), 5) for s in cv_scores.tolist()],
+                    "scoring": cv_scoring,
+                    "n_splits": n_splits,
+                }
+                events.append(
+                    _trace_event(
+                        tool_id=self.metadata.tool_id,
+                        event_type="tool_progress",
+                        title="Cross-validation complete",
+                        detail=f"{cv_scoring} mean={cross_val_results['cv_mean']:.5f} ±{cross_val_results['cv_std']:.5f}",
+                        data=cross_val_results,
+                    )
+                )
+            except Exception as exc:
+                warnings.append(f"Cross-validation failed: {str(exc)}")
+
+        if tune_param:
+            try:
+                from sklearn.model_selection import GridSearchCV
+                if model_label == "logistic_regression":
+                    param_grid: dict[str, Any] = {"model__C": [0.01, 0.1, 1, 10]}
+                elif model_label in {"random_forest_classifier", "random_forest_regressor"}:
+                    param_grid = {
+                        "model__n_estimators": [50, 100, 200],
+                        "model__max_depth": [None, 5, 10],
+                    }
+                else:
+                    param_grid = {}
+                if param_grid:
+                    tune_scoring = "accuracy" if problem_type == "classification" else "r2"
+                    gs = GridSearchCV(pipeline, param_grid, cv=3, scoring=tune_scoring, n_jobs=-1)
+                    gs.fit(X_train, y_train)
+                    tune_results = {
+                        "best_params": gs.best_params_,
+                        "best_cv_score": round(float(gs.best_score_), 5),
+                        "scoring": tune_scoring,
+                    }
+                    events.append(
+                        _trace_event(
+                            tool_id=self.metadata.tool_id,
+                            event_type="tool_progress",
+                            title="Hyperparameter tuning complete",
+                            detail=f"best_cv_score={tune_results['best_cv_score']:.5f}",
+                            data=tune_results,
+                        )
+                    )
+            except Exception as exc:
+                warnings.append(f"Hyperparameter tuning failed: {str(exc)}")
+
         context.settings["__latest_ml_training"] = {
             "target": target,
             "problem_type": problem_type,
@@ -384,6 +452,19 @@ class DataScienceModelTrainTool(AgentTool):
             "### Metrics",
             *(metric_lines or ["- No metrics were produced."]),
         ]
+        if cross_val_results:
+            content_lines.extend([
+                "", "### Cross-Validation (5-fold)",
+                f"- Scoring: {cross_val_results['scoring']}",
+                f"- Mean: {cross_val_results['cv_mean']:.5f} ± {cross_val_results['cv_std']:.5f}",
+                f"- Fold scores: {', '.join(str(s) for s in cross_val_results['cv_scores'])}",
+            ])
+        if tune_results:
+            content_lines.extend([
+                "", "### Hyperparameter Tuning",
+                f"- Best CV score: {tune_results['best_cv_score']:.5f}",
+                *[f"- {k}: {v}" for k, v in tune_results.get("best_params", {}).items()],
+            ])
         if quality_issues:
             content_lines.extend(["", "### Data Quality Issues", *[f"- {item}" for item in quality_issues[:8]]])
         if notes:
@@ -401,6 +482,9 @@ class DataScienceModelTrainTool(AgentTool):
                 "train_rows": len(X_train),
                 "test_rows": len(X_test),
                 "metrics": metrics,
+                "cross_val": cross_val_results,
+                "best_params": tune_results.get("best_params", {}),
+                "tune": tune_results,
                 "warnings": warnings,
                 "truncated": truncated,
                 "quality_issues": quality_issues,

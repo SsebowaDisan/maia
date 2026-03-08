@@ -9,7 +9,6 @@ from .constants import (
     quick_urls_submit_js,
     recommended_papers_js,
 )
-
 class ChatPageEventsMixin:
     def on_register_events(self):
         if KH_DEMO_MODE and len(self._indices_input) > 0:
@@ -23,7 +22,6 @@ class ChatPageEventsMixin:
                 outputs=None,
                 js=recommended_papers_js,
             )
-
         chat_event = (
             gr.on(
                 triggers=[
@@ -108,7 +106,6 @@ class ChatPageEventsMixin:
                 show_progress="hidden",
             )
         )
-
         on_suggest_chat_event = {
             "fn": self.suggest_chat_conv,
             "inputs": [
@@ -124,7 +121,6 @@ class ChatPageEventsMixin:
             "show_progress": "hidden",
         }
         chat_event = chat_event.success(**on_suggest_chat_event)
-
         if not KH_DEMO_MODE:
             chat_event = chat_event.then(
                 fn=self.persist_data_source,
@@ -145,7 +141,6 @@ class ChatPageEventsMixin:
                 ],
                 concurrency_limit=20,
             )
-
         self.chat_control.btn_info_expand.click(
             fn=lambda is_expanded: (
                 gr.update(scale=INFO_PANEL_SCALES[is_expanded]),
@@ -157,7 +152,6 @@ class ChatPageEventsMixin:
         self.chat_control.btn_chat_expand.click(
             fn=None, inputs=None, js="function() {toggleChatColumn();}"
         )
-
         if KH_DEMO_MODE:
             self.chat_control.btn_demo_logout.click(
                 fn=None,
@@ -187,7 +181,6 @@ class ChatPageEventsMixin:
                 inputs=None,
                 js=chat_input_focus_js,
             )
-
         if not KH_DEMO_MODE:
             self.chat_control.btn_new.click(
                 self.chat_control.new_conv,
@@ -224,7 +217,6 @@ class ChatPageEventsMixin:
                 inputs=None,
                 js=chat_input_focus_js,
             )
-
             self.chat_control.btn_del.click(
                 lambda id_: self.toggle_delete(id_),
                 inputs=[self.chat_control.conversation_id],
@@ -298,7 +290,6 @@ class ChatPageEventsMixin:
                 ],
                 show_progress="hidden",
             )
-
         on_conv_select = (
             self.chat_control.conversation.select(
                 self.chat_control.select_conv,
@@ -332,13 +323,11 @@ class ChatPageEventsMixin:
                 ],
             )
         )
-
         if KH_DEMO_MODE:
             on_conv_select = on_conv_select.then(
                 lambda: (gr.update(visible=False), gr.update(visible=True)),
                 outputs=[self.paper_list.accordion, self.chat_settings],
             )
-
         on_conv_select = (
             on_conv_select.then(
                 fn=lambda: True,
@@ -352,7 +341,6 @@ class ChatPageEventsMixin:
             )
             .then(fn=None, inputs=None, outputs=None, js=chat_input_focus_js)
         )
-
         if not KH_DEMO_MODE:
             self.chat_panel.chatbot.select(
                 self.message_selected,
@@ -374,14 +362,12 @@ class ChatPageEventsMixin:
                 outputs=[self._preview_links],
                 js=pdfview_js,
             )
-
         self.chat_control.cb_is_public.change(
             self.on_set_public_conversation,
             inputs=[self.chat_control.cb_is_public, self.chat_control.conversation],
             outputs=None,
             show_progress="hidden",
         )
-
         if not KH_DEMO_MODE:
             self.chat_panel.chatbot.like(
                 fn=self.is_liked,
@@ -404,7 +390,6 @@ class ChatPageEventsMixin:
                 + self._indices_input,
                 outputs=None,
             )
-
         self.reasoning_type.change(
             self.reasoning_changed,
             inputs=[self.reasoning_type],
@@ -416,14 +401,11 @@ class ChatPageEventsMixin:
             outputs=[self.use_mindmap, self.use_mindmap_check],
             show_progress="hidden",
         )
-
         def toggle_chat_suggestion(current_state):
             return current_state, gr.update(visible=current_state)
-
         def raise_error_on_state(state):
             if not state:
                 raise ValueError("Chat suggestion disabled")
-
         self.chat_control.cb_suggest_chat.change(
             fn=toggle_chat_suggestion,
             inputs=[self.chat_control.cb_suggest_chat],
@@ -437,7 +419,6 @@ class ChatPageEventsMixin:
         self.chat_control.conversation_id.change(
             lambda: gr.update(visible=False), outputs=self.plot_panel
         )
-
         self.followup_questions.select(
             self.chat_suggestion.select_example,
             outputs=[self.chat_panel.text_input],
@@ -448,7 +429,6 @@ class ChatPageEventsMixin:
             outputs=None,
             js=chat_input_focus_js,
         )
-
         if KH_DEMO_MODE:
             self.paper_list.examples.select(
                 self.paper_list.select_example,
@@ -464,7 +444,6 @@ class ChatPageEventsMixin:
                 outputs=None,
                 js=quick_urls_submit_js,
             )
-
     def on_subscribe_public_events(self):
         if self._app.f_user_management:
             self._app.subscribe_event(
@@ -476,7 +455,6 @@ class ChatPageEventsMixin:
                     "show_progress": "hidden",
                 },
             )
-
             self._app.subscribe_event(
                 name="onSignOut",
                 definition={
@@ -498,7 +476,6 @@ class ChatPageEventsMixin:
                     "show_progress": "hidden",
                 },
             )
-
     def _on_app_created(self):
         if KH_DEMO_MODE:
             self._app.app.load(

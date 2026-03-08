@@ -88,15 +88,28 @@ function highlightPalette(color: HighlightColor): HighlightPalette {
     };
   }
   return {
-    border: "rgba(255, 213, 79, 0.95)",
-    fill: "rgba(255, 213, 79, 0.22)",
-    labelBackground: "rgba(255, 213, 79, 0.95)",
-    labelText: "#2b2410",
+    border: "rgba(255, 255, 255, 0.82)",
+    fill: "rgba(255, 255, 255, 0.14)",
+    labelBackground: "rgba(24, 24, 27, 0.84)",
+    labelText: "#f5f5f7",
   };
 }
 
 function asHttpUrl(value: string): string {
-  return value.startsWith("http://") || value.startsWith("https://") ? value : "";
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+    return normalized;
+  }
+  if (normalized.startsWith("//")) {
+    return `https:${normalized}`;
+  }
+  if (normalized.startsWith("/")) {
+    return normalized;
+  }
+  return "";
 }
 
 function parseBrowserFindState(

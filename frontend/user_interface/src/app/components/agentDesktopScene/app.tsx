@@ -3,7 +3,6 @@ import { renderRichText } from "../../utils/richText";
 import { ApiScene } from "./ApiScene";
 import { BrowserScene } from "./BrowserScene";
 import type { ClickRippleEntry } from "./ClickRipple";
-import type { TracePoint } from "./InteractionTrace";
 import { DocsScene } from "./DocsScene";
 import { DocumentFallbackScene, DocumentPdfScene } from "./DocumentScenes";
 import { EmailScene } from "./EmailScene";
@@ -25,6 +24,18 @@ import { SnapshotScene } from "./SnapshotScene";
 import { DefaultScene, SystemScene } from "./SystemFallbackScenes";
 import { useSceneAnimations } from "./useSceneAnimations";
 import type { AgentDesktopSceneProps } from "./types";
+
+function looksLikePdfUrl(value: string): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes(".pdf") ||
+    normalized.includes("application/pdf") ||
+    normalized.includes("/pdf?")
+  );
+}
 
 function AgentDesktopScene({
   snapshotUrl,
@@ -64,12 +75,25 @@ function AgentDesktopScene({
   const docsFrameUrl = asHttpUrl(documentUrl);
   const sheetsFrameUrl = asHttpUrl(spreadsheetUrl);
   const canRenderLiveUrl = Boolean(asHttpUrl(browserUrl));
-  const providerLabel = compactValue(activeSceneData["provider"]) || compactValue(activeSceneData["web_provider"]);
-  const renderQualityLabel = compactValue(activeSceneData["render_quality"]);
+  const runtimePdfUrl = [
+    compactValue(activeSceneData["pdf_url"]),
+    compactValue(activeSceneData["source_url"]),
+    compactValue(activeSceneData["url"]),
+    compactValue(activeSceneData["target_url"]),
+    compactValue(activeSceneData["page_url"]),
+    compactValue(activeSceneData["final_url"]),
+    compactValue(activeSceneData["link"]),
+    compactValue(sceneDocumentUrl),
+    compactValue(browserUrl),
+  ].find((candidate) => {
+    if (!candidate) {
+      return false;
+    }
+    return looksLikePdfUrl(candidate);
+  }) || "";
+  const effectivePdfUrl = asHttpUrl(stageFileUrl) || asHttpUrl(runtimePdfUrl);
   const blockedSignal = Boolean(activeSceneData["blocked_signal"]);
   const scrollDirection = compactValue(activeSceneData["scroll_direction"]).toLowerCase();
-  const densityRaw = Number(activeSceneData["content_density"]);
-  const contentDensityLabel = Number.isFinite(densityRaw) ? densityRaw.toFixed(2) : "";
   const action = compactValue(activeSceneData["action"]).toLowerCase();
   const actionPhase = compactValue(activeSceneData["action_phase"]).toLowerCase();
   const actionStatus = compactValue(activeSceneData["action_status"]).toLowerCase();
@@ -167,6 +191,29 @@ function AgentDesktopScene({
 
   const { clipboardPreview, liveCopiedWordsKey } = parseLiveCopiedWords(activeSceneData);
   const scrollPercent = parseScrollPercent(activeSceneData["scroll_percent"]);
+  const pageIndexRaw = Number(activeSceneData["page_index"]);
+  const pageIndex = Number.isFinite(pageIndexRaw) && pageIndexRaw >= 1 ? Math.round(pageIndexRaw) : null;
+  const renderQuality = compactValue(activeSceneData["render_quality"]).toLowerCase();
+  const openedPages = Array.isArray(activeSceneData["opened_pages"])
+    ? activeSceneData["opened_pages"]
+        .map((row) => {
+          if (!row || typeof row !== "object") return null;
+          const item = row as Record<string, unknown>;
+          const url = compactValue(item["url"]);
+          if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) return null;
+          const title = compactValue(item["title"]);
+          const pageIdx = Number(item["page_index"]);
+          const reviewed = Boolean(item["reviewed"]);
+          return {
+            url,
+            title,
+            pageIndex: Number.isFinite(pageIdx) && pageIdx >= 1 ? Math.round(pageIdx) : null,
+            reviewed,
+          };
+        })
+        .filter((row): row is { url: string; title: string; pageIndex: number | null; reviewed: boolean } => Boolean(row))
+        .slice(-24)
+    : [];
   const {
     pdfPage,
     pdfPageTotal,
@@ -212,8 +259,8 @@ function AgentDesktopScene({
   const sheetBodyPreview = typedSheetBodyPreview || rawSheetBodyPreview;
   const { sheetPreviewRows, sheetStatusLine } = parseSheetState(sheetBodyPreview);
   const isPdfScene =
-    isDocumentScene &&
-    canRenderPdfFrame &&
+    (isDocumentScene || (isBrowserScene && Boolean(runtimePdfUrl))) &&
+    (canRenderPdfFrame || Boolean(effectivePdfUrl)) &&
     !isSheetsScene &&
     !Boolean(docsFrameUrl) &&
     !Boolean(sheetsFrameUrl);
@@ -222,22 +269,9 @@ function AgentDesktopScene({
   const cursorX = parsePercent(activeSceneData["cursor_x"]);
   const cursorY = parsePercent(activeSceneData["cursor_y"]);
   const isClickEvent = /browser_(left_|right_|double_)?click/i.test(activeEventType);
-  const traceBufferRef = useRef<TracePoint[]>([]);
   const rippleCounterRef = useRef(0);
   const prevEventTypeRef = useRef<string>("");
-  const [interactionTrace, setInteractionTrace] = useState<TracePoint[]>([]);
   const [clickRipples, setClickRipples] = useState<ClickRippleEntry[]>([]);
-
-  useEffect(() => {
-    if (cursorX !== null && cursorY !== null) {
-      const last = traceBufferRef.current[traceBufferRef.current.length - 1];
-      if (!last || last.x !== cursorX || last.y !== cursorY) {
-        const updated = [...traceBufferRef.current, { x: cursorX, y: cursorY }].slice(-5);
-        traceBufferRef.current = updated;
-        setInteractionTrace(updated);
-      }
-    }
-  }, [cursorX, cursorY]);
 
   useEffect(() => {
     if (activeEventType === prevEventTypeRef.current) return;
@@ -251,7 +285,7 @@ function AgentDesktopScene({
     return () => clearTimeout(timer);
   }, [activeEventType, isClickEvent, cursorX, cursorY]);
 
-  if (isBrowserScene) {
+  if (isBrowserScene && !isPdfScene) {
     return (
       <BrowserScene
         activeDetail={activeDetail}
@@ -272,9 +306,6 @@ function AgentDesktopScene({
         semanticFindResults={semanticFindResults}
         highlightRegions={highlightRegions}
         onSnapshotError={onSnapshotError}
-        providerLabel={providerLabel}
-        renderQualityLabel={renderQualityLabel}
-        contentDensityLabel={contentDensityLabel}
         readingMode={readingMode}
         sceneText={sceneText}
         scrollDirection={scrollDirection}
@@ -292,11 +323,13 @@ function AgentDesktopScene({
         zoomEscalationRequested={zoomEscalationRequested}
         showFindOverlay={showFindOverlay}
         snapshotUrl={snapshotUrl}
+        renderQuality={renderQuality}
+        pageIndex={pageIndex}
+        openedPages={openedPages}
         cursorX={cursorX}
         cursorY={cursorY}
         isClickEvent={isClickEvent}
         clickRipples={clickRipples}
-        interactionTrace={interactionTrace}
         narration={compactValue(activeSceneData["narration"]) || null}
       />
     );
@@ -402,7 +435,7 @@ function AgentDesktopScene({
         verifierRecheckRequired={verifierRecheckRequired}
         zoomEscalationRequested={zoomEscalationRequested}
         sceneText={sceneText}
-        stageFileUrl={stageFileUrl}
+        stageFileUrl={effectivePdfUrl || stageFileUrl}
       />
     );
   }

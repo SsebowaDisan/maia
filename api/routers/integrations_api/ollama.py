@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException
-
 from api.auth import get_current_user_id
 from api.context import get_context
 from api.services.ingestion_service import get_ingestion_manager
@@ -28,6 +26,7 @@ from .common import (
     save_ollama_settings,
     tenant_settings,
 )
+from .ollama_support import ensure_model_exists, list_service_models, normalize_required_model
 from .schemas import (
     OllamaConfigRequest,
     OllamaEmbeddingApplyAllRequest,
@@ -38,7 +37,6 @@ from .schemas import (
 )
 
 router = APIRouter(tags=["agent-integrations"])
-
 
 @router.get("/integrations/ollama/status")
 def ollama_integration_status(
@@ -80,8 +78,6 @@ def ollama_integration_status(
             "recommended_embedding_models": OLLAMA_RECOMMENDED_EMBEDDINGS,
             "error": exc.to_detail(),
         }
-
-
 @router.get("/integrations/ollama/quickstart")
 def ollama_quickstart(
     base_url: str | None = None,
@@ -90,8 +86,6 @@ def ollama_quickstart(
     _, settings = tenant_settings(user_id)
     resolved_base_url = resolve_ollama_base_url(settings=settings, override=base_url)
     return quickstart_payload(base_url=resolved_base_url)
-
-
 @router.post("/integrations/ollama/start")
 def start_ollama(
     payload: OllamaStartRequest,
@@ -139,8 +133,6 @@ def start_ollama(
         "base_url": base_url,
         **result,
     }
-
-
 @router.post("/integrations/ollama/config")
 def save_ollama_config(
     payload: OllamaConfigRequest,
@@ -190,12 +182,11 @@ def pull_ollama_model(
 ) -> dict[str, Any]:
     _, settings = tenant_settings(user_id)
     run_id = str(payload.run_id or "").strip() or None
-    model = " ".join(str(payload.model or "").split()).strip()
-    if not model:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "ollama_model_missing", "message": "Model name is required."},
-        )
+    model = normalize_required_model(
+        payload.model,
+        missing_code="ollama_model_missing",
+        missing_message="Model name is required.",
+    )
 
     base_url = resolve_ollama_base_url(settings=settings, override=payload.base_url)
     service = OllamaService(base_url=base_url)
@@ -295,29 +286,19 @@ def select_ollama_model(
 ) -> dict[str, Any]:
     _, settings = tenant_settings(user_id)
     run_id = str(payload.run_id or "").strip() or None
-    model = " ".join(str(payload.model or "").split()).strip()
-    if not model:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "ollama_model_missing", "message": "Model name is required."},
-        )
+    model = normalize_required_model(
+        payload.model,
+        missing_code="ollama_model_missing",
+        missing_message="Model name is required.",
+    )
     base_url = resolve_ollama_base_url(settings=settings, override=payload.base_url)
-    service = OllamaService(base_url=base_url)
-    try:
-        models = service.list_models()
-    except OllamaError as exc:
-        raise_http_from_ollama(exc)
-
-    model_names = {str(item.get("name") or "") for item in models}
-    if model not in model_names:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "ollama_model_not_found",
-                "message": f"Model `{model}` is not downloaded locally.",
-                "details": {"base_url": base_url},
-            },
-        )
+    models = list_service_models(base_url)
+    ensure_model_exists(
+        model=model,
+        models=models,
+        not_found_code="ollama_model_not_found",
+        base_url=base_url,
+    )
 
     try:
         llm_name = upsert_ollama_llm(model=model, base_url=base_url, default=True)
@@ -359,32 +340,19 @@ def select_ollama_embedding_model(
 ) -> dict[str, Any]:
     _, settings = tenant_settings(user_id)
     run_id = str(payload.run_id or "").strip() or None
-    model = " ".join(str(payload.model or "").split()).strip()
-    if not model:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "ollama_embedding_model_missing",
-                "message": "Embedding model name is required.",
-            },
-        )
+    model = normalize_required_model(
+        payload.model,
+        missing_code="ollama_embedding_model_missing",
+        missing_message="Embedding model name is required.",
+    )
     base_url = resolve_ollama_base_url(settings=settings, override=payload.base_url)
-    service = OllamaService(base_url=base_url)
-    try:
-        models = service.list_models()
-    except OllamaError as exc:
-        raise_http_from_ollama(exc)
-
-    model_names = {str(item.get("name") or "") for item in models}
-    if model not in model_names:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "ollama_embedding_model_not_found",
-                "message": f"Model `{model}` is not downloaded locally.",
-                "details": {"base_url": base_url},
-            },
-        )
+    models = list_service_models(base_url)
+    ensure_model_exists(
+        model=model,
+        models=models,
+        not_found_code="ollama_embedding_model_not_found",
+        base_url=base_url,
+    )
 
     try:
         embedding_name = upsert_ollama_embedding(model=model, base_url=base_url, default=True)
@@ -427,33 +395,20 @@ def apply_ollama_embedding_to_all_collections(
     context = get_context()
     _, settings = tenant_settings(user_id)
     run_id = str(payload.run_id or "").strip() or None
-    model = " ".join(str(payload.model or "").split()).strip()
-    if not model:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "ollama_embedding_model_missing",
-                "message": "Embedding model name is required.",
-            },
-        )
+    model = normalize_required_model(
+        payload.model,
+        missing_code="ollama_embedding_model_missing",
+        missing_message="Embedding model name is required.",
+    )
 
     base_url = resolve_ollama_base_url(settings=settings, override=payload.base_url)
-    service = OllamaService(base_url=base_url)
-    try:
-        models = service.list_models()
-    except OllamaError as exc:
-        raise_http_from_ollama(exc)
-
-    model_names = {str(item.get("name") or "") for item in models}
-    if model not in model_names:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "ollama_embedding_model_not_found",
-                "message": f"Model `{model}` is not downloaded locally.",
-                "details": {"base_url": base_url},
-            },
-        )
+    models = list_service_models(base_url)
+    ensure_model_exists(
+        model=model,
+        models=models,
+        not_found_code="ollama_embedding_model_not_found",
+        base_url=base_url,
+    )
 
     publish_event(
         user_id=user_id,

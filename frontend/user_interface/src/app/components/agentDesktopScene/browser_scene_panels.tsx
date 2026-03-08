@@ -102,7 +102,7 @@ function CopyPulse({ copyPulseText, copyPulseVisible }: { copyPulseText: string;
   }
   return (
     <div className="pointer-events-none absolute right-4 bottom-16 z-20 transition-all duration-300">
-      <div className="rounded-full border border-[#ffdc80]/70 bg-[#fff5cf]/95 px-3 py-1.5 text-[11px] font-medium text-[#3a2d0d] shadow-[0_14px_30px_-22px_rgba(0,0,0,0.65)]">
+      <div className="rounded-full border border-white/28 bg-black/62 px-3 py-1.5 text-[11px] font-medium text-white/92 shadow-[0_14px_30px_-22px_rgba(0,0,0,0.65)]">
         Copied: <span className="font-semibold">{copyPulseText}</span>
       </div>
     </div>
@@ -148,7 +148,7 @@ function TargetFocusRing({ targetRegion }: { targetRegion: HighlightRegion | nul
   }
   return (
     <div
-      className="pointer-events-none absolute z-20 animate-pulse rounded-md border-2 border-[#6cb9ff]/90 shadow-[0_0_0_2px_rgba(108,185,255,0.25)]"
+      className="pointer-events-none absolute z-20 animate-pulse rounded-md border-2 border-white/80 shadow-[0_0_0_2px_rgba(0,0,0,0.2)]"
       style={{
         left: `${targetRegion.x}%`,
         top: `${targetRegion.y}%`,
@@ -156,7 +156,7 @@ function TargetFocusRing({ targetRegion }: { targetRegion: HighlightRegion | nul
         height: `${targetRegion.height}%`,
       }}
     >
-      <span className="absolute -top-5 left-0 rounded bg-[#6cb9ff]/90 px-1.5 py-0.5 text-[10px] font-semibold text-[#031325]">
+      <span className="absolute -top-5 left-0 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-semibold text-white">
         target
       </span>
     </div>
@@ -259,10 +259,12 @@ function VerifierConflictBadge({
     return null;
   }
   return (
-    <div className="pointer-events-none absolute left-3 top-3 z-20 w-[min(42%,360px)] rounded-xl border border-[#ffb46b]/45 bg-[#fff4e8]/92 px-2.5 py-2 text-[10px] text-[#7a430a]">
-      <p className="font-semibold uppercase tracking-[0.08em]">Verifier conflict</p>
-      <p className="mt-0.5 line-clamp-2">{verifierConflictReason || "Conflicting or weak evidence detected."}</p>
-      <p className="mt-0.5 text-[#8a5d1a]">
+    <div className="pointer-events-none absolute left-3 top-3 z-20 w-[min(42%,360px)] rounded-xl border border-white/26 bg-black/70 px-2.5 py-2 text-[10px] text-white/92">
+      <p className="font-semibold tracking-[0.02em]">Verifier conflict</p>
+      <p className="mt-0.5 line-clamp-2 text-white/82">
+        {verifierConflictReason || "Conflicting or weak evidence detected."}
+      </p>
+      <p className="mt-0.5 text-white/70">
         {verifierRecheckRequired ? "Re-check required" : ""}
         {verifierRecheckRequired && zoomEscalationRequested ? "  -  " : ""}
         {zoomEscalationRequested ? "Zoom escalation requested" : ""}
@@ -287,17 +289,64 @@ function BrowserMiniMap({
       <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-white/70">Mini-map</p>
       <div className="relative mt-1 h-[88px] w-full rounded bg-white/10">
         <div
-          className="absolute left-[2px] right-[2px] rounded border border-[#8ec3ff] bg-[#8ec3ff]/15"
+          className="absolute left-[2px] right-[2px] rounded border border-white/65 bg-white/15"
           style={{ top: `${viewportTop}%`, height: "14%" }}
         />
         {highlightRegions.slice(0, 8).map((region, index) => (
           <span
             key={`mini-${region.keyword}-${index}`}
-            className="absolute h-1.5 w-1.5 rounded-full bg-[#ffe08a]/95"
+            className="absolute h-1.5 w-1.5 rounded-full bg-white/90"
             style={{ left: `${Math.max(1, Math.min(94, region.x))}%`, top: `${Math.max(1, Math.min(94, region.y))}%` }}
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function OpenedPagesRail({
+  openedPages,
+  activePageUrl,
+  onSelectPage,
+}: {
+  openedPages: Array<{ url: string; title: string; pageIndex: number | null; reviewed: boolean }>;
+  activePageUrl: string;
+  onSelectPage: (url: string) => void;
+}) {
+  if (openedPages.length <= 1) {
+    return null;
+  }
+  return (
+    <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-1 overflow-x-auto rounded-xl border border-white/20 bg-black/50 px-2 py-1.5 backdrop-blur-sm">
+      {openedPages.map((row, index) => {
+        const active = row.url === activePageUrl;
+        const label =
+          row.title ||
+          (() => {
+            try {
+              return new URL(row.url).hostname.replace(/^www\./, "");
+            } catch {
+              return `Page ${index + 1}`;
+            }
+          })();
+        return (
+          <button
+            key={`opened-page-${row.url}-${index}`}
+            type="button"
+            onClick={() => onSelectPage(row.url)}
+            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] transition ${
+              active
+                ? "border-white/50 bg-white/20 text-white"
+                : "border-white/25 bg-white/10 text-white/80 hover:bg-white/15"
+            }`}
+            title={row.url}
+          >
+            {row.pageIndex ? `${row.pageIndex}. ` : ""}
+            {label}
+            {row.reviewed ? " · reviewed" : ""}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -311,6 +360,7 @@ export {
   SceneFooter,
   ScrollMeter,
   TargetFocusRing,
+  OpenedPagesRail,
   VerifierConflictBadge,
   ZoomBadge,
   ZoomHistoryPanel,

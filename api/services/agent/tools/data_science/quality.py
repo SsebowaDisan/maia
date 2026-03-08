@@ -265,6 +265,38 @@ def _resolve_chart_requirements(
             errors.append("Bar chart requires category-like `x` and numeric `y` columns.")
         elif not _is_numeric_dtype(pd, df[y_name]):
             errors.append(f"Bar chart requires numeric `y` column, got `{y_name}`.")
+    elif requested_chart == "heatmap":
+        if len(numeric_columns) < 2:
+            errors.append("Heatmap requires at least two numeric columns for a correlation matrix.")
+    elif requested_chart == "box":
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
+        if not y_name:
+            errors.append("Box plot requires one numeric `y` column.")
+        elif not _is_numeric_dtype(pd, df[y_name]):
+            errors.append(f"Box plot requires numeric `y` column, got `{y_name}`.")
+        if x_name and x_name not in df.columns:
+            x_name = ""
+    elif requested_chart == "pie":
+        if not x_name:
+            x_name = non_numeric_columns[0] if non_numeric_columns else (available_columns[0] if available_columns else "")
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
+        if not x_name or not y_name:
+            errors.append("Pie chart requires a label `x` column and a numeric `y` column.")
+        elif y_name and y_name in df.columns and not _is_numeric_dtype(pd, df[y_name]):
+            errors.append(f"Pie chart requires numeric `y` column, got `{y_name}`.")
+    elif requested_chart == "area":
+        if not y_name:
+            y_name = numeric_columns[0] if numeric_columns else ""
+        if not y_name:
+            errors.append("Area chart requires one numeric `y` column.")
+        elif not _is_numeric_dtype(pd, df[y_name]):
+            errors.append(f"Area chart requires numeric `y` column, got `{y_name}`.")
+        if not x_name and non_numeric_columns:
+            x_name = non_numeric_columns[0]
+        if not x_name:
+            warnings.append("No `x` column provided; chart will use row index.")
     else:
         requested_chart = "histogram"
         if not x_name:

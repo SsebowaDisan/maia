@@ -11,7 +11,7 @@ from api.services.agent.tools.base import ToolExecutionContext, ToolTraceEvent
 from api.services.upload_service import resolve_indexed_file_path
 
 SCENE_SURFACE_SYSTEM = "system"
-SUPPORTED_CHART_TYPES = {"scatter", "line", "bar", "histogram"}
+SUPPORTED_CHART_TYPES = {"scatter", "line", "bar", "histogram", "heatmap", "box", "pie", "area"}
 
 
 def _as_int(value: Any, default: int) -> int:

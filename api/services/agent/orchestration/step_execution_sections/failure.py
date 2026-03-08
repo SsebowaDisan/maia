@@ -5,6 +5,10 @@ from typing import Any
 
 from api.services.agent.llm_execution_support import suggest_failure_recovery
 from api.services.agent.models import AgentActivityEvent
+from api.services.agent.orchestration.clarification_helpers import (
+    questions_for_requirements,
+    select_relevant_clarification_requirements,
+)
 from api.services.agent.planner import PlannedStep
 
 from ..models import ExecutionState
@@ -169,22 +173,38 @@ def handle_step_failure(
             str(tool_meta.action_class).strip().lower() == "execute"
             and not bool(state.execution_context.settings.get("__clarification_requested_after_attempt"))
         ):
-            question = (
-                recovery_hint
-                if recovery_hint.strip().lower().startswith("please provide")
-                else f"Please provide: {recovery_hint}"
+            deferred_missing_requirements = [
+                " ".join(str(item or "").split()).strip()
+                for item in state.execution_context.settings.get("__task_clarification_missing", [])
+                if " ".join(str(item or "").split()).strip()
+            ][:6]
+            deferred_questions = [
+                " ".join(str(item or "").split()).strip()
+                for item in state.execution_context.settings.get("__task_clarification_questions", [])
+                if " ".join(str(item or "").split()).strip()
+            ][:6]
+            relevant_missing_requirements = select_relevant_clarification_requirements(
+                deferred_missing_requirements=deferred_missing_requirements,
+                contract_missing_items=[recovery_hint],
+                limit=6,
             )
-            clarification_event = activity_event_factory(
-                event_type="llm.clarification_requested",
-                title="Clarification required after autonomous attempts",
-                detail=question[:200],
-                metadata={
-                    "missing_requirements": [recovery_hint[:220]],
-                    "questions": [question[:240]],
-                    "deferred_until_after_attempts": True,
-                    "tool_id": step.tool_id,
-                    "step": index,
-                },
-            )
-            yield emit_event(clarification_event)
-            state.execution_context.settings["__clarification_requested_after_attempt"] = True
+            if relevant_missing_requirements:
+                clarification_questions = questions_for_requirements(
+                    requirements=relevant_missing_requirements,
+                    all_requirements=deferred_missing_requirements,
+                    all_questions=deferred_questions,
+                )
+                clarification_event = activity_event_factory(
+                    event_type="llm.clarification_requested",
+                    title="Clarification required after autonomous attempts",
+                    detail="; ".join(relevant_missing_requirements[:3])[:200],
+                    metadata={
+                        "missing_requirements": relevant_missing_requirements,
+                        "questions": clarification_questions,
+                        "deferred_until_after_attempts": True,
+                        "tool_id": step.tool_id,
+                        "step": index,
+                    },
+                )
+                yield emit_event(clarification_event)
+                state.execution_context.settings["__clarification_requested_after_attempt"] = True

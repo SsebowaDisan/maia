@@ -1,29 +1,29 @@
 import asyncio
-import glob
 import logging
-import os
-import re
 from pathlib import Path
 from typing import Generator
 
-import numpy as np
-import pandas as pd
 from ktem.db.models import engine
-from ktem.embeddings.manager import embedding_models_manager as embeddings
-from ktem.llms.manager import llms
 from sqlalchemy.orm import Session
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 from theflow.settings import settings
 
 from maia.base import Document, Param, RetrievedDocument
-from maia.base.schema import AIMessage, HumanMessage, SystemMessage
 
 from ..pipelines import BaseFileIndexRetriever
+from .graphrag_shared import (
+    INDEX_BATCHSIZE,
+    apply_prompt_overrides,
+    build_prompt_settings,
+    build_retrieved_table,
+    clean_quote,
+    clear_json_cache,
+    collect_text_docs,
+    ensure_storage_path,
+    get_default_models_wrapper,
+    list_of_list_to_df,
+    prepare_graph_index_path,
+    store_file_graph_mappings,
+)
 from .pipelines import GraphRAGIndexingPipeline
 from .visualize import create_knowledge_graph, visualize_graph
 
@@ -51,103 +51,7 @@ except ImportError:
 logging.getLogger("lightrag").setLevel(logging.INFO)
 
 
-filestorage_path = Path(settings.KH_FILESTORAGE_PATH) / "lightrag"
-filestorage_path.mkdir(parents=True, exist_ok=True)
-
-INDEX_BATCHSIZE = 4
-
-
-def get_llm_func(model):
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((Exception,)),
-        after=lambda retry_state: logging.warning(
-            f"LLM API call attempt {retry_state.attempt_number} failed. Retrying..."
-        ),
-    )
-    async def _call_model(model, input_messages):
-        return (await model.ainvoke(input_messages)).text
-
-    async def llm_func(
-        prompt, system_prompt=None, history_messages=[], **kwargs
-    ) -> str:
-        input_messages = [SystemMessage(text=system_prompt)] if system_prompt else []
-
-        hashing_kv = kwargs.pop("hashing_kv", None)
-        if history_messages:
-            for msg in history_messages:
-                if msg.get("role") == "user":
-                    input_messages.append(HumanMessage(text=msg["content"]))
-                else:
-                    input_messages.append(AIMessage(text=msg["content"]))
-
-        input_messages.append(HumanMessage(text=prompt))
-
-        if hashing_kv is not None:
-            args_hash = compute_args_hash("model", input_messages)
-            if_cache_return = await hashing_kv.get_by_id(args_hash)
-            if if_cache_return is not None:
-                return if_cache_return["return"]
-
-        try:
-            output = await _call_model(model, input_messages)
-        except Exception as e:
-            logging.error(f"Failed to call LLM API after 3 retries: {str(e)}")
-            raise
-
-        print("-" * 50)
-        print(output, "\n", "-" * 50)
-
-        if hashing_kv is not None:
-            await hashing_kv.upsert({args_hash: {"return": output, "model": "model"}})
-
-        return output
-
-    return llm_func
-
-
-def get_embedding_func(model):
-    async def embedding_func(texts: list[str]) -> np.ndarray:
-        outputs = model(texts)
-        embedding_outputs = np.array([doc.embedding for doc in outputs])
-
-        return embedding_outputs
-
-    return embedding_func
-
-
-def get_default_models_wrapper():
-    # setup model functions
-    default_embedding = embeddings.get_default()
-    default_embedding_dim = len(default_embedding(["Hi"])[0].embedding)
-    embedding_func = EmbeddingFunc(
-        embedding_dim=default_embedding_dim,
-        max_token_size=8192,
-        func=get_embedding_func(default_embedding),
-    )
-    print("GraphRAG embedding dim", default_embedding_dim)
-
-    default_llm = llms.get_default()
-    llm_func = get_llm_func(default_llm)
-
-    return llm_func, embedding_func, default_llm, default_embedding
-
-
-def prepare_graph_index_path(graph_id: str):
-    root_path = Path(filestorage_path) / graph_id
-    input_path = root_path / "input"
-
-    return root_path, input_path
-
-
-def list_of_list_to_df(data: list[list]) -> pd.DataFrame:
-    df = pd.DataFrame(data[1:], columns=data[0])
-    return df
-
-
-def clean_quote(input: str) -> str:
-    return re.sub(r"[\"']", "", input)
+filestorage_path = ensure_storage_path(Path(settings.KH_FILESTORAGE_PATH), "lightrag")
 
 
 async def lightrag_build_local_query_context(
@@ -261,28 +165,7 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
         graph_id = self.collection_graph_id
 
         # Record all files under this graph_id
-        with Session(engine) as session:
-            for file_id in file_ids:
-                if not file_id:
-                    continue
-                # Check if mapping already exists
-                existing = (
-                    session.query(self.Index)
-                    .filter(
-                        self.Index.source_id == file_id,
-                        self.Index.target_id == graph_id,
-                        self.Index.relation_type == "graph",
-                    )
-                    .first()
-                )
-                if not existing:
-                    node = self.Index(
-                        source_id=file_id,
-                        target_id=graph_id,
-                        relation_type="graph",
-                    )
-                    session.add(node)
-            session.commit()
+        store_file_graph_mappings(self.Index, graph_id, file_ids)
 
         return graph_id
 
@@ -291,32 +174,7 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
         try:
             from lightrag.prompt import PROMPTS
 
-            blacklist_keywords = ["default", "response", "process"]
-            settings_dict = {
-                "batch_size": {
-                    "name": (
-                        "Index batch size " "(reduce if you have rate limit issues)"
-                    ),
-                    "value": INDEX_BATCHSIZE,
-                    "component": "number",
-                }
-            }
-            settings_dict.update(
-                {
-                    prompt_name: {
-                        "name": f"Prompt for '{prompt_name}'",
-                        "value": content,
-                        "component": "text",
-                    }
-                    for prompt_name, content in PROMPTS.items()
-                    if all(
-                        keyword not in prompt_name.lower()
-                        for keyword in blacklist_keywords
-                    )
-                    and isinstance(content, str)
-                }
-            )
-            return settings_dict
+            return build_prompt_settings(PROMPTS, INDEX_BATCHSIZE)
         except ImportError as e:
             print(e)
             return {}
@@ -325,11 +183,9 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
         from lightrag.prompt import PROMPTS
 
         # modify the prompt if it is set in the settings
-        for prompt_name, content in self.prompts.items():
-            if prompt_name in PROMPTS:
-                PROMPTS[prompt_name] = content
+        apply_prompt_overrides(PROMPTS, self.prompts)
 
-        _, input_path = prepare_graph_index_path(graph_id)
+        _, input_path = prepare_graph_index_path(filestorage_path, graph_id)
         input_path.mkdir(parents=True, exist_ok=True)
 
         (
@@ -337,17 +193,13 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
             embedding_func,
             default_llm,
             default_embedding,
-        ) = get_default_models_wrapper()
+        ) = get_default_models_wrapper(EmbeddingFunc, compute_args_hash)
         print(
             f"Indexing GraphRAG with LLM {default_llm} "
             f"and Embedding {default_embedding}..."
         )
 
-        all_docs = [
-            doc.text
-            for doc in docs
-            if doc.metadata.get("type", "text") == "text" and len(doc.text.strip()) > 0
-        ]
+        all_docs = collect_text_docs(docs)
 
         yield Document(
             channel="debug",
@@ -360,9 +212,7 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
 
         # Only clear cache if it's a new graph
         if not is_incremental:
-            json_files = glob.glob(f"{input_path}/*.json")
-            for json_file in json_files:
-                os.remove(json_file)
+            clear_json_cache(input_path)
 
         # Initialize or load existing GraphRAG
         graphrag_func = build_graphrag(
@@ -403,9 +253,7 @@ class LightRAGIndexingPipeline(GraphRAGIndexingPipeline):
 
     def stream(
         self, file_paths: str | Path | list[str | Path], reindex: bool = False, **kwargs
-    ) -> Generator[
-        Document, None, tuple[list[str | None], list[str | None], list[Document]]
-    ]:
+    ) -> Generator[Document, None, tuple[list[str | None], list[str | None], list[Document]]]:
         file_ids, errors, all_docs = yield from super().stream(
             file_paths, reindex=reindex, **kwargs
         )
@@ -446,10 +294,13 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
             graph_id = graph_id[0] if graph_id else None
             assert graph_id, f"GraphRAG index not found for file_id: {file_id}"
 
-        _, input_path = prepare_graph_index_path(graph_id)
+        _, input_path = prepare_graph_index_path(filestorage_path, graph_id)
         input_path.mkdir(parents=True, exist_ok=True)
 
-        llm_func, embedding_func, _, _ = get_default_models_wrapper()
+        llm_func, embedding_func, _, _ = get_default_models_wrapper(
+            EmbeddingFunc,
+            compute_args_hash,
+        )
         graphrag_func = build_graphrag(
             input_path,
             llm_func=llm_func,
@@ -461,15 +312,7 @@ class LightRAGRetrieverPipeline(BaseFileIndexRetriever):
         return graphrag_func, query_params
 
     def _to_document(self, header: str, context_text: str) -> RetrievedDocument:
-        return RetrievedDocument(
-            text=context_text,
-            metadata={
-                "file_name": header,
-                "type": "table",
-                "llm_trulens_score": 1.0,
-            },
-            score=1.0,
-        )
+        return build_retrieved_table(header, context_text)
 
     def format_context_records(
         self, entities, relationships, sources

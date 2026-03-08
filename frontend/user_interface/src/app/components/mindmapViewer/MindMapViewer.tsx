@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BaseEdge,
   Position,
   ReactFlow,
   type Edge,
-  type EdgeProps,
   type Node,
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { MindNodeCard } from "./MindNodeCard";
 import type { MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
 import {
   computeDepths,
@@ -30,131 +27,10 @@ import {
   looksNoisyTitle,
   toMindmapPayload,
 } from "./viewerHelpers";
+import { compactNodeValue, detectDefaultMapType, edgeTypes, nodeTypes, payloadSupportsMapType } from "./viewerGraph";
 
-/**
- * Returns the point on the boundary of a node at (cx, cy) facing toward (ox, oy).
- * hw/hh are the half-width and half-height of the node (rectangular approximation).
- */
-function trimEdge(
-  cx: number, cy: number,
-  ox: number, oy: number,
-  hw: number, hh: number,
-): { x: number; y: number } {
-  const dx = ox - cx;
-  const dy = oy - cy;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) return { x: cx, y: cy };
-  const abscos = Math.abs(dx / len);
-  const abssin = Math.abs(dy / len);
-  const d = abscos > 0 && abssin > 0
-    ? Math.min(hw / abscos, hh / abssin)
-    : abscos > 0 ? hw : hh;
-  return { x: cx + (dx / len) * d, y: cy + (dy / len) * d };
-}
-
-const nodeTypes = { mind: MindNodeCard };
-
-// Six branch color families — matches MindNodeCard's BRANCH_PALETTES
-const BRANCH_EDGE_COLORS = [
-  "#F97316", // orange
-  "#06B6D4", // cyan
-  "#8B5CF6", // purple
-  "#22C55E", // green
-  "#F59E0B", // amber
-  "#EC4899", // pink
-];
-
-function CurvedMindEdge({ id, data, style }: EdgeProps) {
-  const d = (data ?? {}) as { sx?: number; sy?: number; tx?: number; ty?: number };
-  const srcX = Number(d.sx ?? 0);
-  const srcY = Number(d.sy ?? 0);
-  const tgtX = Number(d.tx ?? 0);
-  const tgtY = Number(d.ty ?? 0);
-
-  // Root is at (0,0) — use larger bounds for trimming
-  const isRoot = srcX * srcX + srcY * srcY < 25;
-  const start = trimEdge(srcX, srcY, tgtX, tgtY, isRoot ? 92 : NODE_HALF_W, isRoot ? 22 : NODE_HALF_H);
-  const end   = trimEdge(tgtX, tgtY, srcX, srcY, NODE_HALF_W, NODE_HALF_H);
-
-  // Bezier control point: midpoint bowed gently toward the radial center (origin)
-  const mx = (start.x + end.x) / 2;
-  const my = (start.y + end.y) / 2;
-  const midLen = Math.sqrt(mx * mx + my * my) || 1;
-  const edgeLen = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
-  const bow = Math.min(32, edgeLen * 0.12);
-  const cpx = mx - (mx / midLen) * bow;
-  const cpy = my - (my / midLen) * bow;
-
-  return (
-    <BaseEdge
-      id={id}
-      path={`M ${start.x} ${start.y} Q ${cpx} ${cpy} ${end.x} ${end.y}`}
-      style={style}
-    />
-  );
-}
-
-const edgeTypes = { mindCurve: CurvedMindEdge };
-
-function normalizeMapType(raw: unknown): MindmapMapType {
-  const value = String(raw || "").trim().toLowerCase();
-  if (value === "context_mindmap") {
-    return "context_mindmap";
-  }
-  if (value === "work_graph") {
-    return "work_graph";
-  }
-  if (value === "evidence") {
-    return "evidence";
-  }
-  return "structure";
-}
-
-function detectDefaultMapType(payload: MindmapPayload | null): MindmapMapType {
-  if (!payload) {
-    return "structure";
-  }
-  const direct = normalizeMapType(payload.map_type);
-  if (direct === "context_mindmap" || String(payload.kind || "").trim().toLowerCase() === "context_mindmap") {
-    return "context_mindmap";
-  }
-  if (direct === "work_graph" || String(payload.kind || "").trim().toLowerCase() === "work_graph") {
-    return "work_graph";
-  }
-  const variants = payload.variants;
-  if (variants && typeof variants === "object" && Object.prototype.hasOwnProperty.call(variants, "context_mindmap")) {
-    return "context_mindmap";
-  }
-  if (variants && typeof variants === "object" && Object.prototype.hasOwnProperty.call(variants, "work_graph")) {
-    return "work_graph";
-  }
-  return direct;
-}
-
-function _compactNodeValue(raw: unknown): string {
-  const text = String(raw || "").trim();
-  if (!text) {
-    return "";
-  }
-  if (text.length <= 40) {
-    return text;
-  }
-  return `${text.slice(0, 37).trimEnd()}...`;
-}
-
-function payloadSupportsMapType(payload: MindmapPayload | null, mapType: MindmapMapType): boolean {
-  if (!payload) {
-    return false;
-  }
-  if (normalizeMapType(payload.map_type) === mapType) {
-    return true;
-  }
-  const variants = payload.variants;
-  if (!variants || typeof variants !== "object") {
-    return false;
-  }
-  return Object.prototype.hasOwnProperty.call(variants, mapType);
-}
+// Six branch color families — matches MindNodeCard palettes.
+const BRANCH_EDGE_COLORS = ["#F97316", "#06B6D4", "#8B5CF6", "#22C55E", "#F59E0B", "#EC4899"];
 
 export function MindMapViewer({
   payload: rawPayload,
@@ -434,8 +310,8 @@ export function MindMapViewer({
             subtitle:
               activeMapType === "work_graph"
                 ? [
-                    _compactNodeValue((node as Record<string, unknown>)["status"]),
-                    _compactNodeValue((node as Record<string, unknown>)["tool_id"]),
+                    compactNodeValue((node as Record<string, unknown>)["status"]),
+                    compactNodeValue((node as Record<string, unknown>)["tool_id"]),
                   ]
                     .filter((row) => row.length > 0)
                     .join(" • ") || undefined

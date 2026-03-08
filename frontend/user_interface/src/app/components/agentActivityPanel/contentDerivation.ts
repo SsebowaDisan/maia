@@ -37,8 +37,15 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
   for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
     const event = visibleEvents[idx];
     const eventType = String(event.event_type || "").toLowerCase();
+    const sceneSurface = String(event.metadata?.["scene_surface"] || event.data?.["scene_surface"] || "")
+      .trim()
+      .toLowerCase();
     const browserLike =
-      eventTab(event) === "browser" || eventType.startsWith("browser_") || eventType.startsWith("web_");
+      eventTab(event) === "browser" ||
+      sceneSurface === "website" ||
+      sceneSurface === "browser" ||
+      eventType.startsWith("browser_") ||
+      eventType.startsWith("web_");
     if (!browserLike) {
       continue;
     }
@@ -46,6 +53,7 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
     const data = event.data || {};
     const fromMeta =
       readStringField(meta["url"]) ||
+      readStringField(meta["source_url"]) ||
       readStringField(meta["target_url"]) ||
       readStringField(meta["page_url"]) ||
       readStringField(meta["final_url"]) ||
@@ -55,6 +63,7 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
     }
     const fromData =
       readStringField(data["url"]) ||
+      readStringField(data["source_url"]) ||
       readStringField(data["target_url"]) ||
       readStringField(data["page_url"]) ||
       readStringField(data["final_url"]) ||

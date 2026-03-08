@@ -1,0 +1,242 @@
+/* Screenshot-exact left sidebar override */
+body:not(.dark) #conv-settings-panel {
+  flex: 0 0 324px !important;
+  max-width: 324px !important;
+  min-width: 324px !important;
+  margin: 0 !important;
+  padding: 16px 18px 22px !important;
+  border: 0 !important;
+  border-right: 1px solid #e6e9ef !important;
+  border-radius: 0 !important;
+  background: #f4f5f7 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  row-gap: 10px !important;
+}
+
+body:not(.dark) #conv-settings-panel h2 {
+  margin: 0 !important;
+  font-size: 24px !important;
+  line-height: 1.05 !important;
+  letter-spacing: -0.03em !important;
+  font-weight: 700 !important;
+  color: #111827 !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button {
+  width: 20px !important;
+  min-width: 20px !important;
+  max-width: 20px !important;
+  flex: 0 0 20px !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button button {
+  width: 20px !important;
+  min-width: 20px !important;
+  height: 20px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #d2d6dd !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button button svg,
+body:not(.dark) #conv-settings-panel #toggle-dark-button button img {
+  display: none !important;
+}
+
+body:not(.dark) #conversation-dropdown input {
+  min-height: 42px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #eaecf0 !important;
+  color: #374151 !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark) #conversation-dropdown svg {
+  color: #8e96a3 !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox {
+  position: relative !important;
+  top: auto !important;
+  margin: 0 !important;
+  min-height: 38px !important;
+  padding: 0 12px 0 36px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #eaecf0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox::before {
+  content: "\2727";
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #616b79;
+  font-size: 16px;
+  line-height: 1;
+}
+
+body:not(.dark) #suggest-chat-checkbox .switch {
+  display: none !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox span {
+  color: #1f2937 !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  font-weight: 650 !important;
+}
+
+body:not(.dark) #conv-settings-panel .no-background button {
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #7b828d !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel .no-background button:hover {
+  background: #e9edf3 !important;
+  color: #4b5563 !important;
+  transform: none !important;
+}
+
+body:not(.dark) #new-conv-button button {
+  color: #10b981 !important;
+}
+
+body:not(.dark) #conv-settings-panel details,
+body:not(.dark) #conv-settings-panel .gradio-accordion {
+  border: 0 !important;
+  border-top: 1px solid #e3e6ec !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark) #conv-settings-panel details > summary {
+  position: relative !important;
+  min-height: 42px !important;
+  padding: 8px 26px 8px 0 !important;
+  list-style: none !important;
+  color: #1f2937 !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
+  font-weight: 650 !important;
+}
+
+body:not(.dark) #conv-settings-panel details > summary::-webkit-details-marker {
+  display: none !important;
+}
+
+body:not(.dark) #conv-settings-panel details > summary::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -5px;
+  border-right: 2px solid #8f98a7;
+  border-bottom: 2px solid #8f98a7;
+  transform: rotate(45deg);
+}
+
+body:not(.dark) #conv-settings-panel details[open] > summary::after {
+  margin-top: -3px;
+  transform: rotate(135deg);
+}
+
+body:not(.dark) #conv-settings-panel details > div,
+body:not(.dark) #conv-settings-panel .gradio-accordion > div {
+  padding: 8px 0 10px !important;
+}
+
+body:not(.dark) #conv-settings-panel details .gradio-row {
+  gap: 10px !important;
+  flex-wrap: nowrap !important;
+}
+
+body:not(.dark) #conv-settings-panel details .gradio-row > div {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel details button {
+  width: 100% !important;
+  min-height: 42px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #eaecf0 !important;
+  color: #8a909b !important;
+  box-shadow: none !important;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+}
+
+body:not(.dark) #conv-settings-panel details button.selected {
+  background: #0f78ed !important;
+  color: #ffffff !important;
+}
+
+body:not(.dark) #quick-file {
+  min-height: 246px !important;
+  border: 2px dashed #c8cfd9 !important;
+  border-radius: 18px !important;
+  background: #f3f5f8 !important;
+}
+
+body:not(.dark) #quick-file a {
+  color: #0f78ed !important;
+  font-weight: 650 !important;
+}
+
+body:not(.dark) #quick-url textarea,
+body:not(.dark) #quick-url-demo textarea {
+  min-height: 44px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #eaecf0 !important;
+  color: #737b89 !important;
+  box-shadow: none !important;
+  padding: 10px 14px !important;
+  font-size: 17px !important;
+}
+
+body:not(.dark) #quick-url textarea::placeholder,
+body:not(.dark) #quick-url-demo textarea::placeholder {
+  color: #7d8593 !important;
+}
+
+body:not(.dark) #report-accordion {
+  border-top: 1px solid #e3e6ec !important;
+}
+
+body:not(.dark) #report-accordion > summary {
+  min-height: 42px !important;
+  padding: 10px 26px 10px 0 !important;
+  font-size: 16px !important;
+  font-weight: 650 !important;
+}
+
+@media (max-width: 430px) {
+  body:not(.dark) #new-conv-button {
+    display: none !important;
+  }
+}
+

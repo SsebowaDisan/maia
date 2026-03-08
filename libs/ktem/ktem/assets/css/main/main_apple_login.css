@@ -1,0 +1,416 @@
+#maia-login-shell {
+  --maia-login-blue: #111111;
+  --maia-login-blue-hover: #2a2a2d;
+  --maia-login-text: #1d1d1f;
+  --maia-login-subtext: #6e6e73;
+  --maia-login-border: rgba(15, 23, 42, 0.1);
+  --maia-login-shell-bg:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.96) 0%, rgba(245, 246, 250, 0.9) 100%);
+  --maia-login-panel-bg:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(250, 250, 252, 0.9) 100%);
+  --maia-login-field-bg: rgba(255, 255, 255, 0.97);
+  max-width: min(1120px, 95vw);
+  margin: 22px auto 0;
+  gap: 0 !important;
+  border: 1px solid var(--maia-login-border);
+  border-radius: 30px;
+  overflow: hidden;
+  box-shadow:
+    0 28px 64px -36px rgba(15, 23, 42, 0.5),
+    0 18px 38px -30px rgba(15, 23, 42, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  background: var(--maia-login-shell-bg);
+  backdrop-filter: saturate(145%) blur(20px);
+}
+
+#maia-login-shell,
+#maia-login-shell * {
+  font-family: "SF Pro Display", "SF Pro Text", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+#maia-login-shell > div {
+  min-height: clamp(580px, 72vh, 860px);
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#maia-login-hero {
+  position: relative;
+  background:
+    radial-gradient(112% 98% at 8% 6%, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 44%, rgba(255, 255, 255, 0) 74%),
+    radial-gradient(86% 68% at 88% 92%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 52%, rgba(255, 255, 255, 0) 88%),
+    linear-gradient(165deg, #161616 0%, #0f0f10 48%, #090909 100%);
+  color: #f5f5f7;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#maia-login-hero::before {
+  content: "";
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  top: -120px;
+  right: -90px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0) 72%);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
+#maia-login-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.08) 100%),
+    radial-gradient(94% 68% at 50% 100%, rgba(0, 0, 0, 0.45) 0%, rgba(0, 0, 0, 0) 74%);
+  pointer-events: none;
+}
+
+#maia-login-hero .maia-login-hero-inner {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  text-align: center;
+  padding: 54px clamp(24px, 3.7vw, 54px);
+}
+
+#maia-login-hero .maia-login-hero-logo {
+  width: clamp(78px, 8vw, 102px);
+  height: clamp(78px, 8vw, 102px);
+  display: grid;
+  place-items: center;
+  padding: 13px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, rgba(52, 52, 54, 0.95) 0%, rgba(30, 30, 31, 0.9) 100%);
+  box-shadow:
+    0 16px 34px -20px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+#maia-login-hero .maia-login-hero-logo svg {
+  width: 100%;
+  height: 100%;
+}
+
+#maia-login-hero h2 {
+  margin: 0;
+  font-size: clamp(1.9rem, 3.3vw, 3.25rem);
+  font-weight: 620;
+  letter-spacing: -0.025em;
+  color: #ffffff;
+}
+
+#maia-login-hero p {
+  max-width: 440px;
+  margin: 0;
+  font-size: clamp(1rem, 1.18vw, 1.22rem);
+  line-height: 1.52;
+  color: rgba(245, 245, 247, 0.78);
+}
+
+#maia-login-form-panel {
+  background:
+    radial-gradient(100% 84% at 0% 0%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0) 62%),
+    var(--maia-login-panel-bg);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(30px, 5vw, 70px) clamp(20px, 4vw, 74px) !important;
+}
+
+body.dark #maia-login-form-panel {
+  background:
+    radial-gradient(110% 90% at 0% 0%, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0) 68%),
+    linear-gradient(180deg, #161616 0%, #101010 100%);
+}
+
+#maia-login-form-panel > * {
+  width: min(540px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.maia-login-form-intro {
+  margin-bottom: 10px;
+}
+
+.maia-login-kicker {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: rgba(29, 29, 31, 0.58);
+}
+
+.maia-login-form-intro h1 {
+  margin: 9px 0 0;
+  font-size: clamp(2.2rem, 3vw, 3.45rem);
+  letter-spacing: -0.035em;
+  font-weight: 640;
+  color: var(--maia-login-text);
+}
+
+.maia-login-form-intro p {
+  margin: 10px 0 0;
+  font-size: 1.05rem;
+  line-height: 1.48;
+  color: var(--maia-login-subtext);
+}
+
+body.dark .maia-login-form-intro h1 {
+  color: #f3f6fb;
+}
+
+body.dark .maia-login-form-intro p {
+  color: #b5bdd0;
+}
+
+#maia-login-username,
+#maia-login-password {
+  margin-top: 14px !important;
+  padding: 12px !important;
+  border-radius: 18px !important;
+  border: 1px solid var(--maia-login-border) !important;
+  background: var(--maia-login-field-bg) !important;
+  box-shadow:
+    0 10px 20px -20px rgba(15, 23, 42, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
+}
+
+#maia-login-username label,
+#maia-login-password label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin-bottom: 8px !important;
+}
+
+body.dark #maia-login-username label,
+body.dark #maia-login-password label {
+  color: #f1f1f3;
+}
+
+body.dark #maia-login-username,
+body.dark #maia-login-password {
+  border-color: rgba(180, 180, 180, 0.24) !important;
+  background: rgba(28, 28, 30, 0.9) !important;
+  box-shadow:
+    0 12px 26px -20px rgba(0, 0, 0, 0.58),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+#maia-login-username textarea,
+#maia-login-username input,
+#maia-login-password textarea,
+#maia-login-password input {
+  border-radius: 13px !important;
+  min-height: 54px;
+  padding: 12px 15px !important;
+  font-size: 1.05rem !important;
+  line-height: 1.4 !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(29, 29, 31, 0.16) !important;
+  color: #1d1d1f !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+#maia-login-username textarea::placeholder,
+#maia-login-username input::placeholder,
+#maia-login-password textarea::placeholder,
+#maia-login-password input::placeholder {
+  color: #8a8a8f !important;
+}
+
+#maia-login-username textarea:focus,
+#maia-login-username input:focus,
+#maia-login-password textarea:focus,
+#maia-login-password input:focus {
+  border-color: rgba(17, 17, 17, 0.62) !important;
+  background: #ffffff !important;
+  box-shadow:
+    0 0 0 4px rgba(17, 17, 17, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86) !important;
+}
+
+body.dark #maia-login-username textarea,
+body.dark #maia-login-username input,
+body.dark #maia-login-password textarea,
+body.dark #maia-login-password input {
+  background: rgba(24, 24, 24, 0.95) !important;
+  border-color: rgba(180, 180, 180, 0.28) !important;
+  color: #f2f2f4 !important;
+}
+
+body.dark #maia-login-username textarea:focus,
+body.dark #maia-login-username input:focus,
+body.dark #maia-login-password textarea:focus,
+body.dark #maia-login-password input:focus {
+  border-color: rgba(255, 255, 255, 0.45) !important;
+  background: rgba(20, 20, 22, 0.99) !important;
+  box-shadow:
+    0 0 0 4px rgba(255, 255, 255, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+.maia-login-options {
+  margin: 16px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 0.98rem;
+}
+
+.maia-login-remember {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #38383b;
+  font-weight: 550;
+}
+
+.maia-login-remember input {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1px solid rgba(29, 29, 31, 0.24);
+  accent-color: #111111;
+}
+
+.maia-login-options a {
+  color: #1d1d1f;
+  text-decoration: none;
+  font-weight: 560;
+}
+
+.maia-login-options a:hover {
+  color: #000000;
+  text-decoration: underline;
+}
+
+body.dark .maia-login-remember {
+  color: #e4ebf7;
+}
+
+#maia-login-submit {
+  margin-top: 16px !important;
+}
+
+button#maia-login-submit,
+#maia-login-submit button {
+  width: 100%;
+  min-height: 54px;
+  border-radius: 999px !important;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  background: linear-gradient(180deg, #2a2a2d 0%, #0f0f10 100%) !important;
+  box-shadow:
+    0 10px 24px -14px rgba(0, 0, 0, 0.56),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18) !important;
+  transition: transform 140ms ease, filter 160ms ease, box-shadow 160ms ease;
+}
+
+button#maia-login-submit:hover,
+#maia-login-submit button:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 28px -16px rgba(0, 0, 0, 0.62),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24) !important;
+}
+
+button#maia-login-submit:active,
+#maia-login-submit button:active {
+  transform: translateY(0);
+  filter: brightness(0.95);
+}
+
+.maia-login-divider {
+  margin: 24px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #8e8e93;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.maia-login-divider::before,
+.maia-login-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid rgba(29, 29, 31, 0.16);
+}
+
+.maia-login-footnote {
+  margin: 0;
+  text-align: center;
+  color: #6e6e73;
+  font-size: 0.98rem;
+  line-height: 1.4;
+}
+
+body.dark .maia-login-divider {
+  color: #b3b3b7;
+}
+
+body.dark .maia-login-divider::before,
+body.dark .maia-login-divider::after {
+  border-top-color: rgba(180, 180, 180, 0.26);
+}
+
+body.dark .maia-login-footnote {
+  color: #b7b7bd;
+}
+
+body.dark #maia-login-shell {
+  border-color: rgba(180, 180, 180, 0.22);
+  box-shadow:
+    0 28px 66px -34px rgba(0, 0, 0, 0.62),
+    0 16px 34px -22px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, #131313 0%, #0e0e0e 100%);
+}
+
+body.dark #maia-login-hero {
+  background:
+    radial-gradient(112% 94% at 8% 8%, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(255, 255, 255, 0) 78%),
+    linear-gradient(165deg, #141414 0%, #121212 50%, #101010 100%);
+  color: #f5f5f7;
+  border-right-color: rgba(180, 180, 180, 0.18);
+}
+
+body.dark #maia-login-hero::before {
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 74%);
+  opacity: 1;
+}
+
+body.dark #maia-login-hero .maia-login-hero-logo {
+  border-color: rgba(180, 180, 180, 0.3);
+  background: linear-gradient(180deg, rgba(50, 50, 50, 0.92) 0%, rgba(30, 30, 30, 0.9) 100%);
+  box-shadow:
+    0 12px 30px -18px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+body.dark #maia-login-hero h2 {
+  color: #ffffff;
+}
+
+body.dark #maia-login-hero p {
+  color: rgba(245, 245, 247, 0.78);
+}
+

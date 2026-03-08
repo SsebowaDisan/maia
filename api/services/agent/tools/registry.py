@@ -16,6 +16,7 @@ from api.services.agent.policy import (
 )
 from api.services.agent.tools.ads_tools import GoogleAdsPerformanceTool
 from api.services.agent.tools.analytics_tools import GA4ReportTool
+from api.services.agent.tools.ga4_full_report_tool import GA4FullReportTool
 from api.services.agent.tools.business_workflow_tools import (
     BusinessCloudIncidentDigestEmailTool,
     BusinessGa4KpiSheetReportTool,
@@ -108,6 +109,7 @@ class ToolRegistry:
         self.register(GmailSearchTool())
         self.register(CalendarCreateEventTool())
         self.register(GA4ReportTool())
+        self.register(GA4FullReportTool())
         self.register(BusinessRoutePlanTool())
         self.register(BusinessGa4KpiSheetReportTool())
         self.register(BusinessCloudIncidentDigestEmailTool())

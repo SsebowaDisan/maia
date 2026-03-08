@@ -112,6 +112,10 @@ def handle_step_success(
         title=step.title,
         detail=llm_step_summary or result.summary,
         metadata={
+            "scene_surface": "document",
+            "action": "verify",
+            "action_phase": "completed",
+            "action_status": "completed",
             "tool_id": step.tool_id,
             "step": index,
             "llm_step_summary": llm_step_summary,

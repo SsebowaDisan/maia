@@ -17,7 +17,6 @@ import {
 } from "../../../api/client";
 import {
   analyzeGoogleWorkspaceLink,
-  clearMapsIntegrationKey,
   checkGoogleWorkspaceLinkAccess,
   getBraveIntegrationStatus,
   getGoogleServiceAccountStatus,
@@ -31,13 +30,13 @@ import {
   type GoogleWorkspaceAliasRecord,
   type GoogleWorkspaceLinkAccessResult,
   type GoogleWorkspaceLinkAnalyzeResult,
-  saveMapsIntegrationKey,
   type GoogleServiceAccountStatus,
   type IntegrationStatus,
   type OllamaQuickstart,
   type OllamaStatus,
 } from "../../../api/integrations";
 import type { ConnectorDefinition } from "./connectorDefinitions";
+import { createSettingsControllerKeyActions } from "./useSettingsControllerKeyActions";
 import { useOllamaSettings } from "./useOllamaSettings";
 
 export function useSettingsController(activeTab: string) {
@@ -400,66 +399,20 @@ export function useSettingsController(activeTab: string) {
     setGoogleWorkspaceAliases(aliases);
     return aliases;
   };
-
-  const handleSaveMapsKey = async () => {
-    const key = mapsKeyInput.trim();
-    if (!key) {
-      setStatusMessage("Maps API key is required.");
-      return;
-    }
-    try {
-      await saveMapsIntegrationKey(key);
-      setMapsKeyInput("");
-      await refreshIntegrations();
-      setStatusMessage("Maps API key saved.");
-    } catch (error) {
-      setStatusMessage(`Failed to save Maps API key: ${String(error)}`);
-    }
-  };
-
-  const handleClearMapsKey = async () => {
-    try {
-      await clearMapsIntegrationKey();
-      setMapsKeyInput("");
-      await refreshIntegrations();
-      setStatusMessage("Stored Maps API key cleared.");
-    } catch (error) {
-      setStatusMessage(`Failed to clear Maps API key: ${String(error)}`);
-    }
-  };
-
-  const handleSaveBraveKey = async () => {
-    const key = braveKeyInput.trim();
-    if (!key) {
-      setStatusMessage("Brave API key is required.");
-      return;
-    }
-    setSavingConnectorId("brave_search");
-    try {
-      await upsertConnectorCredentials("brave_search", { BRAVE_SEARCH_API_KEY: key });
-      setBraveKeyInput("");
-      await refreshIntegrations();
-      setStatusMessage("Brave Search API key saved.");
-    } catch (error) {
-      setStatusMessage(`Failed to save Brave Search API key: ${String(error)}`);
-    } finally {
-      setSavingConnectorId(null);
-    }
-  };
-
-  const handleClearBraveKey = async () => {
-    setSavingConnectorId("brave_search");
-    try {
-      await deleteConnectorCredentials("brave_search");
-      setBraveKeyInput("");
-      await refreshIntegrations();
-      setStatusMessage("Brave Search API key cleared.");
-    } catch (error) {
-      setStatusMessage(`Failed to clear Brave Search API key: ${String(error)}`);
-    } finally {
-      setSavingConnectorId(null);
-    }
-  };
+  const {
+    handleSaveMapsKey,
+    handleClearMapsKey,
+    handleSaveBraveKey,
+    handleClearBraveKey,
+  } = createSettingsControllerKeyActions({
+    mapsKeyInput,
+    braveKeyInput,
+    refreshIntegrations,
+    setMapsKeyInput,
+    setBraveKeyInput,
+    setStatusMessage,
+    setSavingConnectorId,
+  });
 
   return {
     loading,

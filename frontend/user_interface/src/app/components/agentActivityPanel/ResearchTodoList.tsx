@@ -105,6 +105,8 @@ interface ResearchTodoListProps {
   plannedRoadmapSteps: RoadmapStep[];
   roadmapActiveIndex: number;
   streaming: boolean;
+  /** Render with inverted (light-on-dark) colours for cinema / dark backgrounds */
+  dark?: boolean;
 }
 
 export function ResearchTodoList({
@@ -112,6 +114,7 @@ export function ResearchTodoList({
   plannedRoadmapSteps,
   roadmapActiveIndex,
   streaming,
+  dark = false,
 }: ResearchTodoListProps) {
   const items = deriveTodoItems(visibleEvents, plannedRoadmapSteps, roadmapActiveIndex);
 
@@ -120,6 +123,38 @@ export function ResearchTodoList({
 
   const doneCount = items.filter((i) => i.status === "done").length;
   const totalCount = items.length;
+
+  if (dark) {
+    return (
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <div key={item.id} className="flex items-start gap-2">
+            {item.status === "done" ? (
+              <CheckCircle2 className="mt-[1px] h-3 w-3 shrink-0 text-[#34c759]" />
+            ) : item.status === "active" ? (
+              <Loader2
+                className={`mt-[1px] h-3 w-3 shrink-0 text-[#6e6e73] ${streaming ? "animate-spin" : ""}`}
+              />
+            ) : (
+              <Circle className="mt-[1px] h-3 w-3 shrink-0 text-white/20" />
+            )}
+            <p
+              className={`text-[11px] leading-[1.35] ${
+                item.status === "done"
+                  ? "text-white/30 line-through"
+                  : item.status === "active"
+                    ? "font-medium text-white/90"
+                    : "text-white/25"
+              }`}
+            >
+              {item.label}
+            </p>
+          </div>
+        ))}
+        <p className="pt-1 text-[9px] tabular-nums text-white/25">{doneCount}/{totalCount} done</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3 rounded-2xl border border-black/[0.07] bg-white/70 px-4 py-3 backdrop-blur">

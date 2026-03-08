@@ -1,0 +1,276 @@
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  input:checked
+  + .token,
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  .token.selected {
+  border-color: #0f78ed !important;
+  background: #0f78ed !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 14px rgba(15, 120, 237, 0.26) !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  input:checked
+  + .token::before,
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  .token.selected::before {
+  border-color: #ffffff;
+  background: #ffffff;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] .container .wrap {
+  border: 1px solid #d6ddeb !important;
+  border-radius: 12px !important;
+  background: #eef2f7 !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] .container input {
+  color: #596477 !important;
+  font-size: 15px !important;
+}
+
+/* Conversation action icons: cleaner, more professional */
+body:not(.dark) #conversation-actions {
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox {
+  margin-right: 4px !important;
+}
+
+body:not(.dark) #conversation-actions .no-background button {
+  width: 44px !important;
+  min-width: 44px !important;
+  height: 44px !important;
+  border: 1px solid #d9e0eb !important;
+  border-radius: 13px !important;
+  background: #f4f7fb !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(15, 23, 42, 0.04) !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conversation-actions .no-background button:hover {
+  border-color: #c8d2e1 !important;
+  background: #ebf1f8 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 4px 10px rgba(15, 23, 42, 0.06) !important;
+  transform: none !important;
+}
+
+body:not(.dark) #rename-conv-button button {
+  color: #98a2b3 !important;
+}
+
+body:not(.dark) #delete-conv-button button {
+  color: #ef4444 !important;
+  border-color: #f0d6d6 !important;
+  background: #fff6f6 !important;
+}
+
+body:not(.dark) #delete-conv-button button:hover {
+  color: #dc2626 !important;
+  border-color: #eebbbb !important;
+  background: #fff1f1 !important;
+}
+
+body:not(.dark) #new-conv-button button {
+  color: #10b981 !important;
+  border-color: #cfeee4 !important;
+  background: #f1fcf8 !important;
+}
+
+body:not(.dark) #new-conv-button button:hover {
+  color: #0ea371 !important;
+  border-color: #bfe5d8 !important;
+  background: #e8faf3 !important;
+}
+
+/* Final professional override: conversation controls */
+body:not(.dark) #conversation-dropdown {
+  margin: 6px 0 10px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+body:not(.dark) #conversation-dropdown .wrap {
+  border: 1px solid #d0d7e2 !important;
+  border-radius: 14px !important;
+  background: linear-gradient(180deg, #f5f7fb 0%, #e9edf4 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 4px 12px rgba(15, 23, 42, 0.05) !important;
+}
+
+body:not(.dark) #conversation-dropdown .wrap:focus-within {
+  border-color: #bcc9dd !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98),
+    0 0 0 2px rgba(15, 120, 237, 0.12), 0 4px 12px rgba(15, 23, 42, 0.06) !important;
+}
+
+body:not(.dark) #conversation-dropdown .wrap-inner {
+  padding: 2px !important;
+}
+
+body:not(.dark) #conversation-dropdown input {
+  margin: 0 !important;
+  min-height: 48px !important;
+  padding: 0 40px 0 14px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+  color: #596272 !important;
+  font-size: 15px !important;
+  font-weight: 610 !important;
+  letter-spacing: -0.01em !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark) #conversation-dropdown .icon-wrap {
+  right: 12px !important;
+  color: #8b95a6 !important;
+}
+
+body:not(.dark) #conversation-actions {
+  align-items: center !important;
+  gap: 10px !important;
+  margin-top: 4px !important;
+}
+
+body:not(.dark) #conversation-actions > div {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox::before,
+body:not(.dark) #suggest-chat-checkbox::after,
+body:not(.dark) #suggest-chat-checkbox .switch::before {
+  content: none !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox .switch,
+body:not(.dark) #suggest-chat-checkbox .switch input,
+body:not(.dark) #suggest-chat-checkbox .switch div {
+  display: none !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  min-height: 42px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  border: 1px solid #d8e0eb !important;
+  border-radius: 13px !important;
+  background: linear-gradient(180deg, #fbfcff 0%, #eef2f8 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 4px 12px rgba(15, 23, 42, 0.05) !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox label > * + * {
+  margin-left: 0 !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox input[type="checkbox"] {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body:not(.dark) #conversation-actions #suggest-chat-checkbox span {
+  margin-left: 0 !important;
+  color: #1f2937 !important;
+  font-size: 15px !important;
+  font-weight: 640 !important;
+  letter-spacing: -0.01em !important;
+}
+
+body:not(.dark)
+  #conversation-actions
+  #suggest-chat-checkbox
+  label:has(input:checked) {
+  border-color: #b9d0ef !important;
+  background: linear-gradient(180deg, #f4f8ff 0%, #e8f0fd 100%) !important;
+}
+
+body:not(.dark) #conversation-actions .no-background button {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 42px !important;
+  border: 1px solid #d8e0eb !important;
+  border-radius: 13px !important;
+  background: linear-gradient(180deg, #fbfcff 0%, #edf2f8 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 4px 12px rgba(15, 23, 42, 0.05) !important;
+  color: #9099aa !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conversation-actions .no-background button img,
+body:not(.dark) #conversation-actions .no-background button svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+body:not(.dark) #conversation-actions .no-background button:hover {
+  border-color: #c7d3e3 !important;
+  background: linear-gradient(180deg, #f7fafe 0%, #eaf0f8 100%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.99),
+    0 6px 14px rgba(15, 23, 42, 0.07) !important;
+}
+
+body:not(.dark) #conversation-actions #rename-conv-button button {
+  color: #97a1b2 !important;
+}
+
+body:not(.dark) #conversation-actions #delete-conv-button button {
+  color: #cc6a6a !important;
+  border-color: #efd8d8 !important;
+  background: linear-gradient(180deg, #fffdfd 0%, #fff6f6 100%) !important;
+}
+
+body:not(.dark) #conversation-actions #delete-conv-button button:hover {
+  color: #b75353 !important;
+  border-color: #e9c1c1 !important;
+}
+
+body:not(.dark) #conversation-actions #new-conv-button button {
+  color: #3a8d74 !important;
+  border-color: #d3e7de !important;
+  background: linear-gradient(180deg, #fcfffd 0%, #f2faf6 100%) !important;
+}
+
+body:not(.dark) #conversation-actions #new-conv-button button:hover {
+  color: #2f7b64 !important;
+  border-color: #c4ded2 !important;
+}

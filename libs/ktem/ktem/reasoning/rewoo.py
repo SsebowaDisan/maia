@@ -25,7 +25,6 @@ from ..utils import SUPPORTED_LANGUAGE_MAP
 logger = logging.getLogger(__name__)
 DEFAULT_AGENT_STEPS = 4
 
-
 DEFAULT_PLANNER_PROMPT = (
     "You are an AI agent who makes step-by-step plans to solve a problem under the "
     "help of external tools. For each step, make one plan followed by one tool-call, "
@@ -60,7 +59,6 @@ DEFAULT_SOLVER_PROMPT = (
     "{task}\n\n"
     "##Now Begin##\n"
 )
-
 
 class DocSearchArgs(BaseModel):
     query: str = Field(..., description="a search query as input to the doc search")
@@ -153,7 +151,6 @@ class DocSearchTool(BaseTool):
 
         return Document(content=evidence)
 
-
 TOOL_REGISTRY = {
     "Google": GoogleSearchTool(),
     "Wikipedia": WikipediaTool(),
@@ -169,7 +166,6 @@ DEFAULT_REWRITE_PROMPT = (
     "Original question: {question}\n"
     "Rephrased question: "
 )
-
 
 class RewriteQuestionPipeline(BaseComponent):
     """Rewrite user question

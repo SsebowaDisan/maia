@@ -97,6 +97,14 @@ function eventTab(event: AgentActivityEvent | null): PreviewTab {
   if (!event) {
     return "system";
   }
+  const isShadowStep =
+    String(event.event_type || "").toLowerCase() === "tool_completed" &&
+    String(event.data?.["shadow"] ?? event.metadata?.["shadow"] ?? "")
+      .trim()
+      .toLowerCase() === "true";
+  if (isShadowStep) {
+    return "system";
+  }
   const interactionSurface = sceneSurfaceFromEvent(event);
   const surfaceTab = tabForSceneSurface(interactionSurface);
   if (surfaceTab) {

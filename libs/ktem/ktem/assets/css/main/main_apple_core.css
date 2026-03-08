@@ -1,0 +1,268 @@
+/* Apple-inspired visual refresh */
+:root {
+  --main-area-height: calc(100vh - 110px);
+  --apple-bg: #f5f5f7;
+  --apple-bg-elevated: #ffffff;
+  --apple-surface: rgba(255, 255, 255, 0.78);
+  --apple-surface-strong: rgba(255, 255, 255, 0.92);
+  --apple-text: #1d1d1f;
+  --apple-text-subdued: #6e6e73;
+  --apple-border: rgba(0, 0, 0, 0.1);
+  --apple-blue: #0071e3;
+  --apple-blue-hover: #005cc8;
+  --apple-blue-soft: rgba(0, 113, 227, 0.14);
+  --apple-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 16px 36px rgba(15, 23, 42, 0.08);
+  --apple-shadow-soft: 0 1px 1px rgba(15, 23, 42, 0.03), 0 8px 18px rgba(15, 23, 42, 0.06);
+  --apple-radius: 16px;
+}
+
+body.dark {
+  --apple-bg: #0f1115;
+  --apple-bg-elevated: #151821;
+  --apple-surface: rgba(28, 32, 40, 0.72);
+  --apple-surface-strong: rgba(28, 32, 40, 0.9);
+  --apple-text: #f5f5f7;
+  --apple-text-subdued: #b0b3ba;
+  --apple-border: rgba(255, 255, 255, 0.12);
+  --apple-blue: #4fa3ff;
+  --apple-blue-hover: #78b8ff;
+  --apple-blue-soft: rgba(79, 163, 255, 0.2);
+  --apple-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 18px 44px rgba(0, 0, 0, 0.36);
+  --apple-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.22), 0 12px 24px rgba(0, 0, 0, 0.24);
+}
+
+body,
+.gradio-container {
+  color: var(--apple-text);
+  font-feature-settings: "ss01" on, "cv11" on;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body:not(.dark) .gradio-container {
+  background: radial-gradient(130% 120% at -10% -10%, #ffffff 0%, #f9fafd 38%, #eef2f8 100%);
+}
+
+body.dark .gradio-container {
+  background: radial-gradient(120% 120% at 0% -10%, #1a2230 0%, #131822 44%, #0d1016 100%);
+}
+
+.gradio-container .gr-box,
+.gradio-container .block.border,
+.gradio-container .form,
+.gradio-container .panel {
+  background: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--apple-radius);
+  box-shadow: var(--apple-shadow-soft);
+  backdrop-filter: blur(14px) saturate(150%);
+}
+
+#main-chat-bot {
+  background: transparent;
+}
+
+#chat-area {
+  column-gap: 10px !important;
+}
+
+#chat-info-panel,
+#conv-settings-panel {
+  background: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: 18px;
+  box-shadow: var(--apple-shadow-soft);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+
+.header-bar {
+  display: flex !important;
+  gap: 6px;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
+  margin: 4px auto 18px;
+  background: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: 999px;
+  box-shadow: var(--apple-shadow-soft);
+  backdrop-filter: blur(20px) saturate(170%);
+}
+
+.header-bar button {
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--apple-text-subdued);
+  font-weight: 520;
+  padding: 7px 14px;
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+}
+
+.header-bar button:hover {
+  background: var(--apple-blue-soft);
+  color: var(--apple-text);
+}
+
+.header-bar button.selected,
+button.selected {
+  color: var(--apple-text);
+  background: var(--apple-surface-strong);
+  border-color: var(--apple-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font-weight: 600;
+}
+
+.gradio-container button {
+  border-radius: 12px !important;
+  transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.gradio-container button.primary {
+  background: linear-gradient(180deg, #1380ef 0%, var(--apple-blue) 100%);
+  border: 1px solid rgba(0, 91, 181, 0.5);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 16px rgba(0, 113, 227, 0.24);
+}
+
+.gradio-container button.primary:hover {
+  background: linear-gradient(180deg, #2e8ff3 0%, var(--apple-blue-hover) 100%);
+  transform: translateY(-1px);
+}
+
+.gradio-container button.secondary,
+.gradio-container button:not(.primary):not(.selected):not(.stop):not(.lg) {
+  background: var(--apple-surface-strong);
+  border: 1px solid var(--apple-border);
+  color: var(--apple-text);
+}
+
+.gradio-container button.secondary:hover,
+.gradio-container button:not(.primary):not(.selected):not(.stop):not(.lg):hover {
+  background: var(--apple-blue-soft);
+  border-color: rgba(0, 113, 227, 0.28);
+}
+
+.gradio-container input[type="text"],
+.gradio-container input[type="password"],
+.gradio-container input[type="email"],
+.gradio-container input[type="number"],
+.gradio-container textarea,
+.gradio-container select {
+  background: var(--apple-surface-strong) !important;
+  border: 1px solid var(--apple-border) !important;
+  border-radius: 12px !important;
+  color: var(--apple-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.gradio-container input[type="text"]:focus,
+.gradio-container input[type="password"]:focus,
+.gradio-container input[type="email"]:focus,
+.gradio-container input[type="number"]:focus,
+.gradio-container textarea:focus,
+.gradio-container select:focus {
+  border-color: rgba(0, 113, 227, 0.55) !important;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.gradio-container input::placeholder,
+.gradio-container textarea::placeholder {
+  color: var(--apple-text-subdued) !important;
+}
+
+.message {
+  background: var(--apple-surface-strong);
+  border: 1px solid var(--apple-border);
+  border-radius: 18px !important;
+  box-shadow: var(--apple-shadow-soft);
+}
+
+.message.user {
+  border-color: rgba(0, 113, 227, 0.32);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 8px 20px rgba(0, 113, 227, 0.12);
+}
+
+.message a.citation {
+  color: var(--apple-blue);
+  text-decoration: none;
+}
+
+.message a.citation:hover {
+  text-decoration: underline;
+}
+
+.switch {
+  background: #98989d;
+}
+
+.switch input:checked + div {
+  background: #ffffff;
+}
+
+.switch:has(> input:checked) {
+  background: var(--apple-blue);
+}
+
+mark {
+  background-color: var(--apple-blue-soft);
+  color: var(--apple-text);
+  border-radius: 5px;
+  padding: 0 3px;
+}
+
+.tribute-container li.highlight {
+  background-color: var(--apple-blue-soft) !important;
+}
+
+.modal {
+  background-color: rgba(15, 17, 21, 0.4);
+}
+
+.modal-content {
+  background-color: var(--apple-bg-elevated);
+  border: 1px solid var(--apple-border);
+  border-radius: 18px;
+  box-shadow: var(--apple-shadow);
+}
+
+.close {
+  color: var(--apple-text-subdued);
+}
+
+.close:hover,
+.close:focus {
+  color: var(--apple-text);
+}
+
+svg.markmap {
+  font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+.message.bot {
+  animation: fadein 360ms ease-out forwards;
+}
+
+details.evidence {
+  animation: fadein 260ms ease-out forwards;
+}
+
+.header-bar #login-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-bar #login-tab::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(160deg, #3f4550 8%, #11151b 95%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 1px 2px rgba(15, 23, 42, 0.15);
+}
+
+body.dark .header-bar #login-tab::before {
+  background: linear-gradient(160deg, #5c6270 8%, #1b2230 95%);
+}
+

@@ -1,50 +1,38 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Film, Pause, Play, SkipBack, SkipForward, Timer } from "lucide-react";
-import { ApprovalGateCard } from "./ApprovalGateCard";
 import { exportAgentRunEvents } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
 import { derivePhaseTimeline, resolveEventSourceUrl } from "./helpers";
 import { DesktopViewer } from "./DesktopViewer";
-import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
-import { PhaseTimeline } from "./PhaseTimeline";
-import { PreviewTabsCard } from "./PreviewTabsCard";
-import { ReplayTimeline } from "./ReplayTimeline";
 import type { AgentActivityPanelProps } from "./types";
 import { useAgentActivityDerived } from "./useAgentActivityDerived";
-import { ResearchTodoList } from "./ResearchTodoList";
+import { ActivityHeader } from "./ActivityHeader";
+import { ActivityPanelBody } from "./ActivityPanelBody";
+import { CinemaOverlay } from "./CinemaOverlay";
+import { useAutoScrollTimeline, useJumpTargetSelection, useOverlayKeyboardShortcuts } from "./useActivityPanelNavigation";
 
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
-function normalizeTokenList(values: string[] | undefined): string[] {
-  if (!Array.isArray(values)) {
-    return [];
-  }
-  const cleaned = values
-    .map((value) => String(value || "").trim().toLowerCase())
-    .filter((value) => value.length > 0);
-  return Array.from(new Set(cleaned)).slice(0, 16);
-}
-
-function readEventString(event: AgentActivityEvent, key: string): string {
-  const direct = String((event as Record<string, unknown>)[key] || "").trim();
-  if (direct) {
-    return direct;
-  }
-  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
-  return String(payload[key] || "").trim();
-}
-
-function readEventStringList(event: AgentActivityEvent, key: string): string[] {
-  const payload = (event.data || event.metadata || {}) as Record<string, unknown>;
-  const raw = payload[key];
-  if (Array.isArray(raw)) {
-    return normalizeTokenList(raw.map((value) => String(value || "")));
-  }
-  const text = String(raw || "").trim();
+function compactNarrative(value: string, maxLength = 140): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) {
-    return [];
+    return "";
   }
-  return normalizeTokenList(text.split(","));
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function buildSceneNarrative(event: AgentActivityEvent | null): string {
+  if (!event) {
+    return "";
+  }
+  const title = compactNarrative(event.title || "", 80);
+  const detail = compactNarrative(event.detail || "", 120);
+  if (detail && detail.length <= 90 && title && detail.toLowerCase() !== title.toLowerCase()) {
+    return `${title} - ${detail}`;
+  }
+  return detail || title || "Processing step...";
 }
 
 export function AgentActivityPanel({
@@ -61,7 +49,7 @@ export function AgentActivityPanel({
   const [cursor, setCursor] = useState(0);
   const [sceneText, setSceneText] = useState("");
   const [cursorPoint, setCursorPoint] = useState({ x: 14, y: 24 });
-  const [previewTab, setPreviewTab] = useState<"browser" | "document" | "email" | "system">("document");
+  const [previewTab, setPreviewTab] = useState<"browser" | "document" | "email" | "system">("browser");
   const [isExporting, setIsExporting] = useState(false);
   const [isTheaterView, setIsTheaterView] = useState(true);
   const [isFullscreenViewer, setIsFullscreenViewer] = useState(false);
@@ -92,21 +80,16 @@ export function AgentActivityPanel({
     activeEvent,
     activeRoleColor,
     activeRoleLabel,
-    activeTab,
-    browserEvents,
     browserUrl,
     canRenderPdfFrame,
     cursorLabel,
     desktopStatus,
     docBodyHint,
-    documentEvents,
     effectiveSnapshotUrl,
     emailBodyHint,
-    emailEvents,
     emailRecipient,
     emailSubject,
     eventCursor,
-    filmstripEvents,
     isBrowserScene,
     isDocsScene,
     isDocumentScene,
@@ -127,7 +110,6 @@ export function AgentActivityPanel({
     sheetBodyHint,
     stageFileName,
     stageFileUrl,
-    systemEvents,
     visibleEvents,
     plannedRoadmapSteps,
     roadmapActiveIndex,
@@ -206,8 +188,7 @@ export function AgentActivityPanel({
       return;
     }
 
-    const baseText = [activeEvent.title, activeEvent.detail].filter(Boolean).join(" - ");
-    const targetText = baseText || "Processing step...";
+    const targetText = buildSceneNarrative(activeEvent) || "Processing step...";
     setSceneText("");
 
     let index = 0;
@@ -232,6 +213,16 @@ export function AgentActivityPanel({
       }
     };
   }, [activeEvent?.event_id]);
+
+  // Reset previewTab to browser whenever a new streaming run starts so that
+  // stale "document" state from a previous run doesn't open Google Docs uninvited.
+  const prevStreamingRef = useRef(streaming);
+  useEffect(() => {
+    if (streaming && !prevStreamingRef.current) {
+      setPreviewTab("browser");
+    }
+    prevStreamingRef.current = streaming;
+  }, [streaming]);
 
   useEffect(() => {
     if (!activeEvent) {
@@ -333,93 +324,34 @@ export function AgentActivityPanel({
     setCursorPoint(eventCursor);
   }, [eventCursor]);
 
-  useEffect(() => {
-    if (!jumpTarget || !orderedEvents.length) {
-      return;
-    }
-    const targetGraphNodeIds = normalizeTokenList(jumpTarget.graphNodeIds);
-    const targetSceneRefs = normalizeTokenList(jumpTarget.sceneRefs);
-    const targetEventRefs = normalizeTokenList(jumpTarget.eventRefs);
-    if (!targetGraphNodeIds.length && !targetSceneRefs.length && !targetEventRefs.length) {
-      return;
-    }
+  useJumpTargetSelection({
+    jumpTarget,
+    orderedEvents,
+    setCursor,
+    setIsPlaying,
+  });
 
-    let matchedIndex = -1;
-    for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
-      const event = orderedEvents[index];
-      const eventId = String(event.event_id || "").trim().toLowerCase();
-      const graphNodeId = readEventString(event, "graph_node_id").toLowerCase();
-      const sceneRef = readEventString(event, "scene_ref").toLowerCase();
-      const graphNodeIds = readEventStringList(event, "graph_node_ids");
-      const sceneRefs = readEventStringList(event, "scene_refs");
-      const eventRefs = readEventStringList(event, "event_refs");
-      const byEventRef = targetEventRefs.some((ref) => ref === eventId || eventRefs.includes(ref));
-      const byGraphNode =
-        targetGraphNodeIds.some((ref) => ref === graphNodeId) ||
-        targetGraphNodeIds.some((ref) => graphNodeIds.includes(ref));
-      const bySceneRef =
-        targetSceneRefs.some((ref) => ref === sceneRef) ||
-        targetSceneRefs.some((ref) => sceneRefs.includes(ref));
-      if (byEventRef || byGraphNode || bySceneRef) {
-        matchedIndex = index;
-        break;
-      }
-    }
-    if (matchedIndex < 0) {
-      return;
-    }
-    setCursor(matchedIndex);
-    setIsPlaying(false);
-  }, [jumpTarget?.nonce, orderedEvents]);
+  useOverlayKeyboardShortcuts({
+    isFullscreenViewer,
+    isCinemaMode,
+    streaming,
+    orderedEventsLength: orderedEvents.length,
+    setIsFullscreenViewer,
+    setIsCinemaMode,
+    setIsPlaying,
+    setCursor,
+  });
 
-  useEffect(() => {
-    if (!isFullscreenViewer && !isCinemaMode) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsFullscreenViewer(false);
-        setIsCinemaMode(false);
-      }
-      if (!isCinemaMode) return;
-      if (event.key === " " || event.code === "Space") {
-        event.preventDefault();
-        if (!streaming) setIsPlaying((prev) => !prev);
-      } else if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setCursor((prev) => Math.max(0, prev - 1));
-        setIsPlaying(false);
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setCursor((prev) => Math.min(orderedEvents.length - 1, prev + 1));
-        setIsPlaying(false);
-      }
-    };
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isFullscreenViewer, isCinemaMode, streaming, orderedEvents.length]);
-
-  useEffect(() => {
-    if (!streaming) {
-      return;
-    }
-    const node = listRef.current;
-    if (!node) {
-      return;
-    }
-    node.scrollTop = node.scrollHeight;
-  }, [streaming, orderedEvents.length, activeEvent?.event_id]);
+  useAutoScrollTimeline({
+    streaming,
+    orderedEventsLength: orderedEvents.length,
+    activeEventId: activeEvent?.event_id,
+    listRef,
+  });
 
   if (!orderedEvents.length) {
     return null;
   }
-
-  const trimmedReviewNotes = String(humanReviewNotes || "").trim();
 
   const runId = orderedEvents[0]?.run_id || activeEvent?.run_id || "";
 
@@ -492,280 +424,87 @@ export function AgentActivityPanel({
     },
   };
 
+  const approvalEvent = streaming
+    ? orderedEvents
+        .slice()
+        .reverse()
+        .find((event) => event.event_type === "approval_required") || null
+    : null;
+
   return (
-    <div className="mb-4 overflow-hidden rounded-3xl border border-black/[0.08] bg-[radial-gradient(circle_at_10%_0%,#ffffff_0%,#f5f5f7_55%,#efeff2_100%)] p-4 shadow-[0_10px_30px_-25px_rgba(0,0,0,0.45)]">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.14em] text-[#86868b]">Agent Activity</p>
-          <p className="text-[16px] font-semibold text-[#1d1d1f]">
-            {streaming ? "Live execution feed" : "Replay timeline"}
-          </p>
-          {needsHumanReview ? (
-            <div className="mt-1.5 inline-flex max-w-[520px] items-start gap-1.5 rounded-lg border border-[#f5a524]/40 bg-[#fff7e6] px-2.5 py-1.5 text-[11px] text-[#7a4a00]">
-              <AlertTriangle className="mt-[1px] h-3.5 w-3.5 shrink-0" />
-              <div className="space-y-0.5">
-                <p className="font-medium leading-tight">Needs human review</p>
-                {trimmedReviewNotes ? (
-                  <p className="leading-tight text-[#8e5710]">{trimmedReviewNotes}</p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="inline-flex items-center gap-1 rounded-xl border border-black/[0.08] bg-white/90 p-1 backdrop-blur">
-          <button
-            type="button"
-            onClick={() => setIsCinemaMode(true)}
-            className="rounded-lg p-2 text-[#6e6e73] transition hover:bg-[#f3f3f5]"
-            title="Cinema mode (Space/←/→/Esc)"
-          >
-            <Film className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void exportRun();
-            }}
-            disabled={isExporting || !runId}
-            className="rounded-lg px-2 py-1.5 text-[11px] text-[#4c4c50] transition hover:bg-[#f3f3f5] disabled:cursor-not-allowed disabled:opacity-50"
-            title="Export run JSON"
-          >
-            {isExporting ? "Exporting..." : "Export"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCursor(0);
-              setIsPlaying(false);
-            }}
-            className="rounded-lg p-2 text-[#6e6e73] transition hover:bg-[#f3f3f5]"
-            title="Jump to first step"
-          >
-            <SkipBack className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsPlaying((prev) => !prev)}
-            disabled={streaming}
-            className="rounded-lg p-2 text-[#1d1d1f] transition hover:bg-[#f3f3f5] disabled:cursor-not-allowed disabled:opacity-50"
-            title={isPlaying ? "Pause replay" : "Play replay"}
-          >
-            {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCursor(orderedEvents.length - 1);
-              setIsPlaying(false);
-            }}
-            className="rounded-lg p-2 text-[#6e6e73] transition hover:bg-[#f3f3f5]"
-            title="Jump to latest step"
-          >
-            <SkipForward className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const currentIndex = playbackRates.findIndex((item) => item === speed);
-              const nextRate = playbackRates[(currentIndex + 1) % playbackRates.length];
-              setSpeed(nextRate);
-            }}
-            disabled={streaming}
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium text-[#4c4c50] transition hover:bg-[#f3f3f5] disabled:cursor-not-allowed disabled:opacity-50"
-            title="Cycle replay speed"
-          >
-            <Timer className="h-3.5 w-3.5" />
-            {speed}x
-          </button>
-        </div>
-      </div>
-
-      <DesktopViewer
-        {...sharedViewerProps}
-        onToggleTheaterView={() => setIsTheaterView((prev) => !prev)}
-        onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
-        onOpenFullscreen={() => {
-          setIsFullscreenViewer(true);
-          setIsFocusMode(true);
+    <div className="mb-4 overflow-hidden rounded-3xl border border-black/[0.08] bg-[#f7f7f8] p-4 shadow-[0_8px_24px_-20px_rgba(0,0,0,0.32)]">
+      <ActivityHeader
+        streaming={streaming}
+        isExporting={isExporting}
+        runId={runId}
+        isPlaying={isPlaying}
+        speed={speed}
+        onExport={() => {
+          void exportRun();
+        }}
+        onJumpFirst={() => {
+          setCursor(0);
+          setIsPlaying(false);
+        }}
+        onTogglePlay={() => setIsPlaying((prev) => !prev)}
+        onJumpLast={() => {
+          setCursor(orderedEvents.length - 1);
+          setIsPlaying(false);
+        }}
+        onCycleSpeed={() => {
+          const currentIndex = playbackRates.findIndex((item) => item === speed);
+          const nextRate = playbackRates[(currentIndex + 1) % playbackRates.length];
+          setSpeed(nextRate);
         }}
       />
 
-      <PhaseTimeline phases={phaseTimeline} streaming={streaming} />
+      <ActivityPanelBody
+        sharedViewerProps={sharedViewerProps}
+        phaseTimeline={phaseTimeline}
+        streaming={streaming}
+        visibleEvents={visibleEvents}
+        orderedEvents={orderedEvents}
+        safeCursor={safeCursor}
+        progressPercent={progressPercent}
+        activeEvent={activeEvent}
+        sceneText={sceneText}
+        onSelectEvent={handleSelectEvent}
+        listRef={listRef}
+        setCursor={setCursor}
+        setIsPlaying={setIsPlaying}
+        isFocusMode={isFocusMode}
+        setIsFocusMode={setIsFocusMode}
+        isTheaterView={isTheaterView}
+        setIsTheaterView={setIsTheaterView}
+        isFullscreenViewer={isFullscreenViewer}
+        setIsFullscreenViewer={setIsFullscreenViewer}
+        approvalEvent={approvalEvent}
+        approvalDismissed={approvalDismissed}
+        setApprovalDismissed={setApprovalDismissed}
+      />
 
-      <ResearchTodoList
+      <CinemaOverlay
+        open={isCinemaMode}
+        phaseTimeline={phaseTimeline}
+        safeCursor={safeCursor}
+        orderedEvents={orderedEvents}
+        activeEvent={activeEvent}
         visibleEvents={visibleEvents}
         plannedRoadmapSteps={plannedRoadmapSteps}
         roadmapActiveIndex={roadmapActiveIndex}
+        sharedViewerProps={{
+          ...sharedViewerProps,
+          onToggleTheaterView: () => setIsTheaterView((prev) => !prev),
+          onToggleFocusMode: () => setIsFocusMode((prev) => !prev),
+          onOpenFullscreen: () => {},
+        }}
         streaming={streaming}
-      />
-
-      <PreviewTabsCard
-        previewTab={previewTab}
-        setPreviewTab={setPreviewTab}
-        browserEvents={browserEvents}
-        documentEvents={documentEvents}
-        emailEvents={emailEvents}
-        systemEvents={systemEvents}
-        stageFileName={stageFileName}
-        activeTab={activeTab}
-        totalEvents={orderedEvents.length}
-      />
-
-      <ReplayTimeline
-        streaming={streaming}
-        safeCursor={safeCursor}
-        totalEvents={orderedEvents.length}
-        progressPercent={progressPercent}
-        setCursor={setCursor}
+        isPlaying={isPlaying}
         setIsPlaying={setIsPlaying}
-        activeEvent={activeEvent}
-        sceneText={sceneText}
-        filmstripEvents={filmstripEvents}
-        visibleEvents={visibleEvents}
-        onSelectEvent={handleSelectEvent}
-        listRef={listRef}
+        setCursor={setCursor}
+        onClose={() => setIsCinemaMode(false)}
       />
 
-      {isCinemaMode ? (
-        <div className="fixed inset-0 z-[9999] flex flex-col bg-[#0d1118]">
-          {/* Three-pane content */}
-          <div className="flex min-h-0 flex-1 gap-0">
-            {/* Left: phase info */}
-            <div className="flex w-[240px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/[0.08] p-4">
-              <p className="text-[10px] uppercase tracking-widest text-white/50">Research Phases</p>
-              {phaseTimeline.map((phase) => (
-                <div key={phase.key} className="space-y-0.5">
-                  <p className={`text-[11px] font-semibold ${
-                    phase.state === "active" ? "text-white" :
-                    phase.state === "completed" ? "text-white/60" :
-                    "text-white/25"
-                  }`}>{phase.label}</p>
-                  {phase.latestEventTitle ? (
-                    <p className="truncate text-[10px] text-white/35">{phase.latestEventTitle}</p>
-                  ) : null}
-                </div>
-              ))}
-              <div className="mt-auto space-y-1 border-t border-white/[0.08] pt-3">
-                <p className="text-[10px] text-white/40">Step {safeCursor + 1} / {orderedEvents.length}</p>
-                <p className="text-[11px] font-medium text-white/70">
-                  {activeEvent?.title ?? "Waiting…"}
-                </p>
-              </div>
-            </div>
-
-            {/* Center: scene */}
-            <div className="relative min-h-0 flex-1">
-              <DesktopViewer
-                {...sharedViewerProps}
-                fullscreen
-                onToggleTheaterView={() => setIsTheaterView((prev) => !prev)}
-                onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
-                onOpenFullscreen={() => {}}
-              />
-            </div>
-
-            {/* Right: events */}
-            <div className="flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-white/[0.08] p-4">
-              <p className="text-[10px] uppercase tracking-widest text-white/50">Evidence Trail</p>
-              <div className="space-y-1.5">
-                {visibleEvents.slice(-20).map((ev, i) => {
-                  const isActive = visibleEvents.indexOf(ev) === safeCursor;
-                  return (
-                    <button
-                      key={ev.event_id || i}
-                      type="button"
-                      onClick={() => { setCursor(visibleEvents.indexOf(ev)); setIsPlaying(false); }}
-                      className={`w-full rounded-lg px-2.5 py-1.5 text-left text-[10px] transition ${
-                        isActive
-                          ? "bg-white/15 text-white"
-                          : "text-white/55 hover:bg-white/10 hover:text-white/80"
-                      }`}
-                    >
-                      <p className="truncate font-medium">{ev.title}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Bottom: scrubber + controls */}
-          <div className="flex shrink-0 items-center gap-3 border-t border-white/[0.08] bg-[#0d1118]/90 px-4 py-3 backdrop-blur">
-            <button
-              type="button"
-              onClick={() => setIsPlaying((prev) => !prev)}
-              disabled={streaming}
-              className="rounded-lg p-1.5 text-white/70 hover:bg-white/10 disabled:opacity-40"
-            >
-              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(orderedEvents.length - 1, 0)}
-              value={safeCursor}
-              onChange={(e) => { setCursor(Number(e.target.value)); setIsPlaying(false); }}
-              className="flex-1 accent-white/80"
-            />
-            <span className="shrink-0 text-[11px] tabular-nums text-white/50">
-              {safeCursor + 1}/{orderedEvents.length}
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsCinemaMode(false)}
-              className="rounded-lg px-2.5 py-1.5 text-[11px] text-white/50 hover:bg-white/10 hover:text-white/80"
-            >
-              Esc
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <FullscreenViewerOverlay
-        isOpen={isFullscreenViewer}
-        isFocusMode={isFocusMode}
-        onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
-        onClose={() => setIsFullscreenViewer(false)}
-        desktopViewer={
-          <DesktopViewer
-            {...sharedViewerProps}
-            fullscreen
-            onToggleTheaterView={() => setIsTheaterView((prev) => !prev)}
-            onToggleFocusMode={() => setIsFocusMode((prev) => !prev)}
-            onOpenFullscreen={() => setIsFullscreenViewer(true)}
-          />
-        }
-        visibleEvents={visibleEvents}
-        activeEvent={activeEvent}
-        sceneText={sceneText}
-        onSelectEvent={handleSelectEvent}
-      />
-
-      {/* T7: Approval Gate Spotlight */}
-      {(() => {
-        if (!streaming) return null;
-        const approvalEvent = orderedEvents.slice().reverse().find(
-          (ev) => ev.event_type === "approval_required"
-        );
-        if (!approvalEvent) return null;
-        const eventId = String(approvalEvent.event_id || "");
-        if (approvalDismissed === eventId) return null;
-        const payload = ((approvalEvent.data ?? approvalEvent.metadata) ?? {}) as Record<string, unknown>;
-        const rawGate = String(payload.gate_color ?? payload.trust_gate_color ?? "amber").trim();
-        const gateColor: "amber" | "red" = rawGate === "red" ? "red" : "amber";
-        const trustScore = Number(payload.trust_score ?? 0.5);
-        const reason = String(payload.reason ?? payload.message ?? "").trim();
-        return (
-          <ApprovalGateCard
-            trustScore={trustScore}
-            gateColor={gateColor}
-            reason={reason}
-            onApprove={() => setApprovalDismissed(eventId)}
-            onCancel={() => setApprovalDismissed(eventId)}
-          />
-        );
-      })()}
     </div>
   );
 }

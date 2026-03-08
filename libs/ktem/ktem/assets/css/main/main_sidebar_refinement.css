@@ -1,0 +1,276 @@
+/* Final sidebar section rows: line-style headers, not filled blocks */
+body:not(.dark) #conv-settings-panel [id^="index-"],
+body:not(.dark) #conv-settings-panel #quick-upload-accordion,
+body:not(.dark) #conv-settings-panel #report-accordion {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] > button.label-wrap,
+body:not(.dark) #conv-settings-panel #quick-upload-accordion > button.label-wrap,
+body:not(.dark) #conv-settings-panel #report-accordion > button.label-wrap {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  min-height: 52px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid #e3e7ee !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #1f2937 !important;
+  text-align: left !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] > button.label-wrap.open,
+body:not(.dark) #conv-settings-panel #quick-upload-accordion > button.label-wrap.open,
+body:not(.dark) #conv-settings-panel #report-accordion > button.label-wrap.open {
+  margin-bottom: 0 !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  > button.label-wrap
+  > span:first-child,
+body:not(.dark)
+  #conv-settings-panel
+  #quick-upload-accordion
+  > button.label-wrap
+  > span:first-child,
+body:not(.dark)
+  #conv-settings-panel
+  #report-accordion
+  > button.label-wrap
+  > span:first-child {
+  color: #1f2937 !important;
+  font-size: 15px !important;
+  font-weight: 640 !important;
+  line-height: 1.2 !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  > button.label-wrap
+  > span.icon,
+body:not(.dark)
+  #conv-settings-panel
+  #quick-upload-accordion
+  > button.label-wrap
+  > span.icon,
+body:not(.dark)
+  #conv-settings-panel
+  #report-accordion
+  > button.label-wrap
+  > span.icon {
+  color: #9aa3b2 !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] > div,
+body:not(.dark) #conv-settings-panel #quick-upload-accordion > div,
+body:not(.dark) #conv-settings-panel #report-accordion > div {
+  padding: 12px 0 14px !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] .gradio-row button {
+  min-height: 38px !important;
+  border: 1px solid #e1e6ee !important;
+  border-radius: 11px !important;
+  background: #f3f5f8 !important;
+  box-shadow: none !important;
+  color: #7b8391 !important;
+  font-size: 15px !important;
+  font-weight: 640 !important;
+  justify-content: center !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] .gradio-row button.selected {
+  border-color: #0f78ed !important;
+  background: #0f78ed !important;
+  color: #ffffff !important;
+}
+
+/* Sidebar refinement pass: clean controls + readable tokens */
+body:not(.dark) #conv-settings-panel {
+  padding: 16px 18px 18px !important;
+  row-gap: 10px !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button {
+  width: 32px !important;
+  min-width: 32px !important;
+  max-width: 32px !important;
+  flex: 0 0 32px !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button button {
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  border: 1px solid #d4dbe6 !important;
+  border-radius: 999px !important;
+  background: #e7ebf2 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75) !important;
+  position: relative !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button button::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #d4dbe6;
+  border-radius: 999px;
+  background: #f8fafd;
+}
+
+body:not(.dark) #conv-settings-panel #toggle-dark-button button > * {
+  display: none !important;
+}
+
+body:not(.dark) #conversation-dropdown {
+  margin: 6px 0 8px !important;
+  padding: 10px !important;
+  border: 1px solid #e7ebf2 !important;
+  border-radius: 14px !important;
+  background: #f7f8fb !important;
+}
+
+body:not(.dark) #conversation-dropdown input {
+  min-height: 44px !important;
+  border: 1px solid #c9d1de !important;
+  border-radius: 14px !important;
+  background: #e9edf4 !important;
+  color: #4b5565 !important;
+  font-size: 15px !important;
+  font-weight: 620 !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark) #conversation-dropdown svg {
+  color: #8892a0 !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox {
+  min-height: 40px !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox::before {
+  content: "" !important;
+  display: none !important;
+}
+
+body:not(.dark) #suggest-chat-checkbox span {
+  color: #283141 !important;
+  font-size: 16px !important;
+  font-weight: 650 !important;
+}
+
+body:not(.dark) #conv-settings-panel .no-background:not(#toggle-dark-button) button {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px !important;
+  border: 1px solid #dce2eb !important;
+  border-radius: 12px !important;
+  background: #edf1f6 !important;
+  color: #7d8694 !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  .no-background:not(#toggle-dark-button)
+  button:hover {
+  background: #e7edf6 !important;
+  border-color: #cfd8e6 !important;
+  color: #556173 !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] > button.label-wrap {
+  min-height: 50px !important;
+  border-bottom: 1px solid #dce2ea !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  > button.label-wrap
+  > span:first-child {
+  color: #273142 !important;
+  font-size: 15px !important;
+  font-weight: 640 !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  > button.label-wrap
+  > span.icon {
+  color: #8f99a8 !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] label:not(.container) .wrap {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  .wrap-inner {
+  gap: 10px !important;
+  padding: 0 !important;
+}
+
+body:not(.dark) #conv-settings-panel [id^="index-"] label:not(.container) .token {
+  position: relative !important;
+  min-height: 40px !important;
+  border: 1px solid #dfe4ed !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  color: #3c4656 !important;
+  font-size: 15px !important;
+  font-weight: 620 !important;
+  padding: 0 14px 0 34px !important;
+  box-shadow: 0 1px 1px rgba(255, 255, 255, 0.85),
+    0 3px 10px rgba(15, 23, 42, 0.05) !important;
+}
+
+body:not(.dark)
+  #conv-settings-panel
+  [id^="index-"]
+  label:not(.container)
+  .token::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border: 1.5px solid #d1d8e4;
+  border-radius: 999px;
+  background: transparent;
+}
+
