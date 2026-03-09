@@ -55,21 +55,63 @@ class UnstructuredReader(BaseReader):
         split_documents: Optional[bool] = False,
         **kwargs,
     ) -> List[Document]:
-        """If api is set, parse through api"""
+        def _fallback_docs(reason: str) -> List[Document]:
+            file_path = Path(file)
+            file_name = file_path.name
+            abs_path = str(file_path.resolve())
+            metadata = {"file_name": file_name, "file_path": abs_path}
+            if extra_info is not None:
+                metadata.update(extra_info)
+            metadata["parser_fallback_reason"] = reason
+
+            suffix = file_path.suffix.lower()
+            if suffix in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}:
+                try:
+                    from .local_ocr_loader import OCRImageReader
+
+                    return OCRImageReader().load_data(file_path, extra_info=metadata)
+                except Exception:
+                    pass
+
+            if suffix in {".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".log"}:
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+                    if not text:
+                        text = f"No readable UTF-8 text found in file: {file_name}"
+                    return [Document(text=text, metadata=metadata)]
+                except Exception:
+                    pass
+
+            return [
+                Document(
+                    text=(
+                        "File ingestion fallback used because optional dependency "
+                        f"`unstructured` is unavailable. File: {file_name}"
+                    ),
+                    metadata=metadata,
+                )
+            ]
+
         file_path_str = str(file)
-        if self.api:
-            from unstructured.partition.api import partition_via_api
+        try:
+            if self.api:
+                from unstructured.partition.api import partition_via_api
 
-            elements = partition_via_api(
-                filename=file_path_str,
-                api_key=self.api_key,
-                api_url=self.server_url + "/general/v0/general",
-            )
-        else:
-            """Parse file locally"""
-            from unstructured.partition.auto import partition
+                elements = partition_via_api(
+                    filename=file_path_str,
+                    api_key=self.api_key,
+                    api_url=self.server_url + "/general/v0/general",
+                )
+            else:
+                from unstructured.partition.auto import partition
 
-            elements = partition(filename=file_path_str)
+                elements = partition(filename=file_path_str)
+        except ModuleNotFoundError as exc:
+            if "unstructured" in str(exc):
+                return _fallback_docs("unstructured-not-installed")
+            raise
+        except Exception as exc:
+            return _fallback_docs(f"unstructured-parse-failed:{exc.__class__.__name__}")
 
         """ Process elements """
         docs = []

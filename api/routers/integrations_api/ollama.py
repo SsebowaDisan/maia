@@ -106,6 +106,7 @@ def start_ollama(
         result = start_local_ollama(
             base_url=base_url,
             wait_seconds=payload.wait_seconds,
+            auto_install=payload.auto_install,
         )
     except OllamaError as exc:
         publish_event(
@@ -228,14 +229,66 @@ def pull_ollama_model(
         pull_result = service.pull_model(model=model, on_progress=on_progress)
         models = service.list_models()
     except OllamaError as exc:
+        # Self-heal common local setup issue: runtime not running yet.
+        if exc.code == "ollama_unreachable":
+            try:
+                start_result = start_local_ollama(base_url=base_url, wait_seconds=12, auto_install=True)
+                if not bool(start_result.get("reachable")):
+                    raise OllamaError(
+                        code="ollama_install_in_progress",
+                        message="Ollama installation/startup is in progress. Retry in a moment.",
+                        status_code=503,
+                        details={"start": start_result},
+                    )
+                pull_result = service.pull_model(model=model, on_progress=on_progress)
+                models = service.list_models()
+            except OllamaError as retry_exc:
+                publish_event(
+                    user_id=user_id,
+                    run_id=run_id,
+                    event_type="ollama.pull.failed",
+                    message=f"Download failed for `{model}`",
+                    data=retry_exc.to_detail(),
+                )
+                raise_http_from_ollama(retry_exc)
+
+        else:
+            publish_event(
+                user_id=user_id,
+                run_id=run_id,
+                event_type="ollama.pull.failed",
+                message=f"Download failed for `{model}`",
+                data=exc.to_detail(),
+            )
+            raise_http_from_ollama(exc)
+
+    if not isinstance(models, list):
+        models = []
+
+    # Keep tenant settings synced once runtime responds, even when no explicit config call was made.
+    save_ollama_settings(
+        user_id=user_id,
+        existing_settings=settings,
+        base_url=base_url,
+    )
+
+    # Existing failure handler for non-retryable pull failures.
+    if not isinstance(pull_result, dict):
         publish_event(
             user_id=user_id,
             run_id=run_id,
             event_type="ollama.pull.failed",
             message=f"Download failed for `{model}`",
-            data=exc.to_detail(),
+            data={"code": "ollama_pull_failed", "model": model},
         )
-        raise_http_from_ollama(exc)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "ollama_pull_failed",
+                "message": "Failed to download Ollama model.",
+                "details": {"model": model},
+            },
+        )
 
     model_exists = any(str(item.get("name") or "") == model for item in models)
     selected_llm_name: str | None = None

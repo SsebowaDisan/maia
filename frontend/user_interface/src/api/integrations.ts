@@ -275,7 +275,7 @@ export function startLocalOllama(payload?: {
 }) {
   return request<{
     base_url: string;
-    status: "already_running" | "started" | "starting";
+    status: "already_running" | "started" | "starting" | "installing";
     reachable: boolean;
     version?: string | null;
     pid?: number | null;

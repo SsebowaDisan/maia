@@ -17,7 +17,7 @@ from maia.base import Param
 from .base import BaseEmbeddings, Document, DocumentWithEmbedding
 
 
-def split_text_by_chunk_size(text: str, chunk_size: int) -> list[list[int]]:
+def split_text_by_chunk_size(text: str, chunk_size: int) -> list[str]:
     """Split the text into chunks of a given size
 
     Args:
@@ -25,13 +25,14 @@ def split_text_by_chunk_size(text: str, chunk_size: int) -> list[list[int]]:
         chunk_size: size of each chunk
 
     Returns:
-        list of chunks (as tokens)
+        list of text chunks
     """
     encoding = tiktoken.get_encoding("cl100k_base")
     tokens = iter(encoding.encode(text))
-    result = []
-    while chunk := list(islice(tokens, chunk_size)):
-        result.append(chunk)
+    result: list[str] = []
+    while chunk_tokens := list(islice(tokens, chunk_size)):
+        chunk_text = encoding.decode(chunk_tokens).strip()
+        result.append(chunk_text if chunk_text else " ")
     return result
 
 
@@ -90,16 +91,29 @@ class BaseOpenAIEmbeddings(BaseEmbeddings):
         input_doc = self.prepare_input(text)
         client = self.prepare_client(async_version=False)
 
-        input_: list[str | list[int]] = []
+        def _normalize_text(value) -> str:
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned if cleaned else " "
+            if value is None:
+                return " "
+            try:
+                cleaned = str(value).strip()
+            except Exception:
+                return " "
+            return cleaned if cleaned else " "
+
+        input_: list[str] = []
         splitted_indices = {}
         for idx, text in enumerate(input_doc):
+            normalized_text = _normalize_text(text.text)
             if self.context_length:
-                chunks = split_text_by_chunk_size(text.text or " ", self.context_length)
+                chunks = split_text_by_chunk_size(normalized_text, self.context_length)
                 splitted_indices[idx] = (len(input_), len(input_) + len(chunks))
                 input_.extend(chunks)
             else:
                 splitted_indices[idx] = (len(input_), len(input_) + 1)
-                input_.append(text.text)
+                input_.append(normalized_text)
 
         resp = self.openai_response(client, input=input_, **kwargs).dict()
         output_ = list(sorted(resp["data"], key=lambda x: x["index"]))
@@ -113,10 +127,7 @@ class BaseOpenAIEmbeddings(BaseEmbeddings):
                 )
                 continue
 
-            chunk_lens = [
-                len(_)
-                for _ in input_[splitted_indices[idx][0] : splitted_indices[idx][1]]
-            ]
+            chunk_lens = [max(1, len(_)) for _ in input_[splitted_indices[idx][0] : splitted_indices[idx][1]]]
             vs: list[list[float]] = [_["embedding"] for _ in embs]
             emb = np.average(vs, axis=0, weights=chunk_lens)
             emb = emb / np.linalg.norm(emb)
@@ -129,8 +140,21 @@ class BaseOpenAIEmbeddings(BaseEmbeddings):
     ) -> list[DocumentWithEmbedding]:
         input_ = self.prepare_input(text)
         client = self.prepare_client(async_version=True)
+
+        def _normalize_text(value) -> str:
+            if isinstance(value, str):
+                cleaned = value.strip()
+                return cleaned if cleaned else " "
+            if value is None:
+                return " "
+            try:
+                cleaned = str(value).strip()
+            except Exception:
+                return " "
+            return cleaned if cleaned else " "
+
         resp = await self.openai_response(
-            client, input=[_.text if _.text else " " for _ in input_], **kwargs
+            client, input=[_normalize_text(_.text) for _ in input_], **kwargs
         ).dict()
         output_ = sorted(resp["data"], key=lambda x: x["index"])
         return [

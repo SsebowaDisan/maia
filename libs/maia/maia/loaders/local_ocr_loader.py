@@ -161,7 +161,17 @@ class OCRAugmentedPDFReader(PDFThumbnailReader, RapidOCRMixin):
         extra_info: Optional[Dict] = None,
         fs: Optional[AbstractFileSystem] = None,
     ) -> List[Document]:
-        base_docs = super().load_data(file=file, extra_info=extra_info, fs=fs)
+        try:
+            base_docs = super().load_data(file=file, extra_info=extra_info, fs=fs)
+        except Exception as exc:
+            # Some PDFs contain malformed/encrypted metadata that can break pypdf.
+            # Keep ingestion moving with OCR-only extraction in that case.
+            logger.warning(
+                "Base PDF extraction failed for %s; continuing with OCR-only path: %s",
+                file,
+                exc,
+            )
+            base_docs = []
         ocr_docs = self._page_ocr_documents(Path(file), extra_info=extra_info)
         if not ocr_docs:
             return base_docs
@@ -190,4 +200,3 @@ class OCRAugmentedPDFReader(PDFThumbnailReader, RapidOCRMixin):
             filtered_ocr_docs.append(ocr_doc)
 
         return base_docs + filtered_ocr_docs
-
