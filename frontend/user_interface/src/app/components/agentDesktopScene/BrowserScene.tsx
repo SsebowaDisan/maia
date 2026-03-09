@@ -19,6 +19,15 @@ import { useBrowserPageQueue } from "./browser_scene_page_queue";
 import { useRoadmapTransition } from "./browser_scene_roadmap_transition";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
+function shortHostLabel(url: string): string {
+  try {
+    const host = new URL(String(url || "").trim()).hostname.replace(/^www\./, "");
+    return host || "new page";
+  } catch {
+    return "new page";
+  }
+}
+
 type BrowserSceneProps = {
   activeDetail: string;
   activeEventType: string;
@@ -114,14 +123,20 @@ function BrowserScene({
   roadmapSteps = [],
   roadmapActiveIndex = -1,
 }: BrowserSceneProps) {
+  const normalizedAction = String(action || "").trim().toLowerCase();
+  const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
+  const normalizedScrollDirection = String(scrollDirection || "").trim().toLowerCase();
+  const actionIndicatesScroll = normalizedAction === "scroll" || normalizedAction.includes("scroll");
+  const eventIndicatesScroll = normalizedEventType.includes("scroll");
+  const hasDirectionalScroll = normalizedScrollDirection === "up" || normalizedScrollDirection === "down";
   const [snapshotErrored, setSnapshotErrored] = useState(false);
   const statusChipLabel = blockedSignal
     ? "Needs attention"
-    : readingMode
-      ? "Reading"
-      : action === "navigate"
-        ? "Navigating"
-        : action === "scroll"
+      : readingMode
+        ? "Reading"
+        : action === "navigate"
+          ? "Navigating"
+        : actionIndicatesScroll
           ? "Scanning"
           : action === "extract"
         ? "Extracting"
@@ -137,6 +152,19 @@ function BrowserScene({
     openedPages,
     pageIndex,
   });
+  const [navigationHint, setNavigationHint] = useState("");
+  const previousPageUrlRef = useRef(activePageUrl);
+  useEffect(() => {
+    const nextUrl = String(activePageUrl || "").trim();
+    const previousUrl = String(previousPageUrlRef.current || "").trim();
+    previousPageUrlRef.current = nextUrl;
+    if (!nextUrl || !previousUrl || nextUrl === previousUrl) {
+      return;
+    }
+    setNavigationHint(`Navigating to ${shortHostLabel(nextUrl)}`);
+    const timer = window.setTimeout(() => setNavigationHint(""), 1400);
+    return () => window.clearTimeout(timer);
+  }, [activePageUrl]);
   const surfaceHint = (findQuery || actionTargetLabel || activeDetail || "").slice(0, 180);
   const proxyPreviewUrl = useMemo(() => {
     const source = String(activePageUrl || "").trim();
@@ -187,13 +215,16 @@ function BrowserScene({
   const scrollRafRef = useRef<number | null>(null);
   const syntheticRafRef = useRef<number | null>(null);
   const syntheticTickRef = useRef(0);
+  const scrollEventKeyRef = useRef("");
   const effectiveScrollPercent = scrollPercent ?? syntheticScrollPercent;
 
   useEffect(() => {
     if (effectiveScrollPercent === null) {
       return;
     }
-    scrollTargetRef.current = Math.max(-14, Math.min(14, ((50 - effectiveScrollPercent) / 50) * 10));
+    const clampedPercent = Math.max(0, Math.min(100, effectiveScrollPercent));
+    // Drive a visible viewport glide so users can clearly perceive page scroll.
+    scrollTargetRef.current = Math.max(-120, Math.min(8, 8 - (clampedPercent / 100) * 128));
   }, [effectiveScrollPercent]);
   useEffect(() => {
     if (scrollPercent !== null) {
@@ -205,10 +236,12 @@ function BrowserScene({
       return;
     }
     const shouldSimulate =
-      action === "scroll" ||
-      action === "navigate" ||
-      action === "extract" ||
-      action === "verify" ||
+      actionIndicatesScroll ||
+      eventIndicatesScroll ||
+      hasDirectionalScroll ||
+      normalizedAction === "navigate" ||
+      normalizedAction === "extract" ||
+      normalizedAction === "verify" ||
       readingMode;
     if (!shouldSimulate) {
       setSyntheticScrollPercent(null);
@@ -230,7 +263,36 @@ function BrowserScene({
         syntheticRafRef.current = null;
       }
     };
-  }, [action, readingMode, scrollPercent]);
+  }, [
+    actionIndicatesScroll,
+    eventIndicatesScroll,
+    hasDirectionalScroll,
+    normalizedAction,
+    readingMode,
+    scrollPercent,
+  ]);
+  useEffect(() => {
+    // Add a visible "step" per scroll event so movement is perceptible
+    // even when telemetry emits sparse or repeated percentages.
+    if (!actionIndicatesScroll && !eventIndicatesScroll && !hasDirectionalScroll) {
+      return;
+    }
+    const nextKey = `${normalizedEventType}|${normalizedScrollDirection}|${String(scrollPercent)}`;
+    if (nextKey === scrollEventKeyRef.current) {
+      return;
+    }
+    scrollEventKeyRef.current = nextKey;
+    const direction = normalizedScrollDirection === "up" ? 1 : -1;
+    const steppedTarget = scrollTargetRef.current + direction * 18;
+    scrollTargetRef.current = Math.max(-120, Math.min(8, steppedTarget));
+  }, [
+    actionIndicatesScroll,
+    eventIndicatesScroll,
+    hasDirectionalScroll,
+    normalizedEventType,
+    normalizedScrollDirection,
+    scrollPercent,
+  ]);
   const showOverlayCursor = !showSnapshotPrimary;
   const roadmapVisible = useRoadmapTransition({
     roadmapStepCount: roadmapSteps.length,
@@ -271,6 +333,11 @@ function BrowserScene({
           </span>
         ) : null}
       </div>
+      {navigationHint ? (
+        <div className="pointer-events-none absolute right-3 top-12 z-30 rounded-full border border-white/20 bg-black/58 px-2.5 py-1 text-[10px] text-white/90 backdrop-blur-sm">
+          {navigationHint}
+        </div>
+      ) : null}
       {showSnapshotPrimary ? (
         <div className="relative flex-1 overflow-hidden bg-white">
           {/* Skeleton shown while loading and no cross-fade underlay is available */}
@@ -298,7 +365,8 @@ function BrowserScene({
             alt="Live browser capture"
             className={`h-full w-full object-cover ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
-              transform: `translateY(${scrollOffset}px)`,
+              transform: `translateY(${scrollOffset}px) scale(1.04)`,
+              transformOrigin: "center top",
               transition: "opacity 320ms ease-in-out",
             }}
             onLoad={handleSnapshotLoad}
@@ -360,7 +428,7 @@ function BrowserScene({
           <ThoughtBubble text={narration} />
         </div>
       ) : showProxyPreview || canRenderLiveUrl ? (
-        <div className="relative flex-1 bg-white">
+        <div className="relative flex-1 overflow-hidden bg-white">
           {!proxyLoaded ? (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#f5f5f7]">
               <div className="space-y-2.5 w-[52%]">
@@ -374,6 +442,12 @@ function BrowserScene({
             src={proxyPreviewUrl || activePageUrl}
             title="Live website preview"
             className="h-full w-full border-0"
+            style={{
+              transform: `translate3d(0, ${Math.round(scrollOffset)}px, 0) scale(1.04)`,
+              transformOrigin: "center top",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
+            }}
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
             referrerPolicy="no-referrer-when-downgrade"
             onLoad={() => setProxyLoaded(true)}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -16,10 +17,43 @@ URL_SCOPED_PROBE_TOOL_IDS = {
     "web.dataset.adapter",
     "documents.highlight.extract",
 }
+GA_PROBE_ALLOWED_TOOL_IDS = {
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "business.ga4_kpi_sheet_report",
+    "analytics.chart.generate",
+}
+GA_INTENT_RE = re.compile(
+    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def _is_allowed_url_scoped_probe(tool_id: str) -> bool:
     return str(tool_id or "").strip() in URL_SCOPED_PROBE_TOOL_IDS
+
+
+def _is_google_analytics_probe_context(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+    steps: list[PlannedStep],
+) -> bool:
+    combined = " ".join(
+        [
+            str(request.message or ""),
+            str(request.agent_goal or ""),
+            str(getattr(task_prep, "contract_objective", "") or ""),
+        ]
+    )
+    if GA_INTENT_RE.search(combined):
+        return True
+    if any(
+        step.tool_id in GA_PROBE_ALLOWED_TOOL_IDS
+        for step in steps
+    ):
+        return True
+    return False
 
 
 def build_planning_request(
@@ -85,6 +119,23 @@ def insert_contract_probe_steps(
     steps: list[PlannedStep],
     allowed_tool_ids: list[str],
 ) -> list[PlannedStep]:
+    analytics_context = _is_google_analytics_probe_context(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+    )
+    effective_allowed_tool_ids = (
+        [
+            tool_id
+            for tool_id in allowed_tool_ids
+            if tool_id in GA_PROBE_ALLOWED_TOOL_IDS
+        ]
+        if analytics_context
+        else allowed_tool_ids
+    )
+    if analytics_context and not effective_allowed_tool_ids:
+        return steps
+
     target_url = " ".join(str(task_prep.task_intelligence.target_url or "").split()).strip()
     probe_rows = propose_fact_probe_steps(
         contract=task_prep.task_contract,
@@ -94,7 +145,7 @@ def insert_contract_probe_steps(
             {"tool_id": item.tool_id, "title": item.title, "params": item.params}
             for item in steps[:20]
         ],
-        allowed_tool_ids=allowed_tool_ids,
+        allowed_tool_ids=effective_allowed_tool_ids,
         max_steps=4,
     )
     existing_plan_signatures: set[str] = set()
@@ -113,6 +164,8 @@ def insert_contract_probe_steps(
         if not tool_id:
             continue
         if target_url and not _is_allowed_url_scoped_probe(tool_id):
+            continue
+        if analytics_context and tool_id not in GA_PROBE_ALLOWED_TOOL_IDS:
             continue
         params_raw = row.get("params")
         params_dict = dict(params_raw) if isinstance(params_raw, dict) else {}

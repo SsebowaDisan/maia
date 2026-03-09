@@ -63,6 +63,8 @@ def sort_steps(
         "marketing.local_discovery": 35,
         "marketing.competitor_profile": 40,
         "business.ga4_kpi_sheet_report": 42,
+        "analytics.ga4.full_report": 43,
+        "analytics.ga4.report": 44,
         "business.invoice_workflow": 43,
         "business.meeting_scheduler": 44,
         "business.proposal_workflow": 46,

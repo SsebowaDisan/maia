@@ -47,6 +47,7 @@ class OllamaEmbeddingSelectRequest(BaseModel):
 class OllamaStartRequest(BaseModel):
     base_url: str | None = Field(default=None, min_length=8, max_length=256)
     wait_seconds: int = Field(default=10, ge=2, le=30)
+    auto_install: bool = True
     run_id: str | None = Field(default=None, max_length=120)
 
 

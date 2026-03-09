@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AgentLiveEvent, GoogleOAuthStatus } from "../../../../api/client";
 import type {
@@ -95,10 +95,12 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
   const [oauthManualUrl, setOauthManualUrl] = useState("");
   const [selectedServices, setSelectedServices] = useState<string[]>(DEFAULT_SERVICES);
   const [draftServices, setDraftServices] = useState<string[]>(DEFAULT_SERVICES);
+  const [serviceEmailCopied, setServiceEmailCopied] = useState(false);
   const [linkInput, setLinkInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
   const [analysisResult, setAnalysisResult] = useState<GoogleWorkspaceLinkAnalyzeResult | null>(null);
   const [accessResult, setAccessResult] = useState<GoogleWorkspaceLinkAccessResult | null>(null);
+  const copyServiceEmailTimerRef = useRef<number | null>(null);
 
   const inServiceAccountMode = googleServiceAccountStatus.auth_mode === "service_account";
   const oauthMissingEnv = Array.isArray(googleOAuthStatus.oauth_missing_env)
@@ -115,6 +117,34 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
   const oauthRedirectUri = String(
     googleOAuthStatus.oauth_redirect_uri || "http://localhost:8000/api/agent/oauth/google/callback",
   ).trim();
+
+  const clearCopyServiceEmailTimer = () => {
+    if (copyServiceEmailTimerRef.current !== null) {
+      window.clearTimeout(copyServiceEmailTimerRef.current);
+      copyServiceEmailTimerRef.current = null;
+    }
+  };
+
+  const showServiceEmailCopiedFeedback = () => {
+    clearCopyServiceEmailTimer();
+    setServiceEmailCopied(true);
+    copyServiceEmailTimerRef.current = window.setTimeout(() => {
+      setServiceEmailCopied(false);
+      copyServiceEmailTimerRef.current = null;
+    }, 1600);
+  };
+
+  useEffect(
+    () => () => {
+      clearCopyServiceEmailTimer();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    setServiceEmailCopied(false);
+    clearCopyServiceEmailTimer();
+  }, [serviceAccountEmail]);
 
   const selectedFromStatus = useMemo(() => {
     const fromSaved = Array.isArray(googleOAuthStatus.oauth_selected_services)
@@ -327,17 +357,21 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
 
   const handleCopyServiceEmail = async () => {
     if (!serviceAccountEmail) {
+      setServiceEmailCopied(false);
       setMessage("Service-account email is not available yet.");
       return;
     }
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(serviceAccountEmail);
+        showServiceEmailCopiedFeedback();
         setMessage("Service-account email copied.");
         return;
       }
+      setServiceEmailCopied(false);
       setMessage(`Clipboard is unavailable. Service-account email: ${serviceAccountEmail}`);
     } catch {
+      setServiceEmailCopied(false);
       setMessage(`Could not copy automatically. Service-account email: ${serviceAccountEmail}`);
     }
   };
@@ -399,6 +433,7 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
         onToggleAliases={() => setShowAliases((value) => !value)}
         onShowAliases={() => setShowAliases(true)}
         onCopyServiceEmail={handleCopyServiceEmail}
+        serviceEmailCopied={serviceEmailCopied}
         onShareComplete={handleShareComplete}
         onLinkInputChange={setLinkInput}
         onAliasInputChange={setAliasInput}

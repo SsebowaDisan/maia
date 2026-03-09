@@ -132,6 +132,7 @@ def sanitize_and_inject_preview_html(
         "body[data-maia-highlight-scope='tight'] mark.maia-citation-highlight{padding:.06em .14em;border-radius:.16em;line-height:1.25;}"
         "body[data-maia-highlight-scope='sentence'] mark.maia-citation-highlight{padding:.16em .30em;border-radius:.26em;line-height:1.55;}"
         "body[data-maia-highlight-scope='context'] mark.maia-citation-highlight,body[data-maia-highlight-scope='block'] mark.maia-citation-highlight{padding:.20em .40em;border-radius:.32em;line-height:1.65;}"
+        ".maia-reader-banner{display:none !important;}"
         ".opacity-0{opacity:1 !important;}"
         "img.js-image,img[class*='js-image'],picture img{opacity:1 !important;visibility:visible !important;}"
         ".maia-citation-region mark.maia-citation-highlight{background:#ffe14f !important;}"

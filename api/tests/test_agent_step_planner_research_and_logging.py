@@ -255,6 +255,26 @@ def test_enforce_deep_file_scope_policy_keeps_highlight_with_explicit_scope() ->
     assert any(step.tool_id == "documents.highlight.extract" for step in filtered)
 
 
+def test_enforce_web_only_research_path_skips_for_ga4_flows() -> None:
+    request = ChatRequest(
+        message="Create a GA4 report for leadership.",
+        agent_mode="company_agent",
+    )
+    steps = [
+        PlannedStep(tool_id="analytics.ga4.full_report", title="Run full GA4 report", params={}),
+        PlannedStep(tool_id="report.generate", title="Generate report", params={}),
+    ]
+    research_plan = build_research_plan(request=request, settings={})
+    constrained = enforce_web_only_research_path(
+        request=request,
+        settings={"__research_web_only": True},
+        steps=steps,
+        research_plan=research_plan,
+    )
+    tool_ids = [step.tool_id for step in constrained]
+    assert tool_ids == ["analytics.ga4.full_report", "report.generate"]
+
+
 def test_build_research_plan_uses_default_keyword_floor(monkeypatch) -> None:
     captured: dict[str, int] = {}
 
@@ -370,6 +390,57 @@ def test_insert_contract_probe_steps_filters_non_web_probe_tools_for_target_url(
     tool_ids = [step.tool_id for step in result]
     assert "analytics.ga4.report" not in tool_ids
     assert tool_ids.count("browser.playwright.inspect") == 2
+
+
+def test_insert_contract_probe_steps_filters_web_probe_for_ga4_context(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import contracts as contracts_module
+
+    monkeypatch.setattr(
+        contracts_module,
+        "propose_fact_probe_steps",
+        lambda **kwargs: [
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Collect evidence for required facts",
+                "params": {"query": "Google Analytics report generation"},
+            },
+            {
+                "tool_id": "analytics.ga4.full_report",
+                "title": "Collect analytics evidence",
+                "params": {},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Analyze Google Analytics property 479179141 and make a report.",
+        agent_mode="company_agent",
+    )
+    task_prep = SimpleNamespace(
+        task_contract={"required_facts": ["Include specific metrics in the report."]},
+        task_intelligence=SimpleNamespace(target_url=""),
+        contract_objective="Google Analytics report",
+    )
+    steps = [
+        PlannedStep(
+            tool_id="analytics.ga4.report",
+            title="Generate GA4 report",
+            params={},
+        ),
+        PlannedStep(
+            tool_id="report.generate",
+            title="Generate report",
+            params={"summary": request.message},
+        ),
+    ]
+    result = insert_contract_probe_steps(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+        allowed_tool_ids=["marketing.web_research", "analytics.ga4.full_report"],
+    )
+    tool_ids = [step.tool_id for step in result]
+    assert "marketing.web_research" not in tool_ids
+    assert tool_ids.count("analytics.ga4.full_report") == 1
 
 
 def test_intent_enrichment_skips_deep_highlight_without_explicit_file_scope(monkeypatch) -> None:

@@ -221,6 +221,22 @@ def build_execution_context_settings(
 ) -> dict[str, Any]:
     return {
         **settings,
+        # Reset run-local artifacts to prevent stale carry-over between turns/runs.
+        "__latest_report_title": "",
+        "__latest_report_content": "",
+        "__latest_report_sources": [],
+        "__latest_web_sources": [],
+        "__latest_web_query": "",
+        "__latest_web_provider": "",
+        "__latest_web_source_count": 0,
+        "__latest_web_source_target": 0,
+        "__latest_web_domain_scope_hosts": [],
+        "__latest_web_domain_scope_mode": "",
+        "__latest_web_domain_scope_filtered_out": 0,
+        "__latest_analytics_report": {},
+        "__latest_analytics_full_report": {},
+        "__web_kpi": {},
+        "__web_evidence": {"items": []},
         "__agent_user_id": user_id,
         "__agent_run_id": run_id,
         "__selected_file_ids": selected_file_ids(request),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -18,6 +19,28 @@ from .planner_config import (
 from .planner_followups import build_browser_followup_steps
 from .planner_models import PlannedStep
 from .planner_normalization import normalize_steps
+
+GA_TOOL_IDS = {
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "business.ga4_kpi_sheet_report",
+}
+
+GA_WEB_TOOL_IDS = {
+    "marketing.web_research",
+    "browser.playwright.inspect",
+    "web.extract.structured",
+    "web.dataset.adapter",
+}
+
+GA_INTENT_RE = re.compile(
+    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
+    flags=re.IGNORECASE,
+)
+GA_SHEET_RE = re.compile(
+    r"\b(sheet|sheets|spreadsheet|tracker)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def resolve_web_routing(request: ChatRequest) -> dict[str, Any]:
@@ -77,6 +100,140 @@ def is_deep_research_request(request: ChatRequest) -> bool:
     return profile.tier in {"deep_research", "deep_analytics"}
 
 
+def _ga_intent_text(
+    request: ChatRequest,
+    *,
+    intent: dict[str, Any] | None = None,
+) -> str:
+    intent_rows = intent if isinstance(intent, dict) else {}
+    rows = [
+        str(request.message or ""),
+        str(request.agent_goal or ""),
+        str(intent_rows.get("objective") or ""),
+    ]
+    intent_tags = intent_rows.get("intent_tags")
+    if isinstance(intent_tags, list):
+        rows.extend(str(item) for item in intent_tags[:8])
+    return " ".join(" ".join(piece.split()).strip() for piece in rows if str(piece).strip()).strip()
+
+
+def _is_google_analytics_request(
+    request: ChatRequest,
+    *,
+    intent: dict[str, Any] | None = None,
+    preferred_tool_ids: set[str] | None = None,
+) -> bool:
+    if preferred_tool_ids and any(tool_id in GA_TOOL_IDS for tool_id in preferred_tool_ids):
+        return True
+    text = _ga_intent_text(request, intent=intent)
+    if not text:
+        return False
+    return bool(GA_INTENT_RE.search(text))
+
+
+def _ga_sheet_requested(
+    request: ChatRequest,
+    *,
+    intent: dict[str, Any] | None = None,
+    preferred_tool_ids: set[str] | None = None,
+) -> bool:
+    if preferred_tool_ids and "business.ga4_kpi_sheet_report" in preferred_tool_ids:
+        return True
+    intent_rows = intent if isinstance(intent, dict) else {}
+    if bool(intent_rows.get("wants_sheets_output")):
+        return True
+    return bool(GA_SHEET_RE.search(_ga_intent_text(request, intent=intent)))
+
+
+def _ensure_ga_plan_shape(
+    request: ChatRequest,
+    *,
+    steps: list[PlannedStep],
+    preferred_tool_ids: set[str] | None,
+    intent: dict[str, Any] | None,
+) -> list[PlannedStep]:
+    if not _is_google_analytics_request(
+        request,
+        intent=intent,
+        preferred_tool_ids=preferred_tool_ids,
+    ):
+        return steps
+
+    ga_sheet_requested = _ga_sheet_requested(
+        request,
+        intent=intent,
+        preferred_tool_ids=preferred_tool_ids,
+    )
+    cleaned: list[PlannedStep] = []
+    for step in steps:
+        if step.tool_id in GA_WEB_TOOL_IDS:
+            continue
+        params = dict(step.params)
+        if step.tool_id == "report.generate":
+            params.setdefault("summary", request.message)
+            # GA flows should not silently reuse stale web source snapshots.
+            params.setdefault("sources", [])
+        cleaned.append(
+            PlannedStep(
+                tool_id=step.tool_id,
+                title=step.title,
+                params=params,
+                why_this_step=step.why_this_step,
+                expected_evidence=step.expected_evidence,
+            )
+        )
+
+    tool_ids = [step.tool_id for step in cleaned]
+    if "analytics.ga4.full_report" not in tool_ids:
+        cleaned.insert(
+            0,
+            PlannedStep(
+                tool_id="analytics.ga4.full_report",
+                title="Run full GA4 report",
+                params={},
+                why_this_step="Fetch core GA4 metrics and period comparisons before synthesis.",
+                expected_evidence=(
+                    "Sessions, users, conversions, and bounce rate trends",
+                    "Channel, page, device, and geography breakdowns",
+                ),
+            ),
+        )
+        tool_ids.insert(0, "analytics.ga4.full_report")
+
+    if ga_sheet_requested and "business.ga4_kpi_sheet_report" not in tool_ids:
+        insert_at = 1 if cleaned and cleaned[0].tool_id == "analytics.ga4.full_report" else 0
+        cleaned.insert(
+            insert_at,
+            PlannedStep(
+                tool_id="business.ga4_kpi_sheet_report",
+                title="Write GA4 KPI sheet update",
+                params={"sheet_range": "Tracker!A1"},
+                why_this_step="Persist GA4 KPI rows to the shared tracker for repeatable reporting.",
+                expected_evidence=("Updated KPI rows in Google Sheets",),
+            ),
+        )
+        tool_ids.insert(insert_at, "business.ga4_kpi_sheet_report")
+
+    if "report.generate" not in tool_ids:
+        cleaned.append(
+            PlannedStep(
+                tool_id="report.generate",
+                title="Generate GA4 executive report",
+                params={
+                    "summary": request.message,
+                    "sources": [],
+                },
+                why_this_step="Convert analytics outputs into an executive-ready narrative.",
+                expected_evidence=(
+                    "Executive summary with KPI deltas",
+                    "Detailed analytics interpretation",
+                ),
+            )
+        )
+
+    return cleaned
+
+
 def _augment_for_deep_research(
     request: ChatRequest,
     steps: list[PlannedStep],
@@ -89,10 +246,16 @@ def _augment_for_deep_research(
     deep_research_mode = is_deep_research_request(request)
     company_agent_mode = request.agent_mode == "company_agent"
     effective_intent = intent if isinstance(intent, dict) else intent_signals(request)
+    shaped_steps = _ensure_ga_plan_shape(
+        request,
+        steps=steps,
+        preferred_tool_ids=preferred_tool_ids,
+        intent=effective_intent,
+    )
     if not deep_research_mode:
         return normalize_steps(
             request,
-            steps,
+            shaped_steps,
             preferred_tool_ids=preferred_tool_ids,
             intent=effective_intent,
             web_routing=routing,
@@ -100,11 +263,16 @@ def _augment_for_deep_research(
             company_agent_mode=company_agent_mode,
         )
 
-    enriched = list(steps)
+    analytics_request = _is_google_analytics_request(
+        request,
+        intent=effective_intent,
+        preferred_tool_ids=preferred_tool_ids,
+    )
+    enriched = list(shaped_steps)
     direct_url = str(effective_intent.get("url") or "")
 
     has_web = any(step.tool_id == "marketing.web_research" for step in enriched)
-    if not has_web:
+    if not has_web and not analytics_request:
         enriched.insert(
             0,
             PlannedStep(
@@ -128,7 +296,7 @@ def _augment_for_deep_research(
             )
         )
 
-    if direct_url:
+    if direct_url and not analytics_request:
         enriched = [step for step in enriched if step.tool_id != "browser.playwright.inspect"]
         enriched.insert(
             0,

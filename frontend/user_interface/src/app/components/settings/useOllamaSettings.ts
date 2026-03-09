@@ -70,6 +70,9 @@ export function useOllamaSettings() {
     if (lower.includes("ollama_binary_missing")) {
       return `Ollama is not installed. Install from ${quickstart?.install_url || "https://ollama.com/download"}, then click One-click setup again.`;
     }
+    if (lower.includes("ollama_install_in_progress")) {
+      return "Ollama installation is still in progress. Wait for it to finish, then retry.";
+    }
     if (lower.includes("failed to fetch") || lower.includes("connection refused") || lower.includes("timeout")) {
       return `Cannot reach Ollama runtime. Make sure Ollama is running and this URL is reachable: ${ollamaBaseUrlInput.trim() || "http://127.0.0.1:11434"}. If Maia is hosted online, localhost will not work.`;
     }
@@ -142,6 +145,9 @@ export function useOllamaSettings() {
       setOllamaMessage(result.reachable ? "Ollama started." : "Startup command sent. Ollama may still be initializing.");
       if (result.status === "already_running") {
         setOllamaMessage("Ollama is already running.");
+      }
+      if (result.status === "installing") {
+        setOllamaMessage("Ollama installer started. Finish installation, then click Refresh Models.");
       }
       await handleRefreshOllamaModels();
     } catch (error) {
@@ -322,7 +328,14 @@ export function useOllamaSettings() {
 
       if (!statusBefore.reachable) {
         setOllamaProgress({ status: "starting runtime", percent: 10 });
-        await startLocalOllama({ baseUrl, waitSeconds: 12 });
+        const startResult = await startLocalOllama({ baseUrl, waitSeconds: 12 });
+        if (startResult.status === "installing" || !startResult.reachable) {
+          setOllamaProgress({ status: "installing runtime", percent: 25 });
+          setOllamaMessage(
+            "Ollama installation/startup is in progress. Once complete, run One-click setup again to download and connect models.",
+          );
+          return;
+        }
       }
 
       setOllamaProgress({ status: `downloading ${chatModel}`, percent: 20 });

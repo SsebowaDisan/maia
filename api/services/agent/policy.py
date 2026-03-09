@@ -279,6 +279,14 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
     ),
     AgentToolCapability(
         domain="analytics",
+        tool_id="analytics.ga4.full_report",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_ANALYST,
+        description="Run comprehensive GA4 analytics report with KPI trends and channel/content breakdowns.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="analytics",
         tool_id="analytics.ga4.report",
         action_class=ACTION_CLASS_READ,
         minimum_role=USER_ROLE_ANALYST,

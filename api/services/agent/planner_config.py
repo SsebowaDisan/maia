@@ -6,6 +6,7 @@ from api.services.agent.llm_runtime import env_bool
 LLM_ALLOWED_TOOL_IDS = {
     "ads.google.performance",
     "analytics.chart.generate",
+    "analytics.ga4.full_report",
     "analytics.ga4.report",
     "business.cloud_incident_digest_email",
     "business.ga4_kpi_sheet_report",

@@ -42,7 +42,10 @@ def build_browser_followup_steps(
                     if is_pdf
                     else f"Inspect source: {label[:72] or 'Website'}"
                 ),
-                params={"url": url, "follow_same_domain_links": False if is_pdf else True},
+                # Keep follow-up inspections focused on the selected source URL.
+                # Expanding same-domain links here can dramatically increase runtime
+                # and delay final answer delivery.
+                params={"url": url, "follow_same_domain_links": False},
             )
         )
 
