@@ -8,6 +8,12 @@ from api.services.agent.llm_research_blueprint import build_research_blueprint
 from api.services.agent.planner_helpers import infer_intent_signals_from_text
 from api.services.agent.planner import PlannedStep, is_deep_research_request
 
+GA_TOOL_IDS = {
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "business.ga4_kpi_sheet_report",
+}
+
 
 @dataclass(slots=True, frozen=True)
 class ResearchBlueprint:
@@ -259,6 +265,9 @@ def enforce_web_only_research_path(
     steps: list[PlannedStep],
     research_plan: ResearchBlueprint,
 ) -> list[PlannedStep]:
+    if any(step.tool_id in GA_TOOL_IDS for step in steps):
+        return steps
+
     web_only_raw = settings.get("__research_web_only")
     web_only_enabled = (
         bool(web_only_raw)

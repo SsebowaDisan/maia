@@ -44,7 +44,15 @@ function inferUserId() {
     window.localStorage.setItem("maia.user_id", fromQuery);
     return fromQuery;
   }
-  return sanitizeUserId(window.localStorage.getItem("maia.user_id"));
+  const fromStorage = sanitizeUserId(window.localStorage.getItem("maia.user_id"));
+  if (fromStorage) {
+    return fromStorage;
+  }
+  // Keep user-scoped conversation state stable across reloads even when no
+  // explicit user id is supplied in URL/env.
+  const fallbackUserId = "default";
+  window.localStorage.setItem("maia.user_id", fallbackUserId);
+  return fallbackUserId;
 }
 
 function withUserIdHeaders(initHeaders?: HeadersInit) {

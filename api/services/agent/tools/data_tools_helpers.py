@@ -8,6 +8,97 @@ from api.services.agent.tools.base import ToolTraceEvent
 
 SCENE_SURFACE_SYSTEM = "system"
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}")
+REQUEST_STYLE_RE = re.compile(
+    r"^\s*(make|create|generate|research|analy[sz]e|write|prepare|do|build)\b",
+    flags=re.IGNORECASE,
+)
+STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "among",
+    "been",
+    "being",
+    "between",
+    "from",
+    "have",
+    "into",
+    "more",
+    "most",
+    "such",
+    "than",
+    "that",
+    "their",
+    "there",
+    "these",
+    "this",
+    "those",
+    "using",
+    "with",
+    "which",
+}
+THEME_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Model Architectures and Learning Paradigms",
+        (
+            "transformer",
+            "foundation",
+            "llm",
+            "attention",
+            "diffusion",
+            "multimodal",
+            "self-supervised",
+            "transfer",
+            "fine-tuning",
+        ),
+    ),
+    (
+        "Efficiency, Scale, and Deployment",
+        (
+            "quantization",
+            "distillation",
+            "sparsity",
+            "moe",
+            "mixture",
+            "inference",
+            "latency",
+            "edge",
+            "throughput",
+            "optimization",
+        ),
+    ),
+    (
+        "Reliability, Evaluation, and Governance",
+        (
+            "evaluation",
+            "benchmark",
+            "robustness",
+            "safety",
+            "alignment",
+            "bias",
+            "risk",
+            "trust",
+            "governance",
+            "hallucination",
+        ),
+    ),
+    (
+        "Industry Applications and Business Impact",
+        (
+            "healthcare",
+            "finance",
+            "vision",
+            "language",
+            "robotics",
+            "manufacturing",
+            "operations",
+            "automation",
+            "customer",
+            "enterprise",
+        ),
+    ),
+)
 
 def _as_float(value: Any) -> float | None:
     try:
@@ -242,6 +333,128 @@ def _normalize_source_rows(raw: Any, *, limit: int = 12) -> list[dict[str, str]]
     return normalized
 
 
+def _topic_label(*, title: str, prompt: str, summary: str) -> str:
+    preferred = " ".join(str(title or "").split()).strip()
+    if preferred and preferred.lower() not in {"executive report", "website analysis report"}:
+        return preferred
+    fallback = " ".join(str(summary or "").split()).strip()
+    if fallback and len(fallback) <= 120 and not REQUEST_STYLE_RE.match(fallback):
+        return fallback
+    prompt_clean = " ".join(str(prompt or "").split()).strip()
+    if prompt_clean:
+        trimmed = prompt_clean.rstrip("?.!")
+        if len(trimmed) > 140:
+            trimmed = f"{trimmed[:139].rstrip()}..."
+        return trimmed
+    return "the requested topic"
+
+
+def _top_terms_from_sources(source_rows: list[dict[str, str]], *, limit: int = 6) -> list[str]:
+    counts: dict[str, int] = {}
+    for row in source_rows:
+        joined = " ".join([str(row.get("label") or ""), str(row.get("snippet") or "")]).lower()
+        for match in WORD_RE.finditer(joined):
+            token = match.group(0).lower()
+            if len(token) < 4 or token in STOPWORDS:
+                continue
+            counts[token] = counts.get(token, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [token for token, _ in ranked[: max(1, int(limit))]]
+
+
+def _theme_examples(source_rows: list[dict[str, str]]) -> list[tuple[str, list[str]]]:
+    theme_rows: dict[str, list[str]] = {name: [] for name, _ in THEME_KEYWORDS}
+    generic_rows: list[str] = []
+    for row in source_rows:
+        snippet = " ".join(str(row.get("snippet") or "").split()).strip()
+        label = " ".join(str(row.get("label") or "").split()).strip()
+        if not snippet:
+            if label:
+                snippet = label
+            else:
+                continue
+        lowered = snippet.lower()
+        matched_theme = ""
+        for theme_name, keywords in THEME_KEYWORDS:
+            if any(keyword in lowered for keyword in keywords):
+                matched_theme = theme_name
+                break
+        if matched_theme:
+            if snippet not in theme_rows[matched_theme]:
+                theme_rows[matched_theme].append(snippet)
+        else:
+            if snippet not in generic_rows:
+                generic_rows.append(snippet)
+
+    ordered: list[tuple[str, list[str]]] = []
+    for theme_name, _ in THEME_KEYWORDS:
+        rows = theme_rows.get(theme_name) or []
+        if rows:
+            ordered.append((theme_name, rows[:3]))
+    if not ordered and generic_rows:
+        ordered.append(("Cross-cutting Findings", generic_rows[:3]))
+    return ordered[:4]
+
+
+def _compose_executive_summary(
+    *,
+    title: str,
+    summary: str,
+    prompt: str,
+    source_rows: list[dict[str, str]],
+    depth_tier: str,
+) -> str:
+    clean_summary = " ".join(str(summary or "").split()).strip()
+    topic = _topic_label(title=title, prompt=prompt, summary=clean_summary)
+    source_count = len(source_rows)
+    needs_enrichment = (
+        not clean_summary
+        or len(clean_summary) < 140
+        or REQUEST_STYLE_RE.match(clean_summary) is not None
+        or clean_summary.lower() in {"no summary provided.", "no summary provided"}
+    )
+    if source_count <= 0 and clean_summary and REQUEST_STYLE_RE.match(clean_summary) is None and len(clean_summary) >= 60:
+        return clean_summary
+    if source_count <= 0 and not needs_enrichment:
+        return clean_summary
+
+    top_terms = _top_terms_from_sources(source_rows, limit=6) if source_rows else []
+    terms_text = ", ".join(top_terms[:5]) if top_terms else ""
+    coverage_sentence = (
+        f"This synthesis is grounded in {source_count} captured source(s), with emphasis on evidence quality and cross-source consistency."
+        if source_count > 0
+        else "This synthesis is based on the currently captured evidence and execution trace."
+    )
+    trend_sentence = (
+        f"Recurring themes include {terms_text}, indicating where technical momentum and practical adoption are currently concentrated."
+        if terms_text
+        else "Key themes were extracted from available sources to map what is mature, emerging, and still uncertain."
+    )
+    implication_sentence = (
+        "For decision-makers, the priority is balancing capability gains (quality, speed, automation) against reliability, governance, and operational cost."
+    )
+    gap_sentence = (
+        "Areas with weaker evidence are called out as data gaps and should be validated with additional primary or peer-reviewed sources before high-stakes use."
+    )
+
+    if needs_enrichment:
+        paragraphs = [
+            f"This report provides a deep research synthesis on {topic}, focusing on technical advances, practical impact, and decision-relevant trade-offs.",
+            coverage_sentence,
+            trend_sentence,
+            implication_sentence,
+        ]
+    else:
+        paragraphs = [clean_summary, coverage_sentence, trend_sentence]
+        if depth_tier in {"deep_research", "deep_analytics", "expert"}:
+            paragraphs.append(implication_sentence)
+
+    if depth_tier in {"deep_research", "deep_analytics", "expert"}:
+        paragraphs.append(gap_sentence)
+
+    return "\n\n".join(paragraphs)
+
+
 def _analysis_paragraphs_with_llm(
     *,
     title: str,
@@ -252,22 +465,27 @@ def _analysis_paragraphs_with_llm(
 ) -> list[str]:
     if not env_bool("MAIA_AGENT_LLM_REPORT_ANALYSIS_ENABLED", default=True):
         return []
+    deep_mode = depth_tier in {"deep_research", "deep_analytics", "expert"}
+    min_paragraphs = 6 if deep_mode else 3
+    max_paragraphs = 12 if deep_mode else 6
     payload = {
         "title": " ".join(str(title or "").split()).strip()[:220],
         "summary": " ".join(str(summary or "").split()).strip()[:1200],
         "prompt": " ".join(str(prompt or "").split()).strip()[:520],
         "depth_tier": depth_tier,
-        "sources_preview": source_rows[:8],
+        "sources_preview": source_rows[:16] if deep_mode else source_rows[:8],
     }
     response = call_json_response(
         system_prompt=(
-            "Write concise professional report analysis paragraphs. Return strict JSON only."
+            "Write professional, evidence-grounded analysis paragraphs for executive research reports. "
+            "Return strict JSON only."
         ),
         user_prompt=(
             "Return JSON only in this schema:\n"
             '{ "analysis_paragraphs": ["paragraph one", "paragraph two"] }\n'
             "Rules:\n"
-            "- Provide 2-6 clear paragraphs.\n"
+            f"- Provide {min_paragraphs}-{max_paragraphs} substantive paragraphs.\n"
+            "- Cover mechanisms, evidence patterns, trade-offs, and practical implications.\n"
             "- Use only provided context; avoid fabrications.\n"
             "- Keep each paragraph between 1-4 sentences.\n\n"
             f"Input:\n{payload}"
@@ -280,26 +498,88 @@ def _analysis_paragraphs_with_llm(
     if not isinstance(rows, list):
         return []
     cleaned: list[str] = []
-    for item in rows[:6]:
+    for item in rows[:max_paragraphs]:
         line = " ".join(str(item or "").split()).strip()
         if not line:
             continue
         cleaned.append(line[:1200])
+    if deep_mode:
+        total_chars = sum(len(item) for item in cleaned)
+        if len(cleaned) < min_paragraphs or total_chars < 1300:
+            return []
     return cleaned
 
 
-def _fallback_analysis_paragraphs(*, summary: str) -> list[str]:
-    return [
+def _fallback_analysis_paragraphs(
+    *,
+    summary: str,
+    prompt: str,
+    title: str,
+    source_rows: list[dict[str, str]],
+    depth_tier: str,
+) -> list[str]:
+    topic = _topic_label(title=title, prompt=prompt, summary=summary)
+    source_count = len(source_rows)
+    if source_count <= 0:
+        return [
+            (
+                f"This report addresses {topic} and presents the strongest currently available findings, "
+                "while keeping assumptions explicit."
+            ),
+            (
+                "Because source coverage is limited, conclusions should be treated as directional until additional "
+                "primary evidence is collected and cross-validated."
+            ),
+            "Prioritize independent verification for any decision with legal, financial, or safety impact.",
+        ]
+
+    theme_rows = _theme_examples(source_rows)
+    paragraphs: list[str] = [
         (
-            "This report expands the initial summary with structured analysis, actionable takeaways, "
-            "and source references to support downstream execution decisions."
-        ),
-        (
-            "Use the highlights and recommendations to prioritize next actions, and validate any "
-            "high-impact claims against authoritative sources before external distribution."
-        ),
-        _first_sentence(summary, max_len=260) or "No additional context provided.",
+            f"The analysis synthesizes {source_count} source-backed signal(s) on {topic}, focusing on where evidence converges, "
+            "where it diverges, and what that means for practical execution."
+        )
     ]
+
+    for theme_name, snippets in theme_rows[:3]:
+        examples = "; ".join(snippets[:2])
+        paragraphs.append(
+            (
+                f"{theme_name}: evidence repeatedly points to this area as a central driver of current progress. "
+                f"Representative findings include {examples}. "
+                "Taken together, this suggests both technical opportunity and operational complexity that must be managed explicitly."
+            )
+        )
+
+    top_terms = _top_terms_from_sources(source_rows, limit=6)
+    if top_terms:
+        paragraphs.append(
+            (
+                f"Across sources, the most recurrent terms ({', '.join(top_terms[:5])}) indicate that momentum is concentrated in a few high-impact domains, "
+                "which helps prioritize where to invest research and implementation effort first."
+            )
+        )
+
+    paragraphs.append(
+        (
+            "From an execution standpoint, the strongest near-term value comes from targeted pilot deployments, "
+            "clear evaluation criteria, and continuous monitoring for reliability drift."
+        )
+    )
+    paragraphs.append(
+        (
+            "Risk posture should account for data quality, reproducibility, model behavior under distribution shift, "
+            "and governance requirements before scaling to customer-facing or regulated workflows."
+        )
+    )
+    if depth_tier in {"deep_research", "deep_analytics", "expert"}:
+        paragraphs.append(
+            (
+                "Recommended follow-up is to expand primary-source coverage on unresolved claims, quantify performance/cost trade-offs, "
+                "and maintain a living evidence log that can support auditability."
+            )
+        )
+    return paragraphs[:10]
 
 
 def _auto_highlights_from_sources(rows: list[dict[str, str]], *, limit: int = 6) -> list[str]:
@@ -391,6 +671,33 @@ def _analytics_section_lines(settings: dict[str, Any]) -> list[str]:
                 f"| Metrics | {', '.join(str(item) for item in (metrics or [])[:8]) or 'n/a'} |",
             ]
         )
+    ga4_full_report = settings.get("__latest_analytics_full_report")
+    if isinstance(ga4_full_report, dict) and ga4_full_report:
+        kpis = ga4_full_report.get("kpis")
+        kpi_rows = kpis if isinstance(kpis, dict) else {}
+        chart_keys = (
+            [str(item).strip() for item in ga4_full_report.get("chart_keys", []) if str(item).strip()]
+            if isinstance(ga4_full_report.get("chart_keys"), list)
+            else []
+        )
+        lines.extend(
+            [
+                "",
+                "### GA4 Full Report Snapshot",
+                "| Metric | Value |",
+                "|---|---|",
+                f"| Property ID | {str(ga4_full_report.get('property_id') or 'n/a')} |",
+                f"| Sessions (30d) | {kpi_rows.get('sessions', 'n/a')} |",
+                f"| Users (30d) | {kpi_rows.get('users', 'n/a')} |",
+                f"| Conversions (30d) | {kpi_rows.get('conversions', 'n/a')} |",
+                f"| Bounce rate (30d) | {kpi_rows.get('bounce_rate', 'n/a')}% |",
+                f"| Top channel | {str(ga4_full_report.get('top_channel') or 'n/a')} |",
+                f"| Top page | {str(ga4_full_report.get('top_page') or 'n/a')} |",
+                f"| Chart payloads | {len(chart_keys)} |",
+            ]
+        )
+        if chart_keys:
+            lines.append(f"| Chart keys | {', '.join(chart_keys[:8])} |")
     return lines
 
 

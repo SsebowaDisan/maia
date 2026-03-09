@@ -45,6 +45,7 @@ type GooglePrimarySectionsProps = {
   onToggleAliases: () => void;
   onShowAliases: () => void;
   onCopyServiceEmail: () => Promise<void>;
+  serviceEmailCopied: boolean;
   onShareComplete: () => void;
   onLinkInputChange: (value: string) => void;
   onAliasInputChange: (value: string) => void;
@@ -88,6 +89,7 @@ function GooglePrimarySections({
   onToggleAliases,
   onShowAliases,
   onCopyServiceEmail,
+  serviceEmailCopied,
   onShareComplete,
   onLinkInputChange,
   onAliasInputChange,
@@ -284,9 +286,13 @@ function GooglePrimarySections({
                 type="button"
                 disabled={busy || !serviceAccountReady}
                 onClick={() => void onCopyServiceEmail()}
-                className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-60"
+                className={`rounded-xl border px-3 py-2 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                  serviceEmailCopied
+                    ? "border-[#b7d7bd] bg-[#eff8f1] text-[#1f6b2b]"
+                    : "border-[#d2d2d7] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                }`}
               >
-                Copy service email
+                {serviceEmailCopied ? "Copied" : "Copy service email"}
               </button>
               <button
                 type="button"

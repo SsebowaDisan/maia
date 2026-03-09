@@ -502,6 +502,58 @@ def test_llm_plan_can_select_business_ga4_workflow(monkeypatch) -> None:
     assert "business.ga4_kpi_sheet_report" in tool_ids
 
 
+def test_ga4_request_in_deep_mode_does_not_auto_insert_web_research(monkeypatch) -> None:
+    monkeypatch.setattr(
+        planner_module,
+        "plan_with_llm",
+        lambda **kwargs: [
+            {
+                "tool_id": "report.generate",
+                "title": "Generate report",
+                "params": {"summary": kwargs["request"].message},
+            }
+        ],
+    )
+    request = ChatRequest(
+        message="Create a detailed Google Analytics GA4 report for property 479179141.",
+        agent_mode="deep_search",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "analytics.ga4.full_report" in tool_ids
+    assert "marketing.web_research" not in tool_ids
+    report_step = next(step for step in steps if step.tool_id == "report.generate")
+    assert report_step.params.get("sources") == []
+
+
+def test_ga4_sheet_request_enforces_ga_steps_when_llm_plan_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(planner_module, "plan_with_llm", lambda **kwargs: [])
+    monkeypatch.setattr(
+        planner_module,
+        "enrich_task_intelligence",
+        lambda **kwargs: {
+            "objective": "Generate a GA4 KPI report and write it to sheets.",
+            "requires_web_inspection": False,
+            "requested_report": True,
+            "wants_sheets_output": True,
+            "intent_tags": ["sheets_update"],
+        },
+    )
+    request = ChatRequest(
+        message="Generate a Google Analytics GA4 KPI report and update the tracker sheet.",
+        agent_mode="company_agent",
+    )
+    steps = build_plan(request)
+    tool_ids = [step.tool_id for step in steps]
+
+    assert "analytics.ga4.full_report" in tool_ids
+    assert "business.ga4_kpi_sheet_report" in tool_ids
+    assert "marketing.web_research" not in tool_ids
+    report_step = next(step for step in steps if step.tool_id == "report.generate")
+    assert report_step.params.get("sources") == []
+
+
 def test_llm_plan_can_select_business_cloud_incident_workflow(monkeypatch) -> None:
     def _fake_plan_with_llm(*, request, allowed_tool_ids):
         _ = request
