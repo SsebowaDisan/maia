@@ -91,48 +91,158 @@
   box-shadow: none;
 }
 
+.citation-peek-tooltip {
+  position: fixed;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(16, 26, 44, 0.13);
+  background:
+    linear-gradient(178deg, rgba(255, 255, 255, 0.96) 0%, rgba(247, 250, 255, 0.95) 100%);
+  padding: 10px 12px 11px;
+  box-shadow:
+    0 20px 42px -28px rgba(19, 29, 46, 0.55),
+    0 7px 14px -10px rgba(19, 29, 46, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  animation: citation-peek-enter 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.citation-peek-tooltip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.44) 0%, rgba(255, 255, 255, 0) 56%);
+  pointer-events: none;
+}
+
+.citation-peek-meta {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  color: #6e7482;
+}
+
+.citation-peek-source {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 600;
+  color: #2f3748;
+  letter-spacing: 0.01em;
+}
+
+.citation-peek-pill {
+  border-radius: 999px;
+  border: 1px solid rgba(173, 184, 201, 0.56);
+  background: rgba(255, 255, 255, 0.78);
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #555d6d;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+.citation-peek-pill--reference {
+  border-color: rgba(151, 170, 201, 0.62);
+  background: linear-gradient(180deg, rgba(240, 246, 255, 0.9), rgba(233, 241, 253, 0.9));
+  color: #2f4f7a;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
 .citation-peek-tooltip-text {
+  position: relative;
+  z-index: 1;
   display: -webkit-box;
   overflow: hidden;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
 }
 
 .citation-peek-snippet {
   position: relative;
-  margin-top: 0.15rem;
-  border-left: 2px solid rgba(29, 29, 31, 0.2);
-  padding-left: 0.5rem;
+  margin-top: 0;
+  border: 1px solid rgba(179, 190, 207, 0.45);
+  border-radius: 11px;
+  background: rgba(241, 245, 252, 0.72);
+  padding: 8px 10px;
+  color: #242c39;
 }
 
 .citation-peek-snippet::before {
   content: "\201C";
-  margin-right: 0.12rem;
-  color: rgba(29, 29, 31, 0.5);
+  margin-right: 0.16rem;
+  color: rgba(76, 87, 107, 0.6);
 }
 
 .citation-peek-snippet::after {
   content: "\201D";
-  margin-left: 0.08rem;
-  color: rgba(29, 29, 31, 0.5);
+  margin-left: 0.1rem;
+  color: rgba(76, 87, 107, 0.6);
+}
+
+@keyframes citation-peek-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .dark .citation-peek-tooltip {
-  border-color: rgba(109, 126, 157, 0.65);
-  background: rgba(28, 35, 47, 0.98);
+  border-color: rgba(123, 143, 176, 0.42);
+  background:
+    linear-gradient(182deg, rgba(36, 44, 58, 0.92) 0%, rgba(24, 30, 42, 0.92) 100%);
+  box-shadow:
+    0 24px 46px -28px rgba(8, 12, 20, 0.78),
+    0 8px 18px -12px rgba(8, 12, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
-.dark .citation-peek-tooltip .citation-peek-tooltip-text {
-  color: #e6edf9;
+.dark .citation-peek-tooltip::after {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 60%);
+}
+
+.dark .citation-peek-meta {
+  color: #afbacf;
+}
+
+.dark .citation-peek-source {
+  color: #d9e3f5;
+}
+
+.dark .citation-peek-pill {
+  border-color: rgba(121, 145, 180, 0.5);
+  background: rgba(45, 56, 74, 0.76);
+  color: #c8d4ea;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.dark .citation-peek-pill--reference {
+  border-color: rgba(132, 161, 204, 0.66);
+  background: linear-gradient(180deg, rgba(61, 88, 124, 0.8), rgba(52, 76, 106, 0.8));
+  color: #d7e8ff;
 }
 
 .dark .citation-peek-snippet {
-  border-left-color: rgba(189, 205, 235, 0.35);
+  border-color: rgba(116, 137, 171, 0.42);
+  background: rgba(14, 20, 30, 0.56);
+  color: #e3ecfb;
 }
 
 .dark .citation-peek-snippet::before,
 .dark .citation-peek-snippet::after {
-  color: rgba(213, 225, 246, 0.58);
+  color: rgba(194, 210, 236, 0.66);
 }
 
 @keyframes command-dock-reveal {

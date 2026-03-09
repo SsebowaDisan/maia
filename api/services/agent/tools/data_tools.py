@@ -19,6 +19,7 @@ from api.services.agent.tools.data_tools_helpers import (
     _as_float,
     _auto_highlights_from_sources,
     _classify_report_intent_with_llm,
+    _compose_executive_summary,
     _draft_direct_answer,
     _event,
     _extract_location_signal_with_llm,
@@ -251,6 +252,13 @@ class ReportGenerationTool(AgentTool):
             raw_sources = context.settings.get("__latest_web_sources")
         source_limit = 80 if depth_tier in {"deep_research", "deep_analytics"} else 24
         source_rows = _normalize_source_rows(raw_sources, limit=source_limit)
+        summary = _compose_executive_summary(
+            title=title,
+            summary=summary,
+            prompt=sanitized_prompt,
+            source_rows=source_rows,
+            depth_tier=depth_tier,
+        )
 
         highlights = params.get("highlights")
         if not isinstance(highlights, list):
@@ -289,12 +297,27 @@ class ReportGenerationTool(AgentTool):
             depth_tier=depth_tier,
         )
         if not analysis_paragraphs:
-            analysis_paragraphs = _fallback_analysis_paragraphs(summary=summary)
+            analysis_paragraphs = _fallback_analysis_paragraphs(
+                summary=summary,
+                prompt=sanitized_prompt,
+                title=title,
+                source_rows=source_rows,
+                depth_tier=depth_tier,
+            )
         analysis_paragraphs = [
             _redact_delivery_targets(item, targets=delivery_targets)
             for item in analysis_paragraphs
             if str(item).strip()
         ]
+        analysis_limit = 10 if depth_tier in {"deep_research", "deep_analytics"} else 8
+        analysis_lines: list[str] = []
+        for idx, paragraph in enumerate(analysis_paragraphs[:analysis_limit]):
+            text = " ".join(str(paragraph or "").split()).strip()
+            if not text:
+                continue
+            analysis_lines.append(text)
+            if idx < (analysis_limit - 1):
+                analysis_lines.append("")
         reference_lines = _reference_lines(
             source_rows,
             limit=40 if depth_tier in {"deep_research", "deep_analytics"} else 12,
@@ -326,7 +349,7 @@ class ReportGenerationTool(AgentTool):
                 *([""] if simple_lines else []),
                 "### Detailed Analysis",
                 "",
-                *analysis_paragraphs[:8],
+                *analysis_lines,
                 *([""] + analytics_lines if analytics_lines else []),
                 "",
                 "### Highlights",

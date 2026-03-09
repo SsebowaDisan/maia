@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { ACTIVE_USER_ID } from "../../api/client/core";
 import {
   createConversation,
   deleteConversation,
@@ -28,6 +29,7 @@ import {
   type SendMessageOptions,
 } from "./conversationChat/constants";
 import { sendConversationMessage } from "./conversationChat/sendMessage";
+import { readStoredText } from "./storage";
 
 type UseConversationChatParams = {
   projects: SidebarProject[];
@@ -40,12 +42,20 @@ type UseConversationChatParams = {
   defaultIndexId: number | null;
 };
 
-function readStoredMindmapSettings(): Record<string, ConversationMindmapSettings> {
+function storageScopeForUser(rawUserId: string | null): string {
+  const normalized = String(rawUserId || "default").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
+  return normalized || "default";
+}
+
+function readStoredMindmapSettings(
+  key: string,
+  fallbackKey: string,
+): Record<string, ConversationMindmapSettings> {
   if (typeof window === "undefined") {
     return {};
   }
   try {
-    const raw = window.localStorage.getItem(MINDMAP_SETTINGS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(key) || window.localStorage.getItem(fallbackKey);
     if (!raw) {
       return {};
     }
@@ -82,6 +92,10 @@ export function useConversationChat({
   setConversationModes,
   defaultIndexId,
 }: UseConversationChatParams) {
+  const userStorageScope = storageScopeForUser(ACTIVE_USER_ID);
+  const mindmapSettingsStorageKey = `${MINDMAP_SETTINGS_STORAGE_KEY}:${userStorageScope}`;
+  const lastConversationStorageKey = `maia.last-conversation-id:${userStorageScope}`;
+
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
@@ -94,7 +108,7 @@ export function useConversationChat({
   const [mindmapMapType, setMindmapMapType] = useState<MindmapMapType>("structure");
   const [conversationMindmapSettings, setConversationMindmapSettings] = useState<
     Record<string, ConversationMindmapSettings>
-  >(() => readStoredMindmapSettings());
+  >(() => readStoredMindmapSettings(mindmapSettingsStorageKey, MINDMAP_SETTINGS_STORAGE_KEY));
   const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
   const [composerMode, setComposerMode] = useState<AgentMode>("ask");
   const [accessMode, setAccessMode] = useState<AccessMode>("restricted");
@@ -102,6 +116,7 @@ export function useConversationChat({
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [clarificationPrompt, setClarificationPrompt] = useState<ClarificationPrompt | null>(null);
+  const [initialConversationHydrated, setInitialConversationHydrated] = useState(false);
 
   const refreshConversations = useCallback(async () => {
     const items = await listConversations();
@@ -140,8 +155,19 @@ export function useConversationChat({
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(MINDMAP_SETTINGS_STORAGE_KEY, JSON.stringify(conversationMindmapSettings));
-  }, [conversationMindmapSettings]);
+    window.localStorage.setItem(mindmapSettingsStorageKey, JSON.stringify(conversationMindmapSettings));
+  }, [conversationMindmapSettings, mindmapSettingsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (selectedConversationId) {
+      window.localStorage.setItem(lastConversationStorageKey, selectedConversationId);
+      return;
+    }
+    window.localStorage.removeItem(lastConversationStorageKey);
+  }, [lastConversationStorageKey, selectedConversationId]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
@@ -331,6 +357,56 @@ export function useConversationChat({
       setConversationProjects,
     ],
   );
+
+  useEffect(() => {
+    if (!conversations.length || visibleConversations.length > 0) {
+      return;
+    }
+    const fallbackConversation = conversations[0];
+    if (!fallbackConversation) {
+      return;
+    }
+    const fallbackProjectId =
+      conversationProjects[fallbackConversation.id] || DEFAULT_PROJECT_ID;
+    if (fallbackProjectId !== selectedProjectId) {
+      setSelectedProjectId(fallbackProjectId);
+    }
+  }, [
+    conversationProjects,
+    conversations,
+    selectedProjectId,
+    setSelectedProjectId,
+    visibleConversations.length,
+  ]);
+
+  useEffect(() => {
+    if (!conversations.length || initialConversationHydrated || selectedConversationId) {
+      return;
+    }
+    if (!visibleConversations.length) {
+      return;
+    }
+    const storedConversationId = readStoredText(lastConversationStorageKey, "").trim();
+    const visibleIds = new Set(visibleConversations.map((item) => item.id));
+    const candidateConversationId = visibleIds.has(storedConversationId)
+      ? storedConversationId
+      : visibleConversations[0].id;
+    if (!candidateConversationId) {
+      setInitialConversationHydrated(true);
+      return;
+    }
+    setInitialConversationHydrated(true);
+    void handleSelectConversation(candidateConversationId).catch(() => {
+      // Keep the app usable even if hydration selection fails.
+    });
+  }, [
+    conversations.length,
+    handleSelectConversation,
+    initialConversationHydrated,
+    lastConversationStorageKey,
+    selectedConversationId,
+    visibleConversations,
+  ]);
 
   const handleUpdateUserTurn = useCallback((turnIndex: number, message: string) => {
     setChatTurns((prev) => prev.map((turn, idx) => (idx === turnIndex ? { ...turn, user: message } : turn)));

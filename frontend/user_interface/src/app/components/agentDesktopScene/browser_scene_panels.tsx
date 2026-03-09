@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 
 import { highlightPalette } from "./helpers";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
@@ -369,41 +369,101 @@ function OpenedPagesRail({
   if (openedPages.length <= 1) {
     return null;
   }
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const activeIndex = useMemo(
+    () => openedPages.findIndex((row) => row.url === activePageUrl),
+    [openedPages, activePageUrl],
+  );
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || !activePageUrl) {
+      return;
+    }
+    const activeChip = Array.from(scroller.querySelectorAll<HTMLElement>("[data-page-url]")).find(
+      (chip) => chip.dataset.pageUrl === activePageUrl,
+    );
+    activeChip?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [activePageUrl]);
+
+  const selectOffsetPage = (offset: number) => {
+    if (activeIndex < 0) {
+      return;
+    }
+    const targetIndex = Math.max(0, Math.min(openedPages.length - 1, activeIndex + offset));
+    const target = openedPages[targetIndex];
+    if (!target || target.url === activePageUrl) {
+      return;
+    }
+    onSelectPage(target.url);
+  };
+
   return (
-    <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-1 overflow-x-auto rounded-xl border border-white/20 bg-black/50 px-2 py-1.5 backdrop-blur-sm">
-      {openedPages.map((row, index) => {
-        const active = row.url === activePageUrl;
-        const label =
-          row.title ||
-          (() => {
-            try {
-              return new URL(row.url).hostname.replace(/^www\./, "");
-            } catch {
-              return `Page ${index + 1}`;
-            }
-          })();
-        return (
-          <button
-            key={`opened-page-${row.url}-${index}`}
-            type="button"
-            onClick={() => onSelectPage(row.url)}
-            className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] transition ${
-              active
-                ? "border-white/50 bg-white/20 text-white"
-                : "border-white/25 bg-white/10 text-white/80 hover:bg-white/15"
-            }`}
-            title={row.url}
-          >
-            {row.pageIndex ? `${row.pageIndex}. ` : ""}
-            {label}
-            {row.reviewed ? " · reviewed" : ""}
-          </button>
-        );
-      })}
+    <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-1.5 rounded-xl border border-white/20 bg-black/50 px-2 py-1.5 backdrop-blur-sm">
+      <span className="shrink-0 rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white/75">
+        Pages
+      </span>
+      <button
+        type="button"
+        onClick={() => selectOffsetPage(-1)}
+        disabled={activeIndex <= 0}
+        className="shrink-0 rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] text-white/80 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
+        title="Previous page"
+      >
+        Prev
+      </button>
+      <div
+        ref={scrollerRef}
+        className="flex-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none]"
+      >
+        <div className="flex min-w-max items-center gap-1">
+          {openedPages.map((row, index) => {
+            const active = row.url === activePageUrl;
+            const label =
+              row.title ||
+              (() => {
+                try {
+                  return new URL(row.url).hostname.replace(/^www\./, "");
+                } catch {
+                  return `Page ${index + 1}`;
+                }
+              })();
+            return (
+              <button
+                key={`opened-page-${row.url}-${index}`}
+                data-page-url={row.url}
+                type="button"
+                onClick={() => onSelectPage(row.url)}
+                className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] transition ${
+                  active
+                    ? "border-white/50 bg-white/20 text-white"
+                    : "border-white/25 bg-white/10 text-white/80 hover:bg-white/15"
+                }`}
+                title={row.url}
+              >
+                {row.pageIndex ? `${row.pageIndex}. ` : ""}
+                {label}
+                {row.reviewed ? " · reviewed" : ""}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => selectOffsetPage(1)}
+        disabled={activeIndex < 0 || activeIndex >= openedPages.length - 1}
+        className="shrink-0 rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] text-white/80 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
+        title="Next page"
+      >
+        Next
+      </button>
+      <span className="shrink-0 rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[10px] text-white/75">
+        {activeIndex >= 0 ? `${activeIndex + 1}/${openedPages.length}` : `1/${openedPages.length}`}
+      </span>
     </div>
   );
 }
-
 export {
   BrowserMiniMap,
   ComparePanel,
@@ -419,3 +479,4 @@ export {
   ZoomBadge,
   ZoomHistoryPanel,
 };
+

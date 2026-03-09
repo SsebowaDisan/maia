@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ACTIVE_USER_ID } from "../../api/client/core";
 import { DEFAULT_PROJECT_ID, STORAGE_KEYS } from "./constants";
 import { readStoredJson, readStoredText } from "./storage";
 import type { SidebarProject } from "./types";
@@ -9,36 +10,62 @@ function createProjectId() {
   return `project-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
+function storageScopeForUser(rawUserId: string | null): string {
+  const normalized = String(rawUserId || "default").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
+  return normalized || "default";
+}
+
+const USER_STORAGE_SCOPE = storageScopeForUser(ACTIVE_USER_ID);
+const SCOPED_STORAGE_KEYS = {
+  projects: `${STORAGE_KEYS.projects}:${USER_STORAGE_SCOPE}`,
+  selectedProject: `${STORAGE_KEYS.selectedProject}:${USER_STORAGE_SCOPE}`,
+  conversationProjects: `${STORAGE_KEYS.conversationProjects}:${USER_STORAGE_SCOPE}`,
+  conversationModes: `${STORAGE_KEYS.conversationModes}:${USER_STORAGE_SCOPE}`,
+} as const;
+
 export function useProjectState() {
   const [projects, setProjects] = useState<SidebarProject[]>(() => {
-    const stored = readStoredJson<SidebarProject[]>(STORAGE_KEYS.projects, []);
+    const stored = readStoredJson<SidebarProject[]>(
+      SCOPED_STORAGE_KEYS.projects,
+      readStoredJson<SidebarProject[]>(STORAGE_KEYS.projects, []),
+    );
     if (stored.length > 0) {
       return stored;
     }
     return [{ id: DEFAULT_PROJECT_ID, name: "General" }];
   });
   const [selectedProjectId, setSelectedProjectId] = useState(() =>
-    readStoredText(STORAGE_KEYS.selectedProject, DEFAULT_PROJECT_ID),
+    readStoredText(
+      SCOPED_STORAGE_KEYS.selectedProject,
+      readStoredText(STORAGE_KEYS.selectedProject, DEFAULT_PROJECT_ID),
+    ),
   );
   const [conversationProjects, setConversationProjects] = useState<Record<string, string>>(() =>
-    readStoredJson<Record<string, string>>(STORAGE_KEYS.conversationProjects, {}),
+    readStoredJson<Record<string, string>>(
+      SCOPED_STORAGE_KEYS.conversationProjects,
+      readStoredJson<Record<string, string>>(STORAGE_KEYS.conversationProjects, {}),
+    ),
   );
   const [conversationModes, setConversationModes] = useState<Record<string, ConversationMode>>(
-    () => readStoredJson<Record<string, ConversationMode>>(STORAGE_KEYS.conversationModes, {}),
+    () =>
+      readStoredJson<Record<string, ConversationMode>>(
+        SCOPED_STORAGE_KEYS.conversationModes,
+        readStoredJson<Record<string, ConversationMode>>(STORAGE_KEYS.conversationModes, {}),
+      ),
   );
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
+    window.localStorage.setItem(SCOPED_STORAGE_KEYS.projects, JSON.stringify(projects));
   }, [projects]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(STORAGE_KEYS.selectedProject, selectedProjectId);
+    window.localStorage.setItem(SCOPED_STORAGE_KEYS.selectedProject, selectedProjectId);
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -46,7 +73,7 @@ export function useProjectState() {
       return;
     }
     window.localStorage.setItem(
-      STORAGE_KEYS.conversationProjects,
+      SCOPED_STORAGE_KEYS.conversationProjects,
       JSON.stringify(conversationProjects),
     );
   }, [conversationProjects]);
@@ -55,7 +82,7 @@ export function useProjectState() {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(STORAGE_KEYS.conversationModes, JSON.stringify(conversationModes));
+    window.localStorage.setItem(SCOPED_STORAGE_KEYS.conversationModes, JSON.stringify(conversationModes));
   }, [conversationModes]);
 
   useEffect(() => {

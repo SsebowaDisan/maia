@@ -5,6 +5,11 @@ import type { EvidenceCard } from "../../../utils/infoInsights";
 import { CITATION_ANCHOR_SELECTOR, resolveCitationFocusFromAnchor, resolveStrengthTier } from "../citationFocus";
 import type { CitationPreview } from "./CitationPreviewTooltip";
 
+const CHAT_CITATION_SELECTOR = CITATION_ANCHOR_SELECTOR
+  .split(",")
+  .map((selector) => `.chat-answer-html ${selector.trim()}`)
+  .join(", ");
+
 function strengthTierLabel(tier: number): string {
   if (tier >= 3) {
     return "Strong evidence";
@@ -23,14 +28,17 @@ function formatPreviewExtract(raw: string): string {
   if (!compact) {
     return "No extract available for this citation.";
   }
-  const unquoted = compact.replace(/^[“"'`]+/, "").replace(/[”"'`]+$/, "").trim();
+  const unquoted = compact
+    .replace(/^[\u201c\u201d"'`]+/, "")
+    .replace(/[\u201c\u201d"'`]+$/, "")
+    .trim();
   const text = unquoted || compact;
   if (text.length <= 260) {
     return text;
   }
   const clipped = text.slice(0, 260);
   const wordCut = clipped.lastIndexOf(" ");
-  return `${(wordCut >= 140 ? clipped.slice(0, wordCut) : clipped).trim()}…`;
+  return `${(wordCut >= 140 ? clipped.slice(0, wordCut) : clipped).trim()}...`;
 }
 
 type UseCitationPreviewParams = {
@@ -62,7 +70,7 @@ function useCitationPreview({
     }
 
     const citationAnchors = Array.from(
-      container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"),
+      container.querySelectorAll<HTMLAnchorElement>(CHAT_CITATION_SELECTOR),
     );
     for (const anchor of citationAnchors) {
       const tier = resolveStrengthTier(
@@ -108,13 +116,15 @@ function useCitationPreview({
 
     let hoverTimer: number | null = null;
     const findCitationAnchor = (target: EventTarget | null): HTMLAnchorElement | null => {
-      if (!(target instanceof Element)) {
-        if (target instanceof Node && target.parentElement) {
-          return target.parentElement.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
-        }
-        return null;
+      if (target instanceof Element) {
+        const match = target.closest(CHAT_CITATION_SELECTOR);
+        return match instanceof HTMLAnchorElement ? match : null;
       }
-      return target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+      if (target instanceof Node && target.parentElement) {
+        const match = target.parentElement.closest(CHAT_CITATION_SELECTOR);
+        return match instanceof HTMLAnchorElement ? match : null;
+      }
+      return null;
     };
 
     const clearHoverTimer = () => {
@@ -142,66 +152,86 @@ function useCitationPreview({
       return cards;
     };
 
-    const showPreviewFromAnchor = (anchor: HTMLAnchorElement) => {
+    const resolveTurnIndexFromAnchor = (anchor: HTMLAnchorElement): number => {
       const turnNode = anchor.closest<HTMLElement>("[data-turn-index]");
-      const turnIndex = Number(turnNode?.getAttribute("data-turn-index") || "");
-      if (!Number.isFinite(turnIndex) || turnIndex < 0 || turnIndex >= chatTurns.length) {
+      const parsed = Number(turnNode?.getAttribute("data-turn-index") || "");
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed < chatTurns.length) {
+        return Math.round(parsed);
+      }
+      return chatTurns.length ? chatTurns.length - 1 : -1;
+    };
+
+    const showPreviewFromAnchor = (anchor: HTMLAnchorElement) => {
+      const turnIndex = resolveTurnIndexFromAnchor(anchor);
+      if (turnIndex < 0 || turnIndex >= chatTurns.length) {
         hidePreview();
         return;
       }
 
-      const turn = chatTurns[turnIndex];
-      const evidenceCards = getEvidenceCards(turnIndex, turn);
-      const resolved = resolveCitationFocusFromAnchor({
-        turn,
-        citationAnchor: anchor,
-        evidenceCards,
-      });
-      const rect = anchor.getBoundingClientRect();
-      const width = Math.max(180, Math.min(360, window.innerWidth - 24));
-      const minCenter = 12 + width / 2;
-      const maxCenter = window.innerWidth - 12 - width / 2;
-      const center = rect.left + rect.width / 2;
-      const left = minCenter > maxCenter
-        ? window.innerWidth / 2
-        : Math.max(minCenter, Math.min(maxCenter, center));
-      const placeAbove = rect.top > 172;
-      const top = placeAbove ? rect.top - 8 : rect.bottom + 8;
-      const tierLabel = strengthTierLabel(resolved.strengthTierResolved);
-      if (resolved.strengthTierResolved > 0) {
-        anchor.setAttribute("data-strength-tier-resolved", String(resolved.strengthTierResolved));
+      try {
+        const turn = chatTurns[turnIndex];
+        const evidenceCards = getEvidenceCards(turnIndex, turn);
+        const resolved = resolveCitationFocusFromAnchor({
+          turn,
+          citationAnchor: anchor,
+          evidenceCards,
+        });
+        const rect = anchor.getBoundingClientRect();
+        const width = Math.max(180, Math.min(360, window.innerWidth - 24));
+        const minCenter = 12 + width / 2;
+        const maxCenter = window.innerWidth - 12 - width / 2;
+        const center = rect.left + rect.width / 2;
+        const left =
+          minCenter > maxCenter
+            ? window.innerWidth / 2
+            : Math.max(minCenter, Math.min(maxCenter, center));
+        const placeAbove = rect.top > 172;
+        const top = placeAbove ? rect.top - 8 : rect.bottom + 8;
+        const tierLabel = strengthTierLabel(resolved.strengthTierResolved);
+        if (resolved.strengthTierResolved > 0) {
+          anchor.setAttribute("data-strength-tier-resolved", String(resolved.strengthTierResolved));
+        }
+        setCitationPreview({
+          left,
+          top,
+          width,
+          placeAbove,
+          sourceName: resolved.focus.sourceName || "Indexed source",
+          page: resolved.focus.page,
+          extract: formatPreviewExtract(resolved.focus.extract),
+          strengthLabel: tierLabel || undefined,
+          citationRef: String(anchor.textContent || "").replace(/\s+/g, " ").trim(),
+        });
+      } catch {
+        hidePreview();
       }
-      setCitationPreview({
-        left,
-        top,
-        width,
-        placeAbove,
-        sourceName: resolved.focus.sourceName || "Indexed source",
-        page: resolved.focus.page,
-        extract: formatPreviewExtract(resolved.focus.extract),
-        strengthLabel: tierLabel || undefined,
-        citationRef: String(anchor.textContent || "").replace(/\s+/g, " ").trim(),
-      });
     };
 
-    const handleMouseOver = (event: MouseEvent) => {
+    const handlePointerOver = (event: PointerEvent) => {
       const anchor = findCitationAnchor(event.target);
       if (!anchor || !container.contains(anchor)) {
+        return;
+      }
+      const from = event.relatedTarget;
+      if (from instanceof Node && anchor.contains(from)) {
         return;
       }
       clearHoverTimer();
       hoverTimer = window.setTimeout(() => {
         showPreviewFromAnchor(anchor);
-      }, 180);
+      }, 90);
     };
 
-    const handleMouseOut = (event: MouseEvent) => {
+    const handlePointerOut = (event: PointerEvent) => {
       const anchor = findCitationAnchor(event.target);
       if (!anchor || !container.contains(anchor)) {
         return;
       }
-      clearHoverTimer();
-      setCitationPreview(null);
+      const related = event.relatedTarget;
+      if (related instanceof Node && anchor.contains(related)) {
+        return;
+      }
+      hidePreview();
     };
 
     const handleFocusIn = (event: FocusEvent) => {
@@ -218,10 +248,11 @@ function useCitationPreview({
       if (!anchor || !container.contains(anchor)) {
         return;
       }
-      if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
+      const related = event.relatedTarget;
+      if (related instanceof Node && anchor.contains(related)) {
         return;
       }
-      setCitationPreview(null);
+      hidePreview();
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -234,8 +265,8 @@ function useCitationPreview({
       setCitationPreview(null);
     };
 
-    container.addEventListener("mouseover", handleMouseOver);
-    container.addEventListener("mouseout", handleMouseOut);
+    container.addEventListener("pointerover", handlePointerOver);
+    container.addEventListener("pointerout", handlePointerOut);
     container.addEventListener("focusin", handleFocusIn);
     container.addEventListener("focusout", handleFocusOut);
     container.addEventListener("keydown", handleKeyDown);
@@ -246,8 +277,8 @@ function useCitationPreview({
 
     return () => {
       clearHoverTimer();
-      container.removeEventListener("mouseover", handleMouseOver);
-      container.removeEventListener("mouseout", handleMouseOut);
+      container.removeEventListener("pointerover", handlePointerOver);
+      container.removeEventListener("pointerout", handlePointerOut);
       container.removeEventListener("focusin", handleFocusIn);
       container.removeEventListener("focusout", handleFocusOut);
       container.removeEventListener("keydown", handleKeyDown);

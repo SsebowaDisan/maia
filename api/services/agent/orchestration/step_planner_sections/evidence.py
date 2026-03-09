@@ -16,9 +16,41 @@ EVIDENCE_TOOL_IDS = {
     "workspace.drive.search",
     "documents.highlight.extract",
     "data.dataset.analyze",
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "analytics.chart.generate",
+    "business.ga4_kpi_sheet_report",
     "sheets.read",
     "workspace.sheets.append",
 }
+ANALYTICS_EVIDENCE_TOOL_IDS = {
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "analytics.chart.generate",
+    "business.ga4_kpi_sheet_report",
+}
+ANALYTICS_FACT_TOKENS = {
+    "ga4",
+    "google",
+    "analytics",
+    "metric",
+    "metrics",
+    "kpi",
+    "session",
+    "sessions",
+    "conversion",
+    "conversions",
+    "traffic",
+    "channel",
+    "channels",
+    "users",
+    "audience",
+    "report",
+}
+GA_INTENT_RE = re.compile(
+    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
+    flags=re.IGNORECASE,
+)
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 
 
@@ -38,10 +70,29 @@ def _step_text(step: PlannedStep) -> str:
     ).strip()
 
 
+def _is_analytics_context(
+    *,
+    request: ChatRequest,
+    steps: list[PlannedStep],
+) -> bool:
+    if any(step.tool_id in ANALYTICS_EVIDENCE_TOOL_IDS for step in steps):
+        return True
+    message = " ".join(
+        [
+            str(request.message or ""),
+            str(request.agent_goal or ""),
+        ]
+    ).strip()
+    return bool(GA_INTENT_RE.search(message))
+
+
 def _fact_covered_by_step(*, fact: str, step: PlannedStep) -> bool:
     fact_tokens = _tokenize(fact)
     if not fact_tokens:
         return False
+    if step.tool_id in ANALYTICS_EVIDENCE_TOOL_IDS:
+        if fact_tokens.intersection(ANALYTICS_FACT_TOKENS):
+            return True
     step_tokens = _tokenize(_step_text(step))
     if not step_tokens:
         return False
@@ -83,9 +134,18 @@ def enforce_evidence_path(
     steps: list[PlannedStep],
     highlight_color: str,
 ) -> list[PlannedStep]:
+    analytics_context = _is_analytics_context(request=request, steps=steps)
     has_evidence_path = any(step.tool_id in EVIDENCE_TOOL_IDS for step in steps)
     if task_prep.contract_facts and not has_evidence_path:
-        if task_prep.task_intelligence.target_url:
+        if analytics_context:
+            evidence_step = PlannedStep(
+                tool_id="analytics.ga4.full_report",
+                title="Collect evidence for required facts",
+                params={},
+                why_this_step="Required facts need analytics-grounded evidence before final delivery.",
+                expected_evidence=tuple(task_prep.contract_facts[:4]),
+            )
+        elif task_prep.task_intelligence.target_url:
             evidence_step = PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Collect evidence for required facts",
@@ -112,7 +172,15 @@ def enforce_evidence_path(
         if str(item).strip()
     ]
     if missing_facts:
-        if task_prep.task_intelligence.target_url:
+        if analytics_context:
+            remedial_step = PlannedStep(
+                tool_id="analytics.ga4.full_report",
+                title="Collect missing evidence for uncovered required facts",
+                params={},
+                why_this_step="Plan critic found uncovered required facts and regenerated analytics evidence.",
+                expected_evidence=tuple(missing_facts[:4]),
+            )
+        elif task_prep.task_intelligence.target_url:
             remedial_step = PlannedStep(
                 tool_id="browser.playwright.inspect",
                 title="Collect missing evidence for uncovered required facts",
