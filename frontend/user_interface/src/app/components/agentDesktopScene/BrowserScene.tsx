@@ -7,6 +7,7 @@ import { InteractionOverlay } from "./InteractionOverlay";
 import {
   ComparePanel,
   CopyPulse,
+  ExecutionRoadmapOverlay,
   FindOverlay,
   HighlightOverlay,
   OpenedPagesRail,
@@ -15,6 +16,7 @@ import {
   ZoomBadge,
 } from "./browser_scene_panels";
 import { useBrowserPageQueue } from "./browser_scene_page_queue";
+import { useRoadmapTransition } from "./browser_scene_roadmap_transition";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
 type BrowserSceneProps = {
@@ -56,13 +58,13 @@ type BrowserSceneProps = {
   renderQuality: string;
   pageIndex: number | null;
   openedPages: Array<{ url: string; title: string; pageIndex: number | null; reviewed: boolean }>;
-  // T1: Ghost Cursor + Click Ripple + Interaction Trace
   cursorX?: number | null;
   cursorY?: number | null;
   isClickEvent?: boolean;
   clickRipples?: ClickRippleEntry[];
-  // T5: Thought Bubble narration
   narration?: string | null;
+  roadmapSteps?: Array<{ toolId: string; title: string; whyThisStep: string }>;
+  roadmapActiveIndex?: number;
 };
 
 function BrowserScene({
@@ -109,6 +111,8 @@ function BrowserScene({
   isClickEvent = false,
   clickRipples = [],
   narration = null,
+  roadmapSteps = [],
+  roadmapActiveIndex = -1,
 }: BrowserSceneProps) {
   const [snapshotErrored, setSnapshotErrored] = useState(false);
   const statusChipLabel = blockedSignal
@@ -157,11 +161,6 @@ function BrowserScene({
       action === "navigate" ||
       action === "scroll" ||
       action === "extract");
-
-  // Cross-fade snapshot transitions:
-  // - `snapshotReady` tracks whether the current URL has loaded.
-  // - `crossFadeUrl` holds the previous URL and is shown as a static underlay while the
-  //   next snapshot loads — giving a smooth dissolve instead of a skeleton flash.
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
   const [proxyLoaded, setProxyLoaded] = useState(false);
@@ -170,7 +169,6 @@ function BrowserScene({
   const showProxyPreview = Boolean(proxyPreviewUrl) && (preferPreviewProxy || !showSnapshotPrimary);
   useEffect(() => {
     if (!snapshotUrl || snapshotUrl === prevSnapshotUrlRef.current) return;
-    // Preserve the last-known good URL as the cross-fade background layer.
     if (prevSnapshotUrlRef.current) setCrossFadeUrl(prevSnapshotUrlRef.current);
     setSnapshotReady(false);
     setSnapshotErrored(false);
@@ -178,15 +176,11 @@ function BrowserScene({
   const handleSnapshotLoad = () => {
     setSnapshotReady(true);
     prevSnapshotUrlRef.current = snapshotUrl;
-    // Clear underlay after the fade-in transition completes.
     setTimeout(() => setCrossFadeUrl(""), 400);
   };
   useEffect(() => {
     setProxyLoaded(false);
   }, [proxyPreviewUrl]);
-
-  // Scroll interpolation: map scroll percentage to a subtle frame offset and ease
-  // toward it continuously to avoid jittery jump/kick effects.
   const [scrollOffset, setScrollOffset] = useState(0);
   const [syntheticScrollPercent, setSyntheticScrollPercent] = useState<number | null>(null);
   const scrollTargetRef = useRef(0);
@@ -201,7 +195,6 @@ function BrowserScene({
     }
     scrollTargetRef.current = Math.max(-14, Math.min(14, ((50 - effectiveScrollPercent) / 50) * 10));
   }, [effectiveScrollPercent]);
-
   useEffect(() => {
     if (scrollPercent !== null) {
       setSyntheticScrollPercent(null);
@@ -238,9 +231,12 @@ function BrowserScene({
       }
     };
   }, [action, readingMode, scrollPercent]);
-
   const showOverlayCursor = !showSnapshotPrimary;
-
+  const roadmapVisible = useRoadmapTransition({
+    roadmapStepCount: roadmapSteps.length,
+    roadmapActiveIndex,
+    activeEventType,
+  });
   useEffect(() => {
     const animate = () => {
       setScrollOffset((previous) => {
@@ -260,7 +256,6 @@ function BrowserScene({
       }
     };
   }, []);
-
   return (
     <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
@@ -276,7 +271,6 @@ function BrowserScene({
           </span>
         ) : null}
       </div>
-
       {showSnapshotPrimary ? (
         <div className="relative flex-1 overflow-hidden bg-white">
           {/* Skeleton shown while loading and no cross-fade underlay is available */}
@@ -486,6 +480,11 @@ function BrowserScene({
           Page {Math.max(1, pageIndex)}
         </div>
       ) : null}
+      <ExecutionRoadmapOverlay
+        roadmapSteps={roadmapSteps}
+        roadmapActiveIndex={roadmapActiveIndex}
+        visible={roadmapVisible}
+      />
       {dedupedOpenedPages.length > 1 ? (
         <OpenedPagesRail
           openedPages={dedupedOpenedPages}

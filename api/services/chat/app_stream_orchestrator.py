@@ -190,7 +190,11 @@ def run_orchestrator_stream_turn(
                 "delta": answer_text,
                 "text": answer_text,
             }
-    plot_data = extract_plot_from_actions_fn(agent_result.actions_taken)
+    try:
+        plot_data = extract_plot_from_actions_fn(agent_result.actions_taken)
+    except Exception:
+        logger.exception("Plot extraction failed; continuing without plot event")
+        plot_data = None
     if plot_data:
         yield {"type": "plot", "plot": plot_data}
     agent_web_summary = (

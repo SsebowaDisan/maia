@@ -57,10 +57,25 @@ def _capture_workspace_ids_from_actions(actions: list[Any]) -> dict[str, str]:
 
 
 def _extract_plot_from_actions(actions: list[Any]) -> dict[str, Any] | None:
-    for action in reversed(actions):
-        if action.tool != "python_exec":
+    def _read_action_field(action: Any, *keys: str) -> Any:
+        if isinstance(action, dict):
+            for key in keys:
+                value = action.get(key)
+                if value is not None:
+                    return value
+            return None
+        for key in keys:
+            value = getattr(action, key, None)
+            if value is not None:
+                return value
+        return None
+
+    for action in reversed(actions or []):
+        tool_name = _read_action_field(action, "tool", "tool_id")
+        if str(tool_name or "").strip() != "python_exec":
             continue
-        payload = action.output if isinstance(action.output, dict) else {}
+        output = _read_action_field(action, "output")
+        payload = output if isinstance(output, dict) else {}
         plot = payload.get("plot")
         if isinstance(plot, dict):
             return plot

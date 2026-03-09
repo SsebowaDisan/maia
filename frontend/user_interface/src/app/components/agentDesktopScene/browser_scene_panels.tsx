@@ -273,6 +273,59 @@ function VerifierConflictBadge({
   );
 }
 
+function ExecutionRoadmapOverlay({
+  roadmapSteps,
+  roadmapActiveIndex,
+  visible = true,
+}: {
+  roadmapSteps: Array<{ toolId: string; title: string; whyThisStep: string }>;
+  roadmapActiveIndex: number;
+  visible?: boolean;
+}) {
+  if (!roadmapSteps.length) {
+    return null;
+  }
+  const visibilityClass = visible
+    ? "opacity-100 translate-y-0 scale-100"
+    : "opacity-0 -translate-y-1 scale-[0.985]";
+  return (
+    <div className={`pointer-events-none absolute left-3 top-14 z-20 w-[min(44%,360px)] rounded-xl border border-white/18 bg-black/58 px-2.5 py-2 text-[10px] text-white/85 backdrop-blur-sm transition-all duration-300 ease-out ${visibilityClass}`}>
+      <p className="font-semibold uppercase tracking-[0.08em] text-white/70">Execution plan</p>
+      <div className="mt-1.5 space-y-1">
+        {roadmapSteps.slice(0, 8).map((step, index) => {
+          const isDone = roadmapActiveIndex > index;
+          const isActive = roadmapActiveIndex === index;
+          return (
+            <div
+              key={`roadmap-step-${index}-${step.toolId || step.title}`}
+              className={`flex items-start gap-1.5 rounded-md border px-2 py-1 ${
+                isDone
+                  ? "border-white/15 bg-white/[0.07]"
+                  : isActive
+                    ? "border-white/30 bg-white/[0.12]"
+                    : "border-white/10 bg-white/[0.05]"
+              }`}
+            >
+              <span
+                className={`mt-[2px] h-1.5 w-1.5 rounded-full ${
+                  isDone ? "bg-[#34c759]" : isActive ? "animate-pulse bg-white/90" : "bg-white/30"
+                }`}
+              />
+              <p
+                className={`line-clamp-1 ${
+                  isDone ? "text-white/45 line-through" : isActive ? "text-white/95" : "text-white/65"
+                }`}
+              >
+                {step.title}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BrowserMiniMap({
   highlightRegions,
   scrollPercent,
@@ -355,6 +408,7 @@ export {
   BrowserMiniMap,
   ComparePanel,
   CopyPulse,
+  ExecutionRoadmapOverlay,
   FindOverlay,
   HighlightOverlay,
   SceneFooter,

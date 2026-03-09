@@ -77,6 +77,19 @@ describe("roadmapDerivation", () => {
     expect(result.roadmapActiveIndex).toBe(0);
   });
 
+  it("builds roadmap from llm.plan_step events before plan_ready", () => {
+    const events = [
+      makeEvent("llm.plan_step", { step: 2, tool_id: "docs.create", title: "Draft report" }),
+      makeEvent("llm.plan_step", { step: 1, tool_id: "marketing.web_research", title: "Collect sources" }),
+      makeEvent("tool_started", { tool_id: "marketing.web_research" }),
+      makeEvent("tool_completed", { tool_id: "marketing.web_research" }),
+    ];
+    const result = derivePlannedRoadmap(events);
+    expect(result.plannedRoadmapSteps).toHaveLength(2);
+    expect(result.plannedRoadmapSteps[0].title).toBe("Collect sources");
+    expect(result.roadmapActiveIndex).toBe(1);
+  });
+
   it("reads steps from event data when metadata is empty", () => {
     const events = [
       makeEvent(

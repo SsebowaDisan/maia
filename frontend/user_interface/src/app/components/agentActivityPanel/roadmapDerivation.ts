@@ -34,6 +34,41 @@ function parsePlanStepsFromEvents(visibleEvents: AgentActivityEvent[]): RoadmapS
       }))
       .filter((row) => row.title.length > 0);
   }
+  const planStepRows = visibleEvents
+    .filter((event) => String(event.event_type || "").toLowerCase() === "llm.plan_step")
+    .map((event, rowIndex) => {
+      const payload = eventPayload(event);
+      const title = normalizeWhitespace(payload.title);
+      if (!title) {
+        return null;
+      }
+      const stepRaw = Number(payload.step);
+      const stepOrder = Number.isFinite(stepRaw) && stepRaw >= 1 ? Math.round(stepRaw) : rowIndex + 1;
+      return {
+        toolId: normalizeWhitespace(payload.tool_id),
+        title,
+        whyThisStep: normalizeWhitespace(payload.why_this_step),
+        stepOrder,
+      };
+    })
+    .filter(
+      (
+        row,
+      ): row is {
+        toolId: string;
+        title: string;
+        whyThisStep: string;
+        stepOrder: number;
+      } => Boolean(row),
+    )
+    .sort((left, right) => left.stepOrder - right.stepOrder);
+  if (planStepRows.length) {
+    return planStepRows.map(({ toolId, title, whyThisStep }) => ({
+      toolId,
+      title,
+      whyThisStep,
+    }));
+  }
   for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
     const event = visibleEvents[i];
     const eventType = String(event.event_type || "").toLowerCase();

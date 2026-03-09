@@ -231,6 +231,10 @@ function AgentDesktopScene({
     pdfSemanticFindResults,
     zoomHistory: pdfZoomHistory,
   } = parsePdfPlaybackState(activeSceneData, activeEventType);
+  const roadmapSteps = Array.isArray(activeSceneData["__roadmap_steps"])
+    ? (activeSceneData["__roadmap_steps"] as Array<{ toolId: string; title: string; whyThisStep: string }>)
+    : [];
+  const roadmapActiveIdx = Number(activeSceneData["__roadmap_active_index"] ?? -1);
   const emailBodyPreview = String(emailBodyHint || "").trim();
   const rawDocBodyPreview = String(docBodyHint || "").trim();
   const rawSheetBodyPreview = String(sheetBodyHint || "").trim();
@@ -331,6 +335,8 @@ function AgentDesktopScene({
         isClickEvent={isClickEvent}
         clickRipples={clickRipples}
         narration={compactValue(activeSceneData["narration"]) || null}
+        roadmapSteps={roadmapSteps}
+        roadmapActiveIndex={roadmapActiveIdx}
       />
     );
   }
@@ -461,10 +467,6 @@ function AgentDesktopScene({
   }
 
   if (isDocumentScene) {
-    const roadmapSteps = Array.isArray(activeSceneData["__roadmap_steps"])
-      ? (activeSceneData["__roadmap_steps"] as Array<{ toolId: string; title: string; whyThisStep: string }>)
-      : [];
-    const roadmapActiveIdx = Number(activeSceneData["__roadmap_active_index"] ?? -1);
     return (
       <DocumentFallbackScene
         activeEventType={activeEventType}
