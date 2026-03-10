@@ -4,6 +4,8 @@ import { DesktopViewer } from "./DesktopViewer";
 import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
 import { PhaseTimeline } from "./PhaseTimeline";
 import { ReplayTimeline } from "./ReplayTimeline";
+import { ResearchTodoList } from "./ResearchTodoList";
+import type { TheatreStage } from "./deriveTheatreStage";
 import type { AgentActivityEvent } from "../../types";
 
 type ActivityPanelBodyProps = {
@@ -34,6 +36,11 @@ type ActivityPanelBodyProps = {
   approvalEvent: AgentActivityEvent | null;
   approvalDismissed: string;
   setApprovalDismissed: React.Dispatch<React.SetStateAction<string>>;
+  plannedRoadmapSteps: Array<{ toolId: string; title: string; whyThisStep: string }>;
+  roadmapActiveIndex: number;
+  theatreStage: TheatreStage;
+  needsHumanReview: boolean;
+  humanReviewNotes?: string | null;
 };
 
 function ActivityPanelBody({
@@ -59,6 +66,11 @@ function ActivityPanelBody({
   approvalEvent,
   approvalDismissed,
   setApprovalDismissed,
+  plannedRoadmapSteps,
+  roadmapActiveIndex,
+  theatreStage,
+  needsHumanReview,
+  humanReviewNotes,
 }: ActivityPanelBodyProps) {
   return (
     <>
@@ -73,6 +85,31 @@ function ActivityPanelBody({
       />
 
       <PhaseTimeline phases={phaseTimeline} streaming={streaming} eventCount={visibleEvents.length} />
+
+      <ResearchTodoList
+        visibleEvents={visibleEvents}
+        plannedRoadmapSteps={plannedRoadmapSteps}
+        roadmapActiveIndex={roadmapActiveIndex}
+        streaming={streaming}
+      />
+
+      {(theatreStage === "review" || theatreStage === "confirm") ? (
+        <div className="mt-3 rounded-2xl border border-[#e3e5e8] bg-white px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#7a7a83]">
+            {theatreStage === "confirm" ? "Confirmation Required" : "Review Required"}
+          </p>
+          <p className="mt-1 text-[13px] text-[#1f2937]">
+            {theatreStage === "confirm"
+              ? "An irreversible action is pending. Confirm before execution continues."
+              : "Review generated output before final delivery."}
+          </p>
+          {needsHumanReview || humanReviewNotes ? (
+            <p className="mt-1 text-[12px] text-[#6b7280]">
+              {String(humanReviewNotes || "Human review requested for this run.")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <ReplayTimeline
         streaming={streaming}

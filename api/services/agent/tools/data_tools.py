@@ -5,7 +5,7 @@ import io
 from statistics import mean
 from typing import Any
 
-from api.services.agent.llm_runtime import call_text_response
+from api.services.agent.llm_runtime import call_text_response, env_bool
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -24,7 +24,6 @@ from api.services.agent.tools.data_tools_helpers import (
     _compose_executive_summary,
     _contradiction_section_lines,
     _detect_source_contradictions,
-    _draft_direct_answer,
     _draft_report_markdown_with_llm,
     _event,
     _extract_location_signal_with_llm,
@@ -38,6 +37,34 @@ from api.services.agent.tools.data_tools_helpers import (
     _report_delivery_targets,
     _simple_explanation_lines,
 )
+
+
+def _draft_direct_answer_with_local_llm(question: str) -> str:
+    if not env_bool("MAIA_AGENT_LLM_REPORT_QA_ENABLED", default=True):
+        return ""
+    payload = " ".join(str(question or "").split()).strip()
+    if not payload:
+        return ""
+    response = call_text_response(
+        system_prompt=(
+            "You answer user questions clearly and concisely for enterprise reports. "
+            "Do not mention tools or execution steps."
+        ),
+        user_prompt=(
+            "Provide a direct answer in 2-5 sentences.\n"
+            "If confidence is low, state uncertainty briefly.\n\n"
+            f"Question:\n{payload}"
+        ),
+        temperature=0.1,
+        timeout_seconds=10,
+        max_tokens=260,
+    )
+    clean = " ".join(str(response or "").split()).strip()
+    if not clean:
+        return ""
+    if len(clean) > 900:
+        return f"{clean[:899].rstrip()}..."
+    return clean
 
 class DataAnalysisTool(AgentTool):
     metadata = ToolMetadata(
@@ -247,7 +274,7 @@ class ReportGenerationTool(AgentTool):
                 summary_parts.append(f"Evidence note: {finding_excerpt}")
             summary = " ".join(summary_parts)
         elif bool(report_intent_flags.get("direct_question")) or ("?" in summary):
-            direct_answer = _draft_direct_answer(summary)
+            direct_answer = _draft_direct_answer_with_local_llm(summary)
             if direct_answer:
                 summary = direct_answer
         summary = _redact_delivery_targets(summary, targets=delivery_targets)

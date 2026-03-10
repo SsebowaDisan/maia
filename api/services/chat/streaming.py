@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 import uuid
 from typing import Any
 
@@ -8,6 +9,120 @@ from api.services.agent.event_envelope import build_event_envelope, merge_event_
 from api.services.agent.events import EVENT_SCHEMA_VERSION, infer_stage, infer_status
 from api.services.agent.llm_execution_support import summarize_conversation_window
 from api.services.agent.zoom_history import enrich_event_data_with_zoom
+
+STAGED_THEATRE_ENABLED = (
+    str(os.getenv("MAIA_STAGED_THEATRE_ENABLED", "1")).strip().lower() not in {"0", "false", "no"}
+)
+
+
+def _clean_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _first_http_url(*candidates: Any) -> str:
+    for item in candidates:
+        value = _clean_text(item)
+        if value.startswith("http://") or value.startswith("https://"):
+            return value
+    return ""
+
+
+def _infer_ui_stage(*, event_type: str, stage: str, payload_data: dict[str, Any]) -> str:
+    explicit = _clean_text(payload_data.get("ui_stage"))
+    if explicit:
+        return explicit
+    if event_type == "response_written":
+        return "done"
+    if event_type == "approval_required":
+        return "confirm"
+    if event_type == "policy_blocked":
+        return "blocked"
+    normalized_event = _clean_text(event_type).lower()
+    if stage in {"understanding", "contract", "clarification"}:
+        return "understand"
+    if stage == "planning":
+        return "breakdown"
+    if stage == "execution":
+        return "execute"
+    if stage == "verification":
+        return "review"
+    if stage == "delivery":
+        return "confirm"
+    if normalized_event.startswith(("task_understanding_", "llm.intent_", "llm.task_")):
+        return "understand"
+    if normalized_event.startswith(("plan_", "planning_", "llm.plan_")):
+        return "breakdown"
+    if normalized_event.startswith(
+        (
+            "tool_",
+            "web_",
+            "browser_",
+            "browser.",
+            "document_",
+            "pdf_",
+            "doc_",
+            "docs.",
+            "sheet_",
+            "sheets.",
+            "drive.",
+            "email_",
+            "email.",
+            "gmail_",
+            "gmail.",
+            "api_",
+            "api.",
+        )
+    ):
+        return "execute"
+    return "idle"
+
+
+def _infer_ui_target(payload_data: dict[str, Any]) -> str:
+    explicit = _clean_text(payload_data.get("ui_target"))
+    if explicit:
+        return explicit
+    surface = _clean_text(payload_data.get("scene_surface")).lower()
+    if surface in {"website", "browser", "web"}:
+        return "browser"
+    if surface in {"document", "google_docs", "google_sheets", "docs", "sheets"}:
+        return "document"
+    if surface in {"email", "gmail"}:
+        return "email"
+    return "system"
+
+
+def _infer_ui_commit(*, event_type: str, payload_data: dict[str, Any], ui_target: str) -> dict[str, Any] | None:
+    explicit = payload_data.get("ui_commit")
+    if isinstance(explicit, dict):
+        return explicit
+    url = _first_http_url(
+        payload_data.get("url"),
+        payload_data.get("source_url"),
+        payload_data.get("target_url"),
+        payload_data.get("page_url"),
+        payload_data.get("final_url"),
+        payload_data.get("link"),
+        payload_data.get("document_url"),
+        payload_data.get("spreadsheet_url"),
+    )
+    normalized_type = _clean_text(event_type).lower()
+    if ui_target == "browser" and url:
+        return {"surface": "browser", "commit": "navigate", "url": url}
+    if ui_target == "document" and url:
+        commit = "open_sheet" if "spreadsheets" in url else "open_document"
+        return {"surface": "document", "commit": commit, "url": url}
+    if ui_target == "email" and (
+        normalized_type.startswith("email_")
+        or normalized_type.startswith("email.")
+        or normalized_type.startswith("gmail_")
+        or normalized_type.startswith("gmail.")
+    ):
+        return {"surface": "email", "commit": normalized_type}
+    if ui_target == "system":
+        family = _clean_text(payload_data.get("event_family")).lower()
+        if family == "api" or normalized_type.startswith(("api_", "api.")):
+            return {"surface": "api", "commit": normalized_type or "api_event"}
+    return None
 
 
 def make_activity_stream_event(
@@ -28,6 +143,17 @@ def make_activity_stream_event(
         payload_data.update(metadata)
     resolved_stage = stage or infer_stage(event_type)
     resolved_status = status or infer_status(event_type)
+    if STAGED_THEATRE_ENABLED:
+        payload_data.setdefault(
+            "ui_stage",
+            _infer_ui_stage(event_type=event_type, stage=resolved_stage, payload_data=payload_data),
+        )
+        ui_target = _infer_ui_target(payload_data)
+        payload_data.setdefault("ui_target", ui_target)
+        ui_commit = _infer_ui_commit(event_type=event_type, payload_data=payload_data, ui_target=ui_target)
+        if ui_commit:
+            payload_data["ui_commit"] = ui_commit
+        payload_data.setdefault("ui_contract_version", "v1")
     envelope = build_event_envelope(
         event_type=event_type,
         stage=resolved_stage,

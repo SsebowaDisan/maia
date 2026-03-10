@@ -8,7 +8,7 @@ import {
   sampleFilmstripEvents,
 } from "../agentActivityMeta";
 import { EMAIL_SCENE_EVENT_TYPES, readEventIndex } from "./deriveHelpers";
-import { mergeLiveSceneData, readNumberField, readStringField } from "./helpers";
+import { mergeLiveSceneData, phaseForEvent, readNumberField, readStringField } from "./helpers";
 import { desktopStatusForEventType } from "./labels";
 import { derivePlannedRoadmap } from "./roadmapDerivation";
 import {
@@ -20,6 +20,7 @@ import {
   resolveSceneSnapshotUrl,
   resolveSheetBodyHint,
 } from "./contentDerivation";
+import { deriveSurfaceCommit } from "./surfaceCommitDerivation";
 import {
   agentColorFromEvent,
   agentEventTypeFromEvent,
@@ -116,6 +117,7 @@ function useAgentActivityDerived({
   }, [activeEvent, visibleEvents]);
 
   const sceneTab = eventTab(sceneEvent || activeEvent);
+  const activePhase = useMemo(() => phaseForEvent(activeEvent), [activeEvent?.event_id, activeEvent?.event_type]);
   const progressPercent =
     orderedEvents.length <= 1
       ? 100
@@ -292,6 +294,7 @@ function useAgentActivityDerived({
     () => resolveBrowserUrl(visibleEvents),
     [visibleEvents],
   );
+  const surfaceCommit = useMemo(() => deriveSurfaceCommit(visibleEvents), [visibleEvents]);
   const emailRecipient = useMemo(
     () => resolveEmailRecipient(visibleEvents),
     [visibleEvents],
@@ -402,6 +405,7 @@ function useAgentActivityDerived({
     activeRoleKey,
     activeRoleLabel,
     activeRoleColor,
+    activePhase,
     activeTab,
     browserEvents,
     browserUrl,
@@ -439,6 +443,7 @@ function useAgentActivityDerived({
     sceneSurfaceKey,
     sceneSurfaceLabel,
     sceneTab,
+    surfaceCommit,
     sheetBodyHint,
     stageFileName,
     stageFileUrl,

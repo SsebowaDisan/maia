@@ -1,0 +1,21 @@
+name: LOC Guard
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  changed-file-loc-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce max LOC on changed source files
+        env:
+          MAX_LOC: "500"
+        run: |
+          ./scripts/check_changed_file_locs.sh
+

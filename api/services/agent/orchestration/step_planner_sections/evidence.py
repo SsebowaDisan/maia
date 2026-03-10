@@ -57,9 +57,21 @@ def _is_analytics_context(
     if any(step.tool_id in ANALYTICS_EVIDENCE_TOOL_IDS for step in steps):
         return True
     try:
-        return bool(task_prep.task_intelligence.is_analytics_request)
+        if bool(task_prep.task_intelligence.is_analytics_request):
+            return True
     except AttributeError:
-        return False
+        pass
+    signal_text = " ".join(
+        [
+            str(request.message or ""),
+            str(getattr(request, "agent_goal", "") or ""),
+            str(getattr(task_prep.task_intelligence, "objective", "") or ""),
+        ]
+    ).lower()
+    return any(
+        marker in signal_text
+        for marker in ("google analytics", "google-analytics", "ga4", "analytics property")
+    )
 
 
 def _fact_covered_by_step(*, fact: str, step: PlannedStep) -> bool:

@@ -1,0 +1,134 @@
+import { describe, expect, it } from "vitest";
+import { deriveTheatreStage, desiredPreviewTabForStage } from "./deriveTheatreStage";
+
+describe("deriveTheatreStage", () => {
+  it("keeps system-first during understanding without commits", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "understanding",
+      surfaceCommit: null,
+      needsHumanReview: false,
+      hasApprovalGate: false,
+      isBlocked: false,
+      needsInput: false,
+      hasError: false,
+    });
+    expect(stage).toBe("understand");
+  });
+
+  it("stays in analyze during execution until a surface commit exists", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "execution",
+      surfaceCommit: null,
+      needsHumanReview: false,
+      hasApprovalGate: false,
+      isBlocked: false,
+      needsInput: false,
+      hasError: false,
+    });
+    expect(stage).toBe("analyze");
+  });
+
+  it("moves to execute once a surface commit exists", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "execution",
+      surfaceCommit: {
+        tab: "browser",
+        surface: "website",
+        subtype: "website",
+        sourceUrl: "https://example.org",
+        committedEventId: "evt-1",
+        committedAt: "2026-03-10T12:00:00Z",
+        confidence: "high",
+      },
+      needsHumanReview: false,
+      hasApprovalGate: false,
+      isBlocked: false,
+      needsInput: false,
+      hasError: false,
+    });
+    expect(stage).toBe("execute");
+  });
+
+  it("routes to blocked when blocked signal is present", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "execution",
+      surfaceCommit: null,
+      needsHumanReview: false,
+      hasApprovalGate: false,
+      isBlocked: true,
+      needsInput: false,
+      hasError: false,
+    });
+    expect(stage).toBe("blocked");
+  });
+
+  it("routes to needs_input before execution", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "planning",
+      surfaceCommit: null,
+      needsHumanReview: false,
+      hasApprovalGate: false,
+      isBlocked: false,
+      needsInput: true,
+      hasError: false,
+    });
+    expect(stage).toBe("needs_input");
+  });
+
+  it("routes to confirm when approval is required", () => {
+    const stage = deriveTheatreStage({
+      streaming: true,
+      hasEvents: true,
+      activePhase: "delivery",
+      surfaceCommit: null,
+      needsHumanReview: false,
+      hasApprovalGate: true,
+      isBlocked: false,
+      needsInput: false,
+      hasError: false,
+    });
+    expect(stage).toBe("confirm");
+  });
+});
+
+describe("desiredPreviewTabForStage", () => {
+  it("forces system tab for non-surface stages", () => {
+    const tab = desiredPreviewTabForStage({
+      stage: "breakdown",
+      sceneTab: "browser",
+      surfaceCommit: null,
+      fallbackPreviewTab: "browser",
+      manualOverride: false,
+    });
+    expect(tab).toBe("system");
+  });
+
+  it("uses committed tab for execute stage", () => {
+    const tab = desiredPreviewTabForStage({
+      stage: "execute",
+      sceneTab: "system",
+      surfaceCommit: {
+        tab: "email",
+        surface: "email",
+        subtype: "email",
+        sourceUrl: "",
+        committedEventId: "evt-2",
+        committedAt: "2026-03-10T12:10:00Z",
+        confidence: "high",
+      },
+      fallbackPreviewTab: "system",
+      manualOverride: false,
+    });
+    expect(tab).toBe("email");
+  });
+});

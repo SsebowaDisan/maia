@@ -193,11 +193,13 @@ def polish_final_response(
 ) -> str:
     request_text = str(request_message or "").strip()
     request_emails = emails_from_text(request_text)
+    fallback_answer = redact_emails(str(answer_text or ""), emails=request_emails)
+    answer_source = strip_wrapping_markdown_fence(str(answer_text or ""))
     raw_answer = redact_emails(
-        strip_wrapping_markdown_fence(str(answer_text or "").strip()),
+        answer_source,
         emails=request_emails,
     )
-    if not raw_answer:
+    if not str(raw_answer).strip():
         return answer_text
     if not env_bool("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", default=True):
         return raw_answer
@@ -340,11 +342,11 @@ def polish_final_response(
     raw_has_markdown_table = "|---|" in raw_answer
     cleaned_has_markdown_table = ("|---|" in cleaned) or ("<table" in cleaned.lower())
     if raw_has_markdown_table and not cleaned_has_markdown_table:
-        cleaned = raw_answer
+        return fallback_answer or raw_answer
     if "### GA4 Full Report Snapshot" in raw_answer and "### GA4 Full Report Snapshot" not in cleaned:
-        cleaned = raw_answer
+        return fallback_answer or raw_answer
     if len(cleaned) > int(target_max_chars * 1.35):
-        cleaned = raw_answer
+        return fallback_answer or raw_answer
 
     citation_tail = extract_citation_tail(raw_answer)
     if citation_tail and not contains_citation_markers(cleaned):

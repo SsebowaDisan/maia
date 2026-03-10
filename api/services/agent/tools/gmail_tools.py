@@ -56,8 +56,17 @@ class GmailSendTool(AgentTool):
         explicit_subject = str(params.get("subject") or "").strip()
         explicit_body = str(params.get("body") or "").strip()
         subject = str(explicit_subject or delivery_subject_hint or report_title or _extract_subject(prompt)).strip()
+        body_source = (
+            "explicit"
+            if explicit_body
+            else "delivery_hint"
+            if delivery_body_hint
+            else "report_content"
+            if report_content
+            else "prompt"
+        )
         raw_body = str(explicit_body or delivery_body_hint or report_content or prompt).strip() or "No message provided."
-        if explicit_body:
+        if body_source in {"explicit", "delivery_hint", "report_content"}:
             body = raw_body
         else:
             polished = polish_email_content(

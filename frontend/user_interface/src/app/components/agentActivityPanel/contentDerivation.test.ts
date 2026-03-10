@@ -78,7 +78,7 @@ describe("resolveBrowserUrl", () => {
     expect(resolveBrowserUrl(events)).toBe("https://axongroup.com/overview");
   });
 
-  it("falls back to a website URL when browser scene tagging is missing", () => {
+  it("does not recover website URLs from non-browser events", () => {
     const events = [
       makeEvent({
         eventType: "tool_completed",
@@ -98,6 +98,24 @@ describe("resolveBrowserUrl", () => {
         },
       }),
     ];
-    expect(resolveBrowserUrl(events)).toBe("https://axongroup.com/company");
+    expect(resolveBrowserUrl(events)).toBe("");
+  });
+
+  it("reads URL from opened_pages emitted by browser-like events", () => {
+    const events = [
+      makeEvent({
+        eventType: "browser_extract",
+        title: "Extract page evidence",
+        detail: "Captured content",
+        data: {
+          scene_surface: "website",
+          opened_pages: [
+            { url: "https://example.org/a" },
+            { url: "https://example.org/b" },
+          ],
+        },
+      }),
+    ];
+    expect(resolveBrowserUrl(events)).toBe("https://example.org/b");
   });
 });

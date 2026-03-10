@@ -112,7 +112,30 @@ def _is_google_analytics_request(
     preferred_tool_ids: set[str] | None = None,
 ) -> bool:
     intent_rows = intent if isinstance(intent, dict) else {}
-    return bool(intent_rows.get("is_analytics_request"))
+    if bool(intent_rows.get("is_analytics_request")):
+        return True
+    if preferred_tool_ids and GA_TOOL_IDS.intersection(preferred_tool_ids):
+        return True
+    intent_tags = intent_rows.get("intent_tags")
+    if isinstance(intent_tags, list):
+        lowered_tags = {
+            " ".join(str(item).split()).strip().lower()
+            for item in intent_tags
+            if str(item).strip()
+        }
+        if any("analytics" in tag or "ga4" in tag for tag in lowered_tags):
+            return True
+    signal_text_parts = [
+        str(request.message or ""),
+        str(request.agent_goal or ""),
+        str(intent_rows.get("objective") or ""),
+        str(intent_rows.get("summary") or ""),
+    ]
+    signal_text = " ".join(signal_text_parts).lower()
+    return any(
+        marker in signal_text
+        for marker in ("google analytics", "google-analytics", "ga4", "analytics property")
+    )
 
 
 def _ga_sheet_requested(
@@ -122,7 +145,18 @@ def _ga_sheet_requested(
     preferred_tool_ids: set[str] | None = None,
 ) -> bool:
     intent_rows = intent if isinstance(intent, dict) else {}
-    return bool(intent_rows.get("wants_sheets_output"))
+    if bool(intent_rows.get("wants_sheets_output")):
+        return True
+    if preferred_tool_ids and "business.ga4_kpi_sheet_report" in preferred_tool_ids:
+        return True
+    signal_text_parts = [
+        str(request.message or ""),
+        str(request.agent_goal or ""),
+        str(intent_rows.get("objective") or ""),
+        str(intent_rows.get("summary") or ""),
+    ]
+    signal_text = " ".join(signal_text_parts).lower()
+    return any(marker in signal_text for marker in ("google sheets", "spreadsheet", "sheet", "tracker"))
 
 
 def _ensure_ga_plan_shape(

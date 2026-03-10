@@ -21,6 +21,14 @@ const SURFACE_TO_TAB: Record<string, PreviewTab> = {
   workspace: "system",
 };
 
+const UI_TARGET_TO_TAB: Record<string, PreviewTab> = {
+  browser: "browser",
+  document: "document",
+  email: "email",
+  system: "system",
+  api: "system",
+};
+
 const ROLE_LABELS: Record<string, string> = {
   conductor: "Conductor",
   planner: "Planner",
@@ -93,6 +101,14 @@ function tabForSceneSurface(surface: string): PreviewTab | null {
   return SURFACE_TO_TAB[normalized] || null;
 }
 
+function tabForUiTarget(target: string): PreviewTab | null {
+  const normalized = normalizeToken(target);
+  if (!normalized) {
+    return null;
+  }
+  return UI_TARGET_TO_TAB[normalized] || null;
+}
+
 function isGoogleWorkspaceUrl(candidate: unknown): boolean {
   const value = readStringField(candidate).toLowerCase();
   if (!value) {
@@ -158,6 +174,12 @@ function eventTab(event: AgentActivityEvent | null): PreviewTab {
   }
   const normalizedType = readStringField(event.event_type).trim().toLowerCase();
   const toolId = eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
+  const uiTarget =
+    readStringField(event.data?.["ui_target"]) || readStringField(event.metadata?.["ui_target"]);
+  const uiTargetTab = tabForUiTarget(uiTarget);
+  if (uiTargetTab) {
+    return uiTargetTab;
+  }
   const interactionSurface = sceneSurfaceFromEvent(event);
   const surfaceTab = tabForSceneSurface(interactionSurface);
   if (surfaceTab === "document") {

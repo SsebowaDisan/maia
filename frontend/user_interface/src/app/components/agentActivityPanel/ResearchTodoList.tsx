@@ -126,7 +126,7 @@ export function ResearchTodoList({
 
   if (dark) {
     return (
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 rounded-[14px] border border-white/12 bg-[#131821] p-3">
         {items.map((item) => (
           <div key={item.id} className="flex items-start gap-2">
             {item.status === "done" ? (
@@ -151,30 +151,30 @@ export function ResearchTodoList({
             </p>
           </div>
         ))}
-        <p className="pt-1 text-[9px] tabular-nums text-white/25">{doneCount}/{totalCount} done</p>
+        <p className="pt-1 text-[9px] tabular-nums text-white/30">{doneCount}/{totalCount} done</p>
       </div>
     );
   }
 
   return (
-    <div className="mt-3 rounded-2xl border border-black/[0.07] bg-white/70 px-4 py-3 backdrop-blur">
+    <div className="mt-3 rounded-2xl border border-[#e3e5e8] bg-white px-4 py-3">
       <div className="mb-2.5 flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#86868b]">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7a7a83]">
           Tasks
         </p>
-        <p className="text-[10px] tabular-nums text-[#aeaeb2]">
+        <p className="text-[10px] tabular-nums text-[#9d9da6]">
           {doneCount}/{totalCount}
         </p>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {items.map((item) => (
           <div key={item.id} className="flex items-start gap-2.5">
             {item.status === "done" ? (
               <CheckCircle2 className="mt-[1px] h-3.5 w-3.5 shrink-0 text-[#34c759]" />
             ) : item.status === "active" ? (
               <Loader2
-                className={`mt-[1px] h-3.5 w-3.5 shrink-0 text-[#007aff] ${streaming ? "animate-spin" : ""}`}
+                className={`mt-[1px] h-3.5 w-3.5 shrink-0 text-[#2563eb] ${streaming ? "animate-spin" : ""}`}
               />
             ) : (
               <Circle className="mt-[1px] h-3.5 w-3.5 shrink-0 text-[#d1d1d6]" />
@@ -182,10 +182,10 @@ export function ResearchTodoList({
             <p
               className={`text-[12px] leading-[1.35] ${
                 item.status === "done"
-                  ? "text-[#aeaeb2] line-through decoration-[#c7c7cc]"
+                  ? "text-[#a0a0aa] line-through decoration-[#c7c7cf]"
                   : item.status === "active"
-                    ? "font-medium text-[#1d1d1f]"
-                    : "text-[#c7c7cc]"
+                    ? "font-medium text-[#1f2937]"
+                    : "text-[#9ca3af]"
               }`}
             >
               {item.label}

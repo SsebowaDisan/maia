@@ -2,38 +2,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { exportAgentRunEvents } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
 import { derivePhaseTimeline, resolveEventSourceUrl } from "./helpers";
-import { DesktopViewer } from "./DesktopViewer";
 import type { AgentActivityPanelProps } from "./types";
 import { useAgentActivityDerived } from "./useAgentActivityDerived";
 import { ActivityHeader } from "./ActivityHeader";
 import { ActivityPanelBody } from "./ActivityPanelBody";
 import { CinemaOverlay } from "./CinemaOverlay";
 import { useAutoScrollTimeline, useJumpTargetSelection, useOverlayKeyboardShortcuts } from "./useActivityPanelNavigation";
-
+import { deriveTheatreStage, desiredPreviewTabForStage } from "./deriveTheatreStage";
+import { useSceneTextTyping } from "./useSceneTextTyping";
+import { useSceneSurfaceTransition } from "./useSceneSurfaceTransition";
+import { useManualPreviewTabOverride } from "./useManualPreviewTabOverride";
+import { useTheatreTelemetry } from "./useTheatreTelemetry";
+import { resolveStagedTheatreEnabled } from "./theatreFeatureFlags";
 const playbackRates = [0.75, 1, 1.5, 2] as const;
-
-function compactNarrative(value: string, maxLength = 140): string {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) {
-    return "";
-  }
-  if (text.length <= maxLength) {
-    return text;
-  }
-  return `${text.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-function buildSceneNarrative(event: AgentActivityEvent | null): string {
-  if (!event) {
-    return "";
-  }
-  const title = compactNarrative(event.title || "", 80);
-  const detail = compactNarrative(event.detail || "", 120);
-  if (detail && detail.length <= 90 && title && detail.toLowerCase() !== title.toLowerCase()) {
-    return `${title} - ${detail}`;
-  }
-  return detail || title || "Processing step...";
-}
 
 export function AgentActivityPanel({
   events,
@@ -44,12 +25,15 @@ export function AgentActivityPanel({
   jumpTarget = null,
   onJumpToEvent,
 }: AgentActivityPanelProps) {
+  const stagedTheatreEnabled = resolveStagedTheatreEnabled(import.meta.env.VITE_STAGED_THEATRE_ENABLED);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof playbackRates)[number]>(1);
   const [cursor, setCursor] = useState(0);
-  const [sceneText, setSceneText] = useState("");
   const [cursorPoint, setCursorPoint] = useState({ x: 14, y: 24 });
-  const [previewTab, setPreviewTab] = useState<"browser" | "document" | "email" | "system">("browser");
+  const [previewTab, setPreviewTab] = useState<"browser" | "document" | "email" | "system">(
+    stagedTheatreEnabled ? "system" : "browser",
+  );
+  const [manualTabOverride, setManualTabOverride] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isTheaterView, setIsTheaterView] = useState(true);
   const [isFullscreenViewer, setIsFullscreenViewer] = useState(false);
@@ -57,14 +41,9 @@ export function AgentActivityPanel({
   const [approvalDismissed, setApprovalDismissed] = useState<string>("");
   const [isFocusMode, setIsFocusMode] = useState(true);
   const [snapshotFailedEventId, setSnapshotFailedEventId] = useState("");
-  const [sceneTransitionLabel, setSceneTransitionLabel] = useState("");
 
   const timerRef = useRef<number | null>(null);
-  const typeTimerRef = useRef<number | null>(null);
-  const sceneTransitionTimerRef = useRef<number | null>(null);
-  const sceneSurfaceCommitTimerRef = useRef<number | null>(null);
   const sceneTabSwitchTimerRef = useRef<number | null>(null);
-  const previousSceneSurfaceRef = useRef("");
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const derived = useAgentActivityDerived({
@@ -78,6 +57,7 @@ export function AgentActivityPanel({
 
   const {
     activeEvent,
+    activePhase,
     activeRoleColor,
     activeRoleLabel,
     browserUrl,
@@ -107,6 +87,7 @@ export function AgentActivityPanel({
     sceneSurfaceKey,
     sceneSurfaceLabel,
     sceneTab,
+    surfaceCommit,
     sheetBodyHint,
     stageFileName,
     stageFileUrl,
@@ -115,8 +96,13 @@ export function AgentActivityPanel({
     roadmapActiveIndex,
   } = derived;
 
-  const [stableSceneSurfaceKey, setStableSceneSurfaceKey] = useState(sceneSurfaceKey);
-  const [stableSceneSurfaceLabel, setStableSceneSurfaceLabel] = useState(sceneSurfaceLabel);
+  const { sceneTransitionLabel } = useSceneSurfaceTransition({
+    sceneSurfaceKey,
+    sceneSurfaceLabel,
+    streaming,
+  });
+
+  const sceneText = useSceneTextTyping(activeEvent);
 
   const phaseTimeline = useMemo(
     () => derivePhaseTimeline(visibleEvents, activeEvent),
@@ -190,47 +176,83 @@ export function AgentActivityPanel({
     };
   }, [isPlaying, speed, orderedEvents.length, streaming]);
 
-  useEffect(() => {
-    if (!activeEvent) {
-      setSceneText("");
-      return;
-    }
-
-    const targetText = buildSceneNarrative(activeEvent) || "Processing step...";
-    setSceneText("");
-
-    let index = 0;
-    if (typeTimerRef.current) {
-      window.clearInterval(typeTimerRef.current);
-      typeTimerRef.current = null;
-    }
-
-    typeTimerRef.current = window.setInterval(() => {
-      index += 1;
-      setSceneText(targetText.slice(0, index));
-      if (index >= targetText.length && typeTimerRef.current) {
-        window.clearInterval(typeTimerRef.current);
-        typeTimerRef.current = null;
+  const approvalEvent = useMemo(
+    () =>
+      streaming
+        ? orderedEvents
+            .slice()
+            .reverse()
+            .find((event) => event.event_type === "approval_required") || null
+        : null,
+    [orderedEvents, streaming],
+  );
+  const approvalEventId = String(approvalEvent?.event_id || "");
+  const hasApprovalGate = Boolean(approvalEventId && approvalDismissed !== approvalEventId);
+  const activeEventType = String(activeEvent?.event_type || "").toLowerCase();
+  const blockedReason = String(
+    activeEvent?.data?.["blocked_reason"] ?? activeEvent?.metadata?.["blocked_reason"] ?? "",
+  ).trim();
+  const needsInput = String(
+    activeEvent?.data?.["needs_input"] ?? activeEvent?.metadata?.["needs_input"] ?? "",
+  ).trim();
+  const hasError =
+    activeEventType.endsWith("_failed") ||
+    activeEventType === "tool_failed" ||
+    activeEventType === "error" ||
+    activeEventType === "policy_blocked";
+  const isBlocked = Boolean(activeEventType === "policy_blocked" || blockedReason.length > 0);
+  const theatreStage = useMemo(
+    () =>
+      deriveTheatreStage({
+        streaming,
+        hasEvents: orderedEvents.length > 0,
+        activePhase,
+        surfaceCommit,
+        needsHumanReview: Boolean(needsHumanReview),
+        hasApprovalGate,
+        isBlocked,
+        needsInput: needsInput.length > 0,
+        hasError,
+      }),
+    [
+      activePhase,
+      hasApprovalGate,
+      hasError,
+      isBlocked,
+      needsHumanReview,
+      needsInput,
+      orderedEvents.length,
+      streaming,
+      surfaceCommit,
+    ],
+  );
+  const desiredPreviewTab = useMemo(
+    () => {
+      if (!stagedTheatreEnabled) {
+        return sceneTab === "system" ? previewTab : sceneTab;
       }
-    }, 8);
+      return desiredPreviewTabForStage({
+        stage: theatreStage,
+        sceneTab,
+        surfaceCommit,
+        fallbackPreviewTab: previewTab,
+        manualOverride: manualTabOverride,
+      });
+    },
+    [manualTabOverride, previewTab, sceneTab, stagedTheatreEnabled, surfaceCommit, theatreStage],
+  );
 
-    return () => {
-      if (typeTimerRef.current) {
-        window.clearInterval(typeTimerRef.current);
-        typeTimerRef.current = null;
-      }
-    };
-  }, [activeEvent?.event_id]);
-
-  // Reset previewTab to browser whenever a new streaming run starts so that
-  // stale "document" state from a previous run doesn't open Google Docs uninvited.
   const prevStreamingRef = useRef(streaming);
   useEffect(() => {
     if (streaming && !prevStreamingRef.current) {
-      setPreviewTab("browser");
+      setPreviewTab(stagedTheatreEnabled ? "system" : "browser");
+      setManualTabOverride(false);
+    }
+    if (!streaming) {
+      setManualTabOverride(false);
     }
     prevStreamingRef.current = streaming;
-  }, [streaming]);
+  }, [stagedTheatreEnabled, streaming]);
 
   useEffect(() => {
     if (!activeEvent) {
@@ -243,7 +265,10 @@ export function AgentActivityPanel({
       }
       return;
     }
-    const nextTab = sceneTab === "system" ? previewTab : sceneTab;
+    if (manualTabOverride) {
+      return;
+    }
+    const nextTab = desiredPreviewTab;
     if (sceneTabSwitchTimerRef.current) {
       window.clearTimeout(sceneTabSwitchTimerRef.current);
       sceneTabSwitchTimerRef.current = null;
@@ -254,51 +279,15 @@ export function AgentActivityPanel({
         sceneTabSwitchTimerRef.current = null;
       }, 180);
     }
-  }, [activeEvent?.event_id, previewTab, sceneTab, streaming]);
+  }, [activeEvent?.event_id, desiredPreviewTab, manualTabOverride, previewTab, streaming]);
 
-  useEffect(() => {
-    if (!streaming) {
-      setStableSceneSurfaceKey(sceneSurfaceKey);
-      setStableSceneSurfaceLabel(sceneSurfaceLabel);
-      return;
-    }
-    if (sceneSurfaceKey === stableSceneSurfaceKey) {
-      return;
-    }
-    if (sceneSurfaceCommitTimerRef.current) {
-      window.clearTimeout(sceneSurfaceCommitTimerRef.current);
-      sceneSurfaceCommitTimerRef.current = null;
-    }
-    sceneSurfaceCommitTimerRef.current = window.setTimeout(() => {
-      setStableSceneSurfaceKey(sceneSurfaceKey);
-      setStableSceneSurfaceLabel(sceneSurfaceLabel);
-      sceneSurfaceCommitTimerRef.current = null;
-    }, 180);
-  }, [sceneSurfaceKey, sceneSurfaceLabel, stableSceneSurfaceKey, streaming]);
-
-  useEffect(() => {
-    if (!streaming) {
-      return;
-    }
-    const previous = previousSceneSurfaceRef.current;
-    if (!previous) {
-      previousSceneSurfaceRef.current = stableSceneSurfaceKey;
-      return;
-    }
-    if (previous === stableSceneSurfaceKey) {
-      return;
-    }
-    previousSceneSurfaceRef.current = stableSceneSurfaceKey;
-    setSceneTransitionLabel(`Switched to ${stableSceneSurfaceLabel}`);
-    if (sceneTransitionTimerRef.current) {
-      window.clearTimeout(sceneTransitionTimerRef.current);
-      sceneTransitionTimerRef.current = null;
-    }
-    sceneTransitionTimerRef.current = window.setTimeout(() => {
-      setSceneTransitionLabel("");
-      sceneTransitionTimerRef.current = null;
-    }, 1100);
-  }, [stableSceneSurfaceKey, stableSceneSurfaceLabel, streaming]);
+  useManualPreviewTabOverride({ streaming: streaming && stagedTheatreEnabled, setPreviewTab, setManualTabOverride });
+  useTheatreTelemetry({
+    streaming,
+    theatreStage,
+    manualTabOverride,
+    runId: orderedEvents[0]?.run_id || "",
+  });
 
   useEffect(() => {
     if (!activeEvent?.event_id) {
@@ -309,14 +298,6 @@ export function AgentActivityPanel({
 
   useEffect(
     () => () => {
-      if (sceneTransitionTimerRef.current) {
-        window.clearTimeout(sceneTransitionTimerRef.current);
-        sceneTransitionTimerRef.current = null;
-      }
-      if (sceneSurfaceCommitTimerRef.current) {
-        window.clearTimeout(sceneSurfaceCommitTimerRef.current);
-        sceneSurfaceCommitTimerRef.current = null;
-      }
       if (sceneTabSwitchTimerRef.current) {
         window.clearTimeout(sceneTabSwitchTimerRef.current);
         sceneTabSwitchTimerRef.current = null;
@@ -432,15 +413,8 @@ export function AgentActivityPanel({
     },
   };
 
-  const approvalEvent = streaming
-    ? orderedEvents
-        .slice()
-        .reverse()
-        .find((event) => event.event_type === "approval_required") || null
-    : null;
-
   return (
-    <div className="mb-4 overflow-hidden rounded-3xl border border-black/[0.08] bg-[#f7f7f8] p-4 shadow-[0_8px_24px_-20px_rgba(0,0,0,0.32)]">
+    <div className="mb-4 overflow-hidden rounded-3xl border border-[#e5e7eb] bg-[#f8f9fb] p-4 shadow-[0_20px_40px_-36px_rgba(15,23,42,0.45)]">
       <ActivityHeader
         streaming={streaming}
         isExporting={isExporting}
@@ -489,8 +463,12 @@ export function AgentActivityPanel({
         approvalEvent={approvalEvent}
         approvalDismissed={approvalDismissed}
         setApprovalDismissed={setApprovalDismissed}
+        plannedRoadmapSteps={plannedRoadmapSteps}
+        roadmapActiveIndex={roadmapActiveIndex}
+        theatreStage={theatreStage}
+        needsHumanReview={Boolean(needsHumanReview)}
+        humanReviewNotes={humanReviewNotes}
       />
-
       <CinemaOverlay
         open={isCinemaMode}
         phaseTimeline={phaseTimeline}
@@ -512,7 +490,6 @@ export function AgentActivityPanel({
         setCursor={setCursor}
         onClose={() => setIsCinemaMode(false)}
       />
-
     </div>
   );
 }

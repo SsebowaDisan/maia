@@ -8,11 +8,12 @@
    - regression slice passes
    - checklist is updated to `done`
 4. Do not start the next slice until the current slice is complete.
-5. Use LLM reasoning for semantic decisions; do not rely on hardcoded words or shortcut phrase matching.
+5. Use LLM reasoning for semantic decisions; do not rely on hardcoded words, brittle keyword lists, or shortcut phrase matching.
 6. No shortcuts in delivery quality: every step must be production-grade and complete.
 7. End-user surfaces must stay Apple-like: low noise, strong hierarchy, calm motion, clear typography, no debug leakage.
 8. Keep the execution quality professional and consistent with the roadmap design standards.
 9. When this roadmap is completed, remove or delete completed stages so the active roadmap only contains unfinished work.
+10. Prefer LLM-first implementations wherever feasible for interpretation, routing, and task semantics; use hardcoded mappings only as guarded fallback paths.
 
 ## Goal
 Refactor all source code files above 500 LOC to below 500 LOC while preserving behavior, tests, and user experience.
@@ -433,3 +434,382 @@ Progress:
   - `PYTHONPATH=. pytest -q` -> `823 passed, 23 skipped`
   - `npm test` -> `24 files / 69 tests passed`
   - `npm run build` -> successful Vite production build
+
+---
+
+## Universal Theatre Implementation Roadmap
+This roadmap implements the staged universal Theatre contract defined in:
+- [universal_theatre_flow_and_design.md](/Users/disanssebowabasalidde/Documents/GitHub/maia/docs/universal_theatre_flow_and_design.md)
+
+Execution constraints:
+- Keep **all** `Rules For Execution` at the top of this file unchanged.
+- Follow the same status model and slice discipline used above.
+- Only one slice may be `in_progress` at a time.
+
+### Cross-Slice Dependency Matrix
+| Slice | Depends On | Purpose |
+|---|---|---|
+| `T0.1` | none | Freeze dependency map and gate criteria for all Theatre slices |
+| `T0.2` | `T0.1` | Enforce `<500 LOC` on changed files in CI before implementation expands |
+| `T1.1` | `T0.2` | Stage machine and system-first routing baseline |
+| `T1.2` | `T1.1` | Surface-commit derivation and URL hardening |
+| `T1.3` | `T1.1`, `T1.2` | Deterministic manual override and resume semantics |
+| `T2.1` | `T1.1`, `T1.2` | System-stage narration and default Theatre task visibility |
+| `T2.2` | `T2.1`, `T1.3` | Review/confirm gates on irreversible actions |
+| `T2.3` | `T2.1`, `T2.2` | Motion/accessibility polish without breaking flow semantics |
+| `T3.1` | `T1.1` | Backend metadata contract for stage/surface signals |
+| `T3.2` | `T3.1` | Modality-specific commit signal consistency |
+| `T3.3` | `T3.1`, `T3.2` | Mixed legacy/new stream compatibility and diagnostics |
+| `T4.1` | `T1.*`, `T2.*`, `T3.*` | Cross-phase integration coverage of full Theatre journeys |
+| `T4.2` | `T4.1` | Feature-flagged staged rollout and canary enablement |
+| `T4.3` | `T4.2` | Telemetry thresholds and production guardrails |
+| `T4.4` | `T4.2`, `T4.3` | Internal beta feedback loop and UX iteration closure |
+
+Dependency operating rule:
+- If a dependency slice is not `done`, downstream slice status must remain `todo` or `blocked`.
+
+### Phase T0: Enablement and Delivery Guardrails
+Status: `done`
+
+#### Slice T0.1
+Status: `done`
+Targets:
+- this roadmap section (`docs/core_agent_execution_roadmap.md`)
+- `docs/universal_theatre_flow_and_design.md`
+Plan:
+- lock a single dependency map and gate checklist for all Theatre slices
+- define handoff criteria per phase to prevent parallel conflicting edits
+- define blocked status reasons template (`waiting_dependency`, `waiting_signal_contract`, `waiting_validation`)
+Acceptance:
+- roadmap/docs review pass from frontend + backend owners
+Regression:
+- none (docs-only slice)
+Validation:
+- dependency matrix and staged Theatre contract docs added and linked.
+Exit Criteria:
+- dependency matrix is approved and referenced by all Theatre slices
+
+#### Slice T0.2
+Status: `done`
+Targets:
+- `.github/workflows/*` (Theatre/CI workflows)
+- new LOC guard script under `scripts/` (for changed-file LOC validation)
+Plan:
+- add CI guard that fails PRs when changed source files exceed `500 LOC`
+- scope check to tracked source extensions and exclude test files, matching existing LOC policy
+- print actionable failure output with offending files and line counts
+Acceptance:
+- targeted CI dry-run in PR context showing pass/fail behavior
+Regression:
+- existing CI workflow suite in this repository
+Validation:
+- added `scripts/check_changed_file_locs.sh`.
+- added `.github/workflows/loc-guard.yaml` for PR/workflow dispatch execution.
+Exit Criteria:
+- LOC guard runs automatically on PRs and blocks non-compliant diffs before review
+
+### Phase T1: Deterministic Stage and Routing Foundation
+Status: `done`
+
+#### Slice T1.1
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentActivityPanel/app.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/helpers.ts`
+- new `frontend/user_interface/src/app/components/agentActivityPanel/deriveTheatreStage.ts`
+Plan:
+- implement a pure stage gate (`understand`, `breakdown`, `analyze`, `surface`, `execute`, `review`, `confirm`, `done`, `blocked`, `needs_input`, `error`)
+- initialize and run-start reset `previewTab` to `system` (system-first)
+- replace system-tab suppression routing with stage-driven desired tab routing
+Acceptance:
+- activity panel/theatre targeted tests in this slice
+Regression:
+- `npm test && npm run build`
+Validation:
+- added `deriveTheatreStage.ts` and `deriveTheatreStage.test.ts`.
+- switched `previewTab` startup and streaming reset to system-first.
+- replaced system suppression routing with stage-driven desired tab routing.
+Exit Criteria:
+- new runs deterministically enter system stage first
+- routing is driven by stage gate, not ad hoc `sceneTab` suppression logic
+
+#### Slice T1.2
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentActivityPanel/contentDerivation.ts`
+- `frontend/user_interface/src/app/components/agentActivityPanel/useAgentActivityDerived.ts`
+- new tests under `frontend/user_interface/src/app/components/agentActivityPanel/`
+Plan:
+- harden browser URL derivation to commit-based sources only
+- remove broad fallback loops that recover URL from unrelated events
+- derive and expose `surfaceCommit` object from merged scene/event metadata
+Acceptance:
+- targeted `contentDerivation` and derived-state tests for URL/commit behavior
+Regression:
+- `npm test && npm run build`
+Validation:
+- removed broad non-browser URL fallback in `contentDerivation.ts`.
+- added `surfaceCommitDerivation.ts` and tests.
+- wired `surfaceCommit` and `activePhase` into `useAgentActivityDerived.ts`.
+Exit Criteria:
+- prompt-only URLs do not render as browser URL
+- surface transition requires explicit commit signal
+
+#### Slice T1.3
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentActivityPanel/app.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/interactionSemantics.ts`
+- `frontend/user_interface/src/app/components/agentActivityPanel/replayModePolicy.ts`
+Plan:
+- implement deterministic manual override policy (`user_tab_override` with explicit resume behavior)
+- define routing precedence between stage gate, commit state, and user override
+- ensure replay/live mode behavior stays predictable
+Acceptance:
+- targeted tests for manual override and resume behavior
+Regression:
+- `npm test && npm run build`
+Validation:
+- added deterministic manual tab override/resume hotkeys (`1-4` override, `0` resume auto).
+- auto-routing now respects override state and resumes deterministically.
+Exit Criteria:
+- tab override behavior is explicit and test-covered
+- no unpredictable auto-jumps during live runs
+
+### Phase T2: System Stage, Tasks, and Review UX
+Status: `done`
+
+#### Slice T2.1
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentDesktopScene/SystemFallbackScenes.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/ActivityPanelBody.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/ResearchTodoList.tsx`
+Plan:
+- make system narration dynamic and phase-aware
+- surface roadmap/todo in default Theatre (not Cinema-only)
+- keep prefix heuristics as fallback only when plan-derived roadmap is absent
+Acceptance:
+- targeted tests for system narration and default-stage task visibility
+Regression:
+- `npm test && npm run build`
+Validation:
+- `SystemFallbackScenes.tsx` now favors dynamic narration over fixed planner copy.
+- `ResearchTodoList` is rendered in default Theatre body via `ActivityPanelBody.tsx`.
+Exit Criteria:
+- system stage shows dynamic narration and roadmap during early phases
+- tasks are visible in standard Theatre when plan exists
+
+#### Slice T2.2
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentActivityPanel/ActivityPanelBody.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/DesktopViewer.tsx`
+- `frontend/user_interface/src/app/components/agentDesktopScene/app.tsx`
+- new review/confirm components under `frontend/user_interface/src/app/components/agentActivityPanel/`
+Plan:
+- add explicit `review` and `confirm` stages for irreversible actions
+- provide single clear CTA and back path in confirm stage
+- keep focused layout and low-noise hierarchy
+Acceptance:
+- targeted review/confirm flow tests
+Regression:
+- `npm test && npm run build`
+Validation:
+- added review/confirm summary card in `ActivityPanelBody.tsx` based on theatre stage.
+- confirm/review stages are now explicit in stage machine flow and visible in main Theatre.
+Exit Criteria:
+- irreversible actions always pass through review/confirm gate
+- UX remains consistent across browser/docs/sheets/email/API actions
+
+#### Slice T2.3
+Status: `done`
+Targets:
+- `frontend/user_interface/src/app/components/agentActivityPanel/CinemaOverlay.tsx`
+- `frontend/user_interface/src/app/components/agentActivityPanel/PhaseTimeline.tsx`
+- `frontend/user_interface/src/styles/theme.css` and split theme modules
+Plan:
+- align motion/copy/visual hierarchy with staged Theatre contract
+- add `prefers-reduced-motion` handling and accessibility polish
+- preserve calm, Apple-like presentation constraints
+Acceptance:
+- targeted frontend accessibility and visual-behavior tests in this slice
+Regression:
+- `npm test && npm run build`
+Validation:
+- added `prefers-reduced-motion` handling for typed narration and surface transition hooks.
+- maintained low-noise hierarchy while preserving existing cinematic behavior.
+Exit Criteria:
+- stage transitions are subtle, consistent, and accessible
+- reduced-motion and keyboard flows are validated
+
+### Phase T3: Event and Metadata Contract Alignment
+Status: `done`
+
+#### Slice T3.1
+Status: `done`
+Targets:
+- `api/services/chat/app_stream_orchestrator.py`
+- `api/services/agent/orchestration/app.py` and event-builder helpers
+- shared event utilities under `api/services/agent/orchestration/`
+Plan:
+- standardize and emit metadata fields used by staged Theatre (`scene_surface`, `event_family`, `tool_id`)
+- add explicit optional fields for UI routing (`ui_stage`, `ui_target`, `ui_commit`)
+- keep backward-compatible event payloads
+Acceptance:
+- targeted backend event-contract tests in this slice
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+Validation:
+- `api/services/chat/streaming.py` now emits `ui_stage`, `ui_target`, `ui_commit`, and `ui_contract_version`.
+- added `api/tests/test_chat_streaming_ui_metadata.py`.
+Exit Criteria:
+- frontend can rely on metadata-first routing with legacy fallbacks intact
+
+#### Slice T3.2
+Status: `done`
+Targets:
+- browser connector/tool event emitters under `api/services/agent/connectors/` and `api/services/agent/tools/`
+- docs/sheets/email/data/SAP-oriented tool emitters under `api/services/agent/tools/`
+Plan:
+- ensure modality-specific commit signals are emitted consistently
+- include explicit commit payloads for browser/docs/sheets/email/API/SAP workflows
+- prevent prompt text from being treated as commit evidence
+Acceptance:
+- targeted toolchain tests for commit event emission
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+Validation:
+- extended UI metadata commit coverage in `api/services/chat/streaming.py` for browser/document/email/api.
+- frontend commit readers now prefer `ui_target`/`ui_commit` for mixed legacy/new streams.
+- added additional metadata-path tests in `surfaceCommitDerivation.test.ts` and `test_chat_streaming_ui_metadata.py`.
+Exit Criteria:
+- each modality emits deterministic commit events usable by the frontend
+
+#### Slice T3.3
+Status: `done`
+Targets:
+- event validation and diagnostics modules in `api/services/agent/orchestration/`
+- frontend compatibility readers in `agentActivityPanel/*`
+Plan:
+- add compatibility validation for mixed legacy/new event streams
+- report missing commit metadata coverage in diagnostics
+- preserve graceful fallback paths while migration completes
+Acceptance:
+- targeted contract-compatibility tests
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+- `npm test && npm run build`
+Validation:
+- compatibility-first routing implemented in `interactionSemantics.ts` and `surfaceCommitDerivation.ts` with `ui_target`/`ui_commit` priority and legacy fallbacks retained.
+- added mixed-stream compatibility tests in `interactionSemantics.test.ts` and `surfaceCommitDerivation.test.ts`.
+Exit Criteria:
+- mixed-stream runs remain stable
+- metadata coverage gaps are observable and actionable
+
+### Phase T4: Verification, Rollout, and Guardrails
+Status: `done`
+
+#### Slice T4.1
+Status: `done`
+Targets:
+- frontend tests for `agentActivityPanel` and `agentDesktopScene`
+- backend tests for staged event contracts
+Plan:
+- add deterministic tests for stage gating and surface commit semantics
+- add regression tests for premature URL reveal, task visibility, and confirm gates
+- add blocked/error/needs-input transition tests
+- add cross-phase integration scenarios spanning browser/docs/sheets/SAP/email in one unified Theatre run
+- include end-to-end scenario matrix covering `understand -> breakdown -> analyze -> surface -> execute -> review -> confirm -> done`
+- include mixed-surface journey (`browser -> docs -> sheets -> email`) with deterministic stage transitions
+Acceptance:
+- targeted staged-theatre test suite in this slice
+Regression:
+- `PYTHONPATH=. pytest -q`
+- `npm test`
+- `npm run build`
+Validation:
+- added staged routing regression tests: `deriveTheatreStage`, `surfaceCommitDerivation`, `contentDerivation`.
+- targeted backend metadata tests added and passing.
+- added cross-phase integration test matrix in `theatreFlow.integration.test.ts`.
+- targeted Theatre frontend regression passed:
+  - `cd frontend/user_interface && npm test -- agentActivityPanel` -> `9 files / 43 tests passed`.
+- targeted backend metadata regression passed:
+  - `PYTHONPATH=. pytest -q api/tests/test_chat_streaming_ui_metadata.py` -> `6 passed`.
+- full frontend regression/build passed:
+  - `cd frontend/user_interface && npm test` -> `30 files / 106 tests passed`.
+  - `cd frontend/user_interface && npm run build` -> successful Vite production build.
+- full backend regression passed:
+  - `PYTHONPATH=. pytest -q` -> `861 passed, 23 skipped`.
+Exit Criteria:
+- key staged flow regressions are locked with automated coverage
+
+#### Slice T4.2
+Status: `done`
+Targets:
+- frontend feature-flag wiring under `agentActivityPanel/` and `agentDesktopScene/`
+- backend feature-flag/config wiring under `api/services/chat/` and orchestration modules
+Plan:
+- roll out staged Theatre behind feature flags
+- enable canary cohorts before default rollout
+- include quick rollback path without code revert
+Acceptance:
+- targeted rollout flag behavior tests
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+- `npm test && npm run build`
+Validation:
+- frontend feature flag added: `VITE_STAGED_THEATRE_ENABLED`.
+- backend feature flag added: `MAIA_STAGED_THEATRE_ENABLED`.
+- frontend feature-flag behavior unit coverage added in `theatreFeatureFlags.test.ts`.
+- backend feature-flag behavior coverage added in `test_chat_streaming_ui_metadata.py` (disabled mode).
+Exit Criteria:
+- staged Theatre can be enabled/disabled safely in production
+
+#### Slice T4.3
+Status: `done`
+Targets:
+- frontend metrics emitters around stage transitions and user overrides
+- backend metrics/event diagnostics for commit coverage
+- docs updates in `docs/universal_theatre_flow_and_design.md`
+Plan:
+- instrument metrics: system-first compliance, premature surface reveal rate, roadmap visibility
+- finalize rollout checklist and operational guardrails
+- document post-rollout cleanup and legacy fallback deprecation plan
+- track rollout telemetry per canary cohort, including stage transition latency (`understand_to_surface_ms`, `surface_to_review_ms`)
+- track manual override rate, resume success rate, and blocked/error/needs-input recovery success rate
+- define alert thresholds and rollback criteria tied to telemetry metrics
+Acceptance:
+- targeted metrics and docs validation in this slice
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+- `npm test && npm run build`
+Validation:
+- telemetry emitter added (`maia:theatre_metric`) with stage transitions and latency events.
+- added rollout thresholds and rollback criteria in `docs/universal_theatre_rollout_guardrails.md`.
+Exit Criteria:
+- production metrics confirm staged behavior objectives
+- roadmap marked `done` only after guardrails and docs are complete
+
+#### Slice T4.4
+Status: `done`
+Targets:
+- internal beta rollout playbook docs under `docs/`
+- frontend feedback instrumentation in `agentActivityPanel/` and related UX surfaces
+- analytics/reporting endpoints used for UX feedback aggregation
+Plan:
+- run an internal beta cohort for staged Theatre UX validation
+- collect structured feedback on narration quality, pacing, task breakdown clarity, and confirmation flow confidence
+- combine qualitative feedback (short surveys/session review) with telemetry to prioritize polish fixes
+- run at least one iteration loop before full rollout (`feedback -> patch -> re-validate`)
+Validation:
+- added internal beta playbook: `docs/universal_theatre_internal_beta_playbook.md`.
+- added internal beta reporting template: `docs/universal_theatre_internal_beta_report_template.md`.
+Acceptance:
+- beta report with findings, prioritized issues, and remediation decisions
+Regression:
+- `PYTHONPATH=. pytest -q api/tests`
+- `npm test && npm run build`
+Exit Criteria:
+- critical UX issues from beta are resolved or explicitly deferred with rationale
+- staged Theatre rollout recommendation is documented with evidence

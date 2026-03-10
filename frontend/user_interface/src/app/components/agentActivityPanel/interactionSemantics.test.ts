@@ -84,6 +84,18 @@ describe("interactionSemantics", () => {
     expect(isApiRuntimeEvent(event)).toBe(true);
   });
 
+  it("prefers ui_target metadata for tab routing when present", () => {
+    const event = makeEvent(
+      {
+        ui_target: "email",
+        scene_surface: "system",
+      },
+      {},
+    );
+    event.event_type = "tool_progress";
+    expect(eventTab(event)).toBe("email");
+  });
+
   it("treats shadow events as system tab events", () => {
     const event = makeEvent(
       { scene_surface: "google_docs" },

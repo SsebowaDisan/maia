@@ -94,10 +94,22 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
     const sceneSurface = String(event.metadata?.["scene_surface"] || event.data?.["scene_surface"] || "")
       .trim()
       .toLowerCase();
+    const uiTarget = String(event.metadata?.["ui_target"] || event.data?.["ui_target"] || "")
+      .trim()
+      .toLowerCase();
+    const uiCommit =
+      (event.metadata?.["ui_commit"] as Record<string, unknown> | undefined) ||
+      (event.data?.["ui_commit"] as Record<string, unknown> | undefined) ||
+      {};
+    const uiCommitSurface = String(uiCommit["surface"] || "")
+      .trim()
+      .toLowerCase();
     const browserLike =
       eventTab(event) === "browser" ||
       sceneSurface === "website" ||
       sceneSurface === "browser" ||
+      uiTarget === "browser" ||
+      uiCommitSurface === "browser" ||
       eventType.startsWith("browser_") ||
       eventType.startsWith("web_");
     if (!browserLike) {
@@ -139,54 +151,6 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
     const match = mergedText.match(URL_PATTERN);
     if (match?.[1]) {
       return match[1];
-    }
-  }
-
-  const readEventUrl = (event: AgentActivityEvent): string => {
-    const meta = event.metadata || {};
-    const data = event.data || {};
-    const direct =
-      firstHttpUrl(
-        meta["url"],
-        meta["source_url"],
-        meta["target_url"],
-        meta["page_url"],
-        meta["final_url"],
-        meta["link"],
-        data["url"],
-        data["source_url"],
-        data["target_url"],
-        data["page_url"],
-        data["final_url"],
-        data["link"],
-      ) ||
-      fromTargetObject(meta["action_target"]) ||
-      fromTargetObject(data["action_target"]) ||
-      fromRows(meta["opened_pages"]) ||
-      fromRows(data["opened_pages"]) ||
-      fromRows(meta["top_urls"]) ||
-      fromRows(data["top_urls"]);
-    if (direct) {
-      return direct;
-    }
-    const mergedText = `${event.title} ${event.detail}`.trim();
-    const match = mergedText.match(URL_PATTERN);
-    return String(match?.[1] || "");
-  };
-
-  // Fallback: if scene tagging is missing, recover a website URL from any event.
-  for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-    const candidate = readEventUrl(visibleEvents[idx]);
-    if (candidate && isHttpUrl(candidate) && !isGoogleWorkspaceUrl(candidate)) {
-      return candidate;
-    }
-  }
-
-  // Last-resort fallback: return any HTTP URL to avoid an empty browser frame.
-  for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
-    const candidate = readEventUrl(visibleEvents[idx]);
-    if (candidate && isHttpUrl(candidate)) {
-      return candidate;
     }
   }
 
