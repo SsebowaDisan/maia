@@ -31,11 +31,16 @@ def _allowed_keys(context: ApiContext) -> set[str]:
             "agent.google_service_account_email",
             "agent.google_service_account_json_path",
             "agent.google_service_account_impersonate",
+            "agent.google_analytics_property_id",
             "agent.google_workspace_link_aliases",
             "agent.google_oauth_services",
             "agent.ollama.base_url",
             "agent.ollama.default_model",
             "agent.ollama.embedding_model",
+            "agent.llamacpp.port",
+            "agent.llamacpp.model_dir",
+            "agent.llamacpp.active_model",
+            "agent.llamacpp.active_embedding",
         }
     )
     return base
@@ -61,6 +66,7 @@ def load_user_settings(context: ApiContext, user_id: str) -> dict[str, Any]:
     values.setdefault("agent.google_service_account_email", "")
     values.setdefault("agent.google_service_account_json_path", "")
     values.setdefault("agent.google_service_account_impersonate", "")
+    values.setdefault("agent.google_analytics_property_id", "")
     values.setdefault("agent.google_workspace_link_aliases", {})
     values.setdefault("agent.google_oauth_services", [])
     values.setdefault(
@@ -70,6 +76,10 @@ def load_user_settings(context: ApiContext, user_id: str) -> dict[str, Any]:
     )
     values.setdefault("agent.ollama.default_model", "")
     values.setdefault("agent.ollama.embedding_model", "")
+    values.setdefault("agent.llamacpp.port", 8082)
+    values.setdefault("agent.llamacpp.model_dir", "")
+    values.setdefault("agent.llamacpp.active_model", "")
+    values.setdefault("agent.llamacpp.active_embedding", "")
     return values
 
 

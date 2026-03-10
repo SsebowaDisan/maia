@@ -65,6 +65,34 @@ class GoogleOAuthServicesRequest(BaseModel):
     services: list[str] = Field(default_factory=list, max_length=20)
 
 
+class GoogleAnalyticsPropertyRequest(BaseModel):
+    property_id: str = Field(min_length=1, max_length=40)
+
+
+class LlamaCppDownloadRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=512)
+    filename: str = Field(min_length=4, max_length=200)
+    run_id: str | None = Field(default=None, max_length=120)
+
+
+class LlamaCppStartRequest(BaseModel):
+    model_filename: str = Field(min_length=4, max_length=200)
+    port: int = Field(default=8082, ge=1024, le=65535)
+    n_gpu_layers: int = Field(default=-1, ge=-1, le=999)
+    wait_seconds: int = Field(default=20, ge=5, le=120)
+    run_id: str | None = Field(default=None, max_length=120)
+
+
+class LlamaCppSelectRequest(BaseModel):
+    model_filename: str = Field(min_length=4, max_length=200)
+    run_id: str | None = Field(default=None, max_length=120)
+
+
+class LlamaCppConfigRequest(BaseModel):
+    port: int = Field(default=8082, ge=1024, le=65535)
+    model_dir: str = Field(default="", max_length=512)
+
+
 class GoogleWorkspaceLinkAnalyzeRequest(BaseModel):
     link: str = Field(min_length=4, max_length=2048)
 

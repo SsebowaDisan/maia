@@ -171,7 +171,19 @@ class LiveRunStream:
         if normalized_event.startswith(("document_", "pdf_", "pdf.")):
             return "document"
         if normalized_event.startswith(("doc_", "doc.", "docs.")) or normalized_event == "drive.go_to_doc":
-            return "google_docs"
+            provider = str(
+                payload.get("provider")
+                or payload.get("document_provider")
+                or payload.get("workspace_provider")
+                or ""
+            ).strip().lower()
+            if normalized_tool.startswith("workspace.docs."):
+                return "google_docs"
+            if normalized_tool.startswith("google.api.google_docs"):
+                return "google_docs"
+            if provider in {"google_docs", "google_workspace"}:
+                return "google_docs"
+            return "document"
         if normalized_event.startswith("drive."):
             if normalized_tool.startswith("workspace.sheets."):
                 return "google_sheets"
@@ -179,8 +191,10 @@ class LiveRunStream:
                 return "google_docs"
             return "document"
 
-        if normalized_tool.startswith(("workspace.docs.", "docs.create")):
+        if normalized_tool.startswith("workspace.docs."):
             return "google_docs"
+        if normalized_tool.startswith("docs.create"):
+            return "document"
         if normalized_tool.startswith("documents.highlight."):
             return "document"
         if normalized_tool.startswith("workspace.sheets."):

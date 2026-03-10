@@ -15,6 +15,8 @@ from api.services.agent.tools.base import (
 )
 from api.services.agent.tools.data_tools_helpers import (
     _analysis_paragraphs_with_llm,
+    _analytics_insight_highlights,
+    _analytics_insight_paragraphs,
     _analytics_section_lines,
     _as_float,
     _auto_highlights_from_sources,
@@ -272,6 +274,10 @@ class ReportGenerationTool(AgentTool):
         if not highlight_lines and source_rows:
             highlight_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=8)]
         if not highlight_lines:
+            analytics_highlights = _analytics_insight_highlights(context.settings)
+            if analytics_highlights:
+                highlight_lines = [f"- {line}" for line in analytics_highlights]
+        if not highlight_lines:
             highlight_lines = ["- Key findings will appear here once evidence is synthesized."]
         if depth_tier in {"deep_research", "deep_analytics"} and len(highlight_lines) < 10:
             auto_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=14)]
@@ -296,6 +302,10 @@ class ReportGenerationTool(AgentTool):
             source_rows=source_rows,
             depth_tier=depth_tier,
         )
+        if not source_rows:
+            analytics_paragraphs = _analytics_insight_paragraphs(context.settings)
+            if analytics_paragraphs:
+                analysis_paragraphs = analytics_paragraphs
         if not analysis_paragraphs:
             analysis_paragraphs = _fallback_analysis_paragraphs(
                 summary=summary,

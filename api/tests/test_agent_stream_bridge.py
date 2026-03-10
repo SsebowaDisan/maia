@@ -95,6 +95,22 @@ def test_stream_bridge_infers_google_docs_surface() -> None:
     assert payload["scene_surface"] == "google_docs"
 
 
+def test_stream_bridge_infers_document_surface_for_report_generate_doc_events() -> None:
+    payload = _emit_single_trace(
+        tool_id="report.generate",
+        trace=ToolTraceEvent(event_type="doc_open", title="Draft report", detail="compose"),
+    )
+    assert payload["scene_surface"] == "document"
+
+
+def test_stream_bridge_infers_document_surface_for_docs_create_doc_events() -> None:
+    payload = _emit_single_trace(
+        tool_id="docs.create",
+        trace=ToolTraceEvent(event_type="doc_insert_text", title="Write", detail="body"),
+    )
+    assert payload["scene_surface"] == "document"
+
+
 def test_stream_bridge_keeps_document_surface_for_doc_copy_clipboard() -> None:
     payload = _emit_single_trace(
         tool_id="documents.highlight.extract",

@@ -103,6 +103,10 @@ export function SettingsView() {
           onSaveGoogleLinkAlias={(alias, link) =>
             controller.handleSaveGoogleWorkspaceLinkAlias(alias, link)
           }
+          ga4PropertyId={controller.ga4PropertyId}
+          ga4PropertyIdInput={controller.ga4PropertyIdInput}
+          onGa4PropertyIdInputChange={controller.setGa4PropertyIdInput}
+          onSaveGa4PropertyId={() => controller.handleSaveGa4PropertyId()}
         />
       ) : null}
 
@@ -110,7 +114,6 @@ export function SettingsView() {
         <ModelsSettings
           ollamaStatus={controller.ollama.ollamaStatus}
           ollamaModels={controller.ollama.ollamaModels}
-          ollamaQuickstart={controller.ollama.ollamaQuickstart}
           ollamaBaseUrlInput={controller.ollama.ollamaBaseUrlInput}
           ollamaModelInput={controller.ollama.ollamaModelInput}
           ollamaEmbeddingInput={controller.ollama.ollamaEmbeddingInput}

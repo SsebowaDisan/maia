@@ -52,6 +52,10 @@ type IntegrationsSettingsProps = {
     message: string;
   }>;
   onGoogleAuthModeChange: (mode: "oauth" | "service_account") => void;
+  ga4PropertyId: string;
+  ga4PropertyIdInput: string;
+  onGa4PropertyIdInputChange: (value: string) => void;
+  onSaveGa4PropertyId: () => Promise<{ ok: boolean; message: string }>;
   onAnalyzeGoogleLink: (link: string) => Promise<GoogleWorkspaceLinkAnalyzeResult>;
   onCheckGoogleLinkAccess: (payload: {
     link: string;
@@ -81,6 +85,10 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
     onRequestGoogleOAuthSetup,
     onSaveGoogleOAuthServices,
     onGoogleAuthModeChange,
+    ga4PropertyId,
+    ga4PropertyIdInput,
+    onGa4PropertyIdInputChange,
+    onSaveGa4PropertyId,
     onAnalyzeGoogleLink,
     onCheckGoogleLinkAccess,
     onSaveGoogleLinkAlias,
@@ -376,6 +384,18 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
     }
   };
 
+  const handleSaveGa4PropertyId = async () => {
+    setBusy(true);
+    try {
+      const result = await onSaveGa4PropertyId();
+      setMessage(result.message);
+    } catch (error) {
+      setMessage(`Could not save GA4 property ID: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleShareComplete = () => {
     if (!serviceAccountReady) {
       setMessage("Service-account email is not available yet.");
@@ -438,6 +458,10 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
         onLinkInputChange={setLinkInput}
         onAliasInputChange={setAliasInput}
         onAddAlias={handleAddAlias}
+        ga4PropertyId={ga4PropertyId}
+        ga4PropertyIdInput={ga4PropertyIdInput}
+        onGa4PropertyIdInputChange={onGa4PropertyIdInputChange}
+        onSaveGa4PropertyId={handleSaveGa4PropertyId}
       />
 
       <GoogleAdvancedSection

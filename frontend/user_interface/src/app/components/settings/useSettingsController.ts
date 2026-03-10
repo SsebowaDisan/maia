@@ -19,11 +19,13 @@ import {
   analyzeGoogleWorkspaceLink,
   checkGoogleWorkspaceLinkAccess,
   getBraveIntegrationStatus,
+  getGoogleAnalyticsProperty,
   getGoogleServiceAccountStatus,
   listGoogleWorkspaceLinkAliases,
   getMapsIntegrationStatus,
   getOllamaIntegrationStatus,
   getOllamaQuickstart,
+  saveGoogleAnalyticsProperty,
   saveGoogleWorkspaceLinkAlias,
   saveGoogleOAuthServices,
   saveGoogleWorkspaceAuthMode,
@@ -60,6 +62,8 @@ export function useSettingsController(activeTab: string) {
     instructions: [],
   });
   const [googleWorkspaceAliases, setGoogleWorkspaceAliases] = useState<GoogleWorkspaceAliasRecord[]>([]);
+  const [ga4PropertyId, setGa4PropertyId] = useState("");
+  const [ga4PropertyIdInput, setGa4PropertyIdInput] = useState("");
   const [mapsStatus, setMapsStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [braveStatus, setBraveStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [mapsKeyInput, setMapsKeyInput] = useState("");
@@ -84,7 +88,7 @@ export function useSettingsController(activeTab: string) {
   const refreshIntegrations = async () => {
     setLoading(true);
     try {
-      const [healthRows, credentialRows, oauthRow, mapsRow, braveRow, ollamaRow, serviceAccountRow, aliasRows] =
+      const [healthRows, credentialRows, oauthRow, mapsRow, braveRow, ollamaRow, serviceAccountRow, aliasRows, ga4PropertyRow] =
         await Promise.all([
         listConnectorHealth(),
         listConnectorCredentials(),
@@ -94,6 +98,7 @@ export function useSettingsController(activeTab: string) {
         getOllamaIntegrationStatus(),
         getGoogleServiceAccountStatus(),
         listGoogleWorkspaceLinkAliases(),
+        getGoogleAnalyticsProperty(),
       ]);
       const quickstartRow = await getOllamaQuickstart(ollamaRow.base_url || undefined);
 
@@ -124,6 +129,9 @@ export function useSettingsController(activeTab: string) {
       );
       setGoogleServiceAccountStatus(serviceAccountRow);
       setGoogleWorkspaceAliases(Array.isArray(aliasRows.aliases) ? aliasRows.aliases : []);
+      const savedPropertyId = String(ga4PropertyRow.property_id || "").trim();
+      setGa4PropertyId(savedPropertyId);
+      setGa4PropertyIdInput((prev) => (prev.trim() ? prev : savedPropertyId));
       setMapsStatus(mapsRow);
       setBraveStatus(braveRow);
       ollama.syncFromStatus(ollamaRow as OllamaStatus, quickstartRow as OllamaQuickstart | null);
@@ -399,6 +407,20 @@ export function useSettingsController(activeTab: string) {
     setGoogleWorkspaceAliases(aliases);
     return aliases;
   };
+  const handleSaveGa4PropertyId = async (): Promise<{ ok: boolean; message: string }> => {
+    const raw = ga4PropertyIdInput.trim();
+    if (!raw) {
+      return { ok: false, message: "Enter a GA4 property ID." };
+    }
+    try {
+      const result = await saveGoogleAnalyticsProperty(raw);
+      setGa4PropertyId(String(result.property_id || raw));
+      return { ok: true, message: `GA4 property ID saved: ${result.property_id}` };
+    } catch (error) {
+      return { ok: false, message: `Could not save GA4 property ID: ${String(error)}` };
+    }
+  };
+
   const {
     handleSaveMapsKey,
     handleClearMapsKey,
@@ -425,6 +447,10 @@ export function useSettingsController(activeTab: string) {
     googleOAuthStatus,
     googleServiceAccountStatus,
     googleWorkspaceAliases,
+    ga4PropertyId,
+    ga4PropertyIdInput,
+    setGa4PropertyIdInput,
+    handleSaveGa4PropertyId,
     mapsStatus,
     braveStatus,
     mapsKeyInput,

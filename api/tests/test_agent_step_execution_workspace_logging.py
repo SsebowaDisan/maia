@@ -111,6 +111,40 @@ def test_workspace_logging_failure_disables_only_optional_logging_steps() -> Non
     assert state.executed_steps[-1].get("status") == "skipped"
 
 
+def test_workspace_logging_failure_disables_for_service_account_unauthorized_client() -> None:
+    state = _state(deep_workspace_logging_enabled=True)
+    step = PlannedStep(
+        tool_id="workspace.sheets.track_step",
+        title="Roadmap step",
+        params={"__workspace_logging_step": True},
+    )
+    captured: list[AgentActivityEvent] = []
+
+    def _emit(event: AgentActivityEvent):
+        captured.append(event)
+        return {"type": "activity", "event": event.to_dict()}
+
+    _ = list(
+        handle_step_failure(
+            execution_prompt="research",
+            state=state,
+            registry=_Registry(),
+            step=step,
+            index=1,
+            step_started="2026-01-01T00:00:00Z",
+            duration_seconds=0.1,
+            exc=RuntimeError(
+                "google_service_account_token_failed: unauthorized_client"
+            ),
+            emit_event=_emit,
+            activity_event_factory=_activity_factory,
+        )
+    )
+
+    assert state.deep_workspace_logging_enabled is False
+    assert any(str(event.event_type) == "tool_skipped" for event in captured)
+
+
 def test_explicit_workspace_step_failure_keeps_logging_flag_enabled() -> None:
     state = _state(deep_workspace_logging_enabled=True)
     step = PlannedStep(

@@ -195,11 +195,11 @@ def _sanitize_subsections(report_lines: list[str]) -> list[str]:
 
 def append_deep_research_report(lines: list[str], ctx: AnswerBuildContext) -> None:
     depth_tier = " ".join(str(ctx.runtime_settings.get("__research_depth_tier") or "").split()).strip().lower()
-    if depth_tier not in {"deep_research", "deep_analytics", "expert"}:
-        return
-
     report_content = str(ctx.runtime_settings.get("__latest_report_content") or "").strip()
     if not report_content:
+        return
+    analytics_snapshot_report = "### GA4 Full Report Snapshot" in report_content
+    if depth_tier not in {"deep_research", "deep_analytics", "expert"} and not analytics_snapshot_report:
         return
 
     report_lines = _strip_ops_sections([line.rstrip() for line in report_content.splitlines()])
@@ -209,9 +209,9 @@ def append_deep_research_report(lines: list[str], ctx: AnswerBuildContext) -> No
         return
 
     lines.append("")
-    lines.append("## Detailed Research Report")
-    # Expert tier gets full report; deep tiers get up to 500 lines
-    max_lines = 800 if depth_tier == "expert" else 500
+    lines.append("## Analytics Report" if analytics_snapshot_report else "## Detailed Research Report")
+    # Expert tier gets full report; deep tiers get up to 500 lines; standard analytics reports remain concise.
+    max_lines = 800 if depth_tier == "expert" else (500 if depth_tier in {"deep_research", "deep_analytics"} else 380)
     lines.extend(report_lines[:max_lines])
     if len(report_lines) > max_lines:
         lines.append("")

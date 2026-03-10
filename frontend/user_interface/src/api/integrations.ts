@@ -210,6 +210,23 @@ export function saveGoogleOAuthServices(services: string[]) {
   );
 }
 
+export function getGoogleAnalyticsProperty() {
+  return request<{ property_id: string; configured: boolean }>(
+    "/api/agent/integrations/google/analytics/property",
+  );
+}
+
+export function saveGoogleAnalyticsProperty(propertyId: string) {
+  return request<{ status: string; property_id: string }>(
+    "/api/agent/integrations/google/analytics/property",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ property_id: propertyId }),
+    },
+  );
+}
+
 export function listGoogleWorkspaceLinkAliases() {
   return request<{ aliases: GoogleWorkspaceAliasRecord[] }>(
     "/api/agent/integrations/google-workspace/link-assistant/aliases",
@@ -385,6 +402,115 @@ export function applyOllamaEmbeddingToAllCollections(payload: {
     }),
   });
 }
+
+// ─── llama-cpp-python (local models, no Ollama) ─────────────────────────────
+
+export type LlamaCppModelRecord = {
+  filename: string;
+  size_bytes: number;
+  path: string;
+};
+
+export type LlamaCppCatalogEntry = {
+  name: string;
+  filename: string;
+  url: string;
+  size_gb: number;
+  type: "chat" | "embedding";
+  recommended: boolean;
+};
+
+export type LlamaCppStatus = {
+  installed: boolean;
+  reachable: boolean;
+  port: number;
+  pid: number | null;
+  base_url: string;
+  active_model: string | null;
+  active_embedding: string | null;
+  server_models: { id: string; object: string }[];
+};
+
+export function getLlamaCppStatus() {
+  return request<LlamaCppStatus>("/api/agent/integrations/llamacpp/status");
+}
+
+export function getLlamaCppCatalog() {
+  return request<{ models: LlamaCppCatalogEntry[] }>("/api/agent/integrations/llamacpp/catalog");
+}
+
+export function listLlamaCppModels() {
+  return request<{ total: number; models: LlamaCppModelRecord[] }>(
+    "/api/agent/integrations/llamacpp/models",
+  );
+}
+
+export function downloadLlamaCppModel(payload: {
+  url: string;
+  filename: string;
+  runId?: string;
+}) {
+  return request<{ status: string; filename: string; size_bytes: number; path: string }>(
+    "/api/agent/integrations/llamacpp/download",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: payload.url, filename: payload.filename, run_id: payload.runId }),
+    },
+  );
+}
+
+export function startLlamaCppServer(payload: {
+  modelFilename: string;
+  port?: number;
+  nGpuLayers?: number;
+  waitSeconds?: number;
+  runId?: string;
+}) {
+  return request<{ status: string; reachable: boolean; pid: number | null; base_url: string }>(
+    "/api/agent/integrations/llamacpp/start",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model_filename: payload.modelFilename,
+        port: payload.port,
+        n_gpu_layers: payload.nGpuLayers,
+        wait_seconds: payload.waitSeconds,
+        run_id: payload.runId,
+      }),
+    },
+  );
+}
+
+export function stopLlamaCppServer() {
+  return request<{ status: string; port: number }>("/api/agent/integrations/llamacpp/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export function selectLlamaCppModel(payload: { modelFilename: string; runId?: string }) {
+  return request<{ status: string; filename: string; llm_name: string; type: string }>(
+    "/api/agent/integrations/llamacpp/select",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_filename: payload.modelFilename, run_id: payload.runId }),
+    },
+  );
+}
+
+export function saveLlamaCppConfig(payload: { port?: number; modelDir?: string }) {
+  return request<{ status: string; port: number }>("/api/agent/integrations/llamacpp/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ port: payload.port, model_dir: payload.modelDir }),
+  });
+}
+
+// ─── end llama-cpp-python ────────────────────────────────────────────────────
 
 export function runBraveWebSearch(payload: {
   query: string;

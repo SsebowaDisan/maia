@@ -86,7 +86,26 @@ class GoogleAuthSession:
     def require_access_token(self) -> str:
         auth_mode = resolve_google_auth_mode(settings=self.settings)
         if auth_mode == "service_account":
-            return self._service_account_access_token()
+            try:
+                return self._service_account_access_token()
+            except GoogleTokenError:
+                # Resilient fallback: if service-account minting fails but OAuth is connected
+                # for this user, continue with the OAuth token instead of hard failing.
+                try:
+                    record = self.oauth.ensure_valid_tokens(user_id=self.user_id)
+                except GoogleTokenError:
+                    raise
+                access_token = str(getattr(record, "access_token", "") or "").strip()
+                if access_token:
+                    return access_token
+                raise GoogleTokenError(
+                    code="google_tokens_missing",
+                    message=(
+                        "Service-account token minting failed and no OAuth access token is available. "
+                        "Reconnect Google OAuth or repair service-account credentials."
+                    ),
+                    status_code=401,
+                )
         try:
             record = self.oauth.ensure_valid_tokens(user_id=self.user_id)
             return record.access_token
@@ -113,6 +132,10 @@ class GoogleAuthSession:
         return [str(item).strip() for item in (record.scopes or []) if str(item).strip()]
 
     def require_scopes(self, required_scopes: list[str], *, reason: str = "Google tool access") -> None:
+        # Service account tokens are minted with all requested scopes at JWT issuance time;
+        # there is no per-call OAuth grant to validate against.
+        if resolve_google_auth_mode(settings=self.settings) == "service_account":
+            return
         normalized_required = [str(item).strip() for item in required_scopes if str(item).strip()]
         if not normalized_required:
             return

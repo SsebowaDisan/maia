@@ -123,7 +123,15 @@ def run_workspace_shadow_logging(
         except Exception as shadow_exc:
             if any(
                 marker in str(shadow_exc).lower()
-                for marker in ("google_tokens_missing", "oauth", "refresh_token")
+                for marker in (
+                    "google_tokens_missing",
+                    "oauth",
+                    "refresh_token",
+                    "service_account_token_failed",
+                    "unauthorized_client",
+                    "access_denied",
+                    "forbidden",
+                )
             ):
                 state.deep_workspace_logging_enabled = False
                 if not state.deep_workspace_warning_emitted:

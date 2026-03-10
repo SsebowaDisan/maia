@@ -270,3 +270,34 @@ def test_polish_final_response_keeps_operational_sections_for_debug_requests(mon
     )
     assert "## Delivery Status" in polished
     assert "## Execution Summary" in polished
+
+
+def test_polish_final_response_preserves_ga_tables_when_llm_drops_them(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_RESPONSE_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_json_response",
+        lambda **kwargs: {
+            "response_style": "adaptive_detailed",
+            "detail_level": "high",
+            "tone": "professional",
+            "sections": [{"title": "Analytics Report", "purpose": "Summarize", "format": "mixed"}],
+        },
+    )
+    monkeypatch.setattr(
+        llm_response_formatter,
+        "call_text_response",
+        lambda **kwargs: "## Analytics Report\nNarrative summary without table content.",
+    )
+    raw_answer = (
+        "## Analytics Report\n"
+        "### GA4 Full Report Snapshot\n"
+        "| Metric | Value |\n"
+        "|---|---|\n"
+        "| Sessions (30d) | 302 |\n"
+    )
+    polished = polish_final_response(
+        request_message="Provide GA4 analytics report with tables.",
+        answer_text=raw_answer,
+    )
+    assert polished == raw_answer

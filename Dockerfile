@@ -58,6 +58,10 @@ RUN --mount=type=ssh  \
     --mount=type=cache,target=/root/.cache/pip  \
     if [ "$TARGETARCH" = "amd64" ]; then pip install "graphrag<=0.3.6" future; fi
 
+# Install llama-cpp-python server (CPU build; for GPU use CMAKE_ARGS="-DGGML_CUDA=on" at build time)
+RUN --mount=type=cache,target=/root/.cache/pip  \
+    pip install "llama-cpp-python[server]>=0.3.0"
+
 # Clean up
 RUN apt-get autoremove \
     && apt-get clean \

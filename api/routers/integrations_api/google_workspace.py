@@ -25,6 +25,7 @@ from api.services.settings_service import save_user_settings
 
 from .common import publish_event, tenant_settings
 from .schemas import (
+    GoogleAnalyticsPropertyRequest,
     GoogleOAuthServicesRequest,
     GoogleWorkspaceAuthModeRequest,
     GoogleWorkspaceLinkAliasSaveRequest,
@@ -259,6 +260,30 @@ def save_google_oauth_services(
         "services": services,
         "scopes": scopes_from_service_ids(services, include_base=True),
     }
+
+
+@router.get("/integrations/google/analytics/property")
+def get_google_analytics_property(
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    _, settings = tenant_settings(user_id)
+    property_id = str(settings.get("agent.google_analytics_property_id") or "").strip()
+    return {"property_id": property_id, "configured": bool(property_id)}
+
+
+@router.post("/integrations/google/analytics/property")
+def save_google_analytics_property(
+    payload: GoogleAnalyticsPropertyRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, object]:
+    raw = " ".join(str(payload.property_id or "").split()).strip()
+    if not raw.isdigit():
+        raise HTTPException(status_code=400, detail="GA4 property ID must be numeric (e.g. 479179141).")
+    _, settings = tenant_settings(user_id)
+    next_settings = deepcopy(settings)
+    next_settings["agent.google_analytics_property_id"] = raw
+    save_user_settings(context=get_context(), user_id=user_id, values=next_settings)
+    return {"status": "saved", "property_id": raw}
 
 
 @router.get("/integrations/google-workspace/link-assistant/aliases")

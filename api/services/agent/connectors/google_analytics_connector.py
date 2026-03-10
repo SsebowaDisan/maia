@@ -23,11 +23,15 @@ class GoogleAnalyticsConnector(BaseConnector):
     def _property_id(self, payload_property_id: str | None = None) -> str:
         property_id = str(
             payload_property_id
+            or self.settings.get("agent.google_analytics_property_id")
             or self.settings.get("GOOGLE_ANALYTICS_PROPERTY_ID")
             or self._read_secret("GOOGLE_ANALYTICS_PROPERTY_ID")
         ).strip()
         if not property_id:
-            raise ConnectorError("GOOGLE_ANALYTICS_PROPERTY_ID is required.")
+            raise ConnectorError(
+                "GA4 property ID is not configured. "
+                "Set it in Settings → Integrations → Google Analytics Property ID."
+            )
         return property_id
 
     def _session(self) -> GoogleAuthSession:

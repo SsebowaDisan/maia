@@ -44,24 +44,26 @@ def handle_step_success(
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, None]:
+    result_data = result.data if isinstance(result.data, dict) else {}
+    step_status = "failed" if result_data.get("available") is False else "success"
     if is_web_tool(step.tool_id):
         record_web_kpi(
             settings=state.execution_context.settings,
             tool_id=step.tool_id,
-            status="success",
+            status=step_status,
             duration_seconds=duration_seconds,
-            data=result.data if isinstance(result.data, dict) else {},
+            data=result_data,
         )
         record_web_evidence(
             settings=state.execution_context.settings,
             tool_id=step.tool_id,
-            status="success",
-            data=result.data if isinstance(result.data, dict) else {},
+            status=step_status,
+            data=result_data,
             sources=result.sources if isinstance(result.sources, list) else [],
         )
-    action_metadata = extract_action_artifact_metadata(result.data, step=index)
+    action_metadata = extract_action_artifact_metadata(result_data, step=index)
     action = registry.get(step.tool_id).to_action(
-        status="success",
+        status=step_status,
         summary=result.summary,
         started_at=step_started,
         metadata=action_metadata,
@@ -73,7 +75,7 @@ def handle_step_success(
             "step": index,
             "tool_id": step.tool_id,
             "title": step.title,
-            "status": "success",
+            "status": step_status,
             "summary": result.summary,
         }
     )
@@ -82,7 +84,7 @@ def handle_step_success(
         tool_id=step.tool_id,
         step_title=step.title,
         result_summary=result.summary,
-        result_data=result.data if isinstance(result.data, dict) else {},
+        result_data=result_data,
     )
     llm_step_summary = str(llm_step.get("summary") or "").strip()
     llm_step_suggestion = str(llm_step.get("suggestion") or "").strip()
@@ -108,14 +110,14 @@ def handle_step_success(
         )
         yield emit_event(llm_step_event)
     completed_event = activity_event_factory(
-        event_type="tool_completed",
+        event_type="tool_completed" if step_status == "success" else "tool_failed",
         title=step.title,
         detail=llm_step_summary or result.summary,
         metadata={
             "scene_surface": "document",
             "action": "verify",
             "action_phase": "completed",
-            "action_status": "completed",
+            "action_status": "completed" if step_status == "success" else "failed",
             "tool_id": step.tool_id,
             "step": index,
             "llm_step_summary": llm_step_summary,
@@ -124,7 +126,7 @@ def handle_step_success(
     )
     yield emit_event(completed_event)
 
-    if step.tool_id == "marketing.web_research" and not state.dynamic_inspection_inserted:
+    if step_status == "success" and step.tool_id == "marketing.web_research" and not state.dynamic_inspection_inserted:
         configured_max_urls = state.execution_context.settings.get("__research_max_live_inspections")
         try:
             max_urls = int(configured_max_urls)

@@ -160,3 +160,31 @@ def test_deep_research_response_strips_contract_noise_and_low_signal_subsections
     assert "### Reference Links" not in answer
     assert "### Recommended Next Steps" not in answer
     assert "### Detailed Analysis" in answer
+
+
+def test_standard_mode_includes_analytics_report_when_ga4_snapshot_exists() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(message="generate analytics report", agent_mode="company_agent"),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__research_depth_tier": "standard",
+            "__latest_report_content": (
+                "## GA4 Executive Report\n"
+                "### Executive Summary\n"
+                "Analytics summary.\n\n"
+                "### GA4 Full Report Snapshot\n"
+                "| Metric | Value |\n"
+                "|---|---|\n"
+                "| Sessions (30d) | 302 |\n"
+            ),
+        },
+        verification_report=None,
+    )
+
+    assert "## Analytics Report" in answer
+    assert "### GA4 Full Report Snapshot" in answer
+    assert "| Sessions (30d) | 302 |" in answer

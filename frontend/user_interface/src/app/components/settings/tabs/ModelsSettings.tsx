@@ -1,4 +1,21 @@
-import type { OllamaModelRecord, OllamaQuickstart, OllamaStatus } from "../../../../api/integrations";
+import { useCallback, useEffect, useState } from "react";
+import type {
+  LlamaCppCatalogEntry,
+  LlamaCppModelRecord,
+  LlamaCppStatus,
+  OllamaModelRecord,
+  OllamaStatus,
+} from "../../../../api/integrations";
+import {
+  downloadLlamaCppModel,
+  getLlamaCppCatalog,
+  getLlamaCppStatus,
+  listLlamaCppModels,
+  saveLlamaCppConfig,
+  selectLlamaCppModel,
+  startLlamaCppServer,
+  stopLlamaCppServer,
+} from "../../../../api/integrations";
 import { SettingsRow } from "../ui/SettingsRow";
 import { SettingsSection } from "../ui/SettingsSection";
 import { StatusChip, toneFromBoolean } from "../ui/StatusChip";
@@ -6,7 +23,6 @@ import { StatusChip, toneFromBoolean } from "../ui/StatusChip";
 type ModelsSettingsProps = {
   ollamaStatus: OllamaStatus;
   ollamaModels: OllamaModelRecord[];
-  ollamaQuickstart: OllamaQuickstart | null;
   ollamaBaseUrlInput: string;
   ollamaModelInput: string;
   ollamaEmbeddingInput: string;
@@ -51,10 +67,335 @@ function formatModelSize(sizeBytes: number) {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
+function formatGb(gb: number) {
+  if (gb < 1) return `${Math.round(gb * 1024)} MB`;
+  return `${gb.toFixed(1)} GB`;
+}
+
+function LlamaCppSection() {
+  const [status, setStatus] = useState<LlamaCppStatus | null>(null);
+  const [catalog, setCatalog] = useState<LlamaCppCatalogEntry[]>([]);
+  const [localModels, setLocalModels] = useState<LlamaCppModelRecord[]>([]);
+  const [portInput, setPortInput] = useState("8082");
+  const [busyFilename, setBusyFilename] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [progress, setProgress] = useState<{ percent: number; filename: string } | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [s, m] = await Promise.all([getLlamaCppStatus(), listLlamaCppModels()]);
+      setStatus(s);
+      setLocalModels(m.models);
+      setPortInput(String(s.port ?? 8082));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    getLlamaCppCatalog()
+      .then((r) => setCatalog(r.models))
+      .catch(() => {});
+    refresh();
+  }, [refresh]);
+
+  const handleDownload = async (entry: LlamaCppCatalogEntry) => {
+    setBusyFilename(entry.filename);
+    setMessage(`Downloading ${entry.name}...`);
+    setProgress({ percent: 0, filename: entry.filename });
+    try {
+      await downloadLlamaCppModel({ url: entry.url, filename: entry.filename });
+      setMessage(`Downloaded: ${entry.filename}`);
+      setProgress(null);
+      await refresh();
+    } catch {
+      setMessage(`Download failed: ${entry.filename}`);
+      setProgress(null);
+    } finally {
+      setBusyFilename(null);
+    }
+  };
+
+  const handleStartAndUse = async (filename: string) => {
+    setBusyFilename(filename);
+    setMessage(`Starting server with ${filename}...`);
+    try {
+      const result = await startLlamaCppServer({
+        modelFilename: filename,
+        port: parseInt(portInput, 10) || 8082,
+      });
+      if (result.reachable) {
+        setMessage(`Server running on port ${portInput}. Model active.`);
+      } else {
+        // Try selecting anyway (server may still be starting)
+        await selectLlamaCppModel({ modelFilename: filename }).catch(() => {});
+        setMessage(`Server starting — may take a moment. Refresh to check status.`);
+      }
+      await refresh();
+    } catch {
+      setMessage(`Failed to start server with ${filename}.`);
+    } finally {
+      setBusyFilename(null);
+    }
+  };
+
+  const handleStop = async () => {
+    setBusyFilename("__stop__");
+    try {
+      await stopLlamaCppServer();
+      setMessage("Server stopped.");
+      await refresh();
+    } catch {
+      setMessage("Failed to stop server.");
+    } finally {
+      setBusyFilename(null);
+    }
+  };
+
+  const handleSavePort = async () => {
+    const port = parseInt(portInput, 10);
+    if (!port || port < 1024 || port > 65535) {
+      setMessage("Port must be between 1024 and 65535.");
+      return;
+    }
+    try {
+      await saveLlamaCppConfig({ port });
+      setMessage(`Port saved: ${port}`);
+      await refresh();
+    } catch {
+      setMessage("Failed to save config.");
+    }
+  };
+
+  const isBusy = busyFilename !== null;
+  const isReachable = status?.reachable ?? false;
+  const isInstalled = status?.installed ?? false;
+  const runtimeChip = toneFromBoolean(isReachable, { trueLabel: "Running", falseLabel: isInstalled ? "Stopped" : "Not installed" });
+
+  const chatCatalog = catalog.filter((e) => e.type === "chat");
+  const embedCatalog = catalog.filter((e) => e.type === "embedding");
+
+  return (
+    <SettingsSection
+      title="Local Models"
+      subtitle="Download GGUF models from HuggingFace and serve them directly — no Ollama required."
+      actions={<StatusChip label={runtimeChip.label} tone={runtimeChip.tone} />}
+    >
+
+      <SettingsRow
+        title="Server port"
+        description="Port the llama-cpp-python server listens on."
+        right={
+          <div className="flex items-center gap-2">
+            {isReachable && (
+              <button
+                type="button"
+                onClick={handleStop}
+                disabled={isBusy}
+                className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#c00] hover:bg-[#f5f5f7] disabled:opacity-50"
+              >
+                Stop server
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={isBusy}
+              className="rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f] hover:bg-[#f5f5f7] disabled:opacity-50"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={handleSavePort}
+              disabled={isBusy}
+              className="rounded-xl bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        }
+      >
+        <input
+          type="number"
+          value={portInput}
+          onChange={(e) => setPortInput(e.target.value)}
+          aria-label="llama.cpp server port"
+          disabled={isBusy}
+          className="w-32 rounded-xl border border-[#d2d2d7] bg-white px-3 py-2 text-[13px] text-[#1d1d1f] focus:outline-none focus:border-[#8e8e93]"
+        />
+        {status?.active_model && (
+          <p className="mt-1 text-[12px] text-[#6e6e73]">Active model: {status.active_model}</p>
+        )}
+      </SettingsRow>
+
+      {chatCatalog.length > 0 && (
+        <SettingsRow
+          title="Chat models"
+          description="Download a GGUF model from HuggingFace and start the server."
+        >
+          <div className="space-y-2">
+            {chatCatalog.map((entry) => {
+              const isDownloaded = localModels.some((m) => m.filename === entry.filename);
+              const isActive = status?.active_model === entry.filename;
+              const isBusyThis = busyFilename === entry.filename;
+              return (
+                <div
+                  key={entry.filename}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#ececf0] bg-white px-4 py-3"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[13px] font-semibold text-[#1d1d1f]">{entry.name}</p>
+                      {entry.recommended && (
+                        <span className="rounded-full bg-[#e8f5e9] px-2 py-0.5 text-[11px] font-medium text-[#2e7d32]">
+                          Recommended
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[12px] text-[#6e6e73]">{formatGb(entry.size_gb)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!isDownloaded ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDownload(entry)}
+                        disabled={isBusy}
+                        className="rounded-xl bg-[#1d1d1f] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
+                      >
+                        {isBusyThis ? "Downloading..." : "Download"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleStartAndUse(entry.filename)}
+                        disabled={isBusy || isActive}
+                        className={`rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition ${
+                          isActive
+                            ? "border-[#d2d2d7] bg-[#f5f5f7] text-[#6e6e73]"
+                            : "border-[#d2d2d7] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                        } disabled:opacity-50`}
+                      >
+                        {isActive ? "Active" : isBusyThis ? "Starting..." : "Start + Use"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </SettingsRow>
+      )}
+
+      {embedCatalog.length > 0 && (
+        <SettingsRow
+          title="Embedding models"
+          description="Download a GGUF embedding model."
+        >
+          <div className="space-y-2">
+            {embedCatalog.map((entry) => {
+              const isDownloaded = localModels.some((m) => m.filename === entry.filename);
+              const isActive = status?.active_embedding === entry.filename;
+              const isBusyThis = busyFilename === entry.filename;
+              return (
+                <div
+                  key={entry.filename}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#ececf0] bg-white px-4 py-3"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-[13px] font-semibold text-[#1d1d1f]">{entry.name}</p>
+                      {entry.recommended && (
+                        <span className="rounded-full bg-[#e8f5e9] px-2 py-0.5 text-[11px] font-medium text-[#2e7d32]">
+                          Recommended
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[12px] text-[#6e6e73]">{formatGb(entry.size_gb)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!isDownloaded ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDownload(entry)}
+                        disabled={isBusy}
+                        className="rounded-xl bg-[#1d1d1f] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:opacity-50"
+                      >
+                        {isBusyThis ? "Downloading..." : "Download"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => selectLlamaCppModel({ modelFilename: entry.filename }).then(refresh).catch(() => {})}
+                        disabled={isBusy || isActive}
+                        className={`rounded-xl border px-3 py-1.5 text-[12px] font-semibold transition ${
+                          isActive
+                            ? "border-[#d2d2d7] bg-[#f5f5f7] text-[#6e6e73]"
+                            : "border-[#d2d2d7] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                        } disabled:opacity-50`}
+                      >
+                        {isActive ? "Active" : "Use"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </SettingsRow>
+      )}
+
+      {progress && (
+        <SettingsRow
+          title="Download progress"
+          description={`${progress.filename} — ${progress.percent.toFixed(1)}%`}
+          right={<StatusChip label={`${progress.percent.toFixed(0)}%`} tone="neutral" />}
+          noDivider
+        >
+          <div className="h-1.5 overflow-hidden rounded-full bg-[#ececf0]">
+            <div
+              className="h-full rounded-full bg-[#1d1d1f] transition-all"
+              style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }}
+            />
+          </div>
+        </SettingsRow>
+      )}
+
+      {localModels.length > 0 && (
+        <SettingsRow
+          title="Downloaded models"
+          description={`${localModels.length} GGUF file(s) on server disk.`}
+          right={<StatusChip label={`${localModels.length} file(s)`} tone="neutral" />}
+          noDivider
+        >
+          <div className="overflow-hidden rounded-xl border border-[#ececf0]">
+            {localModels.map((model, index) => (
+              <div
+                key={model.filename}
+                className={`flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3 ${index < localModels.length - 1 ? "border-b border-[#f2f2f4]" : ""}`}
+              >
+                <div>
+                  <p className="text-[13px] font-semibold text-[#1d1d1f]">{model.filename}</p>
+                  <p className="text-[12px] text-[#6e6e73]">{formatModelSize(model.size_bytes)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SettingsRow>
+      )}
+
+      {message ? (
+        <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">
+          <p className="text-[12px] text-[#6e6e73]">{message}</p>
+        </div>
+      ) : null}
+    </SettingsSection>
+  );
+}
+
 export function ModelsSettings({
   ollamaStatus,
   ollamaModels,
-  ollamaQuickstart,
   ollamaBaseUrlInput,
   ollamaModelInput,
   ollamaEmbeddingInput,
@@ -80,9 +421,11 @@ export function ModelsSettings({
 
   return (
     <>
+      <LlamaCppSection />
+
       <SettingsSection
-        title="Local Models"
-        subtitle="Run models privately on your machine."
+        title="Ollama"
+        subtitle="Use Ollama if it is already installed on this server."
         actions={<StatusChip label={runtimeChip.label} tone={runtimeChip.tone} />}
       >
         <SettingsRow
@@ -318,37 +661,6 @@ export function ModelsSettings({
           noDivider
         />
       </SettingsSection>
-
-      {ollamaQuickstart ? (
-        <SettingsSection title="Local setup" subtitle="Quick shell commands to bootstrap Ollama locally.">
-          <SettingsRow
-            title="Install"
-            description={ollamaQuickstart.install_url}
-            right={<StatusChip label="Quickstart" tone="neutral" />}
-          />
-          <SettingsRow
-            title="Check CLI"
-            description={ollamaQuickstart.commands.check}
-            right={<StatusChip label="Step 2" tone="neutral" />}
-          />
-          <SettingsRow
-            title="Start server"
-            description={ollamaQuickstart.commands.start}
-            right={<StatusChip label="Step 3" tone="neutral" />}
-          />
-          <SettingsRow
-            title="Pull chat model"
-            description={ollamaQuickstart.commands.pull_model}
-            right={<StatusChip label="Step 4" tone="neutral" />}
-          />
-          <SettingsRow
-            title="Pull embedding"
-            description={ollamaQuickstart.commands.pull_embedding}
-            right={<StatusChip label="Step 5" tone="neutral" />}
-            noDivider
-          />
-        </SettingsSection>
-      ) : null}
 
       {ollamaMessage ? (
         <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">

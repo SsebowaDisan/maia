@@ -9,6 +9,10 @@ import { StatusChip } from "../../ui/StatusChip";
 import type { GoogleServiceDefinition } from "./googleServices";
 
 type GooglePrimarySectionsProps = {
+  ga4PropertyId: string;
+  ga4PropertyIdInput: string;
+  onGa4PropertyIdInputChange: (value: string) => void;
+  onSaveGa4PropertyId: () => Promise<void>;
   statusChipLabel: string;
   statusChipTone: "success" | "warning" | "neutral";
   connected: boolean;
@@ -53,6 +57,10 @@ type GooglePrimarySectionsProps = {
 };
 
 function GooglePrimarySections({
+  ga4PropertyId,
+  ga4PropertyIdInput,
+  onGa4PropertyIdInputChange,
+  onSaveGa4PropertyId,
   statusChipLabel,
   statusChipTone,
   connected,
@@ -311,6 +319,43 @@ function GooglePrimarySections({
           </p>
           <p className="mt-1 text-[12px] text-[#6e6e73]">
             Next: share in Google, click "I shared it, add link", then paste the link to save an alias.
+          </p>
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Google Analytics"
+        subtitle="Set your GA4 property ID so Maia can pull analytics data without needing a link each time."
+      >
+        <SettingsRow
+          title="GA4 Property ID"
+          description={ga4PropertyId ? `Saved: ${ga4PropertyId}` : "Not configured — enter your numeric property ID."}
+          right={
+            <StatusChip
+              label={ga4PropertyId ? "Configured" : "Not set"}
+              tone={ga4PropertyId ? "success" : "warning"}
+            />
+          }
+          noDivider
+        >
+          <div className="flex items-center gap-2">
+            <input
+              value={ga4PropertyIdInput}
+              onChange={(event) => onGa4PropertyIdInputChange(event.target.value)}
+              placeholder="e.g. 479179141"
+              className="w-48 rounded-lg border border-[#d2d2d7] bg-white px-3 py-2 text-[12px] text-[#1d1d1f]"
+            />
+            <button
+              type="button"
+              disabled={!ga4PropertyIdInput.trim()}
+              onClick={() => void onSaveGa4PropertyId()}
+              className="rounded-lg bg-[#1d1d1f] px-3 py-2 text-[12px] font-semibold text-white hover:bg-[#2f2f34] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Save
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-[#6e6e73]">
+            Find it in Google Analytics → Admin → Property Settings → Property ID.
           </p>
         </SettingsRow>
       </SettingsSection>

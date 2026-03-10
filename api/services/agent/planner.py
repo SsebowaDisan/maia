@@ -34,7 +34,8 @@ GA_WEB_TOOL_IDS = {
 }
 
 GA_INTENT_RE = re.compile(
-    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
+    r"\b(google\s+analytics|google\s+analys[ei]s|ga4|analytics\s+property"
+    r"|property\s*id|google\s+property|ga\s+report|ga\s+data|ga\s+metrics)\b",
     flags=re.IGNORECASE,
 )
 GA_SHEET_RE = re.compile(
@@ -167,6 +168,10 @@ def _ensure_ga_plan_shape(
     cleaned: list[PlannedStep] = []
     for step in steps:
         if step.tool_id in GA_WEB_TOOL_IDS:
+            continue
+        if step.tool_id not in GA_TOOL_IDS and step.tool_id != "report.generate":
+            continue
+        if step.tool_id == "business.ga4_kpi_sheet_report" and not ga_sheet_requested:
             continue
         params = dict(step.params)
         if step.tool_id == "report.generate":

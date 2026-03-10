@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
+from dataclasses import dataclass
 from typing import Any
 
 from api.services.agent.connectors.base import ConnectorError
@@ -126,6 +128,12 @@ def _build_ga4_pie_payload(
 # Query helper
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class _QueryResult:
+    rows: list[dict[str, str]]
+    error: str | None = None
+
+
 def _run_query(
     connector: Any,
     property_id: str,
@@ -133,7 +141,7 @@ def _run_query(
     metrics: list[str],
     date_range: dict[str, str],
     limit: int = 50,
-) -> list[dict[str, str]]:
+) -> _QueryResult:
     try:
         raw = connector.run_report(
             property_id=property_id,
@@ -142,9 +150,84 @@ def _run_query(
             date_ranges=[date_range],
             limit=limit,
         )
-        return _parse_ga4_rows(raw if isinstance(raw, dict) else {})
-    except (ConnectorError, Exception):
-        return []
+        return _QueryResult(rows=_parse_ga4_rows(raw if isinstance(raw, dict) else {}))
+    except (ConnectorError, Exception) as exc:
+        return _QueryResult(
+            rows=[],
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
+def _is_access_error(message: str) -> bool:
+    lowered = message.lower()
+    return (
+        "403" in lowered
+        or "forbidden" in lowered
+        or "permission" in lowered
+        or "access denied" in lowered
+        or "insufficient permission" in lowered
+        or "unauthorized" in lowered
+    )
+
+
+def _collect_query_results(
+    *,
+    connector: Any,
+    property_id: str,
+    current_range: dict[str, str],
+    prev_range: dict[str, str],
+    trend_range: dict[str, str],
+) -> dict[str, _QueryResult]:
+    return {
+        "trend": _run_query(
+            connector,
+            property_id,
+            ["date"],
+            ["sessions", "totalUsers", "screenPageViews"],
+            trend_range,
+            90,
+        ),
+        "channels_current": _run_query(
+            connector,
+            property_id,
+            ["sessionDefaultChannelGroup"],
+            ["sessions", "conversions", "bounceRate"],
+            current_range,
+            20,
+        ),
+        "channels_previous": _run_query(
+            connector,
+            property_id,
+            ["sessionDefaultChannelGroup"],
+            ["sessions", "conversions", "bounceRate"],
+            prev_range,
+            20,
+        ),
+        "pages": _run_query(
+            connector,
+            property_id,
+            ["pagePath"],
+            ["screenPageViews", "averageSessionDuration", "bounceRate"],
+            current_range,
+            20,
+        ),
+        "devices": _run_query(
+            connector,
+            property_id,
+            ["deviceCategory"],
+            ["sessions"],
+            current_range,
+            10,
+        ),
+        "geography": _run_query(
+            connector,
+            property_id,
+            ["country"],
+            ["sessions", "totalUsers"],
+            current_range,
+            12,
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +249,14 @@ def execute_ga4_full_report(
         resolved = resolve_ga4_reference(prompt=prompt, params=params, settings=context.settings)
         if resolved is not None:
             property_id = resolved.resource_id
+    # Fallback: check user settings key then env var (mirrors connector._property_id() logic)
+    if not property_id:
+        property_id = (
+            str(context.settings.get("agent.google_analytics_property_id") or "").strip()
+            or str(context.settings.get("GOOGLE_ANALYTICS_PROPERTY_ID") or "").strip()
+            or str(os.getenv("GOOGLE_ANALYTICS_PROPERTY_ID", "")).strip()
+            or None
+        )
     if not property_id:
         events.append(ToolTraceEvent(
             event_type="tool_failed", title="GA4 property ID missing",
@@ -203,6 +294,33 @@ def execute_ga4_full_report(
             events=events,
         )
 
+    # --- Pre-flight: verify auth + property before running 6 queries ---
+    health = connector.health_check()
+    if not health.ok:
+        events.append(ToolTraceEvent(
+            event_type="tool_failed", title="GA4 auth or property check failed",
+            detail=health.message, data={"tool_id": tool_id},
+        ))
+        return ToolExecutionResult(
+            summary="GA4 authentication or property check failed.",
+            content=(
+                "### GA4 Full Report — Connection Error\n\n"
+                f"- Error: {health.message}\n\n"
+                "**Possible causes**:\n"
+                "- Google Analytics OAuth scope (`analytics.readonly`) not granted — reconnect Google and enable Analytics\n"
+                "- Service account not added to the GA4 property in Google Analytics Property Access Management\n"
+                "- `GOOGLE_ANALYTICS_PROPERTY_ID` not set\n"
+            ),
+            data={"available": False, "error": health.message},
+            sources=[],
+            next_steps=[
+                "In Google Analytics → Admin → Property Access Management, add the service account email with Viewer role.",
+                "Or reconnect Google OAuth in Settings and grant the Analytics read scope.",
+                "Set GOOGLE_ANALYTICS_PROPERTY_ID to your GA4 numeric property ID.",
+            ],
+            events=events,
+        )
+
     events.append(ToolTraceEvent(
         event_type="prepare_request", title="Prepare GA4 queries",
         detail=f"property={property_id}", data={"property_id": property_id},
@@ -223,24 +341,147 @@ def execute_ga4_full_report(
     ))
 
     # --- Run 6 queries ---
-    trend_rows = _run_query(connector, property_id,
-        ["date"], ["sessions", "totalUsers", "screenPageViews"], trend_range, 90)
-    channel_rows = _run_query(connector, property_id,
-        ["sessionDefaultChannelGroup"], ["sessions", "conversions", "bounceRate"], current_range, 20)
-    channel_prev_rows = _run_query(connector, property_id,
-        ["sessionDefaultChannelGroup"], ["sessions", "conversions", "bounceRate"], prev_range, 20)
-    pages_rows = _run_query(connector, property_id,
-        ["pagePath"], ["screenPageViews", "averageSessionDuration", "bounceRate"], current_range, 20)
-    device_rows = _run_query(connector, property_id,
-        ["deviceCategory"], ["sessions"], current_range, 10)
-    geo_rows = _run_query(connector, property_id,
-        ["country"], ["sessions", "totalUsers"], current_range, 12)
+    query_results = _collect_query_results(
+        connector=connector,
+        property_id=property_id,
+        current_range=current_range,
+        prev_range=prev_range,
+        trend_range=trend_range,
+    )
+    query_failures = {
+        name: result.error
+        for name, result in query_results.items()
+        if result.error
+    }
+    trend_rows = query_results["trend"].rows
+    channel_rows = query_results["channels_current"].rows
+    channel_prev_rows = query_results["channels_previous"].rows
+    pages_rows = query_results["pages"].rows
+    device_rows = query_results["devices"].rows
+    geo_rows = query_results["geography"].rows
+    any_rows_available = any(result.rows for result in query_results.values())
+    any_failure = bool(query_failures)
+    all_failures_are_access = bool(query_failures) and all(
+        _is_access_error(message or "")
+        for message in query_failures.values()
+    )
+
+    auth_mode = " ".join(str(context.settings.get("agent.google_auth_mode") or "").split()).strip().lower()
+    if (not any_rows_available) and (not any_failure) and auth_mode == "service_account":
+        oauth_settings = dict(context.settings)
+        oauth_settings["agent.google_auth_mode"] = "oauth"
+        try:
+            oauth_connector = get_connector_registry().build("google_analytics", settings=oauth_settings)
+            oauth_query_results = _collect_query_results(
+                connector=oauth_connector,
+                property_id=property_id,
+                current_range=current_range,
+                prev_range=prev_range,
+                trend_range=trend_range,
+            )
+            oauth_has_rows = any(result.rows for result in oauth_query_results.values())
+            if oauth_has_rows:
+                query_results = oauth_query_results
+                query_failures = {
+                    name: result.error
+                    for name, result in query_results.items()
+                    if result.error
+                }
+                trend_rows = query_results["trend"].rows
+                channel_rows = query_results["channels_current"].rows
+                channel_prev_rows = query_results["channels_previous"].rows
+                pages_rows = query_results["pages"].rows
+                device_rows = query_results["devices"].rows
+                geo_rows = query_results["geography"].rows
+                any_rows_available = True
+                any_failure = bool(query_failures)
+                all_failures_are_access = bool(query_failures) and all(
+                    _is_access_error(message or "")
+                    for message in query_failures.values()
+                )
+                events.append(
+                    ToolTraceEvent(
+                        event_type="tool_progress",
+                        title="Retried GA4 queries with OAuth session",
+                        detail="Service-account query returned no rows; OAuth retry returned data.",
+                        data={"property_id": property_id},
+                    )
+                )
+        except Exception as exc:
+            events.append(
+                ToolTraceEvent(
+                    event_type="tool_progress",
+                    title="OAuth retry skipped",
+                    detail=f"Retry could not be completed: {exc}",
+                    data={"property_id": property_id},
+                )
+            )
 
     events.append(ToolTraceEvent(
         event_type="api_call_completed", title="GA4 data fetched",
-        detail=f"trend={len(trend_rows)}, channels={len(channel_rows)}, pages={len(pages_rows)}",
-        data={"trend_rows": len(trend_rows), "channel_rows": len(channel_rows)},
+        detail=(
+            f"trend={len(trend_rows)}, channels={len(channel_rows)}, pages={len(pages_rows)}, "
+            f"failures={len(query_failures)}"
+        ),
+        data={
+            "trend_rows": len(trend_rows),
+            "channel_rows": len(channel_rows),
+            "query_failures": query_failures,
+        },
     ))
+
+    if not any_rows_available and any_failure:
+        failure_lines = [
+            f"- **{name}**: {error}"
+            for name, error in query_failures.items()
+        ]
+        events.append(ToolTraceEvent(
+            event_type="tool_failed",
+            title="GA4 report queries failed",
+            detail="No GA4 rows returned from any report query.",
+            data={"query_failures": query_failures, "tool_id": tool_id},
+        ))
+        if all_failures_are_access:
+            remediation = [
+                "Grant your connected Google account (or service account) Viewer access in GA4 Property Access Management.",
+                "Confirm the numeric property ID is correct for the property you can access.",
+                "Reconnect Google integration and ensure `analytics.readonly` scope is granted.",
+            ]
+            summary = "GA4 data access is blocked by permissions."
+            heading = "### GA4 Full Report — Permission Blocked"
+        else:
+            remediation = [
+                "Confirm the GA4 property ID is valid and active.",
+                "Retry after checking Google Analytics API quota and connector authentication.",
+                "Inspect per-query failures below and rerun the report.",
+            ]
+            summary = "GA4 full report failed because all report queries errored."
+            heading = "### GA4 Full Report — Query Failure"
+        return ToolExecutionResult(
+            summary=summary,
+            content="\n".join(
+                [
+                    heading,
+                    "",
+                    "No GA4 data could be retrieved for this run.",
+                    "",
+                    "#### Query failures",
+                    *failure_lines,
+                    "",
+                    "#### How to fix",
+                    *[f"- {item}" for item in remediation],
+                ]
+            ),
+            data={
+                "available": False,
+                "error": "ga4_queries_failed",
+                "property_id": property_id,
+                "query_failures": query_failures,
+            },
+            sources=[],
+            next_steps=remediation,
+            events=events,
+        )
 
     # --- Compute KPIs ---
     def _sum(rows: list[dict], col: str) -> float:
@@ -335,6 +576,26 @@ def execute_ga4_full_report(
         f"# Google Analytics Report — Property `{property_id}`",
         f"*Period: last 30 days vs previous 30 days | Generated {today.isoformat()}*",
         "",
+    ]
+
+    if query_failures:
+        content_lines.extend(
+            [
+                "## Data Quality Notes",
+                "Some GA4 queries failed, but this report includes all available successful data.",
+                "",
+                "| Query | Status |",
+                "|---|---|",
+                *[
+                    f"| {query_name} | failed ({error}) |"
+                    for query_name, error in query_failures.items()
+                ],
+                "",
+            ]
+        )
+
+    content_lines.extend(
+        [
         "## Executive Summary",
         "",
         "| Metric | Current 30d | Previous 30d | Change |",
@@ -374,6 +635,7 @@ def execute_ga4_full_report(
         "|---|---|---|",
         *geo_table,
     ]
+    )
 
     context.settings["__latest_analytics_full_report"] = {
         "property_id": property_id,
@@ -381,12 +643,22 @@ def execute_ga4_full_report(
         "chart_keys": list(charts.keys()),
         "top_channel": top_channel,
         "top_page": top_page,
+        "query_failures": query_failures,
+        "channel_rows": channel_rows[:20],
+        "pages_rows": pages_rows[:20],
+        "device_rows": device_rows[:10],
+        "geo_rows": geo_rows[:12],
+        "trend_rows": trend_rows[:90],
     }
 
     events.append(ToolTraceEvent(
         event_type="tool_progress", title="GA4 full report ready",
-        detail=f"charts={len(charts)}, kpis captured",
-        data={"charts": list(charts.keys()), "property_id": property_id},
+        detail=f"charts={len(charts)}, kpis captured, query_failures={len(query_failures)}",
+        data={
+            "charts": list(charts.keys()),
+            "property_id": property_id,
+            "query_failures": query_failures,
+        },
     ))
 
     return ToolExecutionResult(
@@ -396,6 +668,7 @@ def execute_ga4_full_report(
             "property_id": property_id,
             "kpis": kpis,
             "charts": charts,
+            "query_failures": query_failures,
             "channel_rows": channel_rows[:20],
             "pages_rows": pages_rows[:20],
             "device_rows": device_rows,

@@ -72,6 +72,40 @@ def test_google_auth_session_service_account_mode_uses_service_token(monkeypatch
     assert session.require_access_token() == "sa-access-token"
 
 
+def test_google_auth_session_service_account_mode_falls_back_to_oauth_token(monkeypatch) -> None:
+    class _OAuthFallbackStub:
+        class _Tokens:
+            @staticmethod
+            def get_tokens(*, user_id: str):  # pragma: no cover - deterministic stub
+                _ = user_id
+                return None
+
+        tokens = _Tokens()
+
+        @staticmethod
+        def ensure_valid_tokens(*, user_id: str):
+            _ = user_id
+            return type("_Record", (), {"access_token": "oauth-fallback-token"})()
+
+    monkeypatch.setattr("api.services.google.auth.get_google_oauth_manager", lambda: _OAuthFallbackStub())
+    monkeypatch.setattr(
+        "api.services.google.session.issue_service_account_access_token",
+        lambda **kwargs: (_ for _ in ()).throw(
+            GoogleTokenError(
+                code="google_service_account_token_failed",
+                message="unauthorized_client",
+                status_code=401,
+            )
+        ),
+    )
+
+    session = GoogleAuthSession(
+        user_id="user-fallback",
+        settings={"agent.google_auth_mode": "service_account"},
+    )
+    assert session.require_access_token() == "oauth-fallback-token"
+
+
 def test_google_auth_session_oauth_mode_missing_token_has_clear_message(monkeypatch) -> None:
     class _TokenStoreStub:
         @staticmethod

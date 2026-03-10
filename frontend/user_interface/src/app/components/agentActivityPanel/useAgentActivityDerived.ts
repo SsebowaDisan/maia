@@ -232,12 +232,6 @@ function useAgentActivityDerived({
         const tags = Array.isArray(event.metadata?.["intent_tags"]) ? event.metadata["intent_tags"] : [];
         if (tags.some((item) => String(item || "").trim().toLowerCase() === "docs_write")) return true;
       }
-      if (eventType === "llm.task_contract_completed") {
-        const actions = Array.isArray(event.metadata?.["required_actions"])
-          ? event.metadata["required_actions"]
-          : [];
-        if (actions.some((item) => String(item || "").trim().toLowerCase() === "create_document")) return true;
-      }
     }
     return false;
   }, [visibleEvents]);

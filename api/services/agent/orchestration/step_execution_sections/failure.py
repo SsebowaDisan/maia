@@ -54,6 +54,10 @@ def handle_step_failure(
                 "refresh_token",
                 "unauthenticated",
                 "invalid authentication",
+                "service_account_token_failed",
+                "unauthorized_client",
+                "access_denied",
+                "forbidden",
             )
         )
     )

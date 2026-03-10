@@ -337,6 +337,12 @@ def polish_final_response(
         minimum_length = max(target_min_chars, int(len(raw_answer) * 0.6))
         if len(cleaned) < minimum_length:
             cleaned = raw_answer
+    raw_has_markdown_table = "|---|" in raw_answer
+    cleaned_has_markdown_table = ("|---|" in cleaned) or ("<table" in cleaned.lower())
+    if raw_has_markdown_table and not cleaned_has_markdown_table:
+        cleaned = raw_answer
+    if "### GA4 Full Report Snapshot" in raw_answer and "### GA4 Full Report Snapshot" not in cleaned:
+        cleaned = raw_answer
     if len(cleaned) > int(target_max_chars * 1.35):
         cleaned = raw_answer
 
