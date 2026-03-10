@@ -188,11 +188,12 @@ export function IntegrationsSettings(props: IntegrationsSettingsProps) {
   const draftScopes = useMemo(() => scopesFromServices(draftServices), [draftServices]);
   const selectedScopes = useMemo(() => scopesFromServices(selectedServices), [selectedServices]);
   const hasServiceChanges = !sameList(normalizeServiceIds(draftServices), normalizeServiceIds(selectedServices));
-  const grantStepDone =
-    googleOAuthStatus.connected && hasAllScopes(selectedScopes, googleOAuthStatus.scopes || []);
   const connectStepDone = googleOAuthStatus.connected;
-  const aliasStepDone = googleWorkspaceAliases.length > 0;
-  const nextAction = !connectStepDone ? "connect" : !grantStepDone ? "grant" : !aliasStepDone ? "alias" : "done";
+  const grantStepDone =
+    connectStepDone && hasAllScopes(selectedScopes, googleOAuthStatus.scopes || []);
+  const aliasExists = googleWorkspaceAliases.length > 0;
+  const aliasStepDone = grantStepDone && aliasExists;
+  const nextAction = !connectStepDone ? "connect" : !grantStepDone ? "grant" : !aliasExists ? "alias" : "done";
 
   const statusChip = (() => {
     if (googleOAuthStatus.connected) {

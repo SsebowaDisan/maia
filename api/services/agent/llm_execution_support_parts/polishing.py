@@ -11,12 +11,51 @@ from api.services.agent.llm_execution_support_parts.polishing_text_utils import 
     inferred_focus_text as _inferred_focus_text,
     safe_trim_body as _safe_trim_body,
     sanitize_delivery_body as _sanitize_delivery_body,
+    strip_embedded_email_draft as _strip_embedded_email_draft,
 )
 
 RESEARCH_INTENT_RE = re.compile(
     r"\b(research|analy(?:s|z)e|report|investigate|study|deep\s*research|overview)\b",
     re.I,
 )
+MARKDOWN_HEADING_LINE_RE = re.compile(r"(?im)^\s*#{1,6}\s+")
+
+
+def _as_recipient_email_brief(*, body_text: str, objective: str) -> str:
+    clean = _strip_embedded_email_draft(body_text=body_text)
+    if not clean:
+        clean = str(body_text or "").strip()
+    lines: list[str] = []
+    blank_pending = False
+    for raw_line in clean.splitlines():
+        line = str(raw_line or "").rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if lines and not blank_pending:
+                lines.append("")
+                blank_pending = True
+            continue
+        blank_pending = False
+        if MARKDOWN_HEADING_LINE_RE.match(stripped):
+            heading = re.sub(r"^\s*#{1,6}\s*", "", stripped).strip(" :")
+            if heading:
+                lines.append(f"{heading}:")
+            continue
+        if re.fullmatch(r"(?im)email\s*draft\s*:?\s*", stripped):
+            continue
+        lines.append(stripped)
+
+    normalized = "\n".join(lines).strip()
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    if len(normalized) >= 120:
+        return normalized[:4800]
+
+    objective_line = " ".join(str(objective or "").split()).strip()
+    if objective_line:
+        if normalized:
+            return f"{objective_line}\n\n{normalized}"[:4800]
+        return objective_line[:4800]
+    return normalized[:4800]
 
 
 def _is_detailed_research_task(*, request_message: str, objective: str, sources: list[dict[str, Any]]) -> bool:
@@ -383,9 +422,13 @@ def polish_email_content(
     body_text: str,
     recipient: str,
     context_summary: str = "",
+    target_format: str = "report_markdown",
 ) -> dict[str, str]:
     if not env_bool("MAIA_AGENT_LLM_EMAIL_POLISH_ENABLED", default=True):
         return {"subject": subject, "body_text": _sanitize_delivery_body(body_text=body_text, recipient=recipient)}
+    normalized_target = " ".join(str(target_format or "").split()).strip().lower()
+    if normalized_target not in {"report_markdown", "recipient_email"}:
+        normalized_target = "report_markdown"
     recipient_text = " ".join(str(recipient or "").split()).strip()
     sanitized_context = str(context_summary or "").strip()
     if recipient_text:
@@ -393,12 +436,28 @@ def polish_email_content(
         sanitized_context = " ".join(sanitized_context.split())
     baseline_body = _sanitize_delivery_body(body_text=body_text, recipient=recipient_text)
     baseline_body = _safe_trim_body(baseline_body, max_chars=12000)
+    if normalized_target == "recipient_email":
+        baseline_body = _as_recipient_email_brief(body_text=baseline_body, objective=sanitized_context)
     payload = {
         "recipient": recipient_text,
         "subject": str(subject or "").strip(),
         "body_text": baseline_body,
         "context_summary": sanitized_context,
+        "target_format": normalized_target,
     }
+    target_rules = (
+        "- Output must be a clean outbound email body for a busy business recipient.\n"
+        "- Use concise prose and bullet points where helpful.\n"
+        "- Do not output markdown headings (no lines starting with #).\n"
+        "- Do not include any section named 'Email Draft'.\n"
+        "- Never include placeholders such as [Your Name], [Your Position], or [Your Contact Information].\n"
+        "- Keep only recipient-facing content; remove internal planning/report scaffolding.\n"
+    )
+    if normalized_target != "recipient_email":
+        target_rules = (
+            "- Do not force a generic template; preserve or improve request-specific structure.\n"
+            "- Keep section structure intact when the draft is report-like markdown.\n"
+        )
     prompt = (
         "Polish this email draft for clarity and executive tone.\n"
         "Return JSON only in this schema:\n"
@@ -406,11 +465,10 @@ def polish_email_content(
         "Rules:\n"
         "- Preserve factual content; do not invent claims.\n"
         "- Keep tone professional, complete, and premium in clarity.\n"
-        "- Do not force a generic template; preserve or improve request-specific structure.\n"
         "- Keep report depth intact; avoid over-compressing substantive content.\n"
         "- Do not include recipient email addresses in the message body.\n"
         "- Do not add placeholder recipient tokens such as bracketed names.\n"
-        "- Keep section structure intact when the draft is report-like markdown.\n\n"
+        f"{target_rules}\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     response = call_json_response(
@@ -424,7 +482,7 @@ def polish_email_content(
         max_tokens=2400,
     )
     if not isinstance(response, dict):
-        return {"subject": subject, "body_text": _sanitize_delivery_body(body_text=body_text, recipient=recipient_text)}
+        return {"subject": subject, "body_text": baseline_body}
     clean_subject = " ".join(str(response.get("subject") or "").split()).strip()[:180]
     clean_body = str(response.get("body_text") or "").strip()
     if not clean_subject:
@@ -432,12 +490,18 @@ def polish_email_content(
     if not clean_body:
         clean_body = baseline_body
     clean_body = _sanitize_delivery_body(body_text=clean_body, recipient=recipient_text)
-    clean_body = _safe_trim_body(clean_body, max_chars=12000)
-    if baseline_body and len(baseline_body) >= 900:
+    if normalized_target == "recipient_email":
+        clean_body = _as_recipient_email_brief(body_text=clean_body, objective=sanitized_context)
+        clean_body = _safe_trim_body(clean_body, max_chars=4800)
+    else:
+        clean_body = _safe_trim_body(clean_body, max_chars=12000)
+    if normalized_target != "recipient_email" and baseline_body and len(baseline_body) >= 900:
         min_preserved = int(len(baseline_body) * 0.85)
         if len(clean_body) < min_preserved:
             clean_body = baseline_body
     if baseline_body and len(clean_body) < len(baseline_body) and _ends_with_fragment(clean_body):
+        clean_body = baseline_body
+    if normalized_target == "recipient_email" and len(clean_body) < 120:
         clean_body = baseline_body
     if not clean_body:
         clean_body = baseline_body

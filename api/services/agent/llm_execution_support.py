@@ -123,6 +123,7 @@ def polish_email_content(
     body_text: str,
     recipient: str,
     context_summary: str = "",
+    target_format: str = "report_markdown",
 ) -> dict[str, str]:
     _sync_call_json_response()
     return _polishing_module.polish_email_content(
@@ -130,6 +131,7 @@ def polish_email_content(
         body_text=body_text,
         recipient=recipient,
         context_summary=context_summary,
+        target_format=target_format,
     )
 
 

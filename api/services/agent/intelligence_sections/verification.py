@@ -80,7 +80,7 @@ def build_verification_report(
         len(unique_source_urls) > 0,
         f"{len(unique_source_urls)} unique source URL(s) linked to this run.",
     )
-    if depth_tier in {"deep_research", "deep_analytics"}:
+    if depth_tier in {"deep_research", "deep_analytics"} and task.requires_web_inspection:
         add_check(
             "Source coverage target",
             len(unique_source_urls) >= source_target,

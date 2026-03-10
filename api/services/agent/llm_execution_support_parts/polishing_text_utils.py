@@ -4,6 +4,10 @@ import re
 
 DEAR_PLACEHOLDER_RE = re.compile(r"(?im)^\s*dear\s*\[[^\]\n]{1,80}\]\s*,?\s*$")
 EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
+EMAIL_DRAFT_HEADING_RE = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?email\s*draft\s*:?\s*$")
+PLACEHOLDER_SIGNATURE_RE = re.compile(
+    r"(?im)^\s*\[(?:your name|your position|your contact information)\]\s*$"
+)
 INTERNAL_CONTEXT_LINE_RE = re.compile(
     r"(?im)^(?:working context:|active role:|role-scoped context:|role verification obligations:|unresolved slots:).*$"
 )
@@ -14,8 +18,20 @@ CITATION_ANCHOR_RE = re.compile(
 GENERIC_ANCHOR_RE = re.compile(r"</?a\b[^>]*>", re.I)
 
 
+def strip_embedded_email_draft(*, body_text: str) -> str:
+    raw = str(body_text or "").strip()
+    if not raw:
+        return ""
+    lines = raw.splitlines()
+    for index, line in enumerate(lines):
+        if EMAIL_DRAFT_HEADING_RE.match(str(line or "").strip()):
+            kept = "\n".join(lines[:index]).strip()
+            return kept
+    return raw
+
+
 def sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
-    clean = str(body_text or "").strip()
+    clean = strip_embedded_email_draft(body_text=body_text)
     if not clean:
         return ""
     clean = CITATION_ANCHOR_RE.sub(lambda match: f"[{match.group(1)}]", clean)
@@ -26,6 +42,7 @@ def sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
     clean = INTERNAL_CONTEXT_LINE_RE.sub("", clean)
     clean = re.sub(r"(?im)^subject:\s*.+$", "", clean)
     clean = re.sub(r"(?im)^objective:\s*.+$", "", clean)
+    clean = PLACEHOLDER_SIGNATURE_RE.sub("", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean)
     clean = DEAR_PLACEHOLDER_RE.sub("Hello,", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean)

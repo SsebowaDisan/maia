@@ -64,6 +64,10 @@ def run_browser_pages_stage(
                 except Exception:
                     return False
 
+        # Always include the initial page as page 1. Additional same-origin
+        # targets are appended when follow-up navigation is enabled.
+        targets: list[str] = [str(current_url or "").strip() or "about:blank"]
+
         if follow_same_domain_links:
             targets.extend(
                 extract_same_origin_links(

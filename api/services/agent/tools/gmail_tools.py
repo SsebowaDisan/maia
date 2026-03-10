@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Generator
 
 from api.services.agent.connectors.registry import get_connector_registry
+from api.services.agent.llm_execution_support import polish_email_content
 from api.services.agent.tools.base import (
     AgentTool,
     ToolExecutionContext,
@@ -49,9 +50,28 @@ class GmailSendTool(AgentTool):
         if not to:
             raise ToolExecutionError("`to` is required for Gmail send.")
         report_title = str(context.settings.get("__latest_report_title") or "").strip()
+        delivery_subject_hint = str(context.settings.get("__latest_delivery_email_subject") or "").strip()
         report_content = str(context.settings.get("__latest_report_content") or "").strip()
-        subject = str(params.get("subject") or report_title or _extract_subject(prompt)).strip()
-        body = str(params.get("body") or report_content or prompt).strip() or "No message provided."
+        delivery_body_hint = str(context.settings.get("__latest_delivery_email_body") or "").strip()
+        explicit_subject = str(params.get("subject") or "").strip()
+        explicit_body = str(params.get("body") or "").strip()
+        subject = str(explicit_subject or delivery_subject_hint or report_title or _extract_subject(prompt)).strip()
+        raw_body = str(explicit_body or delivery_body_hint or report_content or prompt).strip() or "No message provided."
+        if explicit_body:
+            body = raw_body
+        else:
+            polished = polish_email_content(
+                subject=subject or "Company update",
+                body_text=raw_body,
+                recipient=to,
+                context_summary=" ".join(str(prompt or "").split()).strip()[:320],
+                target_format="recipient_email",
+            )
+            polished_subject = " ".join(str(polished.get("subject") or "").split()).strip()
+            polished_body = str(polished.get("body_text") or "").strip()
+            if not explicit_subject and polished_subject:
+                subject = polished_subject
+            body = polished_body or raw_body
         sender = str(params.get("from") or "").strip()
         attachments = _resolve_attachments(
             context=context,
@@ -132,13 +152,23 @@ class GmailSendTool(AgentTool):
         subject_event = ToolTraceEvent(event_type="email_set_subject", title="Set Gmail subject", detail=subject)
         trace_events.append(subject_event)
         yield subject_event
-        body_chunks = _chunk_text(body, chunk_size=160, max_chunks=10)
+        body_chunks = _chunk_text(
+            body,
+            chunk_size=120,
+            max_chunks=max(1, (len(body) // 120) + 2),
+        )
+        typed_preview = ""
         for chunk_index, chunk in enumerate(body_chunks, start=1):
+            typed_preview += chunk
             body_event = ToolTraceEvent(
                 event_type="email_type_body",
                 title=f"Type email body {chunk_index}/{len(body_chunks)}",
                 detail=chunk,
-                data={"chunk_index": chunk_index, "chunk_total": len(body_chunks), "typed_preview": chunk},
+                data={
+                    "chunk_index": chunk_index,
+                    "chunk_total": len(body_chunks),
+                    "typed_preview": typed_preview,
+                },
             )
             trace_events.append(body_event)
             yield body_event
@@ -146,7 +176,7 @@ class GmailSendTool(AgentTool):
             event_type="email_set_body",
             title="Prepare Gmail body",
             detail=f"{max(1, len(body))} characters",
-            data={"typed_preview": body_chunks[-1] if body_chunks else body[:140]},
+            data={"typed_preview": typed_preview or body},
         )
         trace_events.append(composed_event)
         yield composed_event

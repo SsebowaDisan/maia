@@ -82,6 +82,55 @@ def _normalize_report_markdown(body_text: str) -> str:
     return cleaned.strip()
 
 
+def _simple_markdown_html(text: str) -> str:
+    rows = str(text or "").split("\n")
+    html_rows: list[str] = []
+    paragraph_parts: list[str] = []
+    in_list = False
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_parts
+        if not paragraph_parts:
+            return
+        paragraph_text = " ".join(part.strip() for part in paragraph_parts if part.strip()).strip()
+        paragraph_parts = []
+        if paragraph_text:
+            html_rows.append(f"<p>{html.escape(paragraph_text)}</p>")
+
+    for raw_line in rows:
+        line = str(raw_line or "")
+        stripped = line.strip()
+        heading_match = _LINE_HEADING_RE.match(stripped)
+        if heading_match:
+            flush_paragraph()
+            if in_list:
+                html_rows.append("</ul>")
+                in_list = False
+            marker, heading_text = heading_match.groups()
+            level = max(1, min(6, len(marker)))
+            html_rows.append(f"<h{level}>{html.escape(' '.join(str(heading_text or '').split()))}</h{level}>")
+            continue
+        if stripped.startswith("- "):
+            flush_paragraph()
+            if not in_list:
+                html_rows.append("<ul>")
+                in_list = True
+            html_rows.append(f"<li>{html.escape(stripped[2:].strip())}</li>")
+            continue
+        if in_list and not stripped:
+            html_rows.append("</ul>")
+            in_list = False
+        if stripped:
+            paragraph_parts.append(stripped)
+            continue
+        flush_paragraph()
+
+    flush_paragraph()
+    if in_list:
+        html_rows.append("</ul>")
+    return "".join(html_rows) if html_rows else "<p>No report content generated.</p>"
+
+
 def _render_markdown_html(body_text: str) -> str:
     text = _normalize_report_markdown(body_text)
     if not text:
@@ -95,8 +144,7 @@ def _render_markdown_html(body_text: str) -> str:
             output_format="html5",
         )
     except Exception:
-        escaped = html.escape(text).replace("\n", "<br/>")
-        rendered = f"<p>{escaped}</p>"
+        rendered = _simple_markdown_html(text)
     return rendered
 
 
@@ -110,6 +158,13 @@ def _sanitize_email_html(content_html: str) -> str:
 def _default_html_body(body_text: str, *, subject: str = "") -> str:
     rendered = _sanitize_email_html(_render_markdown_html(body_text))
     clean_subject = html.escape(" ".join(str(subject or "").split()).strip())
+    header_row = (
+        "<tr><td style=\"padding:22px 30px 14px 30px;border-bottom:1px solid #ececf2;\">"
+        f"<div style=\"margin-top:2px;font-size:28px;line-height:1.16;font-weight:650;letter-spacing:-0.02em;color:#111114;\">{clean_subject}</div>"
+        "</td></tr>"
+        if clean_subject
+        else ""
+    )
     return (
         "<html>"
         "<body style=\"margin:0;background:radial-gradient(1200px 500px at 50% -20%,#ffffff 0%,#f2f3f7 48%,#eceef3 100%);padding:32px 14px;"
@@ -134,15 +189,7 @@ def _default_html_body(body_text: str, *, subject: str = "") -> str:
         "<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" "
         "style=\"max-width:820px;margin:0 auto;background:linear-gradient(180deg,#ffffff 0%,#fbfcff 100%);"
         "border:1px solid #dadce3;border-radius:24px;overflow:hidden;box-shadow:0 30px 72px -46px rgba(0,0,0,.52);\">"
-        "<tr><td style=\"padding:22px 30px 12px 30px;border-bottom:1px solid #ececf2;\">"
-        "<div style=\"font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#6e6e73;font-weight:640;\">Maia Report</div>"
-        + (
-            f"<div style=\"margin-top:8px;font-size:30px;line-height:1.16;font-weight:650;letter-spacing:-0.02em;color:#111114;\">{clean_subject}</div>"
-            if clean_subject
-            else ""
-        )
-        + "<div style=\"margin-top:8px;font-size:13px;color:#86868b;\">Prepared and delivered by Maia</div>"
-        "</td></tr>"
+        f"{header_row}"
         "<tr><td style=\"padding:24px 30px 32px 30px;\">"
         f"<div class=\"maia-report-wrap\" style=\"font-size:15px;line-height:1.72;color:#2b2b30;\">{rendered}</div>"
         "</td></tr>"

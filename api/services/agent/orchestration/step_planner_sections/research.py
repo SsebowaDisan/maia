@@ -250,6 +250,7 @@ def normalize_step_parameters(
             params.setdefault("max_sources", research_plan.max_file_sources)
             params.setdefault("max_chunks", research_plan.max_file_chunks)
             params.setdefault("max_scan_pages", research_plan.max_file_scan_pages)
+            params.setdefault("research_depth_tier", research_plan.depth_tier)
         if step.tool_id == "docs.create":
             params.setdefault("include_copied_highlights", True)
         normalized_steps.append(

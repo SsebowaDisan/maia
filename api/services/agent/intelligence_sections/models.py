@@ -16,6 +16,7 @@ class TaskIntelligence:
     preferred_tone: str = ""
     preferred_format: str = ""
     intent_tags: tuple[str, ...] = ()
+    is_analytics_request: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -29,4 +30,5 @@ class TaskIntelligence:
             "preferred_tone": self.preferred_tone,
             "preferred_format": self.preferred_format,
             "intent_tags": list(self.intent_tags),
+            "is_analytics_request": self.is_analytics_request,
         }

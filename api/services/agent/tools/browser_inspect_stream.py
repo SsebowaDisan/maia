@@ -109,6 +109,10 @@ def execute_playwright_inspect_stream(
         detail=str(interaction_review.get("policy_note") or "").strip()[:200],
         data={
             "web_provider": web_provider,
+            "scene_surface": "website",
+            "url": url,
+            "source_url": url,
+            "target_url": url,
             "requested_actions": len(interaction_actions),
             "allowed_actions": len(allowed_interaction_actions),
             "blocked_actions": len(blocked_interaction_actions),

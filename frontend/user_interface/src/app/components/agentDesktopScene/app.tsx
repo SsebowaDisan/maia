@@ -374,6 +374,7 @@ function AgentDesktopScene({
         actionPhase={actionPhase}
         actionStatus={actionStatus}
         actionTargetLabel={actionTargetLabel}
+        emailBodyPreview={emailBodyPreview}
         emailBodyHtml={emailBodyHtml}
         emailBodyScrollRef={emailBodyScrollRef}
         emailRecipient={emailRecipient}

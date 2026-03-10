@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import type { AgentActivityEvent, AgentSourceRecord, CitationFocus, SourceUsageRecord } from "../types";
+import type { AgentActivityEvent, AgentSourceRecord, ChatAttachment, CitationFocus, SourceUsageRecord } from "../types";
 import { parseEvidence } from "../utils/infoInsights";
 import type { EvidenceCard } from "../utils/infoInsights";
 import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
@@ -26,6 +26,7 @@ interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
   selectedConversationId?: string | null;
   userPrompt?: string;
+  attachments?: ChatAttachment[];
   assistantHtml?: string;
   infoHtml?: string;
   infoPanel?: Record<string, unknown>;
@@ -61,6 +62,7 @@ export function InfoPanel({
   citationFocus = null,
   selectedConversationId = null,
   userPrompt = "",
+  attachments = [],
   infoHtml = "",
   infoPanel = {},
   mindmap = {},
@@ -82,8 +84,10 @@ export function InfoPanel({
     () =>
       parseEvidence(String(infoHtml || ""), {
         infoPanel: infoPanel as Record<string, unknown>,
+        userPrompt: String(userPrompt || ""),
+        promptAttachments: Array.isArray(attachments) ? attachments : [],
       }),
-    [infoHtml, infoPanel],
+    [attachments, infoHtml, infoPanel, userPrompt],
   );
 
   const { sources, evidenceBySource } = useMemo(

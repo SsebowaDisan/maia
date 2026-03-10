@@ -93,30 +93,93 @@ function tabForSceneSurface(surface: string): PreviewTab | null {
   return SURFACE_TO_TAB[normalized] || null;
 }
 
+function isGoogleWorkspaceUrl(candidate: unknown): boolean {
+  const value = readStringField(candidate).toLowerCase();
+  if (!value) {
+    return false;
+  }
+  return (
+    value.includes("docs.google.com/document/") ||
+    value.includes("docs.google.com/spreadsheets/")
+  );
+}
+
+function hasWorkspaceUrlSignal(event: AgentActivityEvent): boolean {
+  const candidates = [
+    event.data?.["document_url"],
+    event.metadata?.["document_url"],
+    event.data?.["spreadsheet_url"],
+    event.metadata?.["spreadsheet_url"],
+    event.data?.["source_url"],
+    event.metadata?.["source_url"],
+    event.data?.["url"],
+    event.metadata?.["url"],
+    event.data?.["target_url"],
+    event.metadata?.["target_url"],
+  ];
+  return candidates.some((candidate) => isGoogleWorkspaceUrl(candidate));
+}
+
+function isWorkspaceLoggingStep(event: AgentActivityEvent, toolId: string): boolean {
+  const markerRaw = event.data?.["__workspace_logging_step"] ?? event.metadata?.["__workspace_logging_step"];
+  const marker =
+    typeof markerRaw === "boolean"
+      ? markerRaw
+      : ["true", "1", "yes"].includes(String(markerRaw ?? "").trim().toLowerCase());
+  if (marker) {
+    return true;
+  }
+  if (toolId === "workspace.sheets.track_step") {
+    return true;
+  }
+  return false;
+}
+
+function isShadowEvent(event: AgentActivityEvent | null): boolean {
+  if (!event) {
+    return false;
+  }
+  const raw = event.data?.["shadow"] ?? event.metadata?.["shadow"];
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  const normalized = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
 function eventTab(event: AgentActivityEvent | null): PreviewTab {
   if (!event) {
     return "system";
   }
-  const isShadowStep =
-    String(event.event_type || "").toLowerCase() === "tool_completed" &&
-    String(event.data?.["shadow"] ?? event.metadata?.["shadow"] ?? "")
-      .trim()
-      .toLowerCase() === "true";
-  if (isShadowStep) {
+  if (isShadowEvent(event)) {
     return "system";
   }
+  const normalizedType = readStringField(event.event_type).trim().toLowerCase();
+  const toolId = eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
   const interactionSurface = sceneSurfaceFromEvent(event);
   const surfaceTab = tabForSceneSurface(interactionSurface);
+  if (surfaceTab === "document") {
+    const explicitDocumentEvent =
+      normalizedType.startsWith("document_") ||
+      normalizedType.startsWith("pdf_") ||
+      normalizedType.startsWith("doc_") ||
+      normalizedType.startsWith("docs.") ||
+      normalizedType.startsWith("sheet_") ||
+      normalizedType.startsWith("sheets.") ||
+      normalizedType === "drive.go_to_doc" ||
+      normalizedType === "drive.go_to_sheet";
+    if (!explicitDocumentEvent && !hasWorkspaceUrlSignal(event) && isWorkspaceLoggingStep(event, toolId)) {
+      return "system";
+    }
+  }
   if (surfaceTab) {
     return surfaceTab;
   }
   const byType = tabForEventType(event.event_type || "");
   if (byType !== "system") {
     return byType;
-  }
-  const toolId = eventMetadataString(event, "tool_id") || readStringField(event.data?.["tool_id"]);
-  if (toolId.startsWith("workspace.docs.") || toolId.startsWith("workspace.sheets.")) {
-    return "document";
   }
   if (toolId.startsWith("browser.") || toolId.startsWith("marketing.web_research")) {
     return "browser";

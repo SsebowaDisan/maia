@@ -127,6 +127,14 @@ export function AgentActivityPanel({
     setCursor(index);
     setIsPlaying(false);
     onJumpToEvent?.(event);
+    const shadowRaw = event.data?.["shadow"] ?? event.metadata?.["shadow"];
+    const isShadowEvent =
+      typeof shadowRaw === "boolean"
+        ? shadowRaw
+        : ["true", "1", "yes"].includes(String(shadowRaw ?? "").trim().toLowerCase());
+    if (isShadowEvent) {
+      return;
+    }
     if (
       event.event_type === "drive.go_to_doc" ||
       event.event_type === "drive.go_to_sheet" ||

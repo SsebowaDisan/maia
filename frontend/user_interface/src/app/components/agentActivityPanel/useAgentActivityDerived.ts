@@ -200,18 +200,18 @@ function useAgentActivityDerived({
     sceneDocumentUrl.length > 0 ||
     currentSceneSourceUrl.includes("docs.google.com/document/");
   const sceneSurface = sceneSurfaceFromEvent(sceneEvent).toLowerCase();
-  const sceneSurfaceTab = tabForSceneSurface(sceneSurface);
-  const sceneToolId = String(sceneEvent?.metadata?.["tool_id"] || sceneEvent?.data?.["tool_id"] || "")
-    .trim()
-    .toLowerCase();
+  const sceneShadowFlagRaw = sceneEvent?.data?.["shadow"] ?? sceneEvent?.metadata?.["shadow"];
+  const isSceneShadowEvent =
+    typeof sceneShadowFlagRaw === "boolean"
+      ? sceneShadowFlagRaw
+      : ["true", "1", "yes"].includes(String(sceneShadowFlagRaw ?? "").trim().toLowerCase());
   const isSheetsScene =
     isDocumentScene &&
     (sceneEventType.startsWith("sheet_") ||
       sceneEventType.startsWith("sheets.") ||
       sceneEventType === "drive.go_to_sheet" ||
       sceneSurface === "google_sheets" ||
-      hasSpreadsheetUrlSignal ||
-      (sceneSurfaceTab === "document" && sceneToolId.startsWith("workspace.sheets.")));
+      hasSpreadsheetUrlSignal);
 
   const mergedPdfPage = readNumberField(mergedSceneData["pdf_page"]);
   const mergedPdfTotal = readNumberField(mergedSceneData["pdf_total_pages"]);
@@ -228,22 +228,39 @@ function useAgentActivityDerived({
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const event = visibleEvents[idx];
       const eventType = String(event.event_type || "").toLowerCase();
+      if (eventType === "llm.task_contract_completed") {
+        const requiredActions = Array.isArray(event.metadata?.["required_actions"])
+          ? event.metadata["required_actions"]
+          : Array.isArray(event.data?.["required_actions"])
+            ? event.data["required_actions"]
+            : [];
+        if (
+          requiredActions.some(
+            (item) => String(item || "").trim().toLowerCase() === "create_document",
+          )
+        ) {
+          return true;
+        }
+      }
       if (eventType === "llm.intent_tags") {
-        const tags = Array.isArray(event.metadata?.["intent_tags"]) ? event.metadata["intent_tags"] : [];
+        const tags = Array.isArray(event.metadata?.["intent_tags"])
+          ? event.metadata["intent_tags"]
+          : Array.isArray(event.data?.["intent_tags"])
+            ? event.data["intent_tags"]
+            : [];
         if (tags.some((item) => String(item || "").trim().toLowerCase() === "docs_write")) return true;
       }
     }
     return false;
   }, [visibleEvents]);
 
-  // hasDocumentUrlSignal deliberately excluded: a URL alone (e.g. a planning note
-  // that references a Google Docs link) must not open the Docs iframe.
+  // Docs scene is gated to explicit docs interactions only.
   const hasDocsEventSignal =
-    sceneEventType.startsWith("doc_") ||
-    sceneEventType.startsWith("docs.") ||
-    sceneEventType === "drive.go_to_doc" ||
-    sceneToolId.startsWith("workspace.docs.") ||
-    sceneToolId === "docs.create";
+    !isSceneShadowEvent &&
+    (sceneEventType.startsWith("doc_") ||
+      sceneEventType.startsWith("docs.") ||
+      sceneEventType === "drive.go_to_doc") &&
+    (sceneSurface === "google_docs" || sceneSurface === "docs" || hasDocumentUrlSignal);
   const isDocsScene =
     isDocumentScene && !isSheetsScene && !isPdfScene && hasDocsEventSignal && docsExplicitlyRequested;
 

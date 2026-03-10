@@ -7,6 +7,7 @@ type EmailSceneProps = {
   actionPhase: string;
   actionStatus: string;
   actionTargetLabel: string;
+  emailBodyPreview: string;
   emailBodyHtml: string;
   emailBodyScrollRef: React.RefObject<HTMLDivElement | null>;
   emailRecipient: string;
@@ -146,6 +147,7 @@ function EmailScene({
   actionPhase,
   actionStatus,
   actionTargetLabel,
+  emailBodyPreview,
   emailBodyHtml,
   emailBodyScrollRef,
   emailRecipient,
@@ -158,18 +160,34 @@ function EmailScene({
     action,
     actionTargetLabel,
   });
-  const focusPulse = action === "type" && (actionPhase === "start" || actionPhase === "active");
+  const isStreamingBodyEvent = activeEventType === "email_type_body";
+  const isFieldUpdateEvent =
+    activeEventType === "email_set_to" ||
+    activeEventType === "email_set_subject" ||
+    activeEventType === "email_set_body" ||
+    isStreamingBodyEvent;
+  const focusPulse =
+    isFieldUpdateEvent || (action === "type" && (actionPhase === "start" || actionPhase === "active"));
   const normalizedBodyHtml = normalizeEmailBodyHtml(emailBodyHtml);
+  const showBodyCaret = focus === "body" && (isStreamingBodyEvent || focusPulse);
+  const bodyHtmlWithCaret = showBodyCaret
+    ? `${normalizedBodyHtml}<p><span class="inline-block h-[1.05em] w-[2px] rounded bg-[#1d1d1f] align-middle"></span></p>`
+    : normalizedBodyHtml;
+  const bodyCharacterCount = String(emailBodyPreview || "").length;
+
   return (
     <div className="absolute inset-0 bg-[linear-gradient(180deg,#ebecef_0%,#e3e4e8_100%)] p-4 text-[#1d1d1f]">
-      <div className="mx-auto h-full w-full max-w-[920px] rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
+      <div className="mx-auto flex h-full w-full max-w-[920px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
         <div className="flex items-center gap-2 border-b border-black/[0.08] px-5 py-3">
           <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
           <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
           <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
           <span className="ml-2 text-[12px] font-semibold tracking-[0.01em] text-[#3a3a3c]">Compose</span>
+          <span className="ml-auto rounded-full border border-black/[0.08] bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#5f6368]">
+            Draft
+          </span>
         </div>
-        <div className="relative space-y-3 p-5 pt-12 text-[12px]">
+        <div className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-5 pt-12 text-[12px]">
           <InteractionOverlay
             sceneSurface="email"
             activeEventType={activeEventType}
@@ -188,7 +206,9 @@ function EmailScene({
             }`}
           >
             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">To</span>
-            <span className="truncate text-[13px] text-[#1d1d1f]">{emailRecipient}</span>
+            <span className="truncate text-[13px] text-[#1d1d1f]">
+              {emailRecipient || "recipient@example.com"}
+            </span>
           </div>
           <div
             className={`grid grid-cols-[70px_minmax(0,1fr)] items-center rounded-[14px] border px-4 py-2.5 transition-all duration-300 ${
@@ -198,25 +218,32 @@ function EmailScene({
             }`}
           >
             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">Subject</span>
-            <span className="truncate text-[13px] font-medium text-[#1d1d1f]">{emailSubject}</span>
+            <span className="truncate text-[13px] font-medium text-[#1d1d1f]">
+              {emailSubject || "No subject"}
+            </span>
           </div>
           <div
-            className={`overflow-hidden rounded-[16px] border transition-all duration-300 ${
+            className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] border transition-all duration-300 ${
               focus === "body" && focusPulse
                 ? "border-black/25 bg-[#f9f9fa]"
                 : "border-black/[0.07] bg-white"
             }`}
           >
             <div className="border-b border-black/[0.06] px-4 py-2">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">Message</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8b8b91]">Message</span>
+                <span className="text-[10px] text-[#86868b]">
+                  {isStreamingBodyEvent ? "Live typing" : "Ready"} - {bodyCharacterCount} chars
+                </span>
+              </div>
             </div>
             <div
               ref={emailBodyScrollRef}
-              className="h-[328px] overflow-y-auto px-4 py-3.5 text-[14px] leading-[1.65] text-[#1f1f22]"
+              className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-3.5 text-[14px] leading-[1.65] text-[#1f1f22]"
             >
               <div
-                className="[&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h1]:tracking-[-0.02em] [&_h2]:mb-2.5 [&_h2]:mt-5 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h2]:tracking-[-0.015em] [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[17px] [&_h3]:font-semibold [&_h3]:tracking-[-0.01em] [&_p]:mb-3 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1.5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#f2f2f7] [&_pre]:p-2.5 [&_a]:text-[#1d1d1f] hover:[&_a]:underline"
-                dangerouslySetInnerHTML={{ __html: normalizedBodyHtml }}
+                className="break-words [overflow-wrap:anywhere] [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_h1]:mb-3 [&_h1]:text-[24px] [&_h1]:font-semibold [&_h1]:tracking-[-0.02em] [&_h2]:mb-2.5 [&_h2]:mt-5 [&_h2]:text-[20px] [&_h2]:font-semibold [&_h2]:tracking-[-0.015em] [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[17px] [&_h3]:font-semibold [&_h3]:tracking-[-0.01em] [&_p]:mb-3 [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:mb-1.5 [&_code]:rounded [&_code]:bg-[#f2f2f7] [&_code]:px-1 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#f2f2f7] [&_pre]:p-2.5 [&_a]:break-all [&_a]:text-[#1d1d1f] hover:[&_a]:underline"
+                dangerouslySetInnerHTML={{ __html: bodyHtmlWithCaret }}
               />
             </div>
           </div>

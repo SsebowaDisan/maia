@@ -387,13 +387,13 @@ function mergeLiveSceneData(
   }
 
   if (mergedGraphNodeIds.length) {
-    merged["graph_node_ids"] = mergedGraphNodeIds.slice(0, 24);
+    merged["graph_node_ids"] = mergedGraphNodeIds;
   }
   if (mergedSceneRefs.length) {
-    merged["scene_refs"] = mergedSceneRefs.slice(0, 24);
+    merged["scene_refs"] = mergedSceneRefs;
   }
   if (mergedEventRefs.length) {
-    merged["event_refs"] = mergedEventRefs.slice(0, 24);
+    merged["event_refs"] = mergedEventRefs;
   }
   if (zoomHistory.length) {
     merged["zoom_history"] = zoomHistory;
@@ -406,7 +406,7 @@ function mergeLiveSceneData(
     }
   }
   if (openedPages.length) {
-    merged["opened_pages"] = openedPages.slice(-24);
+    merged["opened_pages"] = openedPages;
     merged["opened_page_count"] = openedPages.length;
   }
 

@@ -159,3 +159,38 @@ def test_answer_includes_evidence_citations_section_when_no_sources_exist() -> N
     )
     assert "## Evidence Citations" in answer
     assert "No external evidence sources were captured in this run" in answer
+
+
+def test_answer_uses_runtime_web_sources_for_coverage_and_filters_operational_citations() -> None:
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="Analyze https://axongroup.com and send a professional summary email.",
+            agent_mode="company_agent",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__latest_web_sources": [
+                {
+                    "label": "Axon Group website",
+                    "url": "https://axongroup.com/",
+                    "snippet": "Company overview and services.",
+                }
+            ]
+        },
+        verification_report={
+            "evidence_units": [
+                {
+                    "source": "workspace.sheets.track_step",
+                    "url": "",
+                    "text": "Tracked step `Execution roadmap initialized` in Google Sheets.",
+                }
+            ]
+        },
+    )
+    assert "- Source coverage: 1 unique source(s)." in answer
+    assert "workspace.sheets.track_step" not in answer
+    assert "https://axongroup.com/" in answer

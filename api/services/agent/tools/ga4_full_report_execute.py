@@ -483,6 +483,9 @@ def execute_ga4_full_report(
             events=events,
         )
 
+    # --- Detect zero-data case (queries all succeeded but returned no rows) ---
+    data_empty = not any_rows_available
+
     # --- Compute KPIs ---
     def _sum(rows: list[dict], col: str) -> float:
         return sum(_safe_float(r.get(col, 0)) for r in rows)
@@ -578,6 +581,14 @@ def execute_ga4_full_report(
         "",
     ]
 
+    if data_empty:
+        content_lines.extend([
+            "> **DATA NOT AVAILABLE** — All GA4 queries returned 0 rows for this period.",
+            "> All metrics below are zero. Do not draw performance conclusions or trend claims from this report.",
+            "> Verify that the service account (or OAuth user) has Viewer access on this property, and that data collection is active for the selected date range.",
+            "",
+        ])
+
     if query_failures:
         content_lines.extend(
             [
@@ -640,6 +651,7 @@ def execute_ga4_full_report(
     context.settings["__latest_analytics_full_report"] = {
         "property_id": property_id,
         "kpis": kpis,
+        "data_empty": data_empty,
         "chart_keys": list(charts.keys()),
         "top_channel": top_channel,
         "top_page": top_page,
@@ -661,12 +673,14 @@ def execute_ga4_full_report(
         },
     ))
 
+    summary_prefix = "No data available — " if data_empty else ""
     return ToolExecutionResult(
-        summary=f"GA4 full report: {kpis['sessions']:,} sessions, {kpis['conversions']:,} conversions, {len(charts)} charts.",
+        summary=f"{summary_prefix}GA4 full report: {kpis['sessions']:,} sessions, {kpis['conversions']:,} conversions, {len(charts)} charts.",
         content="\n".join(content_lines),
         data={
             "property_id": property_id,
             "kpis": kpis,
+            "data_empty": data_empty,
             "charts": charts,
             "query_failures": query_failures,
             "channel_rows": channel_rows[:20],

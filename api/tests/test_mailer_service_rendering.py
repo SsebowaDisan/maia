@@ -19,6 +19,8 @@ def test_send_report_email_renders_markdown_html_template() -> None:
     assert "<h3>Executive Summary</h3>" in body_html
     assert "<li>One</li>" in body_html
     assert "font-family:-apple-system" in body_html
+    assert "Maia Report" not in body_html
+    assert "Prepared and delivered by Maia" not in body_html
 
 
 def test_normalize_report_markdown_splits_inline_heading_markers() -> None:

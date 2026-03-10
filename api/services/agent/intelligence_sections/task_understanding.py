@@ -119,6 +119,10 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         ]
         intent_tags = list(dict.fromkeys([*intent_tags, *normalized]))[:8]
 
+    is_analytics_request = isinstance(llm_intent.get("is_analytics_request"), bool) and bool(
+        llm_intent.get("is_analytics_request")
+    )
+
     return TaskIntelligence(
         objective=objective,
         target_url=target_url,
@@ -130,4 +134,5 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         preferred_tone=preferred_tone,
         preferred_format=preferred_format,
         intent_tags=tuple(intent_tags[:8]),
+        is_analytics_request=is_analytics_request,
     )

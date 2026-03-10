@@ -44,12 +44,47 @@ def test_workspace_logging_disabled_by_default_for_company_agent_mode() -> None:
     assert plan.deep_workspace_logging_enabled is False
 
 
-def test_workspace_logging_can_be_enabled_for_company_agent_mode_via_setting() -> None:
+def test_workspace_logging_setting_requires_explicit_user_request_by_default() -> None:
     request = ChatRequest(message="what is machine learning", agent_mode="company_agent")
     task_prep = _task_prep(contract_actions=[], intent_tags=())
     plan = build_workspace_logging_plan(
         request=request,
         settings={"agent.company_agent_always_workspace_logging": True},
+        task_prep=task_prep,
+        deep_research_mode=True,
+    )
+    assert plan.workspace_logging_requested is False
+    assert plan.deep_workspace_logging_enabled is False
+
+
+def test_workspace_logging_ignores_contract_or_intent_without_explicit_message_terms() -> None:
+    request = ChatRequest(
+        message="Search the web and send an email summary.",
+        agent_mode="company_agent",
+    )
+    task_prep = _task_prep(
+        contract_actions=["create_document", "update_sheet"],
+        intent_tags=("docs_write", "sheets_update"),
+    )
+    plan = build_workspace_logging_plan(
+        request=request,
+        settings={"agent.company_agent_always_workspace_logging": True},
+        task_prep=task_prep,
+        deep_research_mode=True,
+    )
+    assert plan.workspace_logging_requested is False
+    assert plan.deep_workspace_logging_enabled is False
+
+
+def test_workspace_logging_can_be_force_enabled_when_explicit_guard_disabled() -> None:
+    request = ChatRequest(message="what is machine learning", agent_mode="company_agent")
+    task_prep = _task_prep(contract_actions=[], intent_tags=())
+    plan = build_workspace_logging_plan(
+        request=request,
+        settings={
+            "agent.company_agent_always_workspace_logging": True,
+            "agent.workspace_logging_require_user_request": False,
+        },
         task_prep=task_prep,
         deep_research_mode=True,
     )
@@ -70,12 +105,28 @@ def test_workspace_logging_enabled_when_update_sheet_requested() -> None:
     assert plan.deep_workspace_logging_enabled is True
 
 
-def test_workspace_logging_can_be_enabled_for_deep_research_via_setting() -> None:
+def test_deep_research_workspace_logging_setting_requires_explicit_user_request_by_default() -> None:
     request = ChatRequest(message="what is machine learning", agent_mode="company_agent")
     task_prep = _task_prep(contract_actions=[], intent_tags=())
     plan = build_workspace_logging_plan(
         request=request,
         settings={"agent.deep_research_workspace_logging": True},
+        task_prep=task_prep,
+        deep_research_mode=True,
+    )
+    assert plan.workspace_logging_requested is False
+    assert plan.deep_workspace_logging_enabled is False
+
+
+def test_deep_research_workspace_logging_setting_can_force_enable_when_guard_disabled() -> None:
+    request = ChatRequest(message="what is machine learning", agent_mode="company_agent")
+    task_prep = _task_prep(contract_actions=[], intent_tags=())
+    plan = build_workspace_logging_plan(
+        request=request,
+        settings={
+            "agent.deep_research_workspace_logging": True,
+            "agent.workspace_logging_require_user_request": False,
+        },
         task_prep=task_prep,
         deep_research_mode=True,
     )
@@ -712,6 +763,52 @@ def test_intent_enrichment_research_only_prunes_delivery_and_workspace_steps(mon
     assert "workspace.sheets.track_step" not in tool_ids
     assert "gmail.send" not in tool_ids
     assert "browser.contact_form.send" not in tool_ids
+
+
+def test_intent_enrichment_prunes_workspace_steps_without_explicit_request(
+    monkeypatch,
+) -> None:
+    from api.services.agent.orchestration.step_planner_sections import intent_enrichment as enrichment_module
+
+    # Simulate noisy inferred signals; explicit message should still control
+    # Docs/Sheets inclusion when the explicit guard is enabled.
+    monkeypatch.setattr(
+        enrichment_module,
+        "infer_intent_signals_from_text",
+        lambda **kwargs: {
+            "url": "https://axongroup.com/",
+            "wants_contact_form": False,
+            "wants_highlight_words": False,
+            "wants_docs_output": True,
+            "wants_sheets_output": True,
+        },
+    )
+    request = ChatRequest(
+        message="Search axongroup.com and send an email summary.",
+        agent_mode="company_agent",
+    )
+    task_prep = _task_prep(
+        contract_actions=["create_document", "update_sheet"],
+        intent_tags=("docs_write", "sheets_update"),
+    )
+    steps = [
+        PlannedStep(tool_id="marketing.web_research", title="Search web", params={"query": "axon group"}),
+        PlannedStep(tool_id="workspace.docs.research_notes", title="Write notes", params={}),
+        PlannedStep(tool_id="workspace.sheets.track_step", title="Track step", params={}),
+        PlannedStep(tool_id="gmail.send", title="Send email", params={"to": "person@example.com"}),
+    ]
+
+    enriched = apply_intent_enrichment(
+        request=request,
+        settings={"agent.workspace_logging_require_user_request": True},
+        task_prep=task_prep,
+        steps=steps,
+    )
+    tool_ids = [step.tool_id for step in enriched]
+    assert "marketing.web_research" in tool_ids
+    assert "gmail.send" in tool_ids
+    assert "workspace.docs.research_notes" not in tool_ids
+    assert "workspace.sheets.track_step" not in tool_ids
 
 
 def test_workspace_roadmap_steps_marked_for_optional_skip() -> None:

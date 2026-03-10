@@ -7,6 +7,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from api.context import get_context
+from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.agent.tools.theater_cursor import with_scene
 from ktem.db.models import engine
 
@@ -365,6 +366,83 @@ def _load_source_chunks(
         if len(chunks) >= max(1, int(max_chunks)):
             break
     return chunks
+
+
+def _synthesize_file_with_llm(
+    chunks: list[dict[str, Any]],
+    *,
+    source_name: str,
+    topic: str,
+) -> str:
+    """Use an LLM to extract key findings from a single file's chunks.
+
+    Returns a concise synthesis (3-5 sentences) of the file's most relevant
+    claims and data points relative to the research topic. Falls back to the
+    first chunk's text when LLM is disabled or fails.
+    """
+    if not env_bool("MAIA_AGENT_LLM_FILE_SYNTHESIS_ENABLED", default=True):
+        return _safe_snippet(str(chunks[0].get("text") or "") if chunks else "", limit=300)
+
+    excerpts = []
+    for chunk in chunks[:12]:
+        text = _safe_snippet(str(chunk.get("text") or ""), limit=400)
+        if text:
+            excerpts.append(text)
+    if not excerpts:
+        return ""
+
+    payload = {
+        "source_name": " ".join(str(source_name or "").split()).strip()[:180],
+        "topic": " ".join(str(topic or "").split()).strip()[:220],
+        "excerpts": excerpts,
+    }
+    response = call_json_response(
+        system_prompt=(
+            "You extract concise, evidence-grounded key findings from document excerpts "
+            "for enterprise research reports. Return strict JSON only."
+        ),
+        user_prompt=(
+            "Read the document excerpts below and extract the most relevant findings "
+            "for the given research topic.\n"
+            "Return JSON only in this schema:\n"
+            '{ "synthesis": "3-5 sentence summary of key claims and data points." }\n'
+            "Rules:\n"
+            "- Focus on specific facts, figures, dates, and conclusions — not general statements.\n"
+            "- Only use information present in the provided excerpts.\n"
+            "- Do not fabricate facts, URLs, or company names.\n"
+            "- Keep the synthesis under 400 characters.\n\n"
+            f"Input:\n{payload}"
+        ),
+        temperature=0.1,
+        timeout_seconds=10,
+        max_tokens=260,
+    )
+    if isinstance(response, dict):
+        text = " ".join(str(response.get("synthesis") or "").split()).strip()
+        if text:
+            return text[:420]
+    return _safe_snippet(excerpts[0], limit=300)
+
+
+def _deep_file_source_summaries(
+    chunks_by_source: dict[str, list[dict[str, Any]]],
+    *,
+    topic: str,
+    depth_tier: str,
+) -> dict[str, str]:
+    """Return {source_id: synthesis_text} for all sources in a deep-research run.
+
+    Only fires for deep_research / deep_analytics / expert tiers; returns {} otherwise.
+    """
+    if depth_tier not in {"deep_research", "deep_analytics", "expert"}:
+        return {}
+    result: dict[str, str] = {}
+    for source_id, chunks in chunks_by_source.items():
+        source_name = str(chunks[0].get("source_name") or "") if chunks else ""
+        synthesis = _synthesize_file_with_llm(chunks, source_name=source_name, topic=topic)
+        if synthesis:
+            result[source_id] = synthesis
+    return result
 
 
 def _build_highlights(

@@ -48,17 +48,16 @@ def _infer_dry_run(text: str) -> bool:
 
 
 def _chunk_text(text: str, *, chunk_size: int = 140, max_chunks: int = 8) -> list[str]:
-    compact = " ".join(str(text or "").split())
-    if not compact:
+    raw = str(text or "")
+    if not raw:
         return []
     chunks: list[str] = []
     cursor = 0
     size = max(30, int(chunk_size))
-    while cursor < len(compact) and len(chunks) < max(1, int(max_chunks)):
-        chunks.append(compact[cursor : cursor + size])
+    cap = max(1, int(max_chunks))
+    while cursor < len(raw) and len(chunks) < cap:
+        chunks.append(raw[cursor : cursor + size])
         cursor += size
-    if cursor < len(compact):
-        chunks[-1] = f"{chunks[-1]}..."
     return chunks
 
 

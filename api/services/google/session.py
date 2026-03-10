@@ -88,24 +88,17 @@ class GoogleAuthSession:
         if auth_mode == "service_account":
             try:
                 return self._service_account_access_token()
-            except GoogleTokenError:
+            except GoogleTokenError as service_account_exc:
                 # Resilient fallback: if service-account minting fails but OAuth is connected
                 # for this user, continue with the OAuth token instead of hard failing.
                 try:
                     record = self.oauth.ensure_valid_tokens(user_id=self.user_id)
                 except GoogleTokenError:
-                    raise
+                    raise service_account_exc
                 access_token = str(getattr(record, "access_token", "") or "").strip()
                 if access_token:
                     return access_token
-                raise GoogleTokenError(
-                    code="google_tokens_missing",
-                    message=(
-                        "Service-account token minting failed and no OAuth access token is available. "
-                        "Reconnect Google OAuth or repair service-account credentials."
-                    ),
-                    status_code=401,
-                )
+                raise service_account_exc
         try:
             record = self.oauth.ensure_valid_tokens(user_id=self.user_id)
             return record.access_token

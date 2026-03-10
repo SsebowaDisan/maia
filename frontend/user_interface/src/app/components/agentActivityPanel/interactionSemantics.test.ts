@@ -83,4 +83,25 @@ describe("interactionSemantics", () => {
     expect(eventTab(event)).toBe("system");
     expect(isApiRuntimeEvent(event)).toBe(true);
   });
+
+  it("treats shadow events as system tab events", () => {
+    const event = makeEvent(
+      { scene_surface: "google_docs" },
+      { shadow: true, tool_id: "workspace.docs.research_notes" },
+    );
+    expect(eventTab(event)).toBe("system");
+  });
+
+  it("keeps workspace logging sheet events on system tab without sheet URL signals", () => {
+    const event = makeEvent(
+      {
+        scene_surface: "google_sheets",
+        tool_id: "workspace.sheets.track_step",
+        __workspace_logging_step: true,
+      },
+      {},
+    );
+    event.event_type = "tool_started";
+    expect(eventTab(event)).toBe("system");
+  });
 });

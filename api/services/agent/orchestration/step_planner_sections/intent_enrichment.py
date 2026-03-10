@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import os
+import re
 
 from api.schemas import ChatRequest
 from api.services.agent.planner_helpers import infer_intent_signals_from_text
 from api.services.agent.planner import PlannedStep
 
 from ..models import TaskPreparation
+
+
+DOCS_REQUEST_RE = re.compile(r"\bgoogle\s+docs?\b|\bdocs?\b", re.IGNORECASE)
+SHEETS_REQUEST_RE = re.compile(
+    r"\bgoogle\s+sheets?\b|\bspreadsheet(?:s)?\b|\bsheets?\b",
+    re.IGNORECASE,
+)
 
 
 def _coerce_bool(value: object, *, default: bool) -> bool:
@@ -52,6 +60,19 @@ def _is_research_mode_disallowed_tool(tool_id: str) -> bool:
     return normalized.startswith("business.")
 
 
+def _explicit_workspace_output_flags(
+    *,
+    request: ChatRequest,
+) -> tuple[bool, bool]:
+    message_text = " ".join(str(request.message or "").split()).strip()
+    # Use explicit terms from the current user message only. Inferred LLM tags
+    # are intentionally excluded from this opt-in gate to prevent accidental
+    # Docs/Sheets execution when the user did not request workspace output.
+    explicit_docs_requested = bool(DOCS_REQUEST_RE.search(message_text))
+    explicit_sheets_requested = bool(SHEETS_REQUEST_RE.search(message_text))
+    return explicit_docs_requested, explicit_sheets_requested
+
+
 def apply_intent_enrichment(
     *,
     request: ChatRequest,
@@ -63,10 +84,6 @@ def apply_intent_enrichment(
     inferred_signals = infer_intent_signals_from_text(
         message=request.message,
         agent_goal=request.agent_goal,
-    )
-    explicit_message_signals = infer_intent_signals_from_text(
-        message=request.message,
-        agent_goal="",
     )
     deep_search_mode = str(request.agent_mode or "").strip().lower() == "deep_search" or bool(
         settings.get("__deep_search_enabled")
@@ -112,19 +129,32 @@ def apply_intent_enrichment(
     target_url = " ".join(
         str(getattr(task_prep.task_intelligence, "target_url", "") or "").split()
     ).strip() or " ".join(str(inferred_signals.get("url") or "").split()).strip()
-    docs_requested = (
+    contract_or_intent_docs_requested = (
         ("create_document" in contract_actions)
         or ("docs_write" in intent_tags)
         or bool(inferred_signals.get("wants_docs_output"))
     )
-    sheets_requested = (
+    contract_or_intent_sheets_requested = (
         ("update_sheet" in contract_actions)
         or ("sheets_update" in intent_tags)
         or bool(inferred_signals.get("wants_sheets_output"))
     )
+    explicit_docs_requested, explicit_sheets_requested = _explicit_workspace_output_flags(
+        request=request,
+    )
+    require_explicit_workspace_request = _coerce_bool(
+        settings.get("agent.workspace_logging_require_user_request"),
+        default=True,
+    )
+    if require_explicit_workspace_request:
+        docs_requested = explicit_docs_requested
+        sheets_requested = explicit_sheets_requested
+    else:
+        docs_requested = contract_or_intent_docs_requested or explicit_docs_requested
+        sheets_requested = contract_or_intent_sheets_requested or explicit_sheets_requested
     if research_only_mode:
-        docs_requested = bool(explicit_message_signals.get("wants_docs_output"))
-        sheets_requested = bool(explicit_message_signals.get("wants_sheets_output"))
+        docs_requested = explicit_docs_requested
+        sheets_requested = explicit_sheets_requested
     contact_form_requested = (
         ("submit_contact_form" in contract_actions)
         or ("contact_form_submission" in intent_tags)
@@ -137,21 +167,22 @@ def apply_intent_enrichment(
         contact_form_requested = False
     contact_form_enabled = _contact_form_capability_enabled(settings)
 
-    if research_only_mode:
-        filtered_steps: list[PlannedStep] = []
-        for step in steps:
-            tool_id = " ".join(str(step.tool_id or "").split()).strip().lower()
-            if _is_research_mode_disallowed_tool(tool_id):
-                continue
-            if not docs_requested and (
-                tool_id == "docs.create"
-                or tool_id.startswith("workspace.docs.")
-            ):
-                continue
-            if not sheets_requested and tool_id.startswith("workspace.sheets."):
-                continue
-            filtered_steps.append(step)
-        steps = filtered_steps
+    filtered_steps: list[PlannedStep] = []
+    for step in steps:
+        tool_id = " ".join(str(step.tool_id or "").split()).strip().lower()
+        if research_only_mode and _is_research_mode_disallowed_tool(tool_id):
+            continue
+        # Keep Google Docs/Sheets execution opt-in: only include these tools
+        # when the user explicitly requested Docs/Sheets output.
+        if not docs_requested and (
+            tool_id == "docs.create"
+            or tool_id.startswith("workspace.docs.")
+        ):
+            continue
+        if not sheets_requested and tool_id.startswith("workspace.sheets."):
+            continue
+        filtered_steps.append(step)
+    steps = filtered_steps
 
     if highlight_requested and not any(
         step.tool_id == "documents.highlight.extract" for step in steps

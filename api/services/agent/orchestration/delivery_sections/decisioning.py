@@ -249,16 +249,19 @@ def prepare_delivery_content(
         body_text=report_body or "Report requested, but no body content was generated.",
         recipient=task_intelligence.delivery_email,
         context_summary=context_summary,
+        target_format="recipient_email",
     )
-    report_title = str(
+    delivery_subject = str(
         polished_email.get("subject") or report_title or "Website Analysis Report"
     ).strip()
-    report_body = str(
+    delivery_body = str(
         polished_email.get("body_text")
         or report_body
         or "Report requested, but no body content was generated."
-    ).strip()
+    ).replace("\r\n", "\n").replace("\r", "\n").strip()
     report_body = _normalize_delivery_markdown(report_body)
     state.execution_context.settings["__latest_report_title"] = report_title
     state.execution_context.settings["__latest_report_content"] = report_body
+    state.execution_context.settings["__latest_delivery_email_subject"] = delivery_subject
+    state.execution_context.settings["__latest_delivery_email_body"] = delivery_body
     return report_title, report_body, pre_send_events

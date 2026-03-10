@@ -5,6 +5,7 @@ import { parseEvidence } from "./evidence";
 describe("parseEvidence", () => {
   it("prefers typed info_panel evidence_items over raw html", () => {
     const cards = parseEvidence("<p>fallback</p>", {
+      userPrompt: "Use https://axongroup.com/ if needed.",
       infoPanel: {
         evidence_items: [
           {
@@ -29,6 +30,35 @@ describe("parseEvidence", () => {
     expect(cards[0].graphNodeIds).toEqual(["node-1"]);
     expect(cards[0].sceneRefs).toEqual(["scene.browser.main"]);
     expect(cards[0].eventRefs).toEqual(["evt-77"]);
+  });
+
+  it("extracts prompt URLs when structured evidence is missing", () => {
+    const cards = parseEvidence("", {
+      userPrompt:
+        "search https://axongroup.com/ and review https://example.com/files/report.pdf",
+    });
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0].sourceUrl).toBe("https://axongroup.com/");
+    expect(cards[0].sourceType).toBe("web");
+    expect(cards[1].sourceUrl).toBe("https://example.com/files/report.pdf");
+    expect(cards[1].sourceType).toBe("pdf");
+  });
+
+  it("extracts prompt file attachments when provided", () => {
+    const cards = parseEvidence("", {
+      promptAttachments: [
+        {
+          name: "Quarterly-Deck.pdf",
+          fileId: "file-123",
+        },
+      ],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].fileId).toBe("file-123");
+    expect(cards[0].source).toBe("Quarterly-Deck.pdf");
+    expect(cards[0].sourceType).toBe("pdf");
   });
 
   it("keeps deep-link and confidence fields from typed evidence payload", () => {

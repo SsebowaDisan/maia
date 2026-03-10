@@ -38,13 +38,75 @@ function importanceBadge(ev: AgentActivityEvent): string | null {
   return null;
 }
 
-/** Classify event_type into a readable icon */
+/** Classify event surface from emitted metadata (not hardcoded event title words). */
+function cleanToken(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function titleFromToken(value: string): string {
+  return value
+    .split("_")
+    .filter((item) => item.length > 0)
+    .map((item) => item.slice(0, 1).toUpperCase() + item.slice(1))
+    .join(" ");
+}
+
+function eventSurfaceToken(ev: AgentActivityEvent): string {
+  const payload = (ev.data || ev.metadata || {}) as Record<string, unknown>;
+  const sceneSurface = cleanToken(payload.scene_surface);
+  if (sceneSurface) {
+    return sceneSurface;
+  }
+  const eventFamily = cleanToken(payload.event_family);
+  if (eventFamily) {
+    return eventFamily;
+  }
+  const toolId = cleanToken(payload.tool_id);
+  if (toolId.includes(".")) {
+    return toolId.split(".")[0];
+  }
+  const eventType = cleanToken(ev.event_type);
+  if (eventType.includes(".")) {
+    return eventType.split(".")[0];
+  }
+  if (eventType.includes("_")) {
+    return eventType.split("_")[0];
+  }
+  return eventType || "system";
+}
+
+function surfaceGroup(token: string): "website" | "file" | "platform" | "email" | "system" {
+  const normalized = cleanToken(token);
+  if (["website", "browser", "web"].includes(normalized)) return "website";
+  if (["document", "google_docs", "google_sheets", "docs", "sheets", "drive", "pdf", "file"].includes(normalized)) {
+    return "file";
+  }
+  if (["email", "gmail"].includes(normalized)) return "email";
+  if (["api", "integration", "connector"].includes(normalized)) return "platform";
+  return "system";
+}
+
+function surfaceKeyForEvent(ev: AgentActivityEvent): "website" | "file" | "platform" | "email" | "system" {
+  return surfaceGroup(eventSurfaceToken(ev));
+}
+
+function eventSurfaceLabel(ev: AgentActivityEvent): string {
+  const token = eventSurfaceToken(ev);
+  const grouped = surfaceGroup(token);
+  if (grouped === "system") {
+    return titleFromToken(token || "system") || "System";
+  }
+  return titleFromToken(grouped);
+}
+
 function eventIcon(ev: AgentActivityEvent): string {
   const t = ev.event_type.toLowerCase();
-  if (t.includes("navigate") || t.includes("web_result") || t.includes("browser")) return "🌐";
-  if (t.includes("pdf") || t.includes("doc") || t.includes("file")) return "📄";
+  const surface = surfaceKeyForEvent(ev);
+  if (surface === "platform") return "⚙";
+  if (surface === "website") return "🌐";
+  if (surface === "file") return "📄";
+  if (surface === "email") return "✉️";
   if (t.includes("evidence") || t.includes("crystalliz")) return "💎";
-  if (t.includes("email")) return "✉️";
   if (t.includes("plan") || t.includes("task")) return "🗂";
   if (t.includes("approval") || t.includes("gate")) return "⛔";
   if (t.includes("trust") || t.includes("verif")) return "✅";
@@ -53,17 +115,25 @@ function eventIcon(ev: AgentActivityEvent): string {
 }
 
 /** Compute live stats from visible events */
-function computeStats(events: AgentActivityEvent[]): { sources: number; evidence: number } {
+function computeStats(events: AgentActivityEvent[]): { sources: number; evidence: number; platforms: number } {
   let sources = 0;
   let evidence = 0;
+  let platforms = 0;
   for (const ev of events) {
     const t = ev.event_type.toLowerCase();
+    const surface = surfaceKeyForEvent(ev);
+    if (surface === "platform") {
+      platforms += 1;
+    }
     if (
       t.includes("navigate") ||
       t.includes("web_result_opened") ||
       t.includes("doc_open") ||
       t.includes("browser_load") ||
-      t.includes("page_open")
+      t.includes("page_open") ||
+      t.startsWith("docs.") ||
+      t.startsWith("sheets.") ||
+      t.startsWith("drive.")
     ) {
       sources += 1;
     }
@@ -76,7 +146,7 @@ function computeStats(events: AgentActivityEvent[]): { sources: number; evidence
       evidence += 1;
     }
   }
-  return { sources, evidence };
+  return { sources, evidence, platforms };
 }
 
 function CinemaOverlay({
@@ -127,7 +197,7 @@ function CinemaOverlay({
     <div className="fixed inset-0 z-[9999] flex flex-col bg-[#0d1118]">
       <div className="flex min-h-0 flex-1 gap-0">
 
-        {/* ── Left: Research Phases ── */}
+        {/* Left: Research Phases */}
         <div className="flex w-[240px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-white/[0.08] p-4">
           <p className="text-[10px] uppercase tracking-widest text-white/50">Research Phases</p>
           {phaseTimeline.map((phase) => (
@@ -153,7 +223,7 @@ function CinemaOverlay({
               </div>
             </div>
           ))}
-          {/* Research todo list — rendered dark for the cinema background */}
+          {/* Research todo list rendered dark for the cinema background */}
           {(plannedRoadmapSteps.length > 0 || visibleEvents.length > 0) ? (
             <div className="mt-2 border-t border-white/[0.08] pt-3">
               <p className="mb-2 text-[10px] uppercase tracking-widest text-white/50">Tasks</p>
@@ -170,12 +240,12 @@ function CinemaOverlay({
           <div className="mt-auto space-y-1 border-t border-white/[0.08] pt-3">
             <p className="text-[10px] text-white/40">Step {safeCursor + 1} / {total}</p>
             <p className="text-[11px] font-medium text-white/70">
-              {activeEvent?.title ?? "Waiting…"}
+              {activeEvent?.title ?? "Waiting..."}
             </p>
           </div>
         </div>
 
-        {/* ── Centre: DesktopViewer ── */}
+        {/* Center: DesktopViewer */}
         <div className="relative min-h-0 flex-1">
           <DesktopViewer
             {...sharedViewerProps}
@@ -186,7 +256,7 @@ function CinemaOverlay({
           />
         </div>
 
-        {/* ── Right: Evidence Trail ── */}
+        {/* Right: Evidence Trail */}
         <div className="flex w-[260px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-white/[0.08] p-4">
           {/* Live stats row */}
           <div className="flex items-center justify-between">
@@ -198,19 +268,27 @@ function CinemaOverlay({
               </span>
             ) : null}
           </div>
-          {(stats.sources > 0 || stats.evidence > 0) ? (
+          {(stats.sources > 0 || stats.evidence > 0 || stats.platforms > 0) ? (
             <div className="flex gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5">
               {stats.sources > 0 ? (
                 <span className="text-[10px] text-white/55">
                   <span className="font-semibold text-white/80">{stats.sources}</span> pages
                 </span>
               ) : null}
-              {stats.sources > 0 && stats.evidence > 0 ? (
-                <span className="text-white/20">·</span>
+              {(stats.sources > 0 && stats.evidence > 0) || (stats.sources > 0 && stats.platforms > 0) ? (
+                <span className="text-white/20">.</span>
               ) : null}
               {stats.evidence > 0 ? (
                 <span className="text-[10px] text-white/55">
                   <span className="font-semibold text-[#ffd700]/90">{stats.evidence}</span> evidence
+                </span>
+              ) : null}
+              {stats.evidence > 0 && stats.platforms > 0 ? (
+                <span className="text-white/20">.</span>
+              ) : null}
+              {stats.platforms > 0 ? (
+                <span className="text-[10px] text-white/55">
+                  <span className="font-semibold text-[#9dd6ff]">{stats.platforms}</span> platforms
                 </span>
               ) : null}
             </div>
@@ -218,14 +296,14 @@ function CinemaOverlay({
 
           {/* Event list */}
           <div className="space-y-1">
-            {visibleEvents.slice(-40).map((ev, i) => {
-              const eventIndex = Math.max(0, visibleEvents.length - 40) + i;
+            {visibleEvents.map((ev, eventIndex) => {
               const isActive = eventIndex === safeCursor;
               const badge = importanceBadge(ev);
               const icon = eventIcon(ev);
+              const surfaceLabel = eventSurfaceLabel(ev);
               return (
                 <button
-                  key={ev.event_id || i}
+                  key={ev.event_id || eventIndex}
                   type="button"
                   onClick={() => {
                     if (streaming) return;
@@ -243,6 +321,9 @@ function CinemaOverlay({
                   <div className="flex items-center gap-1.5">
                     <span className="shrink-0 text-[11px] leading-none">{icon}</span>
                     <p className="min-w-0 flex-1 truncate text-[10px] font-medium leading-tight">{ev.title}</p>
+                    <span className="shrink-0 rounded border border-white/15 px-1 py-px text-[8px] font-semibold uppercase text-white/55">
+                      {surfaceLabel}
+                    </span>
                     {badge ? (
                       <span className={`shrink-0 rounded px-1 py-px text-[8px] font-bold uppercase leading-none ${
                         badge === "CRIT"
@@ -260,7 +341,7 @@ function CinemaOverlay({
         </div>
       </div>
 
-      {/* ── Bottom: Custom scrubber + controls ── */}
+      {/* Bottom: Custom scrubber + controls */}
       <div className="flex shrink-0 items-center gap-3 border-t border-white/[0.08] bg-[#0d1118]/90 px-4 py-3 backdrop-blur">
         <button
           type="button"
@@ -286,7 +367,7 @@ function CinemaOverlay({
               className="absolute inset-y-0 left-0 rounded-full bg-white/65 transition-[width] duration-150"
               style={{ width: `${progressFraction * 100}%` }}
             />
-            {/* Thumb — only shown on hover */}
+            {/* Thumb only shown on hover */}
             {!streaming ? (
               <div
                 className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-sm transition-[left] duration-150"

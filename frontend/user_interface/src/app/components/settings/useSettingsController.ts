@@ -190,10 +190,10 @@ export function useSettingsController(activeTab: string) {
 
   useEffect(() => {
     const unsubscribe = subscribeAgentEvents({
-      replay: 30,
+      replay: 0,
       onEvent: (event) => {
         ollama.handleLiveEvent(event, refreshIntegrations);
-        setLiveEvents((previous) => [event, ...previous].slice(0, 80));
+        setLiveEvents((previous) => [event, ...previous]);
       },
       onError: () => {
         setOauthStatus((prev) => prev || "Live events stream disconnected. It will reconnect on page refresh.");

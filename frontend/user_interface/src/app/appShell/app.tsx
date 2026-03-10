@@ -373,6 +373,7 @@ export default function App() {
                 citationFocus={chatState.citationFocus}
                 selectedConversationId={chatState.selectedConversationId}
                 userPrompt={activeTurn?.user || ""}
+                attachments={activeTurn?.attachments || []}
                 assistantHtml={activeTurn?.assistant || ""}
                 infoHtml={activeTurn?.info || ""}
                 infoPanel={activeTurn?.infoPanel || {}}

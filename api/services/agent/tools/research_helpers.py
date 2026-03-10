@@ -179,6 +179,71 @@ def fuse_search_results(
     return fused[: max(1, int(top_k))]
 
 
+def _domain_of(url: str) -> str:
+    """Return the registered domain (no www, no port) for MMR similarity."""
+    try:
+        host = urlparse(str(url or "")).netloc.lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host.split(":")[0]
+
+
+def mmr_rerank(
+    results: list[dict[str, Any]],
+    *,
+    top_k: int,
+    lambda_param: float = 0.7,
+) -> list[dict[str, Any]]:
+    """Maximal Marginal Relevance reranking for domain-level source diversity.
+
+    Balances relevance (rrf_score) against redundancy (same domain already
+    selected) so the final list spans multiple domains rather than clustering
+    on whichever single domain ranked highest.
+
+    lambda_param=0.7 → 70% relevance, 30% diversity.
+    """
+    if not results or top_k <= 0:
+        return results[:top_k]
+    if len(results) <= top_k:
+        return results
+
+    # Normalise rrf_scores to [0, 1] over the candidate set.
+    scores = [float(r.get("rrf_score") or 0.0) for r in results]
+    max_score = max(scores) if scores else 1.0
+    if max_score == 0.0:
+        max_score = 1.0
+    norm_scores = [s / max_score for s in scores]
+
+    lam = max(0.0, min(1.0, float(lambda_param)))
+    selected_indices: list[int] = []
+    selected_domains: list[str] = []
+    remaining = list(range(len(results)))
+
+    while len(selected_indices) < top_k and remaining:
+        best_idx: int | None = None
+        best_mmr: float = -1e9
+
+        for i in remaining:
+            relevance = norm_scores[i]
+            candidate_domain = _domain_of(str(results[i].get("url") or ""))
+            # Domain similarity: 1.0 if this domain is already selected, else 0.0.
+            max_sim = 1.0 if candidate_domain and candidate_domain in selected_domains else 0.0
+            mmr = lam * relevance - (1.0 - lam) * max_sim
+            if mmr > best_mmr:
+                best_mmr = mmr
+                best_idx = i
+
+        if best_idx is None:
+            break
+        selected_indices.append(best_idx)
+        selected_domains.append(_domain_of(str(results[best_idx].get("url") or "")))
+        remaining.remove(best_idx)
+
+    return [results[i] for i in selected_indices]
+
+
 def classify_provider_failure(exc: Exception) -> dict[str, Any]:
     message = " ".join(str(exc or "").split()).strip()
     lowered = message.lower()
@@ -225,6 +290,7 @@ __all__ = [
     "extract_first_url",
     "extract_search_variants",
     "fuse_search_results",
+    "mmr_rerank",
     "normalize_search_provider",
     "safe_snippet",
     "truthy",

@@ -155,7 +155,8 @@ function ReplayTimeline({
     return Math.round(ratio * (totalEvents - 1));
   };
 
-  const replayMode = readReplayMode(visibleEvents);
+  // Always show full-fidelity steps while streaming live.
+  const replayMode = streaming ? "full_theatre" : readReplayMode(visibleEvents);
   const firstEventTs = Number(visibleEvents[0]?.timestamp || 0);
   const timelineRows = timelineRowsForMode({
     visibleEvents,

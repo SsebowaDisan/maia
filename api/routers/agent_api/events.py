@@ -16,7 +16,7 @@ router = APIRouter(tags=["agent"])
 @router.get("/events")
 def stream_agent_events(
     run_id: str | None = None,
-    replay: int = Query(default=40, ge=0, le=200),
+    replay: int = Query(default=0, ge=0, le=200000),
     user_id: str = Depends(get_current_user_id),
 ):
     broker = get_live_event_broker()

@@ -414,6 +414,7 @@ class LiveRunStream:
         step: PlannedStep,
         step_index: int,
         traces: list[ToolTraceEvent] | list[Any],
+        is_shadow: bool = False,
         activity_event_factory: Callable[..., AgentActivityEvent],
     ) -> Generator[dict[str, Any], None, None]:
         for trace in list(traces or []):
@@ -439,6 +440,8 @@ class LiveRunStream:
             trace_detail = str(payload.get("detail") or "").strip()
             trace_data = payload.get("data")
             trace_data_dict = dict(trace_data) if isinstance(trace_data, dict) else {}
+            if is_shadow:
+                trace_data_dict["shadow"] = True
             if not str(trace_data_dict.get("scene_surface") or "").strip():
                 trace_data_dict["scene_surface"] = self._infer_scene_surface(
                     event_type=trace_event_type,
@@ -476,6 +479,7 @@ class LiveRunStream:
         access_context: Any,
         prompt: str,
         params: dict[str, Any],
+        is_shadow: bool = False,
         activity_event_factory: Callable[..., AgentActivityEvent],
     ) -> Generator[dict[str, Any], None, Any]:
         execution_stream = registry.execute_with_trace(
@@ -494,6 +498,7 @@ class LiveRunStream:
                 step=step,
                 step_index=step_index,
                 traces=[trace],
+                is_shadow=is_shadow,
                 activity_event_factory=activity_event_factory,
             ):
                 yield trace_event

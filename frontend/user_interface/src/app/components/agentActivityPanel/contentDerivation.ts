@@ -34,6 +34,60 @@ function resolveSceneSnapshotUrl(
 }
 
 function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
+  const isGoogleWorkspaceUrl = (value: string): boolean => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return (
+      normalized.includes("docs.google.com/document/") ||
+      normalized.includes("docs.google.com/spreadsheets/")
+    );
+  };
+
+  const isHttpUrl = (value: string): boolean =>
+    value.startsWith("http://") || value.startsWith("https://");
+
+  const firstHttpUrl = (...candidates: unknown[]): string => {
+    for (const candidate of candidates) {
+      const value = readStringField(candidate);
+      if (isHttpUrl(value)) {
+        return value;
+      }
+    }
+    return "";
+  };
+  const fromTargetObject = (value: unknown): string => {
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    const row = value as Record<string, unknown>;
+    return firstHttpUrl(
+      row["url"],
+      row["source_url"],
+      row["target_url"],
+      row["page_url"],
+      row["final_url"],
+      row["link"],
+    );
+  };
+  const fromRows = (value: unknown): string => {
+    if (!Array.isArray(value)) {
+      return "";
+    }
+    for (let rowIdx = value.length - 1; rowIdx >= 0; rowIdx -= 1) {
+      const row = value[rowIdx];
+      const extracted = fromTargetObject(row);
+      if (extracted) {
+        return extracted;
+      }
+      const direct = readStringField(row);
+      if (direct.startsWith("http://") || direct.startsWith("https://")) {
+        return direct;
+      }
+    }
+    return "";
+  };
   for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
     const event = visibleEvents[idx];
     const eventType = String(event.event_type || "").toLowerCase();
@@ -52,33 +106,90 @@ function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
     const meta = event.metadata || {};
     const data = event.data || {};
     const fromMeta =
-      readStringField(meta["url"]) ||
-      readStringField(meta["source_url"]) ||
-      readStringField(meta["target_url"]) ||
-      readStringField(meta["page_url"]) ||
-      readStringField(meta["final_url"]) ||
-      readStringField(meta["link"]);
-    if (fromMeta.startsWith("http://") || fromMeta.startsWith("https://")) {
+      firstHttpUrl(
+        meta["url"],
+        meta["source_url"],
+        meta["target_url"],
+        meta["page_url"],
+        meta["final_url"],
+        meta["link"],
+      ) ||
+      fromTargetObject(meta["action_target"]) ||
+      fromRows(meta["opened_pages"]) ||
+      fromRows(meta["top_urls"]);
+    if (fromMeta) {
       return fromMeta;
     }
     const fromData =
-      readStringField(data["url"]) ||
-      readStringField(data["source_url"]) ||
-      readStringField(data["target_url"]) ||
-      readStringField(data["page_url"]) ||
-      readStringField(data["final_url"]) ||
-      readStringField(data["link"]);
-    if (fromData.startsWith("http://") || fromData.startsWith("https://")) {
+      firstHttpUrl(
+        data["url"],
+        data["source_url"],
+        data["target_url"],
+        data["page_url"],
+        data["final_url"],
+        data["link"],
+      ) ||
+      fromTargetObject(data["action_target"]) ||
+      fromRows(data["opened_pages"]) ||
+      fromRows(data["top_urls"]);
+    if (fromData) {
       return fromData;
     }
-    if (eventType.startsWith("browser_") || eventType.startsWith("web_")) {
-      const mergedText = `${event.title} ${event.detail}`.trim();
-      const match = mergedText.match(URL_PATTERN);
-      if (match?.[1]) {
-        return match[1];
-      }
+    const mergedText = `${event.title} ${event.detail}`.trim();
+    const match = mergedText.match(URL_PATTERN);
+    if (match?.[1]) {
+      return match[1];
     }
   }
+
+  const readEventUrl = (event: AgentActivityEvent): string => {
+    const meta = event.metadata || {};
+    const data = event.data || {};
+    const direct =
+      firstHttpUrl(
+        meta["url"],
+        meta["source_url"],
+        meta["target_url"],
+        meta["page_url"],
+        meta["final_url"],
+        meta["link"],
+        data["url"],
+        data["source_url"],
+        data["target_url"],
+        data["page_url"],
+        data["final_url"],
+        data["link"],
+      ) ||
+      fromTargetObject(meta["action_target"]) ||
+      fromTargetObject(data["action_target"]) ||
+      fromRows(meta["opened_pages"]) ||
+      fromRows(data["opened_pages"]) ||
+      fromRows(meta["top_urls"]) ||
+      fromRows(data["top_urls"]);
+    if (direct) {
+      return direct;
+    }
+    const mergedText = `${event.title} ${event.detail}`.trim();
+    const match = mergedText.match(URL_PATTERN);
+    return String(match?.[1] || "");
+  };
+
+  // Fallback: if scene tagging is missing, recover a website URL from any event.
+  for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+    const candidate = readEventUrl(visibleEvents[idx]);
+    if (candidate && isHttpUrl(candidate) && !isGoogleWorkspaceUrl(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Last-resort fallback: return any HTTP URL to avoid an empty browser frame.
+  for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+    const candidate = readEventUrl(visibleEvents[idx]);
+    if (candidate && isHttpUrl(candidate)) {
+      return candidate;
+    }
+  }
+
   return "";
 }
 
@@ -109,27 +220,53 @@ function resolveEmailSubject(visibleEvents: AgentActivityEvent[]): string {
 }
 
 function resolveEmailBodyHint(visibleEvents: AgentActivityEvent[]): string {
-  for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
+  let streamed = "";
+  let fallback = "";
+  for (let idx = 0; idx < visibleEvents.length; idx += 1) {
     const event = visibleEvents[idx];
-    if (
-      event.event_type !== "email_set_body" &&
-      event.event_type !== "email_type_body" &&
-      event.event_type !== "email_ready_to_send"
-    ) {
+    const type = String(event.event_type || "");
+    if (type !== "email_set_body" && type !== "email_type_body" && type !== "email_ready_to_send") {
       continue;
     }
     const dataPreview =
       typeof event.data?.["typed_preview"] === "string"
         ? event.data["typed_preview"]
         : "";
-    if (dataPreview) {
-      return dataPreview;
+    const chunkIndex = Number(event.data?.["chunk_index"]);
+    const chunkTotal = Number(event.data?.["chunk_total"]);
+    const detail = String(event.detail || "");
+
+    if (type === "email_type_body") {
+      const chunk = dataPreview || detail;
+      if (!chunk) {
+        continue;
+      }
+      const hasChunkMeta =
+        Number.isFinite(chunkIndex) &&
+        chunkIndex > 0 &&
+        Number.isFinite(chunkTotal) &&
+        chunkTotal > 0;
+      if (hasChunkMeta && chunkIndex === 1 && chunk.length < streamed.length) {
+        streamed = "";
+      }
+      if (chunk.startsWith(streamed)) {
+        streamed = chunk;
+      } else if (!streamed.endsWith(chunk)) {
+        streamed += chunk;
+      }
+      continue;
     }
-    if (event.detail) {
-      return event.detail;
+
+    if (dataPreview) {
+      streamed = dataPreview.length >= streamed.length ? dataPreview : streamed;
+      fallback = dataPreview;
+      continue;
+    }
+    if (detail) {
+      fallback = detail;
     }
   }
-  return "";
+  return streamed || fallback;
 }
 
 function resolveDocBodyHint(visibleEvents: AgentActivityEvent[]): string {

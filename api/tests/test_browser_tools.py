@@ -136,6 +136,9 @@ class BrowserToolTests(unittest.TestCase):
         assert "tool_progress" in event_types
         assert "browser_interaction_policy" in event_types
         assert "browser_open" in event_types
+        policy_event = next(event for event in result.events if event.event_type == "browser_interaction_policy")
+        assert str(policy_event.data.get("url") or "") == "https://example.com"
+        assert str(policy_event.data.get("source_url") or "") == "https://example.com"
         browser_open_event = next(event for event in result.events if event.event_type == "browser_open")
         assert browser_open_event.data.get("action") == "navigate"
         assert browser_open_event.data.get("action_phase") == "active"

@@ -59,7 +59,15 @@ function SheetsScene({
   verifierRecheckRequired,
   zoomEscalationRequested,
 }: SheetsSceneProps) {
-  const typingPulse = action === "type" && (actionPhase === "start" || actionPhase === "active");
+  const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
+  const isTypingAction = action === "type";
+  const typingPulse = isTypingAction && (actionPhase === "start" || actionPhase === "active");
+  const sheetWriteEvent =
+    normalizedEventType === "sheet_cell_update" ||
+    normalizedEventType === "sheet_append_row" ||
+    normalizedEventType === "sheets.append_started";
+  const showLiveTypingPanel = !sheetsFrameUrl || isTypingAction || sheetWriteEvent;
+  const livePanelTitle = typingPulse ? "Live sheet typing" : "Recent sheet activity";
   const activeRowIndex = sheetPreviewRows.length ? Math.max(0, sheetPreviewRows.length - 1) : -1;
   return (
     <div className="absolute inset-0 bg-[linear-gradient(180deg,#ececef_0%,#e1e2e6_100%)] p-3 text-[#1d1d1f]">
@@ -147,28 +155,34 @@ function SheetsScene({
               </div>
             </div>
           )}
-          <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,440px)] rounded-lg border border-black/[0.08] bg-white/90 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
-              Live sheet typing
-            </p>
-            <div className="mt-1.5 max-h-[132px] overflow-y-auto rounded-md border border-black/[0.06] bg-white px-2.5 py-2 text-[12px] leading-[1.5] text-[#1f1f22]">
-              {sheetPreviewRows.length ? (
-                <div className="space-y-1">
-                  {sheetPreviewRows.map((row, index) => (
-                    <p key={`sheet-stream-${index}`} className="line-clamp-2">
-                      {row}
-                    </p>
-                  ))}
-                  <span className="inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
-                </div>
-              ) : (
-                <p>
-                  {sheetStatusLine || "Writing roadmap rows to Google Sheets..."}
-                  <span className="ml-1 inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
-                </p>
-              )}
+          {showLiveTypingPanel ? (
+            <div className="pointer-events-none absolute right-3 bottom-3 z-10 w-[min(42%,440px)] rounded-lg border border-black/[0.08] bg-white/90 px-3 py-2 shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">
+                {livePanelTitle}
+              </p>
+              <div className="mt-1.5 max-h-[132px] overflow-y-auto rounded-md border border-black/[0.06] bg-white px-2.5 py-2 text-[12px] leading-[1.5] text-[#1f1f22]">
+                {sheetPreviewRows.length ? (
+                  <div className="space-y-1">
+                    {sheetPreviewRows.map((row, index) => (
+                      <p key={`sheet-stream-${index}`} className="line-clamp-2">
+                        {row}
+                      </p>
+                    ))}
+                    {typingPulse ? (
+                      <span className="inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
+                    ) : null}
+                  </div>
+                ) : (
+                  <p>
+                    {sheetStatusLine || "Writing roadmap rows to Google Sheets..."}
+                    {typingPulse ? (
+                      <span className="ml-1 inline-block h-[12px] w-[1px] animate-pulse bg-[#1f1f22]" />
+                    ) : null}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          ) : null}
           {zoomHistory.length ? (
             <div className="pointer-events-none absolute left-3 top-16 z-10 w-[min(44%,360px)] rounded-lg border border-black/[0.08] bg-white/90 px-2.5 py-2 text-[10px] text-[#2a2a2d] shadow-[0_8px_18px_-16px_rgba(0,0,0,0.55)] backdrop-blur-sm">
               <p className="font-semibold uppercase tracking-[0.08em] text-[#6e6e73]">Zoom history</p>

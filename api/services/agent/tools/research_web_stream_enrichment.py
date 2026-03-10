@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.agent.models import AgentSource
 from api.services.agent.tools.base import (
     ToolExecutionContext,
@@ -11,9 +12,79 @@ from api.services.agent.tools.base import (
 )
 from api.services.agent.tools.research_helpers import (
     fuse_search_results as _fuse_search_results,
+    mmr_rerank as _mmr_rerank,
     safe_snippet as _safe_snippet,
 )
 from api.services.agent.tools.research_web_helpers import _build_provider_plan, _website_scene_payload
+
+
+def _llm_gap_fill_queries(
+    *,
+    original_query: str,
+    covered_labels: list[str],
+    covered_excerpts: list[str],
+    max_queries: int = 4,
+) -> list[str]:
+    """Generate targeted gap-fill search queries using an LLM.
+
+    Analyses what has already been collected and returns queries that cover
+    different angles, subtopics, or perspectives not yet addressed, producing
+    far more meaningful gap coverage than regex entity extraction.
+    """
+    if not env_bool("MAIA_AGENT_LLM_GAP_FILL_QUERIES_ENABLED", default=True):
+        return []
+    clean_labels = [str(lbl or "").strip() for lbl in covered_labels if str(lbl or "").strip()]
+    clean_excerpts = [str(ex or "").strip() for ex in covered_excerpts if str(ex or "").strip()]
+    if not clean_labels and not clean_excerpts:
+        return []
+    payload = {
+        "original_query": str(original_query or "").strip()[:320],
+        "already_covered_titles": clean_labels[:12],
+        "excerpt_samples": [ex[:200] for ex in clean_excerpts[:6]],
+    }
+    response = call_json_response(
+        system_prompt=(
+            "You generate precise web search queries to fill gaps in research coverage for enterprise intelligence. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            "The research agent already collected the sources listed in 'already_covered_titles' while researching the query below.\n"
+            "Your task: generate search queries that target DIFFERENT angles not yet covered — "
+            "competing viewpoints, specific data points, related companies, expert opinions, recent developments, or niche subtopics.\n"
+            "Return JSON only in this schema:\n"
+            '{ "gap_queries": ["specific query 1", "specific query 2"] }\n'
+            "Rules:\n"
+            f"- Generate exactly {max_queries} distinct search queries.\n"
+            "- Each query must address a gap: a subtopic, competitor, statistic, or perspective absent from already_covered_titles.\n"
+            "- Keep each query under 120 characters and optimised for web search (no filler words).\n"
+            "- Do NOT repeat the original query verbatim or near-verbatim.\n"
+            "- Prioritise specificity: 'Salesforce CRM market share 2024' beats 'CRM market information'.\n"
+            "- If the topic is a company, include queries for financials, leadership, competitors, and recent news.\n"
+            "- If the topic is a product/technology, include queries for pricing, alternatives, user reviews, and benchmarks.\n\n"
+            f"Input:\n{payload}"
+        ),
+        temperature=0.1,
+        timeout_seconds=10,
+        max_tokens=360,
+    )
+    if not isinstance(response, dict):
+        return []
+    raw = response.get("gap_queries")
+    if not isinstance(raw, list):
+        return []
+    original_lower = str(original_query or "").strip().lower()
+    clean: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = " ".join(str(item or "").split()).strip()[:160]
+        key = text.lower()
+        if not text or key == original_lower or key in seen:
+            continue
+        seen.add(key)
+        clean.append(text)
+        if len(clean) >= max_queries:
+            break
+    return clean
 
 
 def run_enrichment_and_finalize_stage(
@@ -85,7 +156,11 @@ def run_enrichment_and_finalize_stage(
                 )
                 trace_events.append(_sup_done)
                 yield _sup_done
-                from api.services.agent.research.source_credibility import score_source_credibility
+                from api.services.agent.research.source_credibility import (
+                    apply_freshness_weight,
+                    score_source_credibility,
+                    score_source_freshness,
+                )
                 for _row in _sup_rows:
                     if not isinstance(_row, dict):
                         continue
@@ -97,12 +172,14 @@ def run_enrichment_and_finalize_stage(
                     _desc = str(_row.get("description") or "").strip()
                     _excerpt = _safe_snippet(_desc or _name or _url, 220)
                     _cred = score_source_credibility(_url)
+                    _fresh = score_source_freshness(_url, _desc)
+                    _composite = apply_freshness_weight(_cred, _fresh)
                     sources.append(
                         AgentSource(
                             source_type="web",
                             label=_name,
                             url=_url or None,
-                            score=max(0.5, min(0.98, 0.60 + _cred * 0.40)),
+                            score=max(0.5, min(0.98, 0.60 + _composite * 0.40)),
                             credibility_score=_cred,
                             metadata={
                                 "provider": _conn_id,
@@ -263,33 +340,42 @@ def run_enrichment_and_finalize_stage(
             if len(_seen_gap_urls) >= min_unique_sources:
                 break
 
-            # Extract salient named terms from top-scoring source labels / excerpts
-            # as gap-fill query seeds (no LLM call — fast entity extraction).
+            # Build label/excerpt lists from top-scoring sources for gap analysis.
             _top_labels = [
                 str(getattr(s, "label", "") or "").strip()
-                for s in sorted(sources, key=lambda x: float(getattr(x, "score", 0) or 0), reverse=True)[:10]
+                for s in sorted(sources, key=lambda x: float(getattr(x, "score", 0) or 0), reverse=True)[:12]
             ]
             _top_excerpts = [
                 str((getattr(s, "metadata", {}) or {}).get("excerpt", "") or "").strip()
-                for s in sources[:6]
+                for s in sources[:8]
             ]
-            _all_terms: list[str] = []
-            for _text in _top_labels + _top_excerpts:
-                _all_terms.extend(re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3}\b", _text))
-            _unique_terms: list[str] = []
-            _seen_t: set[str] = set()
-            for _t in _all_terms:
-                _lt = _t.lower()
-                if _lt not in _seen_t and _lt not in query.lower():
-                    _seen_t.add(_lt)
-                    _unique_terms.append(_t)
-                if len(_unique_terms) >= 6:
-                    break
 
-            if not _unique_terms:
+            # Primary: LLM-generated gap queries targeting uncovered angles.
+            _gap_queries = _llm_gap_fill_queries(
+                original_query=query,
+                covered_labels=_top_labels,
+                covered_excerpts=_top_excerpts,
+                max_queries=4,
+            )
+
+            # Fallback: regex named-entity extraction when LLM is disabled or returns nothing.
+            if not _gap_queries:
+                _all_terms: list[str] = []
+                for _text in _top_labels[:10] + _top_excerpts[:6]:
+                    _all_terms.extend(re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3}\b", _text))
+                _unique_terms: list[str] = []
+                _seen_t: set[str] = set()
+                for _t in _all_terms:
+                    _lt = _t.lower()
+                    if _lt not in _seen_t and _lt not in query.lower():
+                        _seen_t.add(_lt)
+                        _unique_terms.append(_t)
+                    if len(_unique_terms) >= 6:
+                        break
+                _gap_queries = [f"{query} {_t}" for _t in _unique_terms[:4]]
+
+            if not _gap_queries:
                 break
-
-            _gap_queries = [f"{query} {_t}" for _t in _unique_terms[:4]]
             _gap_budget = max(results_per_query, min(20, min_unique_sources - len(_seen_gap_urls)))
 
             _gap_start = ToolTraceEvent(
@@ -331,12 +417,22 @@ def run_enrichment_and_finalize_stage(
                         _grrf = float(_gr.get("rrf_score") or 0.0)
                     except Exception:
                         _grrf = 0.0
+                    from api.services.agent.research.source_credibility import (
+                        apply_freshness_weight,
+                        score_source_credibility,
+                        score_source_freshness,
+                    )
+                    _gcred = score_source_credibility(_gurl)
+                    _gfresh = score_source_freshness(_gurl, _gsnippet)
+                    _gcomposite = apply_freshness_weight(_gcred, _gfresh)
+                    _gbase = max(0.5, min(0.92, 0.62 + (_grrf * 100)))
+                    _gscore = round((0.70 * _gbase + 0.30 * (0.60 + _gcomposite * 0.40)), 4)
                     sources.append(
                         AgentSource(
                             source_type="web",
                             label=_gname,
                             url=_gurl or None,
-                            score=max(0.5, min(0.92, 0.62 + (_grrf * 100))),
+                            score=max(0.5, min(0.92, _gscore)),
                             metadata={
                                 "provider": "brave_search_gap",
                                 "excerpt": _gexcerpt,
@@ -375,6 +471,25 @@ def run_enrichment_and_finalize_stage(
         f"using {used_provider}: {query}"
     )
     if sources:
+        # Apply MMR reranking for domain diversity on deep-research tiers before
+        # saving so the report generator gets a varied source set rather than
+        # clustering on the top-ranked domain.
+        if depth_tier in {"deep_research", "deep_analytics", "expert"} and len(sources) > 20:
+            _mmr_cap = min(200, len(sources))
+            _source_dicts = [
+                {"url": str(s.url or ""), "rrf_score": float(getattr(s, "score", 0.0) or 0.0)}
+                for s in sources
+            ]
+            _mmr_order = _mmr_rerank(_source_dicts, top_k=_mmr_cap, lambda_param=0.72)
+            _url_order = [str(r.get("url") or "") for r in _mmr_order]
+            _src_by_url = {str(s.url or ""): s for s in sources}
+            sources = [_src_by_url[u] for u in _url_order if u in _src_by_url]
+            # Append any sources not captured by MMR at the end (safety).
+            _mmr_url_set = set(_url_order)
+            for _s in list(_src_by_url.values()):
+                if str(_s.url or "") not in _mmr_url_set:
+                    sources.append(_s)
+
         context.settings["__latest_web_sources"] = [
             source.to_dict()
             for source in sources[:200]

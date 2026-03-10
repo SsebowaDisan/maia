@@ -103,6 +103,53 @@ def test_polish_email_content_preserves_long_body_when_llm_over_compresses(monke
     assert len(result["body_text"]) > 3000
 
 
+def test_polish_email_content_recipient_mode_removes_report_scaffolding_when_llm_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_EMAIL_POLISH_ENABLED", "1")
+    monkeypatch.setattr(llm_execution_support, "call_json_response", lambda **kwargs: None)
+    body = (
+        "## Website Analysis Report\n\n"
+        "Company overview and key findings from the website.\n\n"
+        "## Email Draft\n"
+        "Hello,\nPlease see details.\n\n"
+        "[Your Name]\n[Your Position]\n[Your Contact Information]"
+    )
+    result = polish_email_content(
+        subject="Axon Group update",
+        body_text=body,
+        recipient="ops@example.com",
+        target_format="recipient_email",
+    )
+    assert "##" not in result["body_text"]
+    assert "Email Draft" not in result["body_text"]
+    assert "[Your Name]" not in result["body_text"]
+    assert "Company overview" in result["body_text"]
+
+
+def test_polish_email_content_recipient_mode_sanitizes_llm_placeholders(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_AGENT_LLM_EMAIL_POLISH_ENABLED", "1")
+    monkeypatch.setattr(
+        llm_execution_support,
+        "call_json_response",
+        lambda **kwargs: {
+            "subject": "Axon Group summary",
+            "body_text": "## Email Draft\nHello,\n\n[Your Name]\n\n[Your Position]",
+        },
+    )
+    source_body = (
+        "## Website Analysis Report\n\n"
+        "Core summary paragraph with evidence-backed findings and implications."
+    )
+    result = polish_email_content(
+        subject="Axon Group summary",
+        body_text=source_body,
+        recipient="ops@example.com",
+        target_format="recipient_email",
+    )
+    assert "Email Draft" not in result["body_text"]
+    assert "[Your Name]" not in result["body_text"]
+    assert result["body_text"]
+
+
 def test_draft_delivery_report_content_fallback_when_disabled(monkeypatch) -> None:
     monkeypatch.setenv("MAIA_AGENT_LLM_DELIVERY_DRAFT_ENABLED", "0")
     result = draft_delivery_report_content(

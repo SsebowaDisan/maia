@@ -157,6 +157,7 @@ def execute_planned_steps(
             event_type="tool_started",
             title=step.title,
             detail=step.tool_id,
+            metadata={"tool_id": step.tool_id, "step": index},
         )
         yield emit_event(step_event)
         progress_event = activity_event_factory(

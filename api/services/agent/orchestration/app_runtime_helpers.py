@@ -225,6 +225,8 @@ def build_execution_context_settings(
         "__latest_report_title": "",
         "__latest_report_content": "",
         "__latest_report_sources": [],
+        "__latest_delivery_email_subject": "",
+        "__latest_delivery_email_body": "",
         "__latest_web_sources": [],
         "__latest_web_query": "",
         "__latest_web_provider": "",
@@ -295,6 +297,7 @@ def build_run_tool_live(
         step_index: int,
         prompt: str,
         params: dict[str, Any],
+        is_shadow: bool = False,
     ) -> Generator[dict[str, Any], None, Any]:
         owner_role = resolve_owner_role_for_tool(step.tool_id)
         working_context_raw = state.execution_context.settings.get("__working_context")
@@ -317,6 +320,7 @@ def build_run_tool_live(
             access_context=access_context,
             prompt=scoped_prompt,
             params=scoped_params,
+            is_shadow=is_shadow,
             activity_event_factory=activity_event_factory,
         ))
 

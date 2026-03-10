@@ -12,6 +12,7 @@ The lookup table covers the top domains by traffic and trust signal.
 For unknown domains the heuristic uses TLD and subdomain patterns.
 """
 
+import re
 from urllib.parse import urlparse
 
 _HIGH: float = 0.92
@@ -158,6 +159,69 @@ def score_source_credibility(url: str) -> float:
     return _DEFAULT_SCORE
 
 
+_CURRENT_YEAR: int = 2026
+# Matches 4-digit years in the range 2000–2029 inside URLs and text snippets.
+_YEAR_RE = re.compile(r"\b(20[0-2][0-9])\b")
+
+# Freshness decay table: years_ago → multiplier [0.3, 1.0].
+# Recent content gets full weight; older content degrades gradually.
+_FRESHNESS_TABLE: dict[int, float] = {
+    0: 1.00,  # current year
+    1: 0.95,
+    2: 0.88,
+    3: 0.78,
+    4: 0.65,
+    5: 0.52,
+    6: 0.42,
+    7: 0.35,
+}
+_FRESHNESS_FLOOR: float = 0.30
+
+
+def _extract_year(url: str, snippet: str) -> int | None:
+    """Extract the most recent plausible publication year from a URL or text snippet."""
+    candidates: list[int] = []
+    for text in (url, snippet):
+        for m in _YEAR_RE.finditer(str(text or "")):
+            try:
+                y = int(m.group(1))
+                if 2000 <= y <= _CURRENT_YEAR:
+                    candidates.append(y)
+            except ValueError:
+                pass
+    return max(candidates) if candidates else None
+
+
+def score_source_freshness(url: str, snippet: str = "") -> float:
+    """Return a freshness multiplier in [0.3, 1.0] based on publication year.
+
+    Extracts the year from the URL path or snippet text.  When no year is
+    found, returns a neutral 0.75 so undated sources are not penalised
+    heavily but still rank below recent, dated ones.
+    """
+    year = _extract_year(url, snippet)
+    if year is None:
+        return 0.75  # neutral — no date signal available
+    years_ago = max(0, _CURRENT_YEAR - year)
+    return _FRESHNESS_TABLE.get(years_ago, _FRESHNESS_FLOOR)
+
+
+def apply_freshness_weight(
+    credibility_score: float,
+    freshness_score: float,
+    *,
+    freshness_weight: float = 0.25,
+) -> float:
+    """Blend credibility and freshness into a composite score in [0.0, 1.0].
+
+    freshness_weight=0.25 means the final score is 75% credibility + 25% freshness,
+    preserving credibility as the primary signal while rewarding recency.
+    """
+    w = max(0.0, min(1.0, float(freshness_weight)))
+    composite = (1.0 - w) * float(credibility_score) + w * float(freshness_score)
+    return round(max(0.0, min(1.0, composite)), 4)
+
+
 def build_credibility_weights(results: list[dict]) -> dict[str, float]:
     """
     Build a {domain: score} map for a list of search result dicts.
@@ -177,6 +241,8 @@ def build_credibility_weights(results: list[dict]) -> dict[str, float]:
 
 
 __all__ = [
+    "apply_freshness_weight",
     "build_credibility_weights",
     "score_source_credibility",
+    "score_source_freshness",
 ]

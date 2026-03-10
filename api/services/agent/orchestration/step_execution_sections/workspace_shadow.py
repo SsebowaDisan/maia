@@ -95,6 +95,7 @@ def run_workspace_shadow_logging(
                 step_index=index,
                 prompt=execution_prompt,
                 params=shadow_params,
+                is_shadow=True,
             )
             shadow_metadata = extract_action_artifact_metadata(
                 shadow_result.data,

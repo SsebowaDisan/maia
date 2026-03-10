@@ -58,6 +58,7 @@ def _emit_single_trace(
     *,
     tool_id: str,
     trace: ToolTraceEvent,
+    is_shadow: bool = False,
 ) -> dict:
     observed: list[str] = []
     stream = LiveRunStream(
@@ -72,6 +73,7 @@ def _emit_single_trace(
             step=step,
             step_index=1,
             traces=[trace],
+            is_shadow=is_shadow,
             activity_event_factory=_factory_builder(),
         )
     )
@@ -226,6 +228,19 @@ def test_stream_bridge_adds_owner_role_to_normalized_trace() -> None:
         ),
     )
     assert payload.get("owner_role") == "writer"
+
+
+def test_stream_bridge_marks_shadow_traces() -> None:
+    payload = _emit_single_trace(
+        tool_id="workspace.docs.research_notes",
+        trace=ToolTraceEvent(
+            event_type="doc_type_text",
+            title="Typing",
+            detail="chunk",
+        ),
+        is_shadow=True,
+    )
+    assert payload.get("shadow") is True
 
 
 def test_stream_bridge_marks_drive_search_surface_as_document() -> None:

@@ -44,31 +44,6 @@ _NOISY_SECTION_SUBSTRINGS = (
     "execution issues",
     "files and documents",
 )
-_ANALYTICAL_INTENT_RE = re.compile(
-    r"\b("
-    r"analyz[ei]|analysis|analyse|"
-    r"research\s+(?:on|about|into)|"
-    r"report\s+on|"
-    r"overview\s+of|"
-    r"study\s+(?:of|on)|"
-    r"profile\s+of|"
-    r"assess(?:ment)?\s+(?:of|on)|"
-    r"review\s+(?:of|on)|"
-    r"investigate|investigation\s+(?:of|into)|"
-    r"deep\s+(?:dive|research|analysis)|"
-    r"comprehensive\s+(?:guide|overview|analysis|report|summary)|"
-    r"(?:tell|explain)\s+me\s+(?:everything|all)\s+about|"
-    r"background\s+(?:on|about)|"
-    r"compare\s+(?:and\s+contrast\s+)?(?:[a-z]+\s+){0,4}(?:and|vs?\.?|versus)|"
-    r"comparison\s+(?:of|between)|"
-    r"evaluat(?:e|ion)\s+(?:of|on)|"
-    r"brief(?:ing)?\s+on|"
-    r"landscape\s+(?:of|for|in)|"
-    r"state\s+of\s+(?:the\s+)?(?:art\s+)?(?:in\s+)?"
-    r")\b",
-    re.IGNORECASE,
-)
-
 
 def extract_citation_tail(answer_text: str) -> str:
     text = str(answer_text or "")
@@ -257,12 +232,7 @@ def target_character_range(
 
 
 def is_analytical_report_question(request_message: str, *, deep_research_mode: bool = False) -> bool:
-    text = str(request_message or "").strip()
-    if not text:
-        return False
-    if deep_research_mode:
-        return True
-    return bool(_ANALYTICAL_INTENT_RE.search(text))
+    return deep_research_mode
 
 
 def normalize_for_language_detection(text: str) -> str:

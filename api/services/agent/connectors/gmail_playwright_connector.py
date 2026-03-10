@@ -381,21 +381,23 @@ class GmailPlaywrightConnector(BaseConnector):
             body_cursor = self._move_to_locator(page=page, locator=body_field, timeout_ms=timeout_ms)
             body_field.click(timeout=timeout_ms)
             text = str(body or "").strip()
-            chunks = [text[idx : idx + 240] for idx in range(0, len(text), 240)] or [""]
+            chunks = [text[idx : idx + 120] for idx in range(0, len(text), 120)] or [""]
+            typed_preview = ""
             for index, chunk in enumerate(chunks, start=1):
                 page.keyboard.type(chunk, delay=8)
                 page.wait_for_timeout(max(150, wait_ms // 6))
+                typed_preview += chunk
                 body_capture = self._capture(
                     page=page, output_dir=output_dir, stamp=stamp, label=f"type-body-{index}"
                 )
                 yield {
                     "event_type": "email_type_body",
                     "title": f"Type email body {index}/{len(chunks)}",
-                    "detail": chunk[:160] + ("..." if len(chunk) > 160 else ""),
+                    "detail": chunk,
                     "data": {
                         "chunk_index": index,
                         "chunk_total": len(chunks),
-                        "typed_preview": chunk[:220],
+                        "typed_preview": typed_preview,
                         **body_cursor,
                     },
                     "snapshot_ref": body_capture["snapshot_ref"],
@@ -408,7 +410,7 @@ class GmailPlaywrightConnector(BaseConnector):
                 "event_type": "email_set_body",
                 "title": "Compose email body",
                 "detail": f"{len(text)} characters",
-                "data": {"typed_preview": text[:220], **body_cursor},
+                "data": {"typed_preview": typed_preview or text, **body_cursor},
                 "snapshot_ref": body_done_capture["snapshot_ref"],
             }
 

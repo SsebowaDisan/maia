@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -33,14 +32,19 @@ GA_WEB_TOOL_IDS = {
     "web.dataset.adapter",
 }
 
-GA_INTENT_RE = re.compile(
-    r"\b(google\s+analytics|google\s+analys[ei]s|ga4|analytics\s+property"
-    r"|property\s*id|google\s+property|ga\s+report|ga\s+data|ga\s+metrics)\b",
-    flags=re.IGNORECASE,
-)
-GA_SHEET_RE = re.compile(
-    r"\b(sheet|sheets|spreadsheet|tracker)\b",
-    flags=re.IGNORECASE,
+GA_DELIVERY_TOOL_IDS = {
+    "gmail.draft",
+    "gmail.send",
+}
+
+PLANNING_CONTEXT_PREFIXES = (
+    "contract objective:",
+    "required outputs:",
+    "required facts:",
+    "success checks:",
+    "deliverables:",
+    "constraints:",
+    "conversation context:",
 )
 
 
@@ -101,35 +105,14 @@ def is_deep_research_request(request: ChatRequest) -> bool:
     return profile.tier in {"deep_research", "deep_analytics"}
 
 
-def _ga_intent_text(
-    request: ChatRequest,
-    *,
-    intent: dict[str, Any] | None = None,
-) -> str:
-    intent_rows = intent if isinstance(intent, dict) else {}
-    rows = [
-        str(request.message or ""),
-        str(request.agent_goal or ""),
-        str(intent_rows.get("objective") or ""),
-    ]
-    intent_tags = intent_rows.get("intent_tags")
-    if isinstance(intent_tags, list):
-        rows.extend(str(item) for item in intent_tags[:8])
-    return " ".join(" ".join(piece.split()).strip() for piece in rows if str(piece).strip()).strip()
-
-
 def _is_google_analytics_request(
     request: ChatRequest,
     *,
     intent: dict[str, Any] | None = None,
     preferred_tool_ids: set[str] | None = None,
 ) -> bool:
-    if preferred_tool_ids and any(tool_id in GA_TOOL_IDS for tool_id in preferred_tool_ids):
-        return True
-    text = _ga_intent_text(request, intent=intent)
-    if not text:
-        return False
-    return bool(GA_INTENT_RE.search(text))
+    intent_rows = intent if isinstance(intent, dict) else {}
+    return bool(intent_rows.get("is_analytics_request"))
 
 
 def _ga_sheet_requested(
@@ -138,12 +121,8 @@ def _ga_sheet_requested(
     intent: dict[str, Any] | None = None,
     preferred_tool_ids: set[str] | None = None,
 ) -> bool:
-    if preferred_tool_ids and "business.ga4_kpi_sheet_report" in preferred_tool_ids:
-        return True
     intent_rows = intent if isinstance(intent, dict) else {}
-    if bool(intent_rows.get("wants_sheets_output")):
-        return True
-    return bool(GA_SHEET_RE.search(_ga_intent_text(request, intent=intent)))
+    return bool(intent_rows.get("wants_sheets_output"))
 
 
 def _ensure_ga_plan_shape(
@@ -169,7 +148,7 @@ def _ensure_ga_plan_shape(
     for step in steps:
         if step.tool_id in GA_WEB_TOOL_IDS:
             continue
-        if step.tool_id not in GA_TOOL_IDS and step.tool_id != "report.generate":
+        if step.tool_id not in GA_TOOL_IDS and step.tool_id != "report.generate" and step.tool_id not in GA_DELIVERY_TOOL_IDS:
             continue
         if step.tool_id == "business.ga4_kpi_sheet_report" and not ga_sheet_requested:
             continue
@@ -446,6 +425,13 @@ def build_plan(
     steps: list[PlannedStep] = []
     routing = web_routing if isinstance(web_routing, dict) else resolve_web_routing(request)
     signals = intent_signals(request)
+    llm_intent = enrich_task_intelligence(
+        message=request.message,
+        agent_goal=request.agent_goal,
+        heuristic=signals,
+    )
+    if isinstance(llm_intent, dict):
+        signals = {**signals, **llm_intent}
     company_agent_mode = request.agent_mode == "company_agent"
     planning_allowed_ids = _planning_allowed_tool_ids(
         preferred_tool_ids=preferred_tool_ids,

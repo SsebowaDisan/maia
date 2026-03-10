@@ -9,7 +9,7 @@ from maia.integrations.gmail_dwd import GmailDwdError
 
 from ..models import ExecutionState, TaskPreparation
 from ..side_effect_status import record_side_effect_status
-from ..text_helpers import chunk_preserve_text, compact, truncate_text
+from ..text_helpers import chunk_preserve_text
 from .models import DeliveryRuntime
 
 
@@ -47,7 +47,19 @@ def run_delivery_send_path(
         metadata={"step": runtime.step},
     )
 
-    preview_body = truncate_text(report_body or "Composing report body...")
+    delivery_subject = (
+        " ".join(str(state.execution_context.settings.get("__latest_delivery_email_subject") or "").split()).strip()
+        or str(report_title or "").strip()
+        or "Website Analysis Report"
+    )
+    delivery_body = (
+        str(state.execution_context.settings.get("__latest_delivery_email_body") or "").replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+        or str(report_body or "").strip()
+        or "Composing report body..."
+    )
+    stream_body = delivery_body
     set_recipient_event = activity_event_factory(
         event_type="email_set_to",
         title="Apply recipient",
@@ -58,20 +70,27 @@ def run_delivery_send_path(
     set_subject_event = activity_event_factory(
         event_type="email_set_subject",
         title="Apply subject",
-        detail=report_title or "Website Analysis Report",
+        detail=delivery_subject,
         metadata={"tool_id": runtime.tool_id, "step": runtime.step},
     )
     yield emit_event(set_subject_event)
     typed_preview = ""
-    for body_chunk in chunk_preserve_text(preview_body, chunk_size=240, limit=7):
+    body_chunks = chunk_preserve_text(
+        stream_body,
+        chunk_size=96,
+        limit=max(1, (len(stream_body) // 96) + 2),
+    )
+    for chunk_index, body_chunk in enumerate(body_chunks, start=1):
         typed_preview += body_chunk
         typing_event = activity_event_factory(
             event_type="email_type_body",
             title="Typing email body",
-            detail=compact(body_chunk, 120) or "Composing body...",
+            detail=body_chunk or " ",
             metadata={
                 "tool_id": runtime.tool_id,
                 "step": runtime.step,
+                "chunk_index": chunk_index,
+                "chunk_total": len(body_chunks),
                 "typed_preview": typed_preview,
             },
         )
@@ -79,11 +98,11 @@ def run_delivery_send_path(
     set_body_event = activity_event_factory(
         event_type="email_set_body",
         title="Apply email body",
-        detail=compact(preview_body, 180) or "Body ready.",
+        detail=f"{len(stream_body)} characters",
         metadata={
             "tool_id": runtime.tool_id,
             "step": runtime.step,
-            "typed_preview": preview_body,
+            "typed_preview": stream_body,
         },
     )
     yield emit_event(set_body_event)
@@ -94,7 +113,7 @@ def run_delivery_send_path(
         metadata={
             "tool_id": runtime.tool_id,
             "step": runtime.step,
-            "typed_preview": preview_body,
+            "typed_preview": stream_body,
         },
     )
     yield emit_event(send_prepare_event)
@@ -102,8 +121,8 @@ def run_delivery_send_path(
     try:
         delivery_response = send_report_via_mailer(
             to_email=task_intelligence.delivery_email,
-            subject=report_title or "Website Analysis Report",
-            body_text=report_body or "Report requested, but no body content was generated.",
+            subject=delivery_subject,
+            body_text=delivery_body or "Report requested, but no body content was generated.",
         )
         message_id = str(delivery_response.get("id") or "")
         send_summary = (
@@ -121,7 +140,7 @@ def run_delivery_send_path(
                 metadata={
                     "step": runtime.step,
                     "recipient": task_intelligence.delivery_email,
-                    "subject": report_title,
+                    "subject": delivery_subject,
                     "message_id": message_id,
                     "external_action_key": "send_email",
                     "side_effect_status": "completed",

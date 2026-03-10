@@ -84,6 +84,7 @@ def enrich_task_intelligence(
         '  "wants_location_lookup": true,\n'
         '  "wants_file_scope": true,\n'
         '  "requires_attachment_delivery": true,\n'
+        '  "is_analytics_request": false,\n'
         '  "routing_mode": "online_research|url_scrape|none",\n'
         '  "intent_tags": ["allowed_tag_1"],\n'
         '  "preferred_tone": "string",\n'
@@ -94,7 +95,13 @@ def enrich_task_intelligence(
         "- Keep objective concise and actionable.\n"
         f"- Use routing_mode only from: {', '.join(ALLOWED_WEB_ROUTING_MODES)}.\n"
         f"- Include intent_tags only from: {', '.join(ALLOWED_INTENT_TAGS)}.\n"
-        "- Use empty string when unknown for string fields.\n\n"
+        "- Use empty string when unknown for string fields.\n"
+        "- Set is_analytics_request=true ONLY when the user explicitly asks to\n"
+        "  query, analyse, or report on Google Analytics / GA4 data — e.g. phrases\n"
+        "  like 'show my GA4 metrics', 'analytics report', 'GA4 traffic', 'sessions\n"
+        "  and conversions from Google Analytics', 'property ID'. Set it to false\n"
+        "  for any other request even if the word 'analytics' appears in a different\n"
+        "  context (e.g. cookie banners, general data analysis, file analytics).\n\n"
         f"Input:\n{json.dumps(input_payload, ensure_ascii=True)}"
     )
     payload = call_json_response(
@@ -124,6 +131,7 @@ def enrich_task_intelligence(
         "wants_location_lookup",
         "wants_file_scope",
         "requires_attachment_delivery",
+        "is_analytics_request",
     )
     for key in bool_keys:
         coerced = _coerce_bool(enriched.get(key))

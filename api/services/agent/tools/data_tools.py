@@ -22,7 +22,10 @@ from api.services.agent.tools.data_tools_helpers import (
     _auto_highlights_from_sources,
     _classify_report_intent_with_llm,
     _compose_executive_summary,
+    _contradiction_section_lines,
+    _detect_source_contradictions,
     _draft_direct_answer,
+    _draft_report_markdown_with_llm,
     _event,
     _extract_location_signal_with_llm,
     _fallback_analysis_paragraphs,
@@ -31,6 +34,7 @@ from api.services.agent.tools.data_tools_helpers import (
     _prefers_simple_explanation,
     _redact_delivery_targets,
     _reference_lines,
+    _recommended_next_steps_with_llm,
     _report_delivery_targets,
     _simple_explanation_lines,
 )
@@ -252,7 +256,7 @@ class ReportGenerationTool(AgentTool):
         raw_sources = params.get("sources")
         if not isinstance(raw_sources, list):
             raw_sources = context.settings.get("__latest_web_sources")
-        source_limit = 80 if depth_tier in {"deep_research", "deep_analytics"} else 24
+        source_limit = 320 if depth_tier in {"deep_research", "deep_analytics"} else 120
         source_rows = _normalize_source_rows(raw_sources, limit=source_limit)
         summary = _compose_executive_summary(
             title=title,
@@ -278,7 +282,9 @@ class ReportGenerationTool(AgentTool):
             if analytics_highlights:
                 highlight_lines = [f"- {line}" for line in analytics_highlights]
         if not highlight_lines:
-            highlight_lines = ["- Key findings will appear here once evidence is synthesized."]
+            highlight_lines = [
+                "- Evidence synthesis is currently limited; additional validated sources will increase confidence."
+            ]
         if depth_tier in {"deep_research", "deep_analytics"} and len(highlight_lines) < 10:
             auto_lines = [f"- {line}" for line in _auto_highlights_from_sources(source_rows, limit=14)]
             for line in auto_lines:
@@ -289,10 +295,19 @@ class ReportGenerationTool(AgentTool):
 
         action_lines = [f"- {str(item).strip()}" for item in actions if str(item).strip()]
         if not action_lines:
+            llm_next_steps = _recommended_next_steps_with_llm(
+                title=title,
+                prompt=sanitized_prompt,
+                summary=summary,
+                source_rows=source_rows,
+                depth_tier=depth_tier,
+            )
+            action_lines = [f"- {item}" for item in llm_next_steps if str(item).strip()]
+        if not action_lines:
             action_lines = [
-                "- Validate findings with at least two independent sources before distribution.",
-                "- Assign an owner and deadline for each follow-up action item.",
-                "- Capture assumptions, risks, and open questions in the final review note.",
+                f"- Validate unresolved claims in {title} with additional primary sources.",
+                "- Confirm decision-impacting facts with source-level verification before distribution.",
+                "- Finalize owner, timeline, and success criteria for each follow-up action.",
             ]
 
         analysis_paragraphs = _analysis_paragraphs_with_llm(
@@ -319,18 +334,17 @@ class ReportGenerationTool(AgentTool):
             for item in analysis_paragraphs
             if str(item).strip()
         ]
-        analysis_limit = 10 if depth_tier in {"deep_research", "deep_analytics"} else 8
         analysis_lines: list[str] = []
-        for idx, paragraph in enumerate(analysis_paragraphs[:analysis_limit]):
+        for idx, paragraph in enumerate(analysis_paragraphs):
             text = " ".join(str(paragraph or "").split()).strip()
             if not text:
                 continue
             analysis_lines.append(text)
-            if idx < (analysis_limit - 1):
+            if idx < (len(analysis_paragraphs) - 1):
                 analysis_lines.append("")
         reference_lines = _reference_lines(
             source_rows,
-            limit=40 if depth_tier in {"deep_research", "deep_analytics"} else 12,
+            limit=max(12, len(source_rows)),
         )
         if not reference_lines:
             reference_lines = ["- No external links were captured for this run."]
@@ -348,7 +362,25 @@ class ReportGenerationTool(AgentTool):
             else []
         )
 
-        content = "\n".join(
+        contradiction_lines: list[str] = []
+        if depth_tier in {"deep_research", "deep_analytics", "expert"} and source_rows:
+            conflicts = _detect_source_contradictions(source_rows, topic=title)
+            contradiction_lines = _contradiction_section_lines(conflicts)
+
+        llm_report = _draft_report_markdown_with_llm(
+            title=title,
+            prompt=sanitized_prompt,
+            summary=summary,
+            source_rows=source_rows,
+            analysis_paragraphs=analysis_paragraphs,
+            highlight_lines=highlight_lines,
+            action_lines=action_lines,
+            analytics_lines=analytics_lines,
+            contradiction_lines=contradiction_lines,
+            depth_tier=depth_tier,
+        )
+
+        fallback_content = "\n".join(
             [
                 f"## {title}",
                 "",
@@ -361,17 +393,19 @@ class ReportGenerationTool(AgentTool):
                 "",
                 *analysis_lines,
                 *([""] + analytics_lines if analytics_lines else []),
+                *([""] + contradiction_lines if contradiction_lines else []),
                 "",
                 "### Highlights",
                 *highlight_lines[:14],
                 "",
                 "### Recommended Next Steps",
-                *action_lines[:8],
+                *action_lines[:32],
                 "",
                 "### Reference Links",
                 *reference_lines,
             ]
         )
+        content = llm_report or fallback_content
         content = _redact_delivery_targets(content, targets=delivery_targets)
         context.settings["__latest_report_title"] = title
         context.settings["__latest_report_content"] = content

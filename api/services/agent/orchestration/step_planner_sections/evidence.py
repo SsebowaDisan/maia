@@ -29,28 +29,6 @@ ANALYTICS_EVIDENCE_TOOL_IDS = {
     "analytics.chart.generate",
     "business.ga4_kpi_sheet_report",
 }
-ANALYTICS_FACT_TOKENS = {
-    "ga4",
-    "google",
-    "analytics",
-    "metric",
-    "metrics",
-    "kpi",
-    "session",
-    "sessions",
-    "conversion",
-    "conversions",
-    "traffic",
-    "channel",
-    "channels",
-    "users",
-    "audience",
-    "report",
-}
-GA_INTENT_RE = re.compile(
-    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
-    flags=re.IGNORECASE,
-)
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 
 
@@ -73,17 +51,15 @@ def _step_text(step: PlannedStep) -> str:
 def _is_analytics_context(
     *,
     request: ChatRequest,
+    task_prep: Any,
     steps: list[PlannedStep],
 ) -> bool:
     if any(step.tool_id in ANALYTICS_EVIDENCE_TOOL_IDS for step in steps):
         return True
-    message = " ".join(
-        [
-            str(request.message or ""),
-            str(request.agent_goal or ""),
-        ]
-    ).strip()
-    return bool(GA_INTENT_RE.search(message))
+    try:
+        return bool(task_prep.task_intelligence.is_analytics_request)
+    except AttributeError:
+        return False
 
 
 def _fact_covered_by_step(*, fact: str, step: PlannedStep) -> bool:
@@ -91,8 +67,7 @@ def _fact_covered_by_step(*, fact: str, step: PlannedStep) -> bool:
     if not fact_tokens:
         return False
     if step.tool_id in ANALYTICS_EVIDENCE_TOOL_IDS:
-        if fact_tokens.intersection(ANALYTICS_FACT_TOKENS):
-            return True
+        return True
     step_tokens = _tokenize(_step_text(step))
     if not step_tokens:
         return False
@@ -134,7 +109,7 @@ def enforce_evidence_path(
     steps: list[PlannedStep],
     highlight_color: str,
 ) -> list[PlannedStep]:
-    analytics_context = _is_analytics_context(request=request, steps=steps)
+    analytics_context = _is_analytics_context(request=request, task_prep=task_prep, steps=steps)
     has_evidence_path = any(step.tool_id in EVIDENCE_TOOL_IDS for step in steps)
     if task_prep.contract_facts and not has_evidence_path:
         if analytics_context:

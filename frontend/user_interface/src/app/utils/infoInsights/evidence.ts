@@ -25,6 +25,133 @@ function normalizeUrlToken(rawValue: unknown): string {
   return normalizeHttpUrl(value);
 }
 
+function inferSourceTypeFromUrl(rawUrl: string): string {
+  const candidate = String(rawUrl || "").toLowerCase();
+  if (/\.(pdf)(?:[?#]|$)/i.test(candidate)) {
+    return "pdf";
+  }
+  if (/\.(png|jpe?g|webp|gif|svg)(?:[?#]|$)/i.test(candidate)) {
+    return "image";
+  }
+  return "web";
+}
+
+function inferSourceTypeFromName(rawName: string): string {
+  const candidate = String(rawName || "").toLowerCase();
+  if (candidate.endsWith(".pdf")) {
+    return "pdf";
+  }
+  if (/\.(png|jpe?g|webp|gif|svg)$/i.test(candidate)) {
+    return "image";
+  }
+  return "";
+}
+
+function sourceLabelFromUrl(rawUrl: string): string {
+  const normalized = normalizeHttpUrl(rawUrl);
+  if (!normalized) {
+    return "";
+  }
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.replace(/^www\./i, "");
+    const path = String(parsed.pathname || "").trim();
+    if (!path || path === "/") {
+      return host || normalized;
+    }
+    return `${host}${path}`;
+  } catch {
+    return normalized;
+  }
+}
+
+function extractPromptUrls(rawPrompt: unknown): string[] {
+  const text = String(rawPrompt || "");
+  if (!text.trim()) {
+    return [];
+  }
+  const matches = text.match(/https?:\/\/[^\s<>'")\]]+/gi) || [];
+  if (!matches.length) {
+    return [];
+  }
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of matches) {
+    const normalized = normalizeUrlToken(candidate);
+    if (!normalized) {
+      continue;
+    }
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    output.push(normalized);
+    if (output.length >= 12) {
+      break;
+    }
+  }
+  return output;
+}
+
+function parsePromptEvidence(options?: {
+  userPrompt?: string;
+  promptAttachments?: Array<{
+    name?: string;
+    fileId?: string;
+    file_id?: string;
+  }> | null;
+}): EvidenceCard[] {
+  const cards: EvidenceCard[] = [];
+
+  const promptUrls = extractPromptUrls(options?.userPrompt || "");
+  for (const sourceUrl of promptUrls) {
+    cards.push({
+      id: `prompt-url-${cards.length + 1}`,
+      title: `Prompt source [${cards.length + 1}]`,
+      source: sourceLabelFromUrl(sourceUrl) || sourceUrl,
+      sourceType: inferSourceTypeFromUrl(sourceUrl),
+      sourceUrl,
+      extract: "User prompt references this source URL.",
+    });
+  }
+
+  const rawAttachments = Array.isArray(options?.promptAttachments)
+    ? options?.promptAttachments || []
+    : [];
+  const seenAttachments = new Set<string>();
+  for (const rawAttachment of rawAttachments) {
+    if (!rawAttachment || typeof rawAttachment !== "object") {
+      continue;
+    }
+    const fileId = normalizeText(
+      String(rawAttachment.fileId || rawAttachment.file_id || ""),
+    ).trim();
+    const name = normalizeText(String(rawAttachment.name || "")).trim();
+    if (!fileId && !name) {
+      continue;
+    }
+    const key = (fileId ? `file:${fileId}` : `name:${name}`).toLowerCase();
+    if (seenAttachments.has(key)) {
+      continue;
+    }
+    seenAttachments.add(key);
+    cards.push({
+      id: `prompt-file-${cards.length + 1}`,
+      title: `Prompt file [${cards.length + 1}]`,
+      source: name || "Prompt attachment",
+      sourceType: inferSourceTypeFromName(name) || undefined,
+      fileId: fileId || undefined,
+      extract: "User prompt includes this file attachment.",
+    });
+    if (cards.length >= 16) {
+      break;
+    }
+  }
+
+  return cards;
+}
+
 const ARTIFACT_URL_PATH_SEGMENTS = new Set([
   "extract",
   "source",
@@ -379,19 +506,32 @@ function parseEvidence(
   infoHtml: string,
   options?: {
     infoPanel?: Record<string, unknown> | null;
+    userPrompt?: string;
+    promptAttachments?: Array<{
+      name?: string;
+      fileId?: string;
+      file_id?: string;
+    }> | null;
   },
 ): EvidenceCard[] {
   const panelCards = parseEvidenceItemsFromInfoPanel(options?.infoPanel || null);
   if (panelCards.length) {
     return panelCards;
   }
+  const promptCards = parsePromptEvidence({
+    userPrompt: options?.userPrompt,
+    promptAttachments: options?.promptAttachments,
+  });
   if (!infoHtml.trim()) {
-    return [];
+    return promptCards;
   }
 
   const doc = new DOMParser().parseFromString(infoHtml, "text/html");
   const detailsNodes = Array.from(doc.querySelectorAll("details.evidence"));
   if (!detailsNodes.length) {
+    if (promptCards.length) {
+      return promptCards;
+    }
     const fallback = plainText(infoHtml);
     return fallback
       ? [

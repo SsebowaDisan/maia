@@ -38,7 +38,7 @@ describe("timelineRowsForMode", () => {
     expect(rows.length).toBe(events.length);
   });
 
-  it("compresses timeline for fast mode while keeping active row", () => {
+  it("keeps full fidelity for fast mode", () => {
     const events = Array.from({ length: 40 }, (_, idx) => makeEvent(idx + 1));
     events[7].replay_importance = "high";
     const rows = timelineRowsForMode({
@@ -46,7 +46,7 @@ describe("timelineRowsForMode", () => {
       safeCursor: 29,
       replayMode: "fast",
     });
-    expect(rows.length).toBeLessThan(events.length);
+    expect(rows.length).toBe(events.length);
     expect(rows.some((row) => row.index === 29)).toBe(true);
     expect(rows.some((row) => row.index === 7)).toBe(true);
   });

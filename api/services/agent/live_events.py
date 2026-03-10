@@ -258,7 +258,7 @@ class LiveEventBroker:
     def __init__(self) -> None:
         self._lock = Lock()
         self._subscribers: dict[str, list[Queue[dict[str, Any]]]] = defaultdict(list)
-        self._backlog: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=200))
+        self._backlog: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
 
     def publish(self, *, user_id: str, event: dict[str, Any], run_id: str | None = None) -> None:
         envelope = _normalize_live_event(event)
@@ -286,15 +286,15 @@ class LiveEventBroker:
         *,
         user_id: str,
         run_id: str | None = None,
-        replay_limit: int = 30,
+        replay_limit: int = 0,
     ) -> LiveEventSubscription:
         channel = _channel_run(user_id, run_id) if run_id else _channel_user(user_id)
-        queue: Queue[dict[str, Any]] = Queue(maxsize=300)
+        queue: Queue[dict[str, Any]] = Queue()
         with self._lock:
             self._subscribers[channel].append(queue)
             backlog = list(self._backlog.get(channel, deque()))
         persisted: list[dict[str, Any]] = []
-        if run_id and replay_limit:
+        if run_id:
             try:
                 store = get_activity_store()
                 rows = store.load_events(run_id)
@@ -323,20 +323,20 @@ class LiveEventBroker:
                 )
                 persisted.append(_normalize_live_event(replay_payload))
         replay_rows = [*persisted, *backlog]
-        replay_limit_value = max(0, int(replay_limit))
-        if replay_limit_value <= 0:
-            replay_slice = []
-        else:
-            deduped: list[dict[str, Any]] = []
-            seen: set[str] = set()
-            for row in replay_rows:
-                event_id = _clean_text(row.get("event_id"))
-                if event_id and event_id in seen:
-                    continue
-                if event_id:
-                    seen.add(event_id)
-                deduped.append(row)
+        replay_limit_value = int(replay_limit)
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in replay_rows:
+            event_id = _clean_text(row.get("event_id"))
+            if event_id and event_id in seen:
+                continue
+            if event_id:
+                seen.add(event_id)
+            deduped.append(row)
+        if replay_limit_value > 0:
             replay_slice = deduped[-replay_limit_value:]
+        else:
+            replay_slice = deduped
         for item in replay_slice:
             try:
                 queue.put_nowait(item)

@@ -38,6 +38,10 @@ def append_recommended_next_steps(lines: list[str], ctx: AnswerBuildContext) -> 
             return True
         if re.search(r"`[^`\n]{3,}`", clean):
             return True
+        if re.search(r"\bname\s+[A-Za-z_][A-Za-z0-9_]*\s+is\s+not\s+defined\b", clean, flags=re.I):
+            return True
+        if re.search(r"\b(traceback|exception|stack trace|referenceerror|nameerror)\b", clean, flags=re.I):
+            return True
         lowered = clean.lower()
         if re.search(r"\b(?:pip|npm|pnpm|yarn|brew|apt|uv|poetry|playwright)\s+install\b", lowered):
             return True

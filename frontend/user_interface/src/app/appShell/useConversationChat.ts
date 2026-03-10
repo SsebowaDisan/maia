@@ -137,7 +137,6 @@ export function useConversationChat({
     setSelectedTurnIndex(null);
     setInfoText("");
     setActivityEvents([]);
-    setComposerMode("ask");
   }, []);
 
   useEffect(() => {

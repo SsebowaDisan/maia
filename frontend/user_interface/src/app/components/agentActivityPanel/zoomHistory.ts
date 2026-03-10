@@ -29,14 +29,14 @@ function asNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function stringList(value: unknown, limit = 24): string[] {
+function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
   const cleaned = value
     .map((item) => cleanText(item))
     .filter((item) => item.length > 0);
-  return Array.from(new Set(cleaned)).slice(0, Math.max(1, limit));
+  return Array.from(new Set(cleaned));
 }
 
 function zoomActionFromEvent(eventType: string, payload: Record<string, unknown>): string {
@@ -90,7 +90,7 @@ function extractZoomHistoryEntry(event: AgentActivityEvent, payload: Record<stri
   const zoomLevelRaw = asNumber(source.zoom_level ?? source.zoom_to ?? payload.zoom_level ?? payload.zoom_to);
   const zoomLevel = zoomLevelRaw !== null && zoomLevelRaw > 0 ? Number(zoomLevelRaw.toFixed(3)) : null;
   const zoomReason = cleanText(source.zoom_reason || payload.zoom_reason || payload.reason);
-  const zoomPolicyTriggers = stringList(source.zoom_policy_triggers || payload.zoom_policy_triggers, 8);
+  const zoomPolicyTriggers = stringList(source.zoom_policy_triggers || payload.zoom_policy_triggers);
 
   return {
     eventRef,
@@ -126,7 +126,7 @@ function appendZoomHistory(
       next.push(entry);
     }
   }
-  return next.slice(-24);
+  return next;
 }
 
 function collectReferenceTokens(

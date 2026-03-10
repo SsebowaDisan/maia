@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from api.schemas import ChatRequest
@@ -23,10 +22,6 @@ GA_PROBE_ALLOWED_TOOL_IDS = {
     "business.ga4_kpi_sheet_report",
     "analytics.chart.generate",
 }
-GA_INTENT_RE = re.compile(
-    r"\b(google\s+analytics|ga4|analytics\s+property|property\s*id|google\s+property)\b",
-    flags=re.IGNORECASE,
-)
 
 
 def _is_allowed_url_scoped_probe(tool_id: str) -> bool:
@@ -39,19 +34,10 @@ def _is_google_analytics_probe_context(
     task_prep: TaskPreparation,
     steps: list[PlannedStep],
 ) -> bool:
-    combined = " ".join(
-        [
-            str(request.message or ""),
-            str(request.agent_goal or ""),
-            str(getattr(task_prep, "contract_objective", "") or ""),
-        ]
-    )
-    if GA_INTENT_RE.search(combined):
+    del request
+    if bool(getattr(task_prep.task_intelligence, "is_analytics_request", False)):
         return True
-    if any(
-        step.tool_id in GA_PROBE_ALLOWED_TOOL_IDS
-        for step in steps
-    ):
+    if any(step.tool_id in GA_PROBE_ALLOWED_TOOL_IDS for step in steps):
         return True
     return False
 

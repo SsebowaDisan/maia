@@ -14,6 +14,7 @@ from api.services.agent.tools.document_highlight_helpers import (
     _as_bounded_int,
     _build_highlights,
     _build_pdf_scan_steps,
+    _deep_file_source_summaries,
     _document_scene_payload,
     _extract_terms,
     _load_source_chunks,
@@ -44,6 +45,12 @@ class DocumentHighlightExtractTool(AgentTool):
         selected_file_ids = _normalize_file_ids(context.settings.get("__selected_file_ids"))
         index_id_raw = context.settings.get("__selected_index_id")
         index_id = int(index_id_raw) if isinstance(index_id_raw, int) or str(index_id_raw).isdigit() else None
+        depth_tier = str(
+            params.get("research_depth_tier")
+            or context.settings.get("__research_depth_tier")
+            or "standard"
+        ).strip().lower()
+        research_topic = " ".join(str(prompt or "").split()).strip()[:280]
         highlight_color = _normalize_color(params.get("highlight_color") or context.settings.get("__highlight_color"))
         max_sources = _as_bounded_int(
             params.get("max_sources") or context.settings.get("__file_research_max_sources"),
@@ -179,21 +186,47 @@ class DocumentHighlightExtractTool(AgentTool):
                     keywords.append(keyword)
             summary["highlight_count"] = int(summary.get("highlight_count") or 0) + 1
 
+        # Group all loaded chunks by source_id for per-file LLM synthesis.
+        chunks_by_source: dict[str, list[dict[str, Any]]] = {}
+        for chunk in chunks:
+            sid = str(chunk.get("source_id") or "").strip()
+            if sid:
+                chunks_by_source.setdefault(sid, []).append(chunk)
+
+        # For deep-research tiers, synthesize each file's key findings with LLM.
+        file_syntheses = _deep_file_source_summaries(
+            chunks_by_source,
+            topic=research_topic,
+            depth_tier=depth_tier,
+        )
+
+        # Compute total highlight count for proportional relevance scoring.
+        total_highlights = max(1, sum(
+            int(s.get("highlight_count") or 0)
+            for s in source_summary_by_id.values()
+        ))
+
         source_by_id: dict[str, AgentSource] = {}
         for source_id, summary in source_summary_by_id.items():
-            extract_text = str(summary.get("extract") or "").strip()
+            highlight_count = int(summary.get("highlight_count") or 0)
+            # Proportional relevance: 0.55 base + up to 0.40 from match density.
+            relevance_score = round(
+                min(0.95, 0.55 + 0.40 * (highlight_count / total_highlights)), 4
+            )
+            # Use LLM synthesis if available, else fall back to keyword snippet.
+            extract_text = file_syntheses.get(source_id) or str(summary.get("extract") or "").strip()
             source_by_id[source_id] = AgentSource(
                 source_type="file",
                 label=str(summary.get("source_name") or "Indexed file"),
                 file_id=source_id,
-                score=0.72,
+                score=relevance_score,
                 metadata={
                     "page_label": str(summary.get("page_label") or ""),
                     "extract": extract_text,
                     "excerpt": extract_text,
                     "snippet": extract_text,
                     "keywords": list(summary.get("keywords") or [])[:12],
-                    "highlight_count": int(summary.get("highlight_count") or 0),
+                    "highlight_count": highlight_count,
                 },
             )
 
