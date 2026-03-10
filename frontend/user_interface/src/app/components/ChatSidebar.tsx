@@ -293,7 +293,7 @@ export function ChatSidebar({
 
   if (isCollapsed) {
     return (
-      <div className="w-16 min-h-0 bg-[#f6f6f7] border-r border-black/[0.06] flex flex-col items-center py-4">
+      <div className="w-16 min-h-0 bg-[#f6f6f7] flex flex-col items-center py-4">
         <button
           onClick={onToggleCollapse}
           className="p-2 rounded-xl hover:bg-black/5 transition-colors"
@@ -307,7 +307,7 @@ export function ChatSidebar({
 
   return (
     <div
-      className="min-h-0 bg-[#f6f6f7] border-r border-black/[0.06] flex flex-col overflow-hidden"
+      className="min-h-0 bg-[#f6f6f7] flex flex-col overflow-hidden"
       style={{ width: `${Math.round(width)}px` }}
     >
       <div className="px-4 pt-4 pb-3 border-b border-black/[0.06]">

@@ -12,8 +12,6 @@ type EmailSceneProps = {
   emailBodyScrollRef: React.RefObject<HTMLDivElement | null>;
   emailRecipient: string;
   emailSubject: string;
-  copyUsageRefs: string[];
-  copySourceSnippet: string;
 };
 
 const TITLE_CASE_WORD_RE = /^[A-Z][A-Za-z0-9'&/.-]*$/;
@@ -152,8 +150,6 @@ function EmailScene({
   emailBodyScrollRef,
   emailRecipient,
   emailSubject,
-  copyUsageRefs,
-  copySourceSnippet,
 }: EmailSceneProps) {
   const focus = focusedEmailField({
     eventType: activeEventType,
@@ -176,8 +172,8 @@ function EmailScene({
   const bodyCharacterCount = String(emailBodyPreview || "").length;
 
   return (
-    <div className="absolute inset-0 bg-[linear-gradient(180deg,#ebecef_0%,#e3e4e8_100%)] p-4 text-[#1d1d1f]">
-      <div className="mx-auto flex h-full w-full max-w-[920px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
+    <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(168,216,255,0.92),rgba(122,176,244,0.72)_40%,rgba(98,148,232,0.9)_100%)] p-9 text-[#1d1d1f]">
+      <div className="mx-auto flex h-full w-full max-w-[840px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
         <div className="flex items-center gap-2 border-b border-black/[0.08] px-5 py-3">
           <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
           <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
@@ -250,17 +246,6 @@ function EmailScene({
           {activeEventType === "email_click_send" ? (
             <div className="rounded-xl border border-black/15 bg-[#f2f2f4] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#1d1d1f]">
               Send action confirmed
-            </div>
-          ) : null}
-          {copyUsageRefs.length ? (
-            <div className="rounded-xl border border-[#b37a17]/30 bg-[#fff5e7] px-3 py-1.5 text-[10px] text-[#7d4f16]">
-              <p className="font-semibold uppercase tracking-[0.08em]">Copy provenance</p>
-              <p className="mt-0.5">
-                Using copied source {copyUsageRefs.slice(0, 2).join(", ")}
-              </p>
-              {copySourceSnippet ? (
-                <p className="mt-0.5 line-clamp-2 text-[#8a5d1a]">{copySourceSnippet}</p>
-              ) : null}
             </div>
           ) : null}
         </div>

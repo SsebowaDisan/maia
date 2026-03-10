@@ -1,5 +1,6 @@
 import { Monitor, MousePointer2 } from "lucide-react";
 import { AgentDesktopScene } from "../AgentDesktopScene";
+import { DoneStageOverlay } from "./DoneStageOverlay";
 import { DiffViewer } from "./DiffViewer";
 
 interface DesktopViewerProps {
@@ -44,6 +45,9 @@ interface DesktopViewerProps {
   sceneDocumentUrl: string;
   sceneSpreadsheetUrl: string;
   onSnapshotError: () => void;
+  showDoneStage: boolean;
+  doneStageTitle: string;
+  doneStageDetail: string;
 }
 
 function isPlannerNarrativeEventType(eventType: string): boolean {
@@ -106,9 +110,12 @@ function DesktopViewer({
   sceneDocumentUrl,
   sceneSpreadsheetUrl,
   onSnapshotError,
+  showDoneStage,
+  doneStageTitle,
+  doneStageDetail,
 }: DesktopViewerProps) {
   const inlineViewerHeightClass = isTheaterView
-    ? "h-[clamp(250px,40vh,410px)]"
+    ? "h-[clamp(460px,72vh,760px)]"
     : "h-[clamp(200px,28vh,285px)]";
   const fullscreenViewerHeightClass = isFocusMode ? "h-[calc(100vh-180px)]" : "h-[74vh]";
   const viewerHeightClass = fullscreen ? fullscreenViewerHeightClass : inlineViewerHeightClass;
@@ -164,7 +171,7 @@ function DesktopViewer({
 
       <div className={`mx-auto ${viewerWidthClass}`}>
         <div
-          className={`relative overflow-hidden rounded-2xl border border-[#222831] bg-[radial-gradient(circle_at_50%_-20%,rgba(121,152,201,0.2),transparent_44%),#0d1117] ${viewerHeightClass}`}
+          className={`relative overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_50%_-20%,rgba(121,152,201,0.2),transparent_44%),#0d1117] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] ${viewerHeightClass}`}
         >
           <div className="absolute inset-0">
             <AgentDesktopScene
@@ -205,6 +212,8 @@ function DesktopViewer({
               {sceneTransitionLabel}
             </div>
           ) : null}
+
+          <DoneStageOverlay open={showDoneStage} title={doneStageTitle} detail={doneStageDetail} />
 
           {shouldRenderCursor ? (
             <div

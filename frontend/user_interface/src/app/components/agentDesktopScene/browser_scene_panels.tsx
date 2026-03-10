@@ -313,7 +313,7 @@ function ExecutionRoadmapOverlay({
               />
               <p
                 className={`line-clamp-1 ${
-                  isDone ? "text-white/45 line-through" : isActive ? "text-white/95" : "text-white/65"
+                  isDone ? "text-white/45" : isActive ? "text-white/95" : "text-white/65"
                 }`}
               >
                 {step.title}
@@ -366,7 +366,7 @@ function OpenedPagesRail({
   activePageUrl: string;
   onSelectPage: (url: string) => void;
 }) {
-  if (openedPages.length <= 1) {
+  if (openedPages.length === 0) {
     return null;
   }
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -479,4 +479,3 @@ export {
   ZoomBadge,
   ZoomHistoryPanel,
 };
-

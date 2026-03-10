@@ -406,6 +406,30 @@ export function AgentActivityPanel({
       : mergedSceneData,
     sceneDocumentUrl,
     sceneSpreadsheetUrl,
+    showDoneStage: (() => {
+      const finalEventType = String(activeEvent?.event_type || sceneEvent?.event_type || "").toLowerCase();
+      const completionEventSignal =
+        finalEventType === "email_sent" ||
+        finalEventType === "browser_contact_confirmation" ||
+        finalEventType === "verification_completed" ||
+        finalEventType === "llm.delivery_check_completed" ||
+        finalEventType.endsWith("_completed") ||
+        finalEventType.endsWith("_done") ||
+        finalEventType.endsWith("_finished");
+      const terminalState =
+        theatreStage === "done" ||
+        (theatreStage !== "error" &&
+          theatreStage !== "blocked" &&
+          theatreStage !== "needs_input" &&
+          theatreStage !== "review" &&
+          theatreStage !== "confirm" &&
+          completionEventSignal);
+      return !streaming && safeCursor >= Math.max(0, orderedEvents.length - 1) && terminalState;
+    })(),
+    doneStageTitle: desktopStatus || "Task completed",
+    doneStageDetail:
+      (sceneText || roleNarrative || sceneEvent?.detail || activeEvent?.detail || "").trim() ||
+      "All requested work is complete and ready.",
     onSnapshotError: () => {
       if (sceneEvent?.event_id) {
         setSnapshotFailedEventId(sceneEvent.event_id);

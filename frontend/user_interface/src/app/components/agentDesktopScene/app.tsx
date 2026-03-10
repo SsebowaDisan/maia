@@ -108,17 +108,6 @@ function AgentDesktopScene({
     compactValue(actionTarget["title"]) ||
     compactValue(actionTarget["url"]) ||
     compactValue(actionTarget["source_name"]);
-  const copyUsageRefs = Array.isArray(activeSceneData["copy_usage_refs"])
-    ? activeSceneData["copy_usage_refs"]
-        .map((item) => compactValue(item))
-        .filter((item) => item.length > 0)
-        .slice(0, 6)
-    : [];
-  const copyProvenance =
-    activeSceneData["copy_provenance"] && typeof activeSceneData["copy_provenance"] === "object"
-      ? (activeSceneData["copy_provenance"] as Record<string, unknown>)
-      : {};
-  const copySourceSnippet = compactValue(copyProvenance["snippet"]);
   const compareMode =
     activeSceneData["compare_mode"] && typeof activeSceneData["compare_mode"] === "object"
       ? (activeSceneData["compare_mode"] as Record<string, unknown>)
@@ -379,8 +368,6 @@ function AgentDesktopScene({
         emailBodyScrollRef={emailBodyScrollRef}
         emailRecipient={emailRecipient}
         emailSubject={emailSubject}
-        copyUsageRefs={copyUsageRefs}
-        copySourceSnippet={copySourceSnippet}
       />
     );
   }

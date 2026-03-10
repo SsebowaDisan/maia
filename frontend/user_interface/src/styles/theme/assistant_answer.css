@@ -151,6 +151,141 @@
   color: #334056;
 }
 
+/* ── Citation chips ─────────────────────────────────────────── */
+.chat-answer-html a.citation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.625rem;
+  font-weight: 650;
+  line-height: 1;
+  padding: 0.18em 0.5em;
+  border-radius: 100px;
+  background: rgba(10, 102, 217, 0.07);
+  color: #0a66d9;
+  border: 1px solid rgba(10, 102, 217, 0.20);
+  text-decoration: none !important;
+  vertical-align: super;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  letter-spacing: 0;
+  margin: 0 0.1em;
+  min-width: 1.4em;
+  white-space: nowrap;
+}
+
+.chat-answer-html a.citation:hover {
+  background: rgba(10, 102, 217, 0.14);
+  color: #0550b8;
+  border-color: rgba(10, 102, 217, 0.34);
+}
+
+/* ── Section headings with divider ──────────────────────────── */
+.assistantAnswerBody h2 {
+  margin: 1.72rem 0 0.6rem;
+  padding-top: 1.26rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.065);
+  font-size: 1.05rem;
+  line-height: 1.4;
+  font-weight: 630;
+  letter-spacing: -0.013em;
+  color: #101114;
+}
+
+.assistantAnswerBody > h2:first-child,
+.assistantAnswerBody > *:first-child > h2 {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* Keep h1 as a strong report title */
+.assistantAnswerBody h1 {
+  margin: 0 0 1rem;
+  font-size: 1.32rem;
+  line-height: 1.3;
+  font-weight: 680;
+  letter-spacing: -0.018em;
+  color: #0a0a0b;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 0.7rem;
+}
+
+/* ── Lead paragraph after a section heading ─────────────────── */
+.assistantAnswerBody h2 + p,
+.assistantAnswerBody h1 + p {
+  margin-top: 0;
+}
+
+/* ── Report-style bullet list ────────────────────────────────── */
+.assistantAnswerBody ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.assistantAnswerBody ul li {
+  display: flex;
+  gap: 0.55em;
+  padding: 0.12rem 0;
+}
+
+.assistantAnswerBody ul li::before {
+  content: "•";
+  color: #6e6e73;
+  flex-shrink: 0;
+  margin-top: 0.03em;
+}
+
+/* ── Evidence citation list (## Evidence Citations section) ─── */
+.assistantAnswerBody h2:last-of-type + ul,
+.assistantAnswerBody h2:last-of-type ~ ul {
+  margin-top: 0.2rem;
+}
+
+/* ── Inline callout for key findings (blockquote) ────────────── */
+.chat-answer-html blockquote {
+  margin: 0.8rem 0;
+  border-left: 3px solid #0a66d9;
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(135deg, rgba(10, 102, 217, 0.04) 0%, rgba(10, 102, 217, 0.01) 100%);
+  padding: 0.6rem 0.85rem;
+  color: #1d1d1f;
+  font-style: normal;
+}
+
+/* ── Dark mode overrides ─────────────────────────────────────── */
+.dark .chat-answer-html a.citation {
+  background: rgba(96, 165, 250, 0.12);
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.25);
+}
+
+.dark .chat-answer-html a.citation:hover {
+  background: rgba(96, 165, 250, 0.20);
+  color: #bfdbfe;
+}
+
+.dark .assistantAnswerBody h2 {
+  border-top-color: rgba(189, 205, 235, 0.14);
+  color: #f0f4ff;
+}
+
+.dark .assistantAnswerBody h1 {
+  color: #f6f8ff;
+  border-bottom-color: rgba(189, 205, 235, 0.14);
+}
+
+.dark .assistantAnswerBody ul li::before {
+  color: #8e9ab5;
+}
+
+.dark .chat-answer-html blockquote {
+  border-left-color: #3b82f6;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.02) 100%);
+}
+
+/* ────────────────────────────────────────────────────────────── */
+
 .chat-answer-html a:not(.citation) {
   color: #0a66d9;
   font-weight: 500;
@@ -187,14 +322,6 @@
   -webkit-box-decoration-break: clone;
 }
 
-.chat-answer-html blockquote {
-  margin: 0.55rem 0;
-  border-left: 3px solid rgba(29, 29, 31, 0.2);
-  border-radius: 8px;
-  background: #f8f9fc;
-  padding: 0.55rem 0.7rem;
-}
-
 .chat-answer-html td,
 .chat-answer-html th {
   vertical-align: top;
@@ -213,8 +340,7 @@
     0 1px 0 rgba(190, 210, 240, 0.08) inset;
 }
 
-.dark .assistantAnswerBody h1,
-.dark .assistantAnswerBody h2 {
+.dark .assistantAnswerBody h1 {
   color: #f6f8ff;
 }
 
@@ -240,7 +366,3 @@
   background: linear-gradient(180deg, transparent 56%, rgba(249, 207, 81, 0.28) 56%);
 }
 
-.dark .chat-answer-html blockquote {
-  border-left-color: rgba(189, 205, 235, 0.35);
-  background: rgba(34, 40, 56, 0.65);
-}

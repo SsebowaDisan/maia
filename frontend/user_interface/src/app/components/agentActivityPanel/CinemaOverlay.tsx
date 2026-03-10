@@ -264,7 +264,7 @@ function CinemaOverlay({
             {streaming ? (
               <span className="inline-flex items-center gap-1">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/60" />
-                <span className="text-[9px] text-white/40">LIVE</span>
+                <span className="text-[9px] text-white/40">Running</span>
               </span>
             ) : null}
           </div>

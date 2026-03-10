@@ -260,7 +260,7 @@ export function InfoPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden border-l border-black/[0.06] bg-white/80 backdrop-blur-xl" style={{ width: `${Math.round(width)}px` }}>
+    <div className="flex min-h-0 flex-col overflow-hidden bg-white" style={{ width: `${Math.round(width)}px` }}>
       <div className="border-b border-black/[0.06] px-5 py-4">
         <h3 className="text-[15px] tracking-tight text-[#1d1d1f]">Sources</h3>
       </div>

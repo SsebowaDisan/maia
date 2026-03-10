@@ -9,9 +9,7 @@ import {
   CopyPulse,
   ExecutionRoadmapOverlay,
   FindOverlay,
-  HighlightOverlay,
   OpenedPagesRail,
-  TargetFocusRing,
   VerifierConflictBadge,
   ZoomBadge,
 } from "./browser_scene_panels";
@@ -165,7 +163,8 @@ function BrowserScene({
     const timer = window.setTimeout(() => setNavigationHint(""), 1400);
     return () => window.clearTimeout(timer);
   }, [activePageUrl]);
-  const surfaceHint = (findQuery || actionTargetLabel || activeDetail || "").slice(0, 180);
+  const previewHint = (findQuery || actionTargetLabel || "").slice(0, 180);
+  const shouldAnnotatePreview = showFindOverlay || normalizedAction === "find";
   const proxyPreviewUrl = useMemo(() => {
     const source = String(activePageUrl || "").trim();
     if (!source || (!source.startsWith("http://") && !source.startsWith("https://"))) {
@@ -173,28 +172,33 @@ function BrowserScene({
     }
     const params = new URLSearchParams();
     params.set("url", source);
-    if (surfaceHint) {
-      params.set("highlight", surfaceHint);
-      params.set("claim", surfaceHint);
-      params.set("question", surfaceHint);
+    if (shouldAnnotatePreview && previewHint) {
+      params.set("highlight", previewHint);
+      params.set("claim", previewHint);
+      params.set("question", previewHint);
     }
     params.set("viewport", "desktop");
     return `/api/web/preview?${params.toString()}`;
-  }, [activePageUrl, surfaceHint]);
+  }, [activePageUrl, previewHint, shouldAnnotatePreview]);
   const preferPreviewProxy =
     Boolean(proxyPreviewUrl) &&
     (blockedSignal ||
       lowQualitySignal ||
-      !snapshotUrl ||
-      action === "navigate" ||
-      action === "scroll" ||
-      action === "extract");
+      (!canRenderLiveUrl && !snapshotUrl) ||
+      normalizedAction === "navigate" ||
+      normalizedAction === "open" ||
+      actionIndicatesScroll ||
+      eventIndicatesScroll ||
+      hasDirectionalScroll);
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
   const [proxyLoaded, setProxyLoaded] = useState(false);
   const prevSnapshotUrlRef = useRef<string>(snapshotUrl);
   const showSnapshotPrimary = Boolean(snapshotUrl) && !snapshotErrored && !preferPreviewProxy;
-  const showProxyPreview = Boolean(proxyPreviewUrl) && (preferPreviewProxy || !showSnapshotPrimary);
+  const frameUrl = useMemo(() => {
+    return proxyPreviewUrl || activePageUrl;
+  }, [activePageUrl, proxyPreviewUrl]);
+  const showFramePreview = Boolean(frameUrl);
   useEffect(() => {
     if (!snapshotUrl || snapshotUrl === prevSnapshotUrlRef.current) return;
     if (prevSnapshotUrlRef.current) setCrossFadeUrl(prevSnapshotUrlRef.current);
@@ -208,31 +212,30 @@ function BrowserScene({
   };
   useEffect(() => {
     setProxyLoaded(false);
-  }, [proxyPreviewUrl]);
-  const [scrollOffset, setScrollOffset] = useState(0);
+  }, [frameUrl]);
   const [syntheticScrollPercent, setSyntheticScrollPercent] = useState<number | null>(null);
-  const scrollTargetRef = useRef(0);
-  const scrollRafRef = useRef<number | null>(null);
-  const syntheticRafRef = useRef<number | null>(null);
   const syntheticTickRef = useRef(0);
-  const scrollEventKeyRef = useRef("");
+  const syntheticIntervalRef = useRef<number | null>(null);
+  const syntheticDirectionRef = useRef(1);
   const effectiveScrollPercent = scrollPercent ?? syntheticScrollPercent;
 
   useEffect(() => {
-    if (effectiveScrollPercent === null) {
+    if (normalizedScrollDirection === "up") {
+      syntheticDirectionRef.current = -1;
       return;
     }
-    const clampedPercent = Math.max(0, Math.min(100, effectiveScrollPercent));
-    // Drive a visible viewport glide so users can clearly perceive page scroll.
-    scrollTargetRef.current = Math.max(-120, Math.min(8, 8 - (clampedPercent / 100) * 128));
-  }, [effectiveScrollPercent]);
+    if (normalizedScrollDirection === "down") {
+      syntheticDirectionRef.current = 1;
+    }
+  }, [normalizedScrollDirection]);
+
   useEffect(() => {
+    if (syntheticIntervalRef.current !== null) {
+      window.clearInterval(syntheticIntervalRef.current);
+      syntheticIntervalRef.current = null;
+    }
     if (scrollPercent !== null) {
       setSyntheticScrollPercent(null);
-      if (syntheticRafRef.current != null) {
-        cancelAnimationFrame(syntheticRafRef.current);
-        syntheticRafRef.current = null;
-      }
       return;
     }
     const shouldSimulate =
@@ -245,22 +248,27 @@ function BrowserScene({
       readingMode;
     if (!shouldSimulate) {
       setSyntheticScrollPercent(null);
-      if (syntheticRafRef.current != null) {
-        cancelAnimationFrame(syntheticRafRef.current);
-        syntheticRafRef.current = null;
-      }
       return;
     }
-    const animate = () => {
-      syntheticTickRef.current = (syntheticTickRef.current + 0.55) % 100;
+    if (syntheticTickRef.current <= 0 || syntheticTickRef.current >= 100) {
+      syntheticTickRef.current = normalizedScrollDirection === "up" ? 84 : 16;
+    }
+    setSyntheticScrollPercent(syntheticTickRef.current);
+    syntheticIntervalRef.current = window.setInterval(() => {
+      const nextTick = syntheticTickRef.current + syntheticDirectionRef.current * 3.5;
+      if (syntheticDirectionRef.current > 0) {
+        syntheticTickRef.current = Math.min(92, nextTick);
+      } else if (syntheticDirectionRef.current < 0) {
+        syntheticTickRef.current = Math.max(8, nextTick);
+      } else {
+        syntheticTickRef.current = Math.max(8, Math.min(92, nextTick));
+      }
       setSyntheticScrollPercent(syntheticTickRef.current);
-      syntheticRafRef.current = requestAnimationFrame(animate);
-    };
-    syntheticRafRef.current = requestAnimationFrame(animate);
+    }, 140);
     return () => {
-      if (syntheticRafRef.current != null) {
-        cancelAnimationFrame(syntheticRafRef.current);
-        syntheticRafRef.current = null;
+      if (syntheticIntervalRef.current !== null) {
+        window.clearInterval(syntheticIntervalRef.current);
+        syntheticIntervalRef.current = null;
       }
     };
   }, [
@@ -271,64 +279,24 @@ function BrowserScene({
     readingMode,
     scrollPercent,
   ]);
-  useEffect(() => {
-    // Add a visible "step" per scroll event so movement is perceptible
-    // even when telemetry emits sparse or repeated percentages.
-    if (!actionIndicatesScroll && !eventIndicatesScroll && !hasDirectionalScroll) {
-      return;
-    }
-    const nextKey = `${normalizedEventType}|${normalizedScrollDirection}|${String(scrollPercent)}`;
-    if (nextKey === scrollEventKeyRef.current) {
-      return;
-    }
-    scrollEventKeyRef.current = nextKey;
-    const direction = normalizedScrollDirection === "up" ? 1 : -1;
-    const steppedTarget = scrollTargetRef.current + direction * 18;
-    scrollTargetRef.current = Math.max(-120, Math.min(8, steppedTarget));
-  }, [
-    actionIndicatesScroll,
-    eventIndicatesScroll,
-    hasDirectionalScroll,
-    normalizedEventType,
-    normalizedScrollDirection,
-    scrollPercent,
-  ]);
   const showOverlayCursor = !showSnapshotPrimary;
   const roadmapVisible = useRoadmapTransition({
     roadmapStepCount: roadmapSteps.length,
     roadmapActiveIndex,
     activeEventType,
   });
-  useEffect(() => {
-    const animate = () => {
-      setScrollOffset((previous) => {
-        const delta = scrollTargetRef.current - previous;
-        if (Math.abs(delta) < 0.08) {
-          return scrollTargetRef.current;
-        }
-        return previous + delta * 0.16;
-      });
-      scrollRafRef.current = requestAnimationFrame(animate);
-    };
-    scrollRafRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (scrollRafRef.current != null) {
-        cancelAnimationFrame(scrollRafRef.current);
-        scrollRafRef.current = null;
-      }
-    };
-  }, []);
   return (
-    <div className="absolute inset-0 flex flex-col bg-[#0d1118] text-white/90">
-      <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
+    <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(168,216,255,0.92),rgba(122,176,244,0.72)_40%,rgba(98,148,232,0.9)_100%)] p-9 text-[#1d1d1f]">
+      <div className="relative mx-auto flex h-full w-full max-w-[840px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
+      <div className="relative z-40 flex items-center gap-2 border-b border-black/[0.08] bg-[#fcfcfd] px-3 py-2.5">
         <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
         <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
         <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-        <div className="ml-2 flex-1 truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] text-white/85">
+        <div className="ml-2 flex-1 truncate rounded-full border border-black/[0.08] bg-[#f7f8fb] px-3 py-1 text-[11px] text-[#2b3140]">
           {activePageUrl || "Searching the web and opening result pages..."}
         </div>
         {statusChipLabel ? (
-          <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[10px] text-white/85">
+          <span className="rounded-full border border-black/[0.1] bg-[#f7f8fb] px-2 py-0.5 text-[10px] text-[#4a4f5c]">
             {statusChipLabel}
           </span>
         ) : null}
@@ -339,7 +307,7 @@ function BrowserScene({
         </div>
       ) : null}
       {showSnapshotPrimary ? (
-        <div className="relative flex-1 overflow-hidden bg-white">
+        <div className="relative flex-1 overflow-hidden bg-[#f5f7fb]">
           {/* Skeleton shown while loading and no cross-fade underlay is available */}
           {!snapshotReady && !crossFadeUrl ? (
             <div className="absolute inset-0 flex items-center justify-center bg-[#f5f5f7]">
@@ -357,16 +325,14 @@ function BrowserScene({
               src={crossFadeUrl}
               alt=""
               aria-hidden="true"
-              className="absolute inset-0 h-full w-full object-cover"
+              className="absolute inset-0 h-full w-full object-contain object-top bg-transparent"
             />
           ) : null}
           <img
             src={snapshotUrl}
             alt="Live browser capture"
-            className={`h-full w-full object-cover ${snapshotReady ? "opacity-100" : "opacity-0"}`}
+            className={`absolute inset-0 h-full w-full object-contain object-top bg-transparent ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
-              transform: `translateY(${scrollOffset}px) scale(1.04)`,
-              transformOrigin: "center top",
               transition: "opacity 320ms ease-in-out",
             }}
             onLoad={handleSnapshotLoad}
@@ -392,8 +358,6 @@ function BrowserScene({
             verifierRecheckRequired={verifierRecheckRequired}
             zoomEscalationRequested={zoomEscalationRequested}
           />
-          <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-image" />
-          <TargetFocusRing targetRegion={targetRegion} />
           <ZoomBadge zoomLevel={zoomLevel} zoomReason={zoomReason} />
           <ComparePanel
             compareLeft={compareLeft}
@@ -427,8 +391,8 @@ function BrowserScene({
           ) : null}
           <ThoughtBubble text={narration} />
         </div>
-      ) : showProxyPreview || canRenderLiveUrl ? (
-        <div className="relative flex-1 overflow-hidden bg-white">
+      ) : showFramePreview ? (
+        <div className="relative flex-1 overflow-hidden bg-[#f5f7fb]">
           {!proxyLoaded ? (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#f5f5f7]">
               <div className="space-y-2.5 w-[52%]">
@@ -439,15 +403,9 @@ function BrowserScene({
             </div>
           ) : null}
           <iframe
-            src={proxyPreviewUrl || activePageUrl}
+            src={frameUrl || activePageUrl}
             title="Live website preview"
-            className="h-full w-full border-0"
-            style={{
-              transform: `translate3d(0, ${Math.round(scrollOffset)}px, 0) scale(1.04)`,
-              transformOrigin: "center top",
-              willChange: "transform",
-              backfaceVisibility: "hidden",
-            }}
+            className="absolute inset-0 h-full w-full border-0"
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
             referrerPolicy="no-referrer-when-downgrade"
             onLoad={() => setProxyLoaded(true)}
@@ -467,8 +425,6 @@ function BrowserScene({
             verifierRecheckRequired={verifierRecheckRequired}
             zoomEscalationRequested={zoomEscalationRequested}
           />
-          <HighlightOverlay highlightRegions={highlightRegions} keyPrefix="browser-iframe" />
-          <TargetFocusRing targetRegion={targetRegion} />
           <ZoomBadge zoomLevel={zoomLevel} zoomReason={zoomReason} />
           <ComparePanel
             compareLeft={compareLeft}
@@ -510,28 +466,28 @@ function BrowserScene({
             actionStatus={actionStatus}
             actionTargetLabel={actionTargetLabel}
           />
-          <p className="text-[13px] font-semibold text-white">{activeTitle || "Browser scene"}</p>
-          <p className="text-[12px] text-white/80">
+          <p className="text-[13px] font-semibold text-[#1d1d1f]">{activeTitle || "Browser scene"}</p>
+          <p className="text-[12px] text-[#4a4f5c]">
             {sceneText || activeDetail || "Inspecting page content and extracting evidence..."}
           </p>
           <div className="space-y-2">
-            <div className="h-2 w-[92%] rounded-full bg-white/20" />
-            <div className="h-2 w-[84%] rounded-full bg-white/15" />
-            <div className="h-2 w-[88%] rounded-full bg-white/20" />
-            <div className="h-2 w-[63%] rounded-full bg-white/15" />
+            <div className="h-2 w-[92%] rounded-full bg-black/12" />
+            <div className="h-2 w-[84%] rounded-full bg-black/8" />
+            <div className="h-2 w-[88%] rounded-full bg-black/12" />
+            <div className="h-2 w-[63%] rounded-full bg-black/8" />
           </div>
           {showFindOverlay ? (
-            <div className="rounded-lg border border-white/20 bg-white/10 px-2.5 py-2 text-[11px] text-white/90">
+            <div className="rounded-lg border border-black/[0.08] bg-white px-2.5 py-2 text-[11px] text-[#1d1d1f]">
               <p className="font-semibold">
                 Find: {findQuery || dedupedBrowserKeywords.slice(0, 2).join(" ")}
               </p>
               {dedupedBrowserKeywords.length ? (
-                <p className="mt-0.5 text-white/75">Terms: {dedupedBrowserKeywords.slice(0, 5).join(", ")}</p>
+                <p className="mt-0.5 text-[#4a4f5c]">Terms: {dedupedBrowserKeywords.slice(0, 5).join(", ")}</p>
               ) : null}
             </div>
           ) : null}
           {copyPulseVisible ? (
-            <div className="rounded-lg border border-white/20 bg-white/8 px-2.5 py-1.5 text-[11px] text-white/90">
+            <div className="rounded-lg border border-black/[0.08] bg-white px-2.5 py-1.5 text-[11px] text-[#1d1d1f]">
               Copied: {copyPulseText}
             </div>
           ) : null}
@@ -539,7 +495,7 @@ function BrowserScene({
             <img
               src={snapshotUrl}
               alt="Browser capture"
-              className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-white/20 object-contain bg-black/25"
+              className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-black/[0.08] object-contain bg-[#f5f7fb]"
               onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}
             />
           ) : null}
@@ -547,8 +503,8 @@ function BrowserScene({
       )}
       {pageIndex !== null ? (
         <div
-          className={`pointer-events-none absolute right-3 rounded-full border border-white/20 bg-black/55 px-2.5 py-1 text-[10px] text-white/85 ${
-            dedupedOpenedPages.length > 1 ? "bottom-12" : "bottom-3"
+          className={`pointer-events-none absolute right-3 rounded-full border border-black/[0.1] bg-white/92 px-2.5 py-1 text-[10px] text-[#4a4f5c] ${
+            dedupedOpenedPages.length > 0 ? "bottom-12" : "bottom-3"
           }`}
         >
           Page {Math.max(1, pageIndex)}
@@ -559,13 +515,14 @@ function BrowserScene({
         roadmapActiveIndex={roadmapActiveIndex}
         visible={roadmapVisible}
       />
-      {dedupedOpenedPages.length > 1 ? (
+      {dedupedOpenedPages.length > 0 ? (
         <OpenedPagesRail
           openedPages={dedupedOpenedPages}
           activePageUrl={activePageUrl}
           onSelectPage={setSelectedPageUrl}
         />
       ) : null}
+    </div>
     </div>
   );
 }
