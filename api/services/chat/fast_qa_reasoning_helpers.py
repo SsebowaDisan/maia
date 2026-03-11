@@ -367,6 +367,30 @@ def finalize_retrieved_snippets(
     if not retrieved_snippets:
         return [], primary_source_note, "no_snippets"
 
+    # Filter out internal test/placeholder sources that should never appear in citations.
+    # These are indexed during development and have no value to end users.
+    _TEST_HOSTS = {"example.com", "example.org", "example.net"}
+    _TEST_PARAMS = {"maia_gap_test_media", "maia_no_pdf", "maia_gap_test"}
+    def _is_test_snippet(row: dict[str, Any]) -> bool:
+        url = str(row.get("source_url") or row.get("page_url") or row.get("url") or "").strip().lower()
+        if not url:
+            return False
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(url)
+            host = (parsed.netloc or "").lstrip("www.")
+            if host in _TEST_HOSTS:
+                return True
+            qs_keys = set(parse_qs(parsed.query).keys())
+            if qs_keys & _TEST_PARAMS:
+                return True
+        except Exception:
+            pass
+        return False
+    retrieved_snippets = [row for row in retrieved_snippets if not _is_test_snippet(row)]
+    if not retrieved_snippets:
+        return [], primary_source_note, "no_snippets"
+
     snippets, primary_source_note = annotate_primary_sources_fn(
         question=question,
         snippets=retrieved_snippets,

@@ -85,7 +85,14 @@ def run_orchestrator_stream_turn(
     if context_snippets:
         agent_settings["__conversation_snippets"] = context_snippets
     if context_summary:
-        agent_settings["__conversation_summary"] = context_summary
+        # Sanitize emails and URLs from conversation summary before it reaches
+        # task_preparation → llm_contracts → next_steps generation, preventing
+        # prior-turn email addresses from appearing in recommended next steps.
+        _safe_summary = _re.sub(
+            r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", "[email]", context_summary
+        )
+        _safe_summary = _re.sub(r"https?://[^\s\])>\"',]+", "[url]", _safe_summary)
+        agent_settings["__conversation_summary"] = _safe_summary
     agent_settings["__conversation_latest_user_message"] = message
     if persisted_workspace_ids["deep_research_doc_id"]:
         agent_settings["__deep_research_doc_id"] = persisted_workspace_ids["deep_research_doc_id"]
