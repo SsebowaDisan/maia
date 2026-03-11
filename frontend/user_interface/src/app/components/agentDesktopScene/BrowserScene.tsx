@@ -5,11 +5,13 @@ import { GhostCursor } from "./GhostCursor";
 import { ThoughtBubble } from "./ThoughtBubble";
 import { InteractionOverlay } from "./InteractionOverlay";
 import {
+  BrowserMiniMap,
   ComparePanel,
   CopyPulse,
   ExecutionRoadmapOverlay,
   FindOverlay,
   OpenedPagesRail,
+  ScrollMeter,
   VerifierConflictBadge,
   ZoomBadge,
 } from "./browser_scene_panels";
@@ -151,6 +153,8 @@ function BrowserScene({
     pageIndex,
   });
   const [navigationHint, setNavigationHint] = useState("");
+  const boundaryHintRef = useRef<"start" | "end" | null>(null);
+  const boundaryHintTimeoutRef = useRef<number | null>(null);
   const previousPageUrlRef = useRef(activePageUrl);
   useEffect(() => {
     const nextUrl = String(activePageUrl || "").trim();
@@ -159,10 +163,23 @@ function BrowserScene({
     if (!nextUrl || !previousUrl || nextUrl === previousUrl) {
       return;
     }
+    boundaryHintRef.current = null;
+    if (boundaryHintTimeoutRef.current !== null) {
+      window.clearTimeout(boundaryHintTimeoutRef.current);
+      boundaryHintTimeoutRef.current = null;
+    }
     setNavigationHint(`Navigating to ${shortHostLabel(nextUrl)}`);
     const timer = window.setTimeout(() => setNavigationHint(""), 1400);
     return () => window.clearTimeout(timer);
   }, [activePageUrl]);
+  useEffect(() => {
+    return () => {
+      if (boundaryHintTimeoutRef.current !== null) {
+        window.clearTimeout(boundaryHintTimeoutRef.current);
+        boundaryHintTimeoutRef.current = null;
+      }
+    };
+  }, []);
   const previewHint = (findQuery || actionTargetLabel || "").slice(0, 180);
   const shouldAnnotatePreview = showFindOverlay || normalizedAction === "find";
   const proxyPreviewUrl = useMemo(() => {
@@ -217,7 +234,7 @@ function BrowserScene({
   const syntheticTickRef = useRef(0);
   const syntheticIntervalRef = useRef<number | null>(null);
   const syntheticDirectionRef = useRef(1);
-  const effectiveScrollPercent = scrollPercent ?? syntheticScrollPercent;
+  const effectiveScrollPercent = syntheticScrollPercent ?? scrollPercent;
 
   useEffect(() => {
     if (normalizedScrollDirection === "up") {
@@ -279,12 +296,64 @@ function BrowserScene({
     readingMode,
     scrollPercent,
   ]);
+  const handleScrollSelect = (percent: number) => {
+    const nextPercent = Number(percent);
+    if (!Number.isFinite(nextPercent)) {
+      return;
+    }
+    const normalizedPercent = Math.max(0, Math.min(100, nextPercent));
+    if (syntheticIntervalRef.current !== null) {
+      window.clearInterval(syntheticIntervalRef.current);
+      syntheticIntervalRef.current = null;
+    }
+    syntheticDirectionRef.current = 0;
+    syntheticTickRef.current = normalizedPercent;
+    setSyntheticScrollPercent(normalizedPercent);
+  };
+  useEffect(() => {
+    if (typeof effectiveScrollPercent !== "number") {
+      boundaryHintRef.current = null;
+      return;
+    }
+    const boundary =
+      effectiveScrollPercent < 5 ? "start" : effectiveScrollPercent > 95 ? "end" : null;
+    if (!boundary) {
+      boundaryHintRef.current = null;
+      return;
+    }
+    if (navigationHint) {
+      return;
+    }
+    if (boundaryHintRef.current === boundary) {
+      return;
+    }
+    boundaryHintRef.current = boundary;
+    const hintText = boundary === "start" ? "Start of page" : "End of page";
+    setNavigationHint(hintText);
+    if (boundaryHintTimeoutRef.current !== null) {
+      window.clearTimeout(boundaryHintTimeoutRef.current);
+    }
+    boundaryHintTimeoutRef.current = window.setTimeout(() => {
+      setNavigationHint((current) => (current === hintText ? "" : current));
+      boundaryHintTimeoutRef.current = null;
+    }, 1100);
+  }, [effectiveScrollPercent, navigationHint]);
   const showOverlayCursor = !showSnapshotPrimary;
   const roadmapVisible = useRoadmapTransition({
     roadmapStepCount: roadmapSteps.length,
     roadmapActiveIndex,
     activeEventType,
   });
+  const scrollControls = (
+    <>
+      <ScrollMeter scrollPercent={effectiveScrollPercent} onSelect={handleScrollSelect} />
+      <BrowserMiniMap
+        highlightRegions={highlightRegions}
+        scrollPercent={effectiveScrollPercent}
+        onSelect={handleScrollSelect}
+      />
+    </>
+  );
   return (
     <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(168,216,255,0.92),rgba(122,176,244,0.72)_40%,rgba(98,148,232,0.9)_100%)] p-9 text-[#1d1d1f]">
       <div className="relative mx-auto flex h-full w-full max-w-[840px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
@@ -342,16 +411,7 @@ function BrowserScene({
               onSnapshotError?.();
             }}
           />
-          {/* Slim scroll rail — only shown when scroll position is known */}
-          {effectiveScrollPercent !== null ? (
-            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] z-10">
-              <div className="absolute inset-0 bg-black/[0.06]" />
-              <div
-                className="absolute inset-x-0 rounded-full bg-black/30 transition-all duration-300"
-                style={{ height: "16%", top: `${Math.max(0, Math.min(84, effectiveScrollPercent))}%` }}
-              />
-            </div>
-          ) : null}
+          {scrollControls}
           <VerifierConflictBadge
             verifierConflict={verifierConflict}
             verifierConflictReason={verifierConflictReason}
@@ -410,15 +470,7 @@ function BrowserScene({
             referrerPolicy="no-referrer-when-downgrade"
             onLoad={() => setProxyLoaded(true)}
           />
-          {effectiveScrollPercent !== null ? (
-            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-[3px] z-10">
-              <div className="absolute inset-0 bg-black/[0.06]" />
-              <div
-                className="absolute inset-x-0 rounded-full bg-black/30 transition-all duration-300"
-                style={{ height: "16%", top: `${Math.max(0, Math.min(84, effectiveScrollPercent))}%` }}
-              />
-            </div>
-          ) : null}
+          {scrollControls}
           <VerifierConflictBadge
             verifierConflict={verifierConflict}
             verifierConflictReason={verifierConflictReason}
@@ -491,6 +543,7 @@ function BrowserScene({
               Copied: {copyPulseText}
             </div>
           ) : null}
+          {scrollControls}
           {snapshotUrl && snapshotReady ? (
             <img
               src={snapshotUrl}

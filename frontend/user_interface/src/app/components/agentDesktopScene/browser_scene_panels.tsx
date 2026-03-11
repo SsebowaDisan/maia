@@ -3,6 +3,10 @@ import React, { useEffect, useMemo, useRef } from "react";
 import { highlightPalette } from "./helpers";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
 function HighlightOverlay({
   highlightRegions,
   keyPrefix,
@@ -125,19 +129,42 @@ function SceneFooter({
   );
 }
 
-function ScrollMeter({ scrollPercent }: { scrollPercent: number | null }) {
-  if (typeof scrollPercent !== "number") {
-    return null;
-  }
+function ScrollMeter({
+  scrollPercent,
+  onSelect,
+}: {
+  scrollPercent: number | null;
+  onSelect?: (percent: number) => void;
+}) {
+  const interactive = typeof onSelect === "function";
+  const normalizedPercent = typeof scrollPercent === "number" ? clampPercent(scrollPercent) : 0;
+  const label = typeof scrollPercent === "number" ? `${Math.round(normalizedPercent)}%` : "--";
+  const handleTrackClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (!onSelect) {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.height) {
+      return;
+    }
+    const percent = ((event.clientY - rect.top) / rect.height) * 100;
+    onSelect(clampPercent(percent));
+  };
   return (
-    <div className="pointer-events-none absolute right-2 top-20 bottom-6 flex flex-col items-center">
-      <div className="h-full w-1.5 rounded-full bg-black/20">
+    <div className={`absolute right-2 top-20 bottom-6 z-20 flex flex-col items-center ${interactive ? "" : "pointer-events-none"}`}>
+      <button
+        type="button"
+        onClick={handleTrackClick}
+        disabled={!interactive}
+        aria-label="Set scroll position"
+        className={`relative h-full w-1.5 rounded-full bg-black/20 ${interactive ? "cursor-pointer" : ""}`}
+      >
         <div
-          className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
-          style={{ height: "24px", marginTop: `calc(${scrollPercent}% - 12px)` }}
+          className="pointer-events-none absolute left-0 right-0 rounded-full bg-black/60 transition-all duration-300"
+          style={{ height: "24px", top: `${normalizedPercent}%`, transform: "translateY(-50%)" }}
         />
-      </div>
-      <span className="mt-1 text-[10px] font-medium text-black/70">{Math.round(scrollPercent)}%</span>
+      </button>
+      <span className="mt-1 text-[10px] font-medium text-black/70">{label}</span>
     </div>
   );
 }
@@ -329,30 +356,52 @@ function ExecutionRoadmapOverlay({
 function BrowserMiniMap({
   highlightRegions,
   scrollPercent,
+  onSelect,
 }: {
   highlightRegions: HighlightRegion[];
   scrollPercent: number | null;
+  onSelect?: (percent: number) => void;
 }) {
-  const viewportTop =
-    typeof scrollPercent === "number"
-      ? Math.max(0, Math.min(86, Math.round(scrollPercent * 0.86)))
-      : 6;
+  const interactive = typeof onSelect === "function";
+  const normalizedPercent = typeof scrollPercent === "number" ? clampPercent(scrollPercent) : 0;
+  const viewportTop = Math.max(0, Math.min(86, Math.round(normalizedPercent * 0.86)));
+  const handleMapClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (!onSelect) {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.height) {
+      return;
+    }
+    const percent = ((event.clientY - rect.top) / rect.height) * 100;
+    onSelect(clampPercent(percent));
+  };
   return (
-    <div className="pointer-events-none absolute bottom-16 right-3 z-20 h-28 w-20 rounded-lg border border-white/25 bg-black/45 p-1.5 backdrop-blur-sm">
+    <div
+      className={`absolute bottom-16 right-3 z-20 h-28 w-20 rounded-lg border border-white/25 bg-black/45 p-1.5 backdrop-blur-sm ${
+        interactive ? "" : "pointer-events-none"
+      }`}
+    >
       <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-white/70">Mini-map</p>
-      <div className="relative mt-1 h-[88px] w-full rounded bg-white/10">
+      <button
+        type="button"
+        onClick={handleMapClick}
+        disabled={!interactive}
+        aria-label="Jump to section"
+        className={`relative mt-1 h-[88px] w-full rounded bg-white/10 text-left ${interactive ? "cursor-pointer" : ""}`}
+      >
         <div
-          className="absolute left-[2px] right-[2px] rounded border border-white/65 bg-white/15"
+          className="pointer-events-none absolute left-[2px] right-[2px] rounded border border-white/65 bg-white/15"
           style={{ top: `${viewportTop}%`, height: "14%" }}
         />
         {highlightRegions.slice(0, 8).map((region, index) => (
           <span
             key={`mini-${region.keyword}-${index}`}
-            className="absolute h-1.5 w-1.5 rounded-full bg-white/90"
+            className="pointer-events-none absolute h-1.5 w-1.5 rounded-full bg-white/90"
             style={{ left: `${Math.max(1, Math.min(94, region.x))}%`, top: `${Math.max(1, Math.min(94, region.y))}%` }}
           />
         ))}
-      </div>
+      </button>
     </div>
   );
 }
