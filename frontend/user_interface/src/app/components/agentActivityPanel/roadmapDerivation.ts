@@ -2,6 +2,52 @@ import type { AgentActivityEvent } from "../../types";
 
 type RoadmapStep = { toolId: string; title: string; whyThisStep: string };
 
+const REQUEST_TEXT_KEYS = [
+  "original_request",
+  "request_message",
+  "objective",
+  "contract_objective",
+  "summary",
+  "message",
+  "task",
+] as const;
+
+const STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "that",
+  "this",
+  "from",
+  "into",
+  "about",
+  "your",
+  "their",
+  "then",
+  "when",
+  "what",
+  "where",
+  "which",
+  "while",
+  "after",
+  "before",
+  "please",
+  "should",
+  "would",
+  "could",
+  "have",
+  "has",
+  "had",
+  "use",
+  "using",
+  "into",
+  "over",
+  "under",
+  "across",
+  "through",
+]);
+
 function eventPayload(event: AgentActivityEvent): Record<string, unknown> {
   const data = (event.data || {}) as Record<string, unknown>;
   const metadata = (event.metadata || {}) as Record<string, unknown>;
@@ -13,6 +59,105 @@ function normalizeWhitespace(value: unknown): string {
     .split(/\s+/)
     .join(" ")
     .trim();
+}
+
+function parseStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => normalizeWhitespace(item))
+    .filter((item) => item.length > 0);
+}
+
+function requestTextFromEvents(visibleEvents: AgentActivityEvent[]): string {
+  for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
+    const payload = eventPayload(visibleEvents[i]);
+    for (const key of REQUEST_TEXT_KEYS) {
+      const value = normalizeWhitespace(payload[key]);
+      if (value.length > 0) {
+        return value;
+      }
+    }
+    const requiredActions = parseStringList(payload.required_actions);
+    if (requiredActions.length) {
+      return requiredActions.join(" and ");
+    }
+  }
+  return "";
+}
+
+function sentenceCase(value: string): string {
+  const cleaned = normalizeWhitespace(value).replace(/[.;:,]+$/g, "");
+  if (!cleaned) {
+    return "";
+  }
+  return `${cleaned.charAt(0).toUpperCase()}${cleaned.slice(1)}`;
+}
+
+function deriveRoadmapFromRequestText(requestText: string): RoadmapStep[] {
+  const normalized = normalizeWhitespace(requestText);
+  if (!normalized) {
+    return [];
+  }
+  const splitByConjunction = normalized
+    .split(/\s+(?:and then|then|and)\s+/i)
+    .map((part) => sentenceCase(part))
+    .filter((part) => part.length > 0);
+  const clauses = (splitByConjunction.length > 1
+    ? splitByConjunction
+    : normalized
+        .split(/[.!?;]+/)
+        .map((part) => sentenceCase(part))
+        .filter((part) => part.length > 0)
+  ).slice(0, 5);
+  if (!clauses.length) {
+    return [];
+  }
+  return clauses.map((title, index) => ({
+    toolId: `prompt.request_step_${index + 1}`,
+    title,
+    whyThisStep: "Directly requested by the user.",
+  }));
+}
+
+function tokenizeForAlignment(value: string): string[] {
+  return normalizeWhitespace(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9@./\s_-]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !STOPWORDS.has(token));
+}
+
+function roadmapMatchesRequest(roadmapSteps: RoadmapStep[], requestText: string): boolean {
+  if (!roadmapSteps.length) {
+    return false;
+  }
+  const requestTokens = tokenizeForAlignment(requestText);
+  if (requestTokens.length < 2) {
+    return true;
+  }
+  const requestTokenSet = new Set(requestTokens);
+  let alignedSteps = 0;
+  for (const step of roadmapSteps) {
+    const stepTokens = tokenizeForAlignment(`${step.title} ${step.whyThisStep} ${step.toolId}`);
+    if (!stepTokens.length) {
+      continue;
+    }
+    let overlap = 0;
+    for (const token of stepTokens) {
+      if (requestTokenSet.has(token)) {
+        overlap += 1;
+      }
+    }
+    const overlapRatio = overlap / stepTokens.length;
+    if (overlap >= 2 || overlapRatio >= 0.34) {
+      alignedSteps += 1;
+    }
+  }
+  const minAligned = roadmapSteps.length <= 2 ? 1 : Math.ceil(roadmapSteps.length / 2);
+  return alignedSteps >= minAligned;
 }
 
 function parsePlanStepsFromEvents(visibleEvents: AgentActivityEvent[]): RoadmapStep[] {
@@ -155,9 +300,21 @@ function deriveRoadmapActiveIndex(
 function derivePlannedRoadmap(
   visibleEvents: AgentActivityEvent[],
 ): { plannedRoadmapSteps: RoadmapStep[]; roadmapActiveIndex: number } {
+  const requestText = requestTextFromEvents(visibleEvents);
   const plannedRoadmapSteps = parsePlanStepsFromEvents(visibleEvents);
   if (!plannedRoadmapSteps.length) {
+    const requestRoadmapSteps = deriveRoadmapFromRequestText(requestText);
+    if (requestRoadmapSteps.length) {
+      return { plannedRoadmapSteps: requestRoadmapSteps, roadmapActiveIndex: 0 };
+    }
     return { plannedRoadmapSteps: [], roadmapActiveIndex: -1 };
+  }
+  if (requestText && !roadmapMatchesRequest(plannedRoadmapSteps, requestText)) {
+    const requestRoadmapSteps = deriveRoadmapFromRequestText(requestText);
+    if (requestRoadmapSteps.length) {
+      const roadmapActiveIndex = deriveRoadmapActiveIndex(visibleEvents, requestRoadmapSteps);
+      return { plannedRoadmapSteps: requestRoadmapSteps, roadmapActiveIndex };
+    }
   }
   const roadmapActiveIndex = deriveRoadmapActiveIndex(visibleEvents, plannedRoadmapSteps);
   return {

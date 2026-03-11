@@ -16,15 +16,15 @@ PLACEHOLDER_KEYS = {
 }
 API_CHAT_FAST_PATH = config("MAIA_API_CHAT_FAST_PATH", default=True, cast=bool)
 API_FAST_QA_MAX_IMAGES = config("MAIA_FAST_QA_MAX_IMAGES", default=4, cast=int)
-API_FAST_QA_MAX_SNIPPETS = config("MAIA_FAST_QA_MAX_SNIPPETS", default=24, cast=int)
+API_FAST_QA_MAX_SNIPPETS = config("MAIA_FAST_QA_MAX_SNIPPETS", default=30, cast=int)
 API_FAST_QA_SOURCE_SCAN = config("MAIA_FAST_QA_SOURCE_SCAN", default=220, cast=int)
 API_FAST_QA_MAX_SOURCES = config("MAIA_FAST_QA_MAX_SOURCES", default=35, cast=int)
 API_FAST_QA_MAX_CHUNKS_PER_SOURCE = config(
     "MAIA_FAST_QA_MAX_CHUNKS_PER_SOURCE",
-    default=4,
+    default=6,
     cast=int,
 )
-API_FAST_QA_TEMPERATURE = config("MAIA_FAST_QA_TEMPERATURE", default=0.2, cast=float)
+API_FAST_QA_TEMPERATURE = config("MAIA_FAST_QA_TEMPERATURE", default=0.35, cast=float)
 MAIA_CITATION_STRENGTH_ORDERING_ENABLED = config(
     "MAIA_CITATION_STRENGTH_ORDERING_ENABLED",
     default=False,

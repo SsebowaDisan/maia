@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -66,29 +67,45 @@ def review_pdf_route_with_vlm_impl(
             "needs_ocr must be true when this page contains scanned text, text embedded in images, "
             "equations/charts/diagrams where plain PDF text extraction may miss important content."
         )
+        # Phase 1: render pages serially — fitz document is not thread-safe.
+        rendered: list[Path] = []
+        for page_index in page_indexes:
+            page = doc.load_page(page_index)
+            image_path = work_dir / f"review-page-{page_index + 1}.png"
+            image_paths.append(image_path)
+            pix = page.get_pixmap(dpi=review_render_dpi, alpha=False)
+            pix.save(str(image_path))
+            rendered.append(image_path)
+
+        if not rendered:
+            return {"enabled": True, "upgrade": False, "checked_pages": 0, "reason": "vlm-review-kept-normal"}
+
+        # Phase 2: run VLM inference concurrently across rendered page images.
+        # httpx.Client is thread-safe; each thread reuses the same connection pool.
         with httpx.Client(timeout=ollama_timeout_fn(review_timeout_seconds)) as client:
-            for page_index in page_indexes:
-                page = doc.load_page(page_index)
-                image_path = work_dir / f"review-page-{page_index + 1}.png"
-                image_paths.append(image_path)
-                pix = page.get_pixmap(dpi=review_render_dpi, alpha=False)
-                pix.save(str(image_path))
+            def _infer(img_path: Path) -> dict[str, Any]:
                 raw = run_ollama_vlm_for_image_fn(
                     client=client,
                     model=review_model,
                     prompt=prompt,
-                    image_path=image_path,
+                    image_path=img_path,
                     base_url=base_url,
                 )
-                verdict = parse_vlm_classifier_response_fn(raw)
-                checked_pages += 1
-                if bool(verdict.get("needs_ocr")):
-                    return {
-                        "enabled": True,
-                        "upgrade": True,
-                        "checked_pages": checked_pages,
-                        "reason": str(verdict.get("reason") or "vlm-review-upgrade"),
-                    }
+                return parse_vlm_classifier_response_fn(raw)
+
+            max_workers = min(max(1, len(rendered)), 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                verdicts = list(executor.map(_infer, rendered))
+
+        checked_pages = len(verdicts)
+        for verdict in verdicts:
+            if bool(verdict.get("needs_ocr")):
+                return {
+                    "enabled": True,
+                    "upgrade": True,
+                    "checked_pages": checked_pages,
+                    "reason": str(verdict.get("reason") or "vlm-review-upgrade"),
+                }
         return {
             "enabled": True,
             "upgrade": False,
@@ -178,7 +195,6 @@ def classify_pdf_ingestion_route_cached_impl(
     heavy_on_any_image_page: bool,
     sample_page_indexes_fn: Callable[[int, int], list[int]],
     page_has_images_fn: Callable[[Any], bool],
-    count_image_pages_fn: Callable[..., int],
     detect_pdf_images_with_pymupdf_fn: Callable[..., tuple[set[int], int]],
     apply_vlm_review_upgrade_fn: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
@@ -274,15 +290,14 @@ def classify_pdf_ingestion_route_cached_impl(
     sampled_pages = max(1, sampled_pages)
     low_text_ratio = low_text_pages / float(sampled_pages)
     sample_image_ratio = sample_image_pages / float(sampled_pages)
-    image_pages_all = count_image_pages_fn(
-        pages,
-        skip_edge_pages=skip_edge_pages,
-    )
+    # Use fitz (PyMuPDF) as the single authoritative image-page scanner.
+    # The prior pypdf count_image_pages full pass was redundant — fitz already
+    # walks every page and returns a superset of what pypdf detects.
     image_pages_pymupdf, pymupdf_total_pages = detect_pdf_images_with_pymupdf_fn(
         path,
         skip_edge_pages=skip_edge_pages,
     )
-    image_pages_all = max(image_pages_all, len(image_pages_pymupdf))
+    image_pages_all = len(image_pages_pymupdf)
     effective_total_pages = max(total_pages, pymupdf_total_pages or 0)
     image_ratio_all = image_pages_all / float(max(1, effective_total_pages))
 

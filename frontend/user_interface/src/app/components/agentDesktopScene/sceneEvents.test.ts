@@ -34,6 +34,54 @@ describe("overlayForInteractionEvent", () => {
     expect(overlay?.text).toContain("Human verification");
   });
 
+  it("renders waiting overlay with distinct copy for agent.waiting", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "agent.waiting",
+      sceneSurface: "system",
+      activeDetail: "",
+      scrollDirection: "",
+      action: "",
+      actionPhase: "",
+      actionStatus: "ok",
+      actionTargetLabel: "",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.variant).toBe("human-alert");
+    expect(overlay?.text).toContain("Waiting for your input");
+  });
+
+  it("renders paused copy for handoff_paused", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "handoff_paused",
+      sceneSurface: "system",
+      activeDetail: "",
+      scrollDirection: "",
+      action: "",
+      actionPhase: "",
+      actionStatus: "ok",
+      actionTargetLabel: "",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.variant).toBe("human-alert");
+    expect(overlay?.text).toContain("Paused for human review");
+  });
+
+  it("shows resume chip for handoff_resumed", () => {
+    const overlay = overlayForInteractionEvent({
+      eventType: "handoff_resumed",
+      sceneSurface: "system",
+      activeDetail: "",
+      scrollDirection: "",
+      action: "",
+      actionPhase: "",
+      actionStatus: "ok",
+      actionTargetLabel: "",
+    });
+    expect(overlay).not.toBeNull();
+    expect(overlay?.variant).toBe("left-chip");
+    expect(overlay?.text).toContain("Resumed after verification");
+  });
+
   it("returns compact retry overlay for failed action status", () => {
     const overlay = overlayForInteractionEvent({
       eventType: "docs.insert_completed",

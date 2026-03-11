@@ -38,10 +38,13 @@ def plan_adaptive_outline(
         '{ "style": "string", "detail_level": "high", "sections": [{"title":"string","goal":"string","format":"paragraphs|bullets|table|mixed"}], "tone": "string" }\n'
         "Rules:\n"
         "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
-        "- For analytical, research, or comparison questions: use 4-6 substantive sections that explore different "
+        "- For analytical, research, or comparison questions: use 5-7 substantive sections that explore different "
         "dimensions (e.g. context/background, key findings, mechanisms, data/evidence, implications, competing views, limitations).\n"
         "- For direct factual or lookup questions: use 1-2 sections with a precise answer followed by essential context.\n"
-        "- Each section goal must specify what specific insight or data it will surface — not just 'provide details'.\n"
+        "- Each section goal must specify at least 2 concrete, specific findings or data points that will be surfaced — "
+        "goals like 'provide details' or 'explain the topic' are not acceptable.\n"
+        "- Design sections that progressively deepen the analysis: start with context, move to primary "
+        "evidence/data, then mechanisms, then implications or significance.\n"
         "- Sections should cover distinct angles: do not repeat the same content across sections.\n"
         "- Section titles must be specific, professional, and tied to concrete entities in the request/evidence.\n"
         "- Do not default to reusable company-profile or marketing-report skeletons unless explicitly requested.\n"
@@ -51,7 +54,7 @@ def plan_adaptive_outline(
         f"Question:\n{question}\n\n"
         f"Recent chat history:\n{history_text}\n\n"
         f"Source index:\n{refs_text or '(none)'}\n\n"
-        f"Evidence excerpt (truncated):\n{context_text[:6000]}"
+        f"Evidence excerpt (truncated):\n{context_text[:14000]}"
     )
     planner_payload = {
         "model": model,
@@ -73,7 +76,7 @@ def plan_adaptive_outline(
             api_key=api_key,
             base_url=base_url,
             request_payload=planner_payload,
-            timeout_seconds=16,
+            timeout_seconds=22,
         )
         parsed_outline = parse_json_object_fn(str(planned_raw or ""))
         normalized_outline = normalize_outline_fn(parsed_outline)

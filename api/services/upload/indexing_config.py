@@ -170,7 +170,7 @@ UPLOAD_PDF_VLM_REVIEW_RENDER_DPI = max(
     96, int(config("MAIA_UPLOAD_PDF_VLM_REVIEW_RENDER_DPI", default=180, cast=int))
 )
 UPLOAD_PDF_VLM_REVIEW_MAX_PAGES = max(
-    0, int(config("MAIA_UPLOAD_PDF_VLM_REVIEW_MAX_PAGES", default=0, cast=int))
+    0, int(config("MAIA_UPLOAD_PDF_VLM_REVIEW_MAX_PAGES", default=3, cast=int))
 )
 UPLOAD_PDF_VLM_EXTRACT_ENABLED = bool(
     config("MAIA_UPLOAD_PDF_VLM_EXTRACT_ENABLED", default=False, cast=bool)

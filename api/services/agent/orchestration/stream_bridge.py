@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable, Generator
 from typing import Any
 
@@ -11,6 +13,8 @@ from api.services.agent.tools.base import ToolExecutionContext, ToolTraceEvent
 from api.services.agent.tools.theater_cursor import cursor_payload
 from api.services.agent.zoom_history import enrich_event_data_with_zoom
 from .role_contracts import resolve_owner_role_for_tool
+
+_log = logging.getLogger(__name__)
 
 
 class LiveRunStream:
@@ -26,6 +30,8 @@ class LiveRunStream:
         self.user_id = user_id
         self.run_id = run_id
         self.observed_event_types = observed_event_types
+        # Lock guards copy-provenance state which may be accessed from multiple threads.
+        self._copy_lock = threading.Lock()
         self._latest_copy_by_surface: dict[str, dict[str, Any]] = {}
         self._latest_copy_any: dict[str, Any] | None = None
 
@@ -80,32 +86,41 @@ class LiveRunStream:
         event_family = str(event_data.get("event_family") or "").strip()
         event_priority = str(event_data.get("event_priority") or "").strip()
         event_render_mode = str(event_data.get("event_render_mode") or "").strip()
-        get_live_event_broker().publish(
-            user_id=self.user_id,
-            run_id=self.run_id,
-            event={
-                "type": event.event_type,
-                "event_type": event.event_type,
-                "message": event.title,
-                "title": event.title,
-                "detail": event.detail,
-                "data": event.data,
-                "run_id": self.run_id,
-                "event_id": event.event_id,
-                "seq": event.seq,
-                "stage": event.stage,
-                "status": event.status,
-                "event_schema_version": event.event_schema_version,
-                "snapshot_ref": event.snapshot_ref,
-                "event_family": event_family or None,
-                "event_priority": event_priority or None,
-                "event_render_mode": event_render_mode or None,
-                "event_index": event_index,
-                "replay_importance": replay_importance or None,
-                "graph_node_id": graph_node_id or None,
-                "scene_ref": scene_ref or None,
-            },
-        )
+        try:
+            get_live_event_broker().publish(
+                user_id=self.user_id,
+                run_id=self.run_id,
+                event={
+                    "type": event.event_type,
+                    "event_type": event.event_type,
+                    "message": event.title,
+                    "title": event.title,
+                    "detail": event.detail,
+                    "data": event.data,
+                    "run_id": self.run_id,
+                    "event_id": event.event_id,
+                    "seq": event.seq,
+                    "stage": event.stage,
+                    "status": event.status,
+                    "event_schema_version": event.event_schema_version,
+                    "snapshot_ref": event.snapshot_ref,
+                    "event_family": event_family or None,
+                    "event_priority": event_priority or None,
+                    "event_render_mode": event_render_mode or None,
+                    "event_index": event_index,
+                    "replay_importance": replay_importance or None,
+                    "graph_node_id": graph_node_id or None,
+                    "scene_ref": scene_ref or None,
+                },
+            )
+        except Exception:  # pragma: no cover
+            _log.warning(
+                "LiveRunStream: broker publish failed for event %s (run=%s); "
+                "event persisted to activity_store but not delivered to client.",
+                event.event_type,
+                self.run_id,
+                exc_info=True,
+            )
         return {"type": "activity", "event": event.to_dict()}
 
     @staticmethod
@@ -301,13 +316,15 @@ class LiveRunStream:
             provenance = {key: value for key, value in provenance.items() if value not in (None, "", [])}
             data["copy_provenance"] = provenance
             data["copy_role"] = "source"
-            if scene_surface:
-                self._latest_copy_by_surface[scene_surface] = provenance
-            self._latest_copy_any = provenance
+            with self._copy_lock:
+                if scene_surface:
+                    self._latest_copy_by_surface[scene_surface] = provenance
+                self._latest_copy_any = provenance
             return data
 
         if self._is_copy_usage_event(action=action, payload=data):
-            source = self._latest_copy_by_surface.get(scene_surface) or self._latest_copy_any
+            with self._copy_lock:
+                source = self._latest_copy_by_surface.get(scene_surface) or self._latest_copy_any
             if isinstance(source, dict) and source:
                 copy_ref = self._clean_text(source.get("copy_event_ref"))
                 if copy_ref and copy_ref not in existing_usage_refs:

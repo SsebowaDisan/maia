@@ -132,7 +132,7 @@ def index_files_impl(
     uploaded_file_meta: dict[str, dict[str, Any]] | None,
     should_cancel: Callable[[], bool] | None,
     get_index_fn: Callable[..., Any],
-    classify_pdf_ingestion_route_fn: Callable[[Path], dict[str, Any]],
+    classify_pdf_ingestion_route_fn: Callable[..., dict[str, Any]],
     should_route_pdf_to_paddle_fn: Callable[..., bool],
     index_pdf_with_paddleocr_route_fn: Callable[..., dict[str, Any]],
     run_index_pipeline_for_file_fn: Callable[..., dict[str, Any]],
@@ -161,7 +161,15 @@ def index_files_impl(
         is_pdf = ext == ".pdf"
         classification: dict[str, Any] = {}
         if is_pdf:
-            classification = classify_pdf_ingestion_route_fn(file_path)
+            content_hash = ""
+            if uploaded_file_meta:
+                try:
+                    resolved_key = str(file_path.resolve())
+                except Exception:
+                    resolved_key = str(file_path)
+                meta = uploaded_file_meta.get(resolved_key) or {}
+                content_hash = str(meta.get("checksum") or "").strip()
+            classification = classify_pdf_ingestion_route_fn(file_path, content_hash=content_hash)
             all_debug.append(
                 (
                     f"{file_path.name}: pdf route={classification.get('route', 'normal')} "

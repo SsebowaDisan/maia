@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
@@ -255,6 +258,16 @@ def derive_research_depth_profile(
     )
 
     requested_tier = str(llm_profile.get("tier") or "").strip().lower()
+    if requested_tier and requested_tier not in DEPTH_TIERS:
+        _log.warning(
+            "derive_research_depth_profile: LLM returned unknown tier %r; falling back to 'standard'",
+            requested_tier,
+        )
+    elif not requested_tier:
+        _log.warning(
+            "derive_research_depth_profile: LLM returned no tier (profile=%r); falling back to 'standard'",
+            dict(llm_profile) if llm_profile else {},
+        )
     tier = requested_tier if requested_tier in DEPTH_TIERS else "standard"
     normalized_agent_mode = str(agent_mode or "").strip().lower()
     if normalized_agent_mode == "deep_search":

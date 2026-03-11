@@ -1,3 +1,16 @@
+import {
+  EVT_AGENT_BLOCKED,
+  EVT_AGENT_HANDOFF,
+  EVT_AGENT_RESUME,
+  EVT_AGENT_WAITING,
+  EVT_APPROVAL_GRANTED,
+  EVT_APPROVAL_REQUIRED,
+  EVT_BROWSER_HUMAN_VERIFICATION_REQUIRED,
+  EVT_HANDOFF_PAUSED,
+  EVT_HANDOFF_RESUMED,
+  EVT_POLICY_BLOCKED,
+} from "../../constants/eventTypes";
+
 type SceneOverlayVariant = "center-pill" | "left-chip" | "human-alert";
 
 type SceneOverlayState = {
@@ -183,15 +196,28 @@ function overlayForInteractionEvent({
   const type = normalize(eventType);
   const status = normalize(actionStatus);
   if (
-    type === "browser_human_verification_required" ||
-    type === "approval_required" ||
-    type === "policy_blocked" ||
-    type === "agent.waiting"
+    type === EVT_BROWSER_HUMAN_VERIFICATION_REQUIRED ||
+    type === EVT_APPROVAL_REQUIRED ||
+    type === EVT_POLICY_BLOCKED
   ) {
     return {
       text: "Human verification required",
       variant: "human-alert",
       detail: clean(activeDetail) || "Complete verification, then continue.",
+    };
+  }
+  if (type === EVT_AGENT_WAITING) {
+    return {
+      text: "Waiting for your input",
+      variant: "human-alert",
+      detail: clean(activeDetail) || "Review the request and continue.",
+    };
+  }
+  if (type === EVT_HANDOFF_PAUSED) {
+    return {
+      text: "Paused for human review",
+      variant: "human-alert",
+      detail: clean(activeDetail) || "Complete the task, then resume.",
     };
   }
   if (status === "failed" || type.endsWith("_failed")) {
@@ -202,23 +228,30 @@ function overlayForInteractionEvent({
       detail: clean(activeDetail) || "",
     };
   }
-  if (type === "agent.blocked") {
+  if (type === EVT_AGENT_BLOCKED) {
     return {
       text: "Agent blocked",
       variant: "human-alert",
       detail: clean(activeDetail) || "Policy or verification barrier requires intervention.",
     };
   }
-  if (type === "agent.handoff") {
+  if (type === EVT_AGENT_HANDOFF) {
     return {
       text: "Handing off to next specialist",
       variant: "left-chip",
       pulse: true,
     };
   }
-  if (type === "agent.resume") {
+  if (type === EVT_AGENT_RESUME) {
     return {
       text: "Execution resumed",
+      variant: "left-chip",
+      pulse: true,
+    };
+  }
+  if (type === EVT_HANDOFF_RESUMED || type === EVT_APPROVAL_GRANTED) {
+    return {
+      text: "Resumed after verification",
       variant: "left-chip",
       pulse: true,
     };

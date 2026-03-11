@@ -1,5 +1,6 @@
 import { Monitor, MousePointer2 } from "lucide-react";
 import { AgentDesktopScene } from "../AgentDesktopScene";
+import type { InteractionSuggestion } from "./interactionSuggestionMerge";
 import { DoneStageOverlay } from "./DoneStageOverlay";
 import { DiffViewer } from "./DiffViewer";
 
@@ -41,6 +42,9 @@ interface DesktopViewerProps {
   docBodyHint: string;
   sheetBodyHint: string;
   activeEventType: string;
+  runId: string;
+  activeStepIndex: number | null;
+  interactionSuggestion: InteractionSuggestion[] | null;
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl: string;
   sceneSpreadsheetUrl: string;
@@ -106,6 +110,9 @@ function DesktopViewer({
   docBodyHint,
   sheetBodyHint,
   activeEventType,
+  runId,
+  activeStepIndex,
+  interactionSuggestion,
   activeSceneData,
   sceneDocumentUrl,
   sceneSpreadsheetUrl,
@@ -195,6 +202,9 @@ function DesktopViewer({
               activeTitle={activeTitle}
               activeDetail={activeDetail}
               activeEventType={activeEventType}
+              runId={runId}
+              activeStepIndex={activeStepIndex}
+              interactionSuggestion={interactionSuggestion}
               activeSceneData={activeSceneData}
               sceneDocumentUrl={sceneDocumentUrl}
               sceneSpreadsheetUrl={sceneSpreadsheetUrl}

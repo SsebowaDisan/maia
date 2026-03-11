@@ -8,6 +8,13 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { EventStyle } from "../types";
+import {
+  EVT_APPROVAL_GRANTED,
+  EVT_APPROVAL_REQUIRED,
+  EVT_EVENT_COVERAGE,
+  EVT_POLICY_BLOCKED,
+  EVT_VERIFICATION_CHECK,
+} from "../../../constants/eventTypes";
 
 const integrationEventStyles: Record<string, EventStyle> = {
   "docs.create_started": {
@@ -295,7 +302,7 @@ const integrationEventStyles: Record<string, EventStyle> = {
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
-  verification_check: {
+  [EVT_VERIFICATION_CHECK]: {
     label: "Check",
     icon: Activity,
     accent: "text-[#4c4c50]",
@@ -305,22 +312,22 @@ const integrationEventStyles: Record<string, EventStyle> = {
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },
-  approval_required: {
+  [EVT_APPROVAL_REQUIRED]: {
     label: "Approval Needed",
     icon: TriangleAlert,
     accent: "text-[#9b1c1c]",
   },
-  approval_granted: {
+  [EVT_APPROVAL_GRANTED]: {
     label: "Approval Granted",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },
-  policy_blocked: {
+  [EVT_POLICY_BLOCKED]: {
     label: "Policy Blocked",
     icon: TriangleAlert,
     accent: "text-[#9b1c1c]",
   },
-  event_coverage: {
+  [EVT_EVENT_COVERAGE]: {
     label: "Coverage",
     icon: Activity,
     accent: "text-[#4c4c50]",

@@ -21,6 +21,13 @@ _PADDLE_OCR_ENGINE: Any | None = None
 _PADDLE_OCR_LOCK = threading.Lock()
 _PADDLE_OCR_REF: dict[str, Any] = {"engine": None}
 
+# Content-hash-keyed classification cache.
+# Keyed on SHA256 of the uploaded file so re-uploads of identical PDFs skip
+# the expensive pypdf + fitz classification pass entirely.
+_PDF_HASH_CACHE: dict[str, dict[str, Any]] = {}
+_PDF_HASH_CACHE_LOCK = threading.Lock()
+_PDF_HASH_CACHE_MAX = 256
+
 def _is_paddle_runtime_expected() -> bool:
     return _startup_helpers.is_paddle_runtime_expected_impl(
         reader_mode=UPLOAD_INDEX_READER_MODE,
@@ -192,12 +199,25 @@ def _classify_pdf_ingestion_route_cached(
         heavy_on_any_image_page=UPLOAD_PDF_HEAVY_ON_ANY_IMAGE_PAGE,
         sample_page_indexes_fn=_sample_page_indexes,
         page_has_images_fn=_page_has_images,
-        count_image_pages_fn=_count_image_pages,
         detect_pdf_images_with_pymupdf_fn=_detect_pdf_images_with_pymupdf,
         apply_vlm_review_upgrade_fn=_apply_vlm_review_upgrade,
     )
 
-def _classify_pdf_ingestion_route(path: Path) -> dict[str, Any]:
+def _classify_pdf_ingestion_route(path: Path, content_hash: str = "") -> dict[str, Any]:
+    if content_hash:
+        with _PDF_HASH_CACHE_LOCK:
+            cached = _PDF_HASH_CACHE.get(content_hash)
+        if cached is not None:
+            return dict(cached)
+        result = _route_helpers.classify_pdf_ingestion_route_impl(
+            path,
+            classify_pdf_ingestion_route_cached_fn=_classify_pdf_ingestion_route_cached,
+        )
+        with _PDF_HASH_CACHE_LOCK:
+            if len(_PDF_HASH_CACHE) >= _PDF_HASH_CACHE_MAX:
+                _PDF_HASH_CACHE.pop(next(iter(_PDF_HASH_CACHE)), None)
+            _PDF_HASH_CACHE[content_hash] = dict(result)
+        return result
     return _route_helpers.classify_pdf_ingestion_route_impl(
         path,
         classify_pdf_ingestion_route_cached_fn=_classify_pdf_ingestion_route_cached,

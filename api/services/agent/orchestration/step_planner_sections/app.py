@@ -194,10 +194,12 @@ def build_execution_steps(
         task_prep=task_prep,
         steps=steps,
         highlight_color=research_plan.highlight_color,
+        registry=registry,
     )
     fact_coverage = summarize_fact_coverage(
         contract_facts=task_prep.contract_facts,
         steps=steps,
+        analytics_context=bool(getattr(task_prep.task_intelligence, "is_analytics_request", False)),
     )
     yield emit_event(
         plan_fact_coverage_event(

@@ -104,4 +104,36 @@ describe("roadmapDerivation", () => {
     expect(result.plannedRoadmapSteps).toHaveLength(1);
     expect(result.plannedRoadmapSteps[0].toolId).toBe("marketing.web_research");
   });
+
+  it("replaces unrelated plan steps with prompt-aligned request tasks", () => {
+    const events = [
+      makeEvent("llm.task_contract_completed", {
+        objective: "Search what https://axongroup.com/ do and write an email to ssebowadisan1@gmail.com.",
+      }),
+      makeEvent("plan_ready", {
+        steps: [
+          { tool_id: "business.ga4_kpi_sheet_report", title: "Write GA4 KPI sheet update" },
+          { tool_id: "report.generate", title: "Generate GA4 executive report" },
+        ],
+      }),
+    ];
+    const result = derivePlannedRoadmap(events);
+    expect(result.plannedRoadmapSteps.length).toBeGreaterThanOrEqual(2);
+    const mergedTitles = result.plannedRoadmapSteps.map((step) => step.title.toLowerCase()).join(" ");
+    expect(mergedTitles).toContain("axongroup");
+    expect(mergedTitles).toContain("email");
+    expect(result.roadmapActiveIndex).toBe(0);
+  });
+
+  it("derives request-based tasks when no plan steps exist", () => {
+    const events = [
+      makeEvent("llm.task_contract_completed", {
+        objective: "Research competitor pricing and draft a short summary.",
+      }),
+    ];
+    const result = derivePlannedRoadmap(events);
+    expect(result.plannedRoadmapSteps.length).toBeGreaterThanOrEqual(1);
+    expect(result.plannedRoadmapSteps[0].title.toLowerCase()).toContain("research");
+    expect(result.roadmapActiveIndex).toBe(0);
+  });
 });

@@ -12,7 +12,7 @@ function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
 }
 
 function getAgentRunEvents(runId: string) {
-  return request<Array<{ type: string; payload: unknown }>>(
+  return request<unknown[]>(
     `/api/agent/runs/${encodeURIComponent(runId)}/events`,
   );
 }

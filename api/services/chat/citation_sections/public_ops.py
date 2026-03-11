@@ -12,6 +12,16 @@ from .injection import _inject_inline_citations, render_fast_citation_links
 from .refs import resolve_required_citation_mode
 from .resolution import _resolve_citation_refs
 
+# Agent answers already contain structured markdown citation sections built by
+# answer_builder_sections/citations.py.  Running the Fast QA HTML-injection
+# pipeline on top of these corrupts the output: sequence numbers like [1] in
+# "- [1] [Label](url)" bullets get replaced with raw <a class='citation'>
+# anchors, and inline URL bullets in ## Executive Summary gain unwanted HTML.
+_AGENT_CITATION_SECTION_RE = re.compile(
+    r"^##\s+(?:Evidence Citations|Sources|References)\s*$",
+    re.MULTILINE,
+)
+
 
 def enforce_required_citations(
     *,
@@ -21,6 +31,10 @@ def enforce_required_citations(
 ) -> str:
     text = (answer or "").strip()
     if not text:
+        return text
+
+    # Agent-format answers already have clean citation sections — skip injection.
+    if _AGENT_CITATION_SECTION_RE.search(text):
         return text
 
     mode = resolve_required_citation_mode(citation_mode)

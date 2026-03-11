@@ -234,7 +234,10 @@ function TurnListItem({
       </div>
       {turnActivityEvents.length > 0 ? (
         <div className="flex justify-end">
-          <div className="w-full max-w-[98%] xl:max-w-full">
+          <div
+            className="w-full max-w-[98%] xl:max-w-full"
+            data-theatre-anchor={isLatestTurn ? "true" : undefined}
+          >
             <AgentActivityPanel
               events={turnActivityEvents}
               streaming={isLatestTurn && isActivityStreaming}

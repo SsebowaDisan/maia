@@ -9,6 +9,8 @@ from api.services.agent.models import AgentActivityEvent, utc_now
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
 
+from api.services.agent.interaction_suggestion.emitter import maybe_emit_interaction_suggestion
+
 from ..execution_trace import record_retry_trace
 from ..handoff_state import handoff_pause_notice, is_handoff_paused
 from ..models import ExecutionState, TaskPreparation
@@ -19,31 +21,48 @@ from .guards import (
     run_guard_checks,
     should_skip_step_for_workspace_logging,
 )
-from .success import handle_step_success
+from .success import _tool_surface_info, handle_step_success
 
 
-def _should_retry_transient_browser_failure(
+# All tool IDs that make outbound HTTP calls and qualify for one transient-error retry.
+_HTTP_RETRYABLE_TOOL_IDS = frozenset({
+    "browser.playwright.inspect",
+    "marketing.web_research",
+    "web.extract.structured",
+    "web.dataset.adapter",
+    "browser.contact_form.send",
+})
+
+_TRANSIENT_ERROR_MARKERS = (
+    "net::err_http2_protocol_error",
+    "net::err_connection_reset",
+    "net::err_connection_closed",
+    "net::err_timed_out",
+    "net::err_name_not_resolved",
+    "navigation timeout",
+    "read timeout",
+    "connection timeout",
+    "connectionerror",
+    "timeout expired",
+    "service unavailable",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway",
+)
+
+
+def _should_retry_transient_failure(
     *,
     step: PlannedStep,
     params: dict[str, Any],
     exc: Exception,
 ) -> bool:
-    if step.tool_id != "browser.playwright.inspect":
+    if step.tool_id not in _HTTP_RETRYABLE_TOOL_IDS:
         return False
     if bool(params.get("__retry_attempted")):
         return False
     text = str(exc).lower()
-    return any(
-        marker in text
-        for marker in (
-            "net::err_http2_protocol_error",
-            "net::err_connection_reset",
-            "net::err_connection_closed",
-            "net::err_timed_out",
-            "net::err_name_not_resolved",
-            "navigation timeout",
-        )
-    )
+    return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
 
 
 def execute_planned_steps(
@@ -68,6 +87,8 @@ def execute_planned_steps(
     ).strip().lower()
     while step_cursor < len(steps):
         if is_handoff_paused(settings=state.execution_context.settings):
+            # Persist cursor so a resumed run restarts from this exact step, not step 0.
+            state.execution_context.settings["__handoff_pause_step_cursor"] = step_cursor
             if not bool(state.execution_context.settings.get("__handoff_pause_emitted")):
                 pause_notice = handoff_pause_notice(settings=state.execution_context.settings)
                 pause_event = activity_event_factory(
@@ -81,7 +102,10 @@ def execute_planned_steps(
                     event_type="agent.waiting",
                     title="Agent waiting for human verification",
                     detail=str(pause_notice.get("detail") or "")[:200],
-                    metadata=dict(pause_notice.get("metadata") or {}),
+                    metadata={
+                        **dict(pause_notice.get("metadata") or {}),
+                        "agent_event_type": "agent.waiting",
+                    },
                 )
                 yield emit_event(waiting_event)
                 state.execution_context.settings["__handoff_pause_emitted"] = True
@@ -104,6 +128,7 @@ def execute_planned_steps(
                     metadata={
                         "from_role": active_role,
                         "to_role": owner_role,
+                        "owner_role": owner_role,
                         "step": index,
                         "tool_id": step.tool_id,
                     },
@@ -114,8 +139,10 @@ def execute_planned_steps(
                     title="Agent handoff",
                     detail=f"{active_role} -> {owner_role}",
                     metadata={
+                        "agent_event_type": "agent.handoff",
                         "from_role": active_role,
                         "to_role": owner_role,
+                        "owner_role": owner_role,
                         "step": index,
                         "tool_id": step.tool_id,
                     },
@@ -127,6 +154,7 @@ def execute_planned_steps(
                 detail=step.title[:200],
                 metadata={
                     "role": owner_role,
+                    "owner_role": owner_role,
                     "step": index,
                     "tool_id": step.tool_id,
                 },
@@ -137,7 +165,9 @@ def execute_planned_steps(
                 title=f"Agent resumed: {owner_role}",
                 detail=step.title[:200],
                 metadata={
+                    "agent_event_type": "agent.resume",
                     "role": owner_role,
+                    "owner_role": owner_role,
                     "step": index,
                     "tool_id": step.tool_id,
                 },
@@ -146,27 +176,70 @@ def execute_planned_steps(
             active_role = owner_role
             state.execution_context.settings["__active_execution_role"] = owner_role
 
+        event_family, scene_surface = _tool_surface_info(step.tool_id)
         queued_event = activity_event_factory(
             event_type="tool_queued",
             title=step.title,
             detail=step.tool_id,
-            metadata={"tool_id": step.tool_id, "step": index},
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "event_family": event_family,
+                "scene_surface": scene_surface,
+            },
         )
         yield emit_event(queued_event)
         step_event = activity_event_factory(
             event_type="tool_started",
             title=step.title,
             detail=step.tool_id,
-            metadata={"tool_id": step.tool_id, "step": index},
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "event_family": event_family,
+                "scene_surface": scene_surface,
+            },
         )
         yield emit_event(step_event)
         progress_event = activity_event_factory(
             event_type="tool_progress",
             title=step.title,
             detail="Tool execution in progress",
-            metadata={"tool_id": step.tool_id, "step": index, "progress": 0.5},
+            metadata={
+                "tool_id": step.tool_id,
+                "step": index,
+                "progress": 0.5,
+                "event_family": event_family,
+                "scene_surface": scene_surface,
+            },
         )
         yield emit_event(progress_event)
+
+        # Emit a pre-execution interaction hint so the UI can show an anticipatory
+        # cursor/focus cue while the tool is running, not after it completes.
+        # Uses a fresh per-step list so the cap resets for every step.
+        _task_context = " ".join(
+            str(
+                task_prep.contract_objective
+                or task_prep.rewritten_task
+                or ""
+            ).split()
+        )[:120]
+        _step_suggestions: list[Any] = []
+        _pre_hints = maybe_emit_interaction_suggestion(
+            tool_id=step.tool_id,
+            step_title=step.title,
+            step_index=index,
+            total_steps=len(steps),
+            step_why=step.why_this_step,
+            step_params=step.params,
+            task_context=_task_context,
+            emit_event=emit_event,
+            activity_event_factory=activity_event_factory,
+            suggestions_emitted_this_step=_step_suggestions,
+        )
+        for _hint in _pre_hints:
+            yield _hint
 
         params = prepare_step_params(step=step, access_context=access_context)
         guard_outcome = yield from run_guard_checks(
@@ -223,7 +296,7 @@ def execute_planned_steps(
             )
         except Exception as exc:
             elapsed = time.perf_counter() - tool_started_clock
-            if _should_retry_transient_browser_failure(
+            if _should_retry_transient_failure(
                 step=step,
                 params=guard_outcome.params,
                 exc=exc,

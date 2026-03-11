@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { Circle, Loader2 } from "lucide-react";
 import type { AgentActivityEvent } from "../../types";
 
 type TodoStatus = "pending" | "active" | "done";
@@ -117,21 +117,19 @@ export function ResearchTodoList({
   dark = false,
 }: ResearchTodoListProps) {
   const items = deriveTodoItems(visibleEvents, plannedRoadmapSteps, roadmapActiveIndex);
+  const visibleItems = items.filter((item) => item.status !== "done");
 
-  // Only show when we have tasks (during streaming or after agent runs)
-  if (!items.length) return null;
+  // Hide completed rows and only render actionable tasks.
+  if (!visibleItems.length) return null;
 
-  const doneCount = items.filter((i) => i.status === "done").length;
-  const totalCount = items.length;
+  const openCount = visibleItems.length;
 
   if (dark) {
     return (
       <div className="space-y-1.5 rounded-[14px] border border-white/12 bg-[#131821] p-3">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <div key={item.id} className="flex items-start gap-2">
-            {item.status === "done" ? (
-              <CheckCircle2 className="mt-[1px] h-3 w-3 shrink-0 text-[#34c759]" />
-            ) : item.status === "active" ? (
+            {item.status === "active" ? (
               <Loader2
                 className={`mt-[1px] h-3 w-3 shrink-0 text-[#6e6e73] ${streaming ? "animate-spin" : ""}`}
               />
@@ -140,9 +138,7 @@ export function ResearchTodoList({
             )}
             <p
               className={`text-[11px] leading-[1.35] ${
-                item.status === "done"
-                  ? "text-white/30 line-through"
-                  : item.status === "active"
+                item.status === "active"
                     ? "font-medium text-white/90"
                     : "text-white/25"
               }`}
@@ -151,7 +147,7 @@ export function ResearchTodoList({
             </p>
           </div>
         ))}
-        <p className="pt-1 text-[9px] tabular-nums text-white/30">{doneCount}/{totalCount} done</p>
+        <p className="pt-1 text-[9px] tabular-nums text-white/30">{openCount} open</p>
       </div>
     );
   }
@@ -163,16 +159,14 @@ export function ResearchTodoList({
           Tasks
         </p>
         <p className="text-[10px] tabular-nums text-[#9d9da6]">
-          {doneCount}/{totalCount}
+          {openCount} open
         </p>
       </div>
 
       <div className="space-y-2.5">
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <div key={item.id} className="flex items-start gap-2.5">
-            {item.status === "done" ? (
-              <CheckCircle2 className="mt-[1px] h-3.5 w-3.5 shrink-0 text-[#34c759]" />
-            ) : item.status === "active" ? (
+            {item.status === "active" ? (
               <Loader2
                 className={`mt-[1px] h-3.5 w-3.5 shrink-0 text-[#2563eb] ${streaming ? "animate-spin" : ""}`}
               />
@@ -181,9 +175,7 @@ export function ResearchTodoList({
             )}
             <p
               className={`text-[12px] leading-[1.35] ${
-                item.status === "done"
-                  ? "text-[#a0a0aa] line-through decoration-[#c7c7cf]"
-                  : item.status === "active"
+                item.status === "active"
                     ? "font-medium text-[#1f2937]"
                     : "text-[#9ca3af]"
               }`}

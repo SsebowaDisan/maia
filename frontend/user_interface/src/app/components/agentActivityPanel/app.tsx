@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { exportAgentRunEvents } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
-import { derivePhaseTimeline, resolveEventSourceUrl } from "./helpers";
+import { derivePhaseTimeline } from "./helpers";
 import type { AgentActivityPanelProps } from "./types";
 import { useAgentActivityDerived } from "./useAgentActivityDerived";
 import { ActivityHeader } from "./ActivityHeader";
@@ -14,6 +14,8 @@ import { useSceneSurfaceTransition } from "./useSceneSurfaceTransition";
 import { useManualPreviewTabOverride } from "./useManualPreviewTabOverride";
 import { useTheatreTelemetry } from "./useTheatreTelemetry";
 import { resolveStagedTheatreEnabled } from "./theatreFeatureFlags";
+import { latestOpenApprovalEvent } from "./approvalGateState";
+import { maybeOpenEventSource } from "./eventSelection";
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
 export function AgentActivityPanel({
@@ -94,6 +96,8 @@ export function AgentActivityPanel({
     visibleEvents,
     plannedRoadmapSteps,
     roadmapActiveIndex,
+    activeSuggestion,
+    activeStepIndex,
   } = derived;
 
   const { sceneTransitionLabel } = useSceneSurfaceTransition({
@@ -113,25 +117,7 @@ export function AgentActivityPanel({
     setCursor(index);
     setIsPlaying(false);
     onJumpToEvent?.(event);
-    const shadowRaw = event.data?.["shadow"] ?? event.metadata?.["shadow"];
-    const isShadowEvent =
-      typeof shadowRaw === "boolean"
-        ? shadowRaw
-        : ["true", "1", "yes"].includes(String(shadowRaw ?? "").trim().toLowerCase());
-    if (isShadowEvent) {
-      return;
-    }
-    if (
-      event.event_type === "drive.go_to_doc" ||
-      event.event_type === "drive.go_to_sheet" ||
-      event.event_type.startsWith("docs.") ||
-      event.event_type.startsWith("sheets.")
-    ) {
-      const sourceUrl = resolveEventSourceUrl(event);
-      if (sourceUrl) {
-        window.open(sourceUrl, "_blank", "noopener,noreferrer");
-      }
-    }
+    maybeOpenEventSource(event);
   };
 
   useEffect(() => {
@@ -177,13 +163,7 @@ export function AgentActivityPanel({
   }, [isPlaying, speed, orderedEvents.length, streaming]);
 
   const approvalEvent = useMemo(
-    () =>
-      streaming
-        ? orderedEvents
-            .slice()
-            .reverse()
-            .find((event) => event.event_type === "approval_required") || null
-        : null,
+    () => (streaming ? latestOpenApprovalEvent(orderedEvents) : null),
     [orderedEvents, streaming],
   );
   const approvalEventId = String(approvalEvent?.event_id || "");
@@ -401,6 +381,9 @@ export function AgentActivityPanel({
     docBodyHint,
     sheetBodyHint,
     activeEventType: activeEvent?.event_type || sceneEvent?.event_type || "",
+    runId,
+    activeStepIndex,
+    interactionSuggestion: activeSuggestion,
     activeSceneData: plannedRoadmapSteps.length
       ? { ...mergedSceneData, __roadmap_steps: plannedRoadmapSteps, __roadmap_active_index: roadmapActiveIndex }
       : mergedSceneData,

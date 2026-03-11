@@ -12,6 +12,12 @@ import { mergeLiveSceneData, phaseForEvent, readNumberField, readStringField } f
 import { desktopStatusForEventType } from "./labels";
 import { derivePlannedRoadmap } from "./roadmapDerivation";
 import {
+  extractSuggestionLayer,
+  isInteractionSuggestionEvent,
+  suggestionLookupKeyForEvent,
+  type InteractionSuggestion,
+} from "./interactionSuggestionMerge";
+import {
   resolveBrowserUrl,
   resolveDocBodyHint,
   resolveEmailBodyHint,
@@ -57,8 +63,13 @@ function useAgentActivityDerived({
   snapshotFailedEventId,
   streaming,
 }: UseAgentActivityDerivedParams) {
+  const interactionSuggestionLayer = useMemo(() => extractSuggestionLayer(events), [events]);
+  const primaryEvents = useMemo(
+    () => events.filter((event) => !isInteractionSuggestionEvent(event)),
+    [events],
+  );
   const orderedEvents = useMemo(() => {
-    const decorated = events.map((event, index) => ({ event, index }));
+    const decorated = primaryEvents.map((event, index) => ({ event, index }));
     decorated.sort((left, right) => {
       const leftEventIndex = readEventIndex(left.event, left.index + 1);
       const rightEventIndex = readEventIndex(right.event, right.index + 1);
@@ -84,7 +95,7 @@ function useAgentActivityDerived({
       return left.index - right.index;
     });
     return decorated.map((item) => item.event);
-  }, [events]);
+  }, [primaryEvents]);
 
   const safeCursor = Math.min(Math.max(0, cursor), Math.max(orderedEvents.length - 1, 0));
   const visibleEvents = useMemo(
@@ -97,6 +108,23 @@ function useAgentActivityDerived({
   );
 
   const activeEvent = orderedEvents[safeCursor] || null;
+  const activeSuggestion = useMemo<InteractionSuggestion[] | null>(() => {
+    const key = suggestionLookupKeyForEvent(activeEvent);
+    if (!key) {
+      return null;
+    }
+    return interactionSuggestionLayer.get(key) || null;
+  }, [activeEvent, interactionSuggestionLayer]);
+  const activeStepIndex = useMemo(
+    () =>
+      readNumberField(
+        activeEvent?.metadata?.["step_index"] ??
+          activeEvent?.data?.["step_index"] ??
+          activeEvent?.metadata?.["event_index"] ??
+          activeEvent?.data?.["event_index"],
+      ),
+    [activeEvent?.event_id, activeEvent?.metadata, activeEvent?.data],
+  );
   const activeTab = eventTab(activeEvent);
 
   const sceneEvent = useMemo(() => {
@@ -451,6 +479,8 @@ function useAgentActivityDerived({
     visibleEvents,
     plannedRoadmapSteps,
     roadmapActiveIndex,
+    activeSuggestion,
+    activeStepIndex,
   };
 }
 

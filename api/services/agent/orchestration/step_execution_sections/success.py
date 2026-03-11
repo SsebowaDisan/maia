@@ -4,6 +4,29 @@ from collections.abc import Callable, Generator
 from typing import Any
 from urllib.parse import urlparse
 
+
+def _tool_surface_info(tool_id: str) -> tuple[str, str]:
+    """Return (event_family, scene_surface) derived from the tool's namespace prefix."""
+    tid = str(tool_id or "").lower().strip()
+    if tid.startswith("browser.") or tid.startswith("web.") or tid == "marketing.web_research":
+        return "browser", "browser"
+    if tid.startswith("gmail.") or tid.startswith("email."):
+        return "email", "email"
+    if tid.startswith("analytics.") or tid.startswith("business.ga4"):
+        return "analytics", "document"
+    if (
+        tid.startswith("docs.")
+        or tid.startswith("workspace.docs")
+        or tid.startswith("workspace.drive")
+        or tid.startswith("workspace.sheets")
+        or tid.startswith("documents.")
+        or tid.startswith("sheets.")
+        or tid.startswith("drive.")
+        or tid.startswith("data.")
+    ):
+        return "document", "document"
+    return "api", "document"
+
 from api.services.agent.llm_execution_support import summarize_step_outcome
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.planner import PlannedStep, build_browser_followup_steps
@@ -109,12 +132,14 @@ def handle_step_success(
             metadata={"tool_id": step.tool_id, "step": index},
         )
         yield emit_event(llm_step_event)
+    event_family, scene_surface = _tool_surface_info(step.tool_id)
     completed_event = activity_event_factory(
         event_type="tool_completed" if step_status == "success" else "tool_failed",
         title=step.title,
         detail=llm_step_summary or result.summary,
         metadata={
-            "scene_surface": "document",
+            "event_family": event_family,
+            "scene_surface": scene_surface,
             "action": "verify",
             "action_phase": "completed",
             "action_status": "completed" if step_status == "success" else "failed",

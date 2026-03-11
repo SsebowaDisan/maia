@@ -7,38 +7,10 @@ import {
   readStringField,
   readStringListField,
 } from "./value_readers";
+import { derivePhaseTimeline, phaseForEvent } from "./phaseRouting";
+import type { ActivityPhaseKey, ActivityPhaseRow, ActivityPhaseState } from "./phaseRouting";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+)/i;
-const PHASE_ORDER = [
-  "understanding",
-  "contract",
-  "clarification",
-  "planning",
-  "execution",
-  "verification",
-  "delivery",
-] as const;
-
-type ActivityPhaseKey = (typeof PHASE_ORDER)[number];
-type ActivityPhaseState = "pending" | "active" | "completed";
-
-type ActivityPhaseRow = {
-  key: ActivityPhaseKey;
-  label: string;
-  state: ActivityPhaseState;
-  latestEventId: string;
-  latestEventTitle: string;
-};
-
-const PHASE_LABELS: Record<ActivityPhaseKey, string> = {
-  understanding: "Understanding",
-  contract: "Contract",
-  clarification: "Clarification",
-  planning: "Planning",
-  execution: "Execution",
-  verification: "Verification",
-  delivery: "Delivery",
-};
 
 function mergeLiveSceneData(
   events: AgentActivityEvent[],
@@ -411,120 +383,6 @@ function mergeLiveSceneData(
   }
 
   return merged;
-}
-
-function phaseForEvent(event: AgentActivityEvent | null): ActivityPhaseKey | null {
-  if (!event) {
-    return null;
-  }
-  const type = String(event.event_type || "").toLowerCase();
-  const title = String(event.title || "").toLowerCase();
-
-  if (
-    type === "task_understanding_started" ||
-    type === "task_understanding_ready" ||
-    type === "llm.context_summary" ||
-    type === "llm.intent_tags" ||
-    type === "llm.task_rewrite_started" ||
-    type === "llm.task_rewrite_completed"
-  ) {
-    return "understanding";
-  }
-  if (type === "llm.task_contract_started" || type === "llm.task_contract_completed") {
-    return "contract";
-  }
-  if (type === "llm.clarification_requested" || type === "llm.clarification_resolved") {
-    return "clarification";
-  }
-  if (type === "policy_blocked" && title.includes("clarification")) {
-    return "clarification";
-  }
-  if (
-    type === "planning_started" ||
-    type.startsWith("plan_") ||
-    type === "llm.plan_decompose_started" ||
-    type === "llm.plan_decompose_completed" ||
-    type === "llm.web_routing_decision" ||
-    type === "llm.plan_step" ||
-    type === "llm.plan_fact_coverage"
-  ) {
-    return "planning";
-  }
-  if (
-    type.startsWith("tool_") ||
-    type.startsWith("web_") ||
-    type.startsWith("browser_") ||
-    type.startsWith("document_") ||
-    type.startsWith("pdf_") ||
-    type.startsWith("doc_") ||
-    type.startsWith("docs.") ||
-    type.startsWith("sheet_") ||
-    type.startsWith("sheets.") ||
-    type.startsWith("drive.") ||
-    type === "action_prepared"
-  ) {
-    return "execution";
-  }
-  if (
-    type === "verification_started" ||
-    type === "verification_check" ||
-    type === "verification_completed"
-  ) {
-    return "verification";
-  }
-  if (
-    type === "llm.delivery_check_started" ||
-    type === "llm.delivery_check_completed" ||
-    type === "llm.delivery_check_failed" ||
-    type === "email_sent" ||
-    type === "browser_contact_submit" ||
-    type === "browser_contact_confirmation"
-  ) {
-    return "delivery";
-  }
-  return null;
-}
-
-function derivePhaseTimeline(
-  visibleEvents: AgentActivityEvent[],
-  activeEvent: AgentActivityEvent | null,
-): ActivityPhaseRow[] {
-  const latestByPhase: Record<ActivityPhaseKey, AgentActivityEvent | null> = {
-    understanding: null,
-    contract: null,
-    clarification: null,
-    planning: null,
-    execution: null,
-    verification: null,
-    delivery: null,
-  };
-
-  for (const event of visibleEvents) {
-    const phase = phaseForEvent(event);
-    if (!phase) {
-      continue;
-    }
-    latestByPhase[phase] = event;
-  }
-
-  const activePhase = phaseForEvent(activeEvent);
-  return PHASE_ORDER.map((phase) => {
-    const latest = latestByPhase[phase];
-    let state: ActivityPhaseState = "pending";
-    if (latest) {
-      state = "completed";
-    }
-    if (activePhase === phase) {
-      state = "active";
-    }
-    return {
-      key: phase,
-      label: PHASE_LABELS[phase],
-      state,
-      latestEventId: String(latest?.event_id || ""),
-      latestEventTitle: String(latest?.title || ""),
-    };
-  });
 }
 
 function resolveEventSourceUrl(event: AgentActivityEvent): string {

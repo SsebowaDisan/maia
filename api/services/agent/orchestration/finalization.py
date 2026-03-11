@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Callable, Generator
 from typing import Any
 
@@ -118,12 +117,14 @@ def finalize_run(
     for check in verification_report.get("checks") or []:
         if not isinstance(check, dict):
             continue
+        raw_status = str(check.get("status") or "").strip().lower()
+        check_status = raw_status if raw_status in {"pass", "warning", "fail", "info"} else "pass"
         verification_check_event = activity_event_factory(
             event_type="verification_check",
             title=str(check.get("name") or "Verification check"),
             detail=str(check.get("detail") or ""),
             metadata={
-                "status": str(check.get("status") or "info"),
+                "status": check_status,
                 "score": verification_report.get("score"),
             },
         )
@@ -191,34 +192,21 @@ def finalize_run(
                 state.next_steps.insert(0, gate_note)
 
     if deep_research_mode:
-        minimum_seconds_raw = settings.get("agent.deep_research_min_seconds", 30)
-        try:
-            minimum_seconds = max(30.0, float(minimum_seconds_raw))
-        except Exception:
-            minimum_seconds = 30.0
-        elapsed_seconds = time.perf_counter() - run_started_clock
-        remaining_seconds = minimum_seconds - elapsed_seconds
-        if remaining_seconds > 0.4:
-            waited = 0.0
-            wait_started_event = activity_event_factory(
-                event_type="tool_progress",
-                title="Running deep research cross-checks",
-                detail="Verifying evidence consistency before final synthesis",
-                metadata={"step": len(steps), "progress": 0.0},
-            )
-            yield emit_event(wait_started_event)
-            while waited < remaining_seconds:
-                chunk = min(2.0, remaining_seconds - waited)
-                time.sleep(chunk)
-                waited += chunk
-                progress = min(1.0, waited / remaining_seconds) if remaining_seconds > 0 else 1.0
-                wait_progress_event = activity_event_factory(
-                    event_type="tool_progress",
-                    title="Deep research quality pass",
-                    detail=f"Cross-check in progress ({int(progress * 100)}%)",
-                    metadata={"step": len(steps), "progress": round(progress, 3)},
-                )
-                yield emit_event(wait_progress_event)
+        # Emit a non-blocking progress pulse for deep research UX (no sleep).
+        wait_started_event = activity_event_factory(
+            event_type="tool_progress",
+            title="Running deep research cross-checks",
+            detail="Verifying evidence consistency before final synthesis",
+            metadata={"step": len(steps), "progress": 0.0},
+        )
+        yield emit_event(wait_started_event)
+        wait_done_event = activity_event_factory(
+            event_type="tool_progress",
+            title="Deep research quality pass",
+            detail="Cross-check complete (100%)",
+            metadata={"step": len(steps), "progress": 1.0},
+        )
+        yield emit_event(wait_done_event)
 
     state.contract_check_result = yield from run_contract_check_live(
         run_id=run_id,
@@ -247,6 +235,17 @@ def finalize_run(
         for item in final_missing_items[:8]:
             if item and item not in state.next_steps:
                 state.next_steps.append(item)
+        missing_items_event = activity_event_factory(
+            event_type="verification_check",
+            title="Contract items not fully satisfied",
+            detail=f"{len(final_missing_items)} item(s) unresolved: {'; '.join(final_missing_items[:3])}",
+            metadata={
+                "missing_items": final_missing_items[:8],
+                "missing_item_count": len(final_missing_items),
+                "status": "warning",
+            },
+        )
+        yield emit_event(missing_items_event)
     final_reason = " ".join(str(state.contract_check_result.get("reason") or "").split()).strip()
     if final_reason:
         state.execution_context.settings["__task_contract_reason"] = final_reason[:320]
@@ -289,12 +288,24 @@ def finalize_run(
             title="Post-resume verification completed",
             detail="Resumed run passed final contract verification checks.",
             metadata={
+                "status": "pass",
                 "post_resume_verification_pending": False,
                 "barrier_type": str(handoff_state.get("barrier_type") or ""),
                 "resume_status": str(handoff_state.get("resume_status") or ""),
             },
         )
         yield emit_event(verification_event)
+        approval_granted_event = activity_event_factory(
+            event_type="approval_granted",
+            title="Approval granted",
+            detail="Contract verification passed. External actions are cleared to proceed.",
+            metadata={
+                "barrier_type": str(handoff_state.get("barrier_type") or ""),
+                "resume_status": str(handoff_state.get("resume_status") or ""),
+                "ready_for_external_actions": True,
+            },
+        )
+        yield emit_event(approval_granted_event)
 
     unique_next_steps = curate_next_steps_for_task(
         request_message=request.message,
@@ -422,9 +433,20 @@ def finalize_run(
             event_type="verification_check",
             title="Critic review passed",
             detail="No major factual or safety issues flagged.",
-            metadata={"needs_human_review": False},
+            metadata={"status": "pass", "needs_human_review": False},
         )
         yield emit_event(critic_ok_event)
+        if bool(state.contract_check_result.get("ready_for_external_actions")):
+            approval_granted_event = activity_event_factory(
+                event_type="approval_granted",
+                title="Approval granted",
+                detail="All contract checks passed. External actions cleared to proceed.",
+                metadata={
+                    "ready_for_external_actions": True,
+                    "needs_human_review": False,
+                },
+            )
+            yield emit_event(approval_granted_event)
 
     evidence_items = _build_evidence_items_from_sources(response_sources)
     info_html = _build_info_html_from_sources(

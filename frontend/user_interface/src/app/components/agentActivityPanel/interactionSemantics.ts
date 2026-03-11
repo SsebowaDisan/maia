@@ -1,4 +1,10 @@
 import type { AgentActivityEvent } from "../../types";
+import {
+  EVT_AGENT_BLOCKED,
+  EVT_AGENT_HANDOFF,
+  EVT_AGENT_RESUME,
+  EVT_AGENT_WAITING,
+} from "../../constants/eventTypes";
 import { eventMetadataString, tabForEventType } from "../agentActivityMeta";
 import type { PreviewTab } from "../agentActivityMeta";
 import { readNumberField, readStringField } from "./helpers";
@@ -390,16 +396,16 @@ function cursorLabelFromSemantics(args: {
   const agentEventType = String(args.agentEventType || "").trim().toLowerCase();
   const subject = roleLabel || "Agent";
   const surfaceLabel = String(args.sceneSurfaceLabel || "workspace").trim().toLowerCase();
-  if (agentEventType === "agent.waiting") {
+  if (agentEventType === EVT_AGENT_WAITING) {
     return `${subject} awaiting confirmation`;
   }
-  if (agentEventType === "agent.blocked") {
+  if (agentEventType === EVT_AGENT_BLOCKED) {
     return `${subject} blocked`;
   }
-  if (agentEventType === "agent.handoff") {
+  if (agentEventType === EVT_AGENT_HANDOFF) {
     return `${subject} handing off`;
   }
-  if (agentEventType === "agent.resume") {
+  if (agentEventType === EVT_AGENT_RESUME) {
     return `${subject} resumed`;
   }
   if (status === "failed") {
@@ -452,10 +458,10 @@ function roleNarrativeFromSemantics(args: {
   const action = normalizeToken(args.action);
   const surface = String(args.sceneSurfaceLabel || "workspace").trim().toLowerCase();
   const agentEventType = String(args.agentEventType || "").trim().toLowerCase();
-  if (agentEventType === "agent.handoff") return `${roleLabel} is handing control to the next specialist.`;
-  if (agentEventType === "agent.waiting") return `${roleLabel} is waiting for human verification.`;
-  if (agentEventType === "agent.blocked") return `${roleLabel} is blocked by a policy or verification rule.`;
-  if (agentEventType === "agent.resume") return `${roleLabel} resumed execution.`;
+  if (agentEventType === EVT_AGENT_HANDOFF) return `${roleLabel} is handing control to the next specialist.`;
+  if (agentEventType === EVT_AGENT_WAITING) return `${roleLabel} is waiting for human verification.`;
+  if (agentEventType === EVT_AGENT_BLOCKED) return `${roleLabel} is blocked by a policy or verification rule.`;
+  if (agentEventType === EVT_AGENT_RESUME) return `${roleLabel} resumed execution.`;
   if (action === "navigate") return `${roleLabel} is opening ${surface}.`;
   if (action === "click") return `${roleLabel} is selecting a target in ${surface}.`;
   if (action === "type") return `${roleLabel} is composing output in ${surface}.`;

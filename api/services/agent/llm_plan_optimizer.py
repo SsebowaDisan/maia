@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from api.schemas import ChatRequest
 from api.services.agent.llm_runtime import (
@@ -81,9 +84,11 @@ def optimize_plan_rows(
         max_tokens=1200,
     )
     if not isinstance(enriched, dict):
+        _log.warning("llm_plan_optimizer: LLM returned non-dict response; using original plan unmodified")
         return rows
     candidate_rows = enriched.get("steps")
     if not isinstance(candidate_rows, list):
+        _log.warning("llm_plan_optimizer: LLM response missing 'steps' list; using original plan unmodified")
         return rows
     optimized: list[dict[str, Any]] = []
     for candidate in candidate_rows:
@@ -114,6 +119,12 @@ def optimize_plan_rows(
             }
         )
         if len(optimized) >= 10:
+            remaining = len(candidate_rows) - len(optimized)
+            if remaining > 0:
+                _log.warning(
+                    "llm_plan_optimizer: plan truncated to 10 steps; %d candidate(s) discarded",
+                    remaining,
+                )
             break
     return optimized or rows
 

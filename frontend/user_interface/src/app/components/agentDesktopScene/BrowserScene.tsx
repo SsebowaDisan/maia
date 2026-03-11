@@ -5,7 +5,6 @@ import { GhostCursor } from "./GhostCursor";
 import { ThoughtBubble } from "./ThoughtBubble";
 import { InteractionOverlay } from "./InteractionOverlay";
 import {
-  BrowserMiniMap,
   ComparePanel,
   CopyPulse,
   ExecutionRoadmapOverlay,
@@ -17,16 +16,9 @@ import {
 } from "./browser_scene_panels";
 import { useBrowserPageQueue } from "./browser_scene_page_queue";
 import { useRoadmapTransition } from "./browser_scene_roadmap_transition";
+import { useBrowserSceneScrollState } from "./browser_scene_scroll_state";
+import type { MergedInteractionSource } from "../agentActivityPanel/interactionSuggestionMerge";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
-
-function shortHostLabel(url: string): string {
-  try {
-    const host = new URL(String(url || "").trim()).hostname.replace(/^www\./, "");
-    return host || "new page";
-  } catch {
-    return "new page";
-  }
-}
 
 type BrowserSceneProps = {
   activeDetail: string;
@@ -45,7 +37,6 @@ type BrowserSceneProps = {
   findMatchCount: number;
   findQuery: string;
   semanticFindResults: Array<{ term: string; confidence: number }>;
-  highlightRegions: HighlightRegion[];
   onSnapshotError?: () => void;
   readingMode: boolean;
   sceneText: string;
@@ -71,6 +62,7 @@ type BrowserSceneProps = {
   cursorY?: number | null;
   isClickEvent?: boolean;
   clickRipples?: ClickRippleEntry[];
+  cursorSource?: MergedInteractionSource;
   narration?: string | null;
   roadmapSteps?: Array<{ toolId: string; title: string; whyThisStep: string }>;
   roadmapActiveIndex?: number;
@@ -93,7 +85,6 @@ function BrowserScene({
   findMatchCount,
   findQuery,
   semanticFindResults,
-  highlightRegions,
   onSnapshotError,
   readingMode,
   sceneText,
@@ -119,6 +110,7 @@ function BrowserScene({
   cursorY = null,
   isClickEvent = false,
   clickRipples = [],
+  cursorSource = "none",
   narration = null,
   roadmapSteps = [],
   roadmapActiveIndex = -1,
@@ -141,45 +133,11 @@ function BrowserScene({
           : action === "extract"
         ? "Extracting"
         : "";
-  const normalizedRenderQuality = String(renderQuality || "").trim().toLowerCase();
-  const lowQualitySignal =
-    normalizedRenderQuality === "low" ||
-    normalizedRenderQuality === "blocked" ||
-    normalizedRenderQuality === "none" ||
-    normalizedRenderQuality === "empty";
   const { dedupedOpenedPages, activePageUrl, setSelectedPageUrl } = useBrowserPageQueue({
     browserUrl,
     openedPages,
     pageIndex,
   });
-  const [navigationHint, setNavigationHint] = useState("");
-  const boundaryHintRef = useRef<"start" | "end" | null>(null);
-  const boundaryHintTimeoutRef = useRef<number | null>(null);
-  const previousPageUrlRef = useRef(activePageUrl);
-  useEffect(() => {
-    const nextUrl = String(activePageUrl || "").trim();
-    const previousUrl = String(previousPageUrlRef.current || "").trim();
-    previousPageUrlRef.current = nextUrl;
-    if (!nextUrl || !previousUrl || nextUrl === previousUrl) {
-      return;
-    }
-    boundaryHintRef.current = null;
-    if (boundaryHintTimeoutRef.current !== null) {
-      window.clearTimeout(boundaryHintTimeoutRef.current);
-      boundaryHintTimeoutRef.current = null;
-    }
-    setNavigationHint(`Navigating to ${shortHostLabel(nextUrl)}`);
-    const timer = window.setTimeout(() => setNavigationHint(""), 1400);
-    return () => window.clearTimeout(timer);
-  }, [activePageUrl]);
-  useEffect(() => {
-    return () => {
-      if (boundaryHintTimeoutRef.current !== null) {
-        window.clearTimeout(boundaryHintTimeoutRef.current);
-        boundaryHintTimeoutRef.current = null;
-      }
-    };
-  }, []);
   const previewHint = (findQuery || actionTargetLabel || "").slice(0, 180);
   const shouldAnnotatePreview = showFindOverlay || normalizedAction === "find";
   const proxyPreviewUrl = useMemo(() => {
@@ -197,24 +155,28 @@ function BrowserScene({
     params.set("viewport", "desktop");
     return `/api/web/preview?${params.toString()}`;
   }, [activePageUrl, previewHint, shouldAnnotatePreview]);
-  const preferPreviewProxy =
+  const shouldUseProxyPreview =
     Boolean(proxyPreviewUrl) &&
     (blockedSignal ||
-      lowQualitySignal ||
-      (!canRenderLiveUrl && !snapshotUrl) ||
-      normalizedAction === "navigate" ||
-      normalizedAction === "open" ||
-      actionIndicatesScroll ||
-      eventIndicatesScroll ||
-      hasDirectionalScroll);
+      shouldAnnotatePreview ||
+      !canRenderLiveUrl);
+  const preferPreviewProxy =
+    shouldUseProxyPreview &&
+    (!snapshotUrl || snapshotErrored);
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
   const [proxyLoaded, setProxyLoaded] = useState(false);
+  const [frameScrollPercent, setFrameScrollPercent] = useState<number | null>(null);
   const prevSnapshotUrlRef = useRef<string>(snapshotUrl);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const frameScrollObserverCleanupRef = useRef<(() => void) | null>(null);
   const showSnapshotPrimary = Boolean(snapshotUrl) && !snapshotErrored && !preferPreviewProxy;
   const frameUrl = useMemo(() => {
-    return proxyPreviewUrl || activePageUrl;
-  }, [activePageUrl, proxyPreviewUrl]);
+    if (shouldUseProxyPreview && proxyPreviewUrl) {
+      return proxyPreviewUrl;
+    }
+    return activePageUrl;
+  }, [activePageUrl, proxyPreviewUrl, shouldUseProxyPreview]);
   const showFramePreview = Boolean(frameUrl);
   useEffect(() => {
     if (!snapshotUrl || snapshotUrl === prevSnapshotUrlRef.current) return;
@@ -229,116 +191,117 @@ function BrowserScene({
   };
   useEffect(() => {
     setProxyLoaded(false);
+    setFrameScrollPercent(null);
+    if (frameScrollObserverCleanupRef.current) {
+      frameScrollObserverCleanupRef.current();
+      frameScrollObserverCleanupRef.current = null;
+    }
   }, [frameUrl]);
-  const [syntheticScrollPercent, setSyntheticScrollPercent] = useState<number | null>(null);
-  const syntheticTickRef = useRef(0);
-  const syntheticIntervalRef = useRef<number | null>(null);
-  const syntheticDirectionRef = useRef(1);
-  const effectiveScrollPercent = syntheticScrollPercent ?? scrollPercent;
-
-  useEffect(() => {
-    if (normalizedScrollDirection === "up") {
-      syntheticDirectionRef.current = -1;
-      return;
-    }
-    if (normalizedScrollDirection === "down") {
-      syntheticDirectionRef.current = 1;
-    }
-  }, [normalizedScrollDirection]);
-
-  useEffect(() => {
-    if (syntheticIntervalRef.current !== null) {
-      window.clearInterval(syntheticIntervalRef.current);
-      syntheticIntervalRef.current = null;
-    }
-    if (scrollPercent !== null) {
-      setSyntheticScrollPercent(null);
-      return;
-    }
-    const shouldSimulate =
-      actionIndicatesScroll ||
-      eventIndicatesScroll ||
-      hasDirectionalScroll ||
-      normalizedAction === "navigate" ||
-      normalizedAction === "extract" ||
-      normalizedAction === "verify" ||
-      readingMode;
-    if (!shouldSimulate) {
-      setSyntheticScrollPercent(null);
-      return;
-    }
-    if (syntheticTickRef.current <= 0 || syntheticTickRef.current >= 100) {
-      syntheticTickRef.current = normalizedScrollDirection === "up" ? 84 : 16;
-    }
-    setSyntheticScrollPercent(syntheticTickRef.current);
-    syntheticIntervalRef.current = window.setInterval(() => {
-      const nextTick = syntheticTickRef.current + syntheticDirectionRef.current * 3.5;
-      if (syntheticDirectionRef.current > 0) {
-        syntheticTickRef.current = Math.min(92, nextTick);
-      } else if (syntheticDirectionRef.current < 0) {
-        syntheticTickRef.current = Math.max(8, nextTick);
-      } else {
-        syntheticTickRef.current = Math.max(8, Math.min(92, nextTick));
+  useEffect(
+    () => () => {
+      if (frameScrollObserverCleanupRef.current) {
+        frameScrollObserverCleanupRef.current();
+        frameScrollObserverCleanupRef.current = null;
       }
-      setSyntheticScrollPercent(syntheticTickRef.current);
-    }, 140);
-    return () => {
-      if (syntheticIntervalRef.current !== null) {
-        window.clearInterval(syntheticIntervalRef.current);
-        syntheticIntervalRef.current = null;
+    },
+    [],
+  );
+  const bindFrameScrollObserver = () => {
+    if (frameScrollObserverCleanupRef.current) {
+      frameScrollObserverCleanupRef.current();
+      frameScrollObserverCleanupRef.current = null;
+    }
+    const frame = frameRef.current;
+    if (!frame) {
+      return;
+    }
+    try {
+      const frameWindow = frame.contentWindow;
+      const frameDocument = frameWindow?.document;
+      if (!frameWindow || !frameDocument) {
+        return;
       }
-    };
-  }, [
+      const computePercent = () => {
+        try {
+          const doc = frameDocument.documentElement;
+          const body = frameDocument.body;
+          const scrollTop = Number(frameWindow.scrollY || doc?.scrollTop || body?.scrollTop || 0);
+          const scrollHeight = Number(doc?.scrollHeight || body?.scrollHeight || 0);
+          const viewportHeight = Number(frameWindow.innerHeight || doc?.clientHeight || 0);
+          const maxScrollable = Math.max(0, scrollHeight - viewportHeight);
+          if (maxScrollable <= 0) {
+            setFrameScrollPercent(0);
+            return;
+          }
+          const nextPercent = Math.max(0, Math.min(100, (scrollTop / maxScrollable) * 100));
+          setFrameScrollPercent(nextPercent);
+        } catch {
+          setFrameScrollPercent(null);
+        }
+      };
+      frameWindow.addEventListener("scroll", computePercent, { passive: true });
+      computePercent();
+      const syncTimer = window.setTimeout(computePercent, 150);
+      frameScrollObserverCleanupRef.current = () => {
+        frameWindow.removeEventListener("scroll", computePercent);
+        window.clearTimeout(syncTimer);
+      };
+    } catch {
+      setFrameScrollPercent(null);
+    }
+  };
+  const canProgrammaticallyScrollFrame = showFramePreview && shouldUseProxyPreview && !showSnapshotPrimary;
+  const resolvedScrollPercent = canProgrammaticallyScrollFrame
+    ? frameScrollPercent ?? scrollPercent
+    : scrollPercent;
+  const scrollFrameToPercent = (percent: number): boolean => {
+    if (!canProgrammaticallyScrollFrame) {
+      return false;
+    }
+    const frame = frameRef.current;
+    if (!frame) {
+      return false;
+    }
+    try {
+      const frameWindow = frame.contentWindow;
+      const frameDocument = frameWindow?.document;
+      if (!frameWindow || !frameDocument) {
+        return false;
+      }
+      const doc = frameDocument.documentElement;
+      const body = frameDocument.body;
+      const scrollHeight = Number(doc?.scrollHeight || body?.scrollHeight || 0);
+      const viewportHeight = Number(frameWindow.innerHeight || doc?.clientHeight || 0);
+      const maxScrollable = Math.max(0, scrollHeight - viewportHeight);
+      if (maxScrollable <= 0) {
+        return false;
+      }
+      const nextPercent = Math.max(0, Math.min(100, Number(percent)));
+      frameWindow.scrollTo({
+        top: (nextPercent / 100) * maxScrollable,
+        behavior: "smooth",
+      });
+      setFrameScrollPercent(nextPercent);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const { navigationHint, effectiveScrollPercent, handleScrollSelect } = useBrowserSceneScrollState({
+    activePageUrl,
     actionIndicatesScroll,
     eventIndicatesScroll,
     hasDirectionalScroll,
     normalizedAction,
+    normalizedScrollDirection,
     readingMode,
-    scrollPercent,
-  ]);
-  const handleScrollSelect = (percent: number) => {
-    const nextPercent = Number(percent);
-    if (!Number.isFinite(nextPercent)) {
-      return;
-    }
-    const normalizedPercent = Math.max(0, Math.min(100, nextPercent));
-    if (syntheticIntervalRef.current !== null) {
-      window.clearInterval(syntheticIntervalRef.current);
-      syntheticIntervalRef.current = null;
-    }
-    syntheticDirectionRef.current = 0;
-    syntheticTickRef.current = normalizedPercent;
-    setSyntheticScrollPercent(normalizedPercent);
-  };
-  useEffect(() => {
-    if (typeof effectiveScrollPercent !== "number") {
-      boundaryHintRef.current = null;
-      return;
-    }
-    const boundary =
-      effectiveScrollPercent < 5 ? "start" : effectiveScrollPercent > 95 ? "end" : null;
-    if (!boundary) {
-      boundaryHintRef.current = null;
-      return;
-    }
-    if (navigationHint) {
-      return;
-    }
-    if (boundaryHintRef.current === boundary) {
-      return;
-    }
-    boundaryHintRef.current = boundary;
-    const hintText = boundary === "start" ? "Start of page" : "End of page";
-    setNavigationHint(hintText);
-    if (boundaryHintTimeoutRef.current !== null) {
-      window.clearTimeout(boundaryHintTimeoutRef.current);
-    }
-    boundaryHintTimeoutRef.current = window.setTimeout(() => {
-      setNavigationHint((current) => (current === hintText ? "" : current));
-      boundaryHintTimeoutRef.current = null;
-    }, 1100);
-  }, [effectiveScrollPercent, navigationHint]);
-  const showOverlayCursor = !showSnapshotPrimary;
+    scrollPercent: resolvedScrollPercent,
+    allowSyntheticScroll: false,
+    canSelect: canProgrammaticallyScrollFrame,
+    onSelectPercent: scrollFrameToPercent,
+  });
+  const showOverlayCursor = cursorX !== null && cursorY !== null;
+  const viewportScrollOffsetPx = 0;
   const roadmapVisible = useRoadmapTransition({
     roadmapStepCount: roadmapSteps.length,
     roadmapActiveIndex,
@@ -346,11 +309,9 @@ function BrowserScene({
   });
   const scrollControls = (
     <>
-      <ScrollMeter scrollPercent={effectiveScrollPercent} onSelect={handleScrollSelect} />
-      <BrowserMiniMap
-        highlightRegions={highlightRegions}
+      <ScrollMeter
         scrollPercent={effectiveScrollPercent}
-        onSelect={handleScrollSelect}
+        onSelect={canProgrammaticallyScrollFrame ? handleScrollSelect : undefined}
       />
     </>
   );
@@ -395,6 +356,10 @@ function BrowserScene({
               alt=""
               aria-hidden="true"
               className="absolute inset-0 h-full w-full object-contain object-top bg-transparent"
+              style={{
+                transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
+                transition: "transform 220ms ease-out",
+              }}
             />
           ) : null}
           <img
@@ -402,7 +367,8 @@ function BrowserScene({
             alt="Live browser capture"
             className={`absolute inset-0 h-full w-full object-contain object-top bg-transparent ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
-              transition: "opacity 320ms ease-in-out",
+              transition: "opacity 320ms ease-in-out, transform 220ms ease-out",
+              transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
             }}
             onLoad={handleSnapshotLoad}
             onError={() => {
@@ -445,7 +411,12 @@ function BrowserScene({
           <CopyPulse copyPulseText={copyPulseText} copyPulseVisible={copyPulseVisible} />
           {showOverlayCursor ? (
             <>
-              <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+              <GhostCursor
+                cursorX={cursorX}
+                cursorY={cursorY}
+                isClick={isClickEvent}
+                advisory={cursorSource === "suggested"}
+              />
               <ClickRipple ripples={clickRipples} />
             </>
           ) : null}
@@ -463,12 +434,24 @@ function BrowserScene({
             </div>
           ) : null}
           <iframe
+            ref={frameRef}
             src={frameUrl || activePageUrl}
             title="Live website preview"
             className="absolute inset-0 h-full w-full border-0"
+            style={{
+              transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
+              transition: "transform 220ms ease-out",
+            }}
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
             referrerPolicy="no-referrer-when-downgrade"
-            onLoad={() => setProxyLoaded(true)}
+            onLoad={() => {
+              setProxyLoaded(true);
+              if (shouldUseProxyPreview) {
+                bindFrameScrollObserver();
+              } else {
+                setFrameScrollPercent(null);
+              }
+            }}
           />
           {scrollControls}
           <VerifierConflictBadge
@@ -502,7 +485,12 @@ function BrowserScene({
             />
           ) : null}
           <CopyPulse copyPulseText={copyPulseText} copyPulseVisible={copyPulseVisible} />
-          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+          <GhostCursor
+            cursorX={cursorX}
+            cursorY={cursorY}
+            isClick={isClickEvent}
+            advisory={cursorSource === "suggested"}
+          />
           <ClickRipple ripples={clickRipples} />
           <ThoughtBubble text={narration} />
         </div>
@@ -522,11 +510,18 @@ function BrowserScene({
           <p className="text-[12px] text-[#4a4f5c]">
             {sceneText || activeDetail || "Inspecting page content and extracting evidence..."}
           </p>
-          <div className="space-y-2">
-            <div className="h-2 w-[92%] rounded-full bg-black/12" />
-            <div className="h-2 w-[84%] rounded-full bg-black/8" />
-            <div className="h-2 w-[88%] rounded-full bg-black/12" />
-            <div className="h-2 w-[63%] rounded-full bg-black/8" />
+          <div className="relative overflow-hidden rounded-xl border border-black/[0.08] bg-white px-3 py-3">
+            <div
+              className="space-y-2 transition-transform duration-200 ease-out"
+              style={{ transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)` }}
+            >
+              <div className="h-2 w-[92%] rounded-full bg-black/12" />
+              <div className="h-2 w-[84%] rounded-full bg-black/8" />
+              <div className="h-2 w-[88%] rounded-full bg-black/12" />
+              <div className="h-2 w-[63%] rounded-full bg-black/8" />
+              <div className="h-2 w-[76%] rounded-full bg-black/10" />
+              <div className="h-2 w-[68%] rounded-full bg-black/8" />
+            </div>
           </div>
           {showFindOverlay ? (
             <div className="rounded-lg border border-black/[0.08] bg-white px-2.5 py-2 text-[11px] text-[#1d1d1f]">
@@ -551,6 +546,17 @@ function BrowserScene({
               className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-black/[0.08] object-contain bg-[#f5f7fb]"
               onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}
             />
+          ) : null}
+          {showOverlayCursor ? (
+            <>
+              <GhostCursor
+                cursorX={cursorX}
+                cursorY={cursorY}
+                isClick={isClickEvent}
+                advisory={cursorSource === "suggested"}
+              />
+              <ClickRipple ripples={clickRipples} />
+            </>
           ) : null}
         </div>
       )}

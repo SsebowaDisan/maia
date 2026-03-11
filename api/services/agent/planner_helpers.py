@@ -13,7 +13,8 @@ from api.services.agent.llm_intent import (
 )
 from api.services.agent.llm_runtime import env_bool
 
-URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+# Greedily match URLs but strip common trailing punctuation (.,;:)>'"]) via negative lookbehind.
+URL_RE = re.compile(r"https?://[^\s]+(?<![.,;:)\]>\"'])", re.IGNORECASE)
 EMAIL_RE = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 PLANNING_CONTEXT_PREFIXES = (
     "contract objective:",
@@ -99,7 +100,7 @@ def _heuristic_intent_tags(heuristic: dict[str, object]) -> list[str]:
     return list(dict.fromkeys(tags))[:8]
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=2048)
 def _infer_intent_signals_cached(
     message: str,
     agent_goal: str,

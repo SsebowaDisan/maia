@@ -114,8 +114,6 @@ def _is_google_analytics_request(
     intent_rows = intent if isinstance(intent, dict) else {}
     if bool(intent_rows.get("is_analytics_request")):
         return True
-    if preferred_tool_ids and GA_TOOL_IDS.intersection(preferred_tool_ids):
-        return True
     intent_tags = intent_rows.get("intent_tags")
     if isinstance(intent_tags, list):
         lowered_tags = {
@@ -146,8 +144,6 @@ def _ga_sheet_requested(
 ) -> bool:
     intent_rows = intent if isinstance(intent, dict) else {}
     if bool(intent_rows.get("wants_sheets_output")):
-        return True
-    if preferred_tool_ids and "business.ga4_kpi_sheet_report" in preferred_tool_ids:
         return True
     signal_text_parts = [
         str(request.message or ""),
@@ -475,11 +471,13 @@ def build_plan(
             request=request,
             allowed_tool_ids=planning_allowed_ids,
             preferred_tool_ids=preferred_tool_ids,
+            intent_signals=signals,
         )
         if preferred_tool_ids is not None
         else plan_with_llm(
             request=request,
             allowed_tool_ids=planning_allowed_ids,
+            intent_signals=signals,
         )
     )
     if llm_rows:

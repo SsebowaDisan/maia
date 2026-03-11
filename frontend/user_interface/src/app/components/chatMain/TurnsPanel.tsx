@@ -45,6 +45,8 @@ function TurnsPanel({
   citationFocus = null,
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
+  const pendingTheatreCenterTurnRef = useRef<number | null>(null);
+  const previousTurnCountRef = useRef<number>(chatTurns.length);
   const evidenceCacheRef = useRef<Map<number, { info: string; cards: EvidenceCard[] }>>(new Map());
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const editFeedbackTimerRef = useRef<number | null>(null);
@@ -87,6 +89,113 @@ function TurnsPanel({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewAttachment]);
+
+  const latestTurnIndex = chatTurns.length > 0 ? chatTurns.length - 1 : null;
+  const latestAssistantLength =
+    latestTurnIndex === null
+      ? 0
+      : String(chatTurns[latestTurnIndex]?.assistant || "").trim().length;
+
+  const scheduleCenteredScroll = (target: HTMLElement) => {
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
+    const behavior: ScrollBehavior = prefersReducedMotion ? "auto" : "smooth";
+    const centerTarget = () => {
+      target.scrollIntoView({ behavior, block: "center", inline: "nearest" });
+    };
+    const rafId = window.requestAnimationFrame(centerTarget);
+    const t1 = window.setTimeout(centerTarget, 140);
+    const t2 = window.setTimeout(centerTarget, 320);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  };
+
+  useEffect(() => {
+    if (!isSending || latestTurnIndex === null) {
+      return;
+    }
+    pendingTheatreCenterTurnRef.current = latestTurnIndex;
+    const latestTurnNode =
+      turnsRootRef.current?.querySelector<HTMLElement>(
+        `[data-turn-index="${String(latestTurnIndex)}"]`,
+      ) || null;
+    if (!latestTurnNode) {
+      return;
+    }
+    return scheduleCenteredScroll(latestTurnNode);
+  }, [isSending, latestTurnIndex]);
+
+  useEffect(() => {
+    const previousCount = previousTurnCountRef.current;
+    const currentCount = chatTurns.length;
+    previousTurnCountRef.current = currentCount;
+
+    if (latestTurnIndex === null || currentCount <= previousCount) {
+      return;
+    }
+
+    // Covers modes where the newest turn is appended after send settles (e.g. web search).
+    if (!isSending && !isActivityStreaming && previousCount <= 0) {
+      return;
+    }
+
+    pendingTheatreCenterTurnRef.current = latestTurnIndex;
+    const latestTurnNode =
+      turnsRootRef.current?.querySelector<HTMLElement>(
+        `[data-turn-index="${String(latestTurnIndex)}"]`,
+      ) || null;
+    if (!latestTurnNode) {
+      return;
+    }
+    return scheduleCenteredScroll(latestTurnNode);
+  }, [chatTurns.length, isSending, isActivityStreaming, latestTurnIndex]);
+
+  useEffect(() => {
+    if (latestTurnIndex === null) {
+      pendingTheatreCenterTurnRef.current = null;
+      return;
+    }
+    if (pendingTheatreCenterTurnRef.current !== null && pendingTheatreCenterTurnRef.current !== latestTurnIndex) {
+      pendingTheatreCenterTurnRef.current = null;
+      return;
+    }
+    if (pendingTheatreCenterTurnRef.current === null && isSending) {
+      pendingTheatreCenterTurnRef.current = latestTurnIndex;
+    }
+    if (pendingTheatreCenterTurnRef.current !== latestTurnIndex) {
+      return;
+    }
+
+    const theatreAnchor =
+      turnsRootRef.current?.querySelector<HTMLElement>("[data-theatre-anchor='true']") || null;
+    const latestTurnNode =
+      turnsRootRef.current?.querySelector<HTMLElement>(
+        `[data-turn-index="${String(latestTurnIndex)}"]`,
+      ) || null;
+    const target = theatreAnchor || latestTurnNode;
+    if (!target) {
+      return;
+    }
+
+    const cleanup = scheduleCenteredScroll(target);
+
+    if (!isSending && !isActivityStreaming) {
+      pendingTheatreCenterTurnRef.current = null;
+    }
+
+    return cleanup;
+  }, [
+    activityEvents.length,
+    chatTurns.length,
+    isActivityStreaming,
+    isSending,
+    latestAssistantLength,
+    latestTurnIndex,
+  ]);
 
   useCitationPreview({
     chatTurns,

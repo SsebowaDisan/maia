@@ -1,4 +1,5 @@
 import type { ConversationDetail } from "../../api/client";
+import { EVT_INTERACTION_SUGGESTION } from "../constants/eventTypes";
 import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
@@ -16,20 +17,83 @@ type ConversationMessageMeta = {
   mindmap?: Record<string, unknown>;
 };
 
-export function isAgentActivityEvent(payload: unknown): payload is AgentActivityEvent {
-  return Boolean(
-    payload &&
-      typeof payload === "object" &&
-      "event_id" in (payload as object) &&
-      "event_type" in (payload as object),
-  );
+type AgentEventRow = {
+  type?: unknown;
+  payload?: unknown;
+  data?: unknown;
+  event?: unknown;
+};
+
+function normalizeAgentActivityEvent(payload: unknown): AgentActivityEvent | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const candidate = payload as Record<string, unknown>;
+  if (!("event_id" in candidate) || !("event_type" in candidate)) {
+    return null;
+  }
+
+  const normalized = {
+    ...(candidate as AgentActivityEvent),
+    metadata:
+      candidate.metadata && typeof candidate.metadata === "object"
+        ? (candidate.metadata as Record<string, unknown>)
+        : {},
+  } as AgentActivityEvent;
+
+  if (
+    (!normalized.data || typeof normalized.data !== "object") &&
+    candidate.payload &&
+    typeof candidate.payload === "object"
+  ) {
+    normalized.data = candidate.payload as Record<string, unknown>;
+  }
+
+  return normalized;
 }
 
-export function extractAgentEvents(rows: Array<{ type: string; payload: unknown }>) {
-  return rows
-    .filter((row) => row.type === "event")
-    .map((row) => row.payload)
-    .filter(isAgentActivityEvent);
+export function isAgentActivityEvent(payload: unknown): payload is AgentActivityEvent {
+  return normalizeAgentActivityEvent(payload) !== null;
+}
+
+export function extractAgentEvents(rows: unknown[]): AgentActivityEvent[] {
+  const events: AgentActivityEvent[] = [];
+  for (const row of rows) {
+    const rowRecord = row && typeof row === "object" ? (row as AgentEventRow & Record<string, unknown>) : null;
+    const rowType = String(rowRecord?.type ?? "").trim().toLowerCase();
+    if (rowType && rowType !== "event") {
+      continue;
+    }
+
+    let candidate: unknown = row;
+    if (rowRecord && rowType === "event") {
+      candidate = rowRecord.payload ?? rowRecord.data ?? rowRecord.event ?? null;
+    } else if (rowRecord && !("event_id" in rowRecord) && ("payload" in rowRecord || "data" in rowRecord)) {
+      candidate = rowRecord.payload ?? rowRecord.data ?? null;
+    }
+
+    const event = normalizeAgentActivityEvent(candidate);
+    if (event) {
+      events.push(event);
+    }
+  }
+  return events;
+}
+
+export function splitAgentEventsBySuggestionType(events: AgentActivityEvent[]): {
+  primaryEvents: AgentActivityEvent[];
+  suggestionEvents: AgentActivityEvent[];
+} {
+  const primaryEvents: AgentActivityEvent[] = [];
+  const suggestionEvents: AgentActivityEvent[] = [];
+  for (const event of events) {
+    if (String(event.event_type || "").trim().toLowerCase() === EVT_INTERACTION_SUGGESTION) {
+      suggestionEvents.push(event);
+      continue;
+    }
+    primaryEvents.push(event);
+  }
+  return { primaryEvents, suggestionEvents };
 }
 
 function mapMessageAttachments(

@@ -1,3 +1,6 @@
+import { ClickRipple } from "./ClickRipple";
+import type { ClickRippleEntry } from "./ClickRipple";
+import { GhostCursor } from "./GhostCursor";
 import { InteractionOverlay } from "./InteractionOverlay";
 import type { ZoomHistoryEntry } from "./types";
 
@@ -22,6 +25,10 @@ type SheetsSceneProps = {
   verifierConflictReason: string;
   verifierRecheckRequired: boolean;
   zoomEscalationRequested: boolean;
+  cursorX?: number | null;
+  cursorY?: number | null;
+  isClickEvent?: boolean;
+  clickRipples?: ClickRippleEntry[];
 };
 
 function zoomActionLabel(action: ZoomHistoryEntry["action"]): string {
@@ -58,6 +65,10 @@ function SheetsScene({
   verifierConflictReason,
   verifierRecheckRequired,
   zoomEscalationRequested,
+  cursorX = null,
+  cursorY = null,
+  isClickEvent = false,
+  clickRipples = [],
 }: SheetsSceneProps) {
   const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
   const isTypingAction = action === "type";
@@ -69,6 +80,10 @@ function SheetsScene({
   const showLiveTypingPanel = !sheetsFrameUrl || isTypingAction || sheetWriteEvent;
   const livePanelTitle = typingPulse ? "Live sheet typing" : "Recent sheet activity";
   const activeRowIndex = sheetPreviewRows.length ? Math.max(0, sheetPreviewRows.length - 1) : -1;
+  const sheetsViewportOffsetPx =
+    typeof scrollPercent === "number"
+      ? Math.max(-12, Math.min(12, (50 - scrollPercent) * 0.26))
+      : 0;
   return (
     <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(168,216,255,0.92),rgba(122,176,244,0.72)_40%,rgba(98,148,232,0.9)_100%)] p-9 text-[#1d1d1f]">
       <div className="h-full w-full overflow-hidden rounded-[18px] border border-black/[0.08] bg-white shadow-[0_26px_60px_-40px_rgba(0,0,0,0.55)]">
@@ -114,12 +129,22 @@ function SheetsScene({
               src={sheetsFrameUrl}
               title="Google Sheets live preview"
               className="h-full w-full border-0 bg-white"
+              style={{
+                transform: `translate3d(0, ${sheetsViewportOffsetPx}px, 0)`,
+                transition: "transform 220ms ease-out",
+              }}
               sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               referrerPolicy="no-referrer-when-downgrade"
             />
           ) : (
             <div className="h-full p-5">
-              <div className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white">
+              <div
+                className="mx-auto h-full w-[96%] max-w-[1120px] rounded-xl border border-black/[0.08] bg-white"
+                style={{
+                  transform: `translate3d(0, ${sheetsViewportOffsetPx}px, 0)`,
+                  transition: "transform 220ms ease-out",
+                }}
+              >
                 <div className="grid grid-cols-[120px_repeat(4,minmax(0,1fr))] border-b border-black/[0.06] bg-[#f8f9fc] text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7b7b80]">
                   <div className="border-r border-black/[0.06] px-3 py-2">A</div>
                   <div className="border-r border-black/[0.06] px-3 py-2">B</div>
@@ -223,6 +248,8 @@ function SheetsScene({
               </div>
             </div>
           ) : null}
+          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+          <ClickRipple ripples={clickRipples} />
         </div>
       </div>
     </div>

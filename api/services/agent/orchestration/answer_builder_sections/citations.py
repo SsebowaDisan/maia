@@ -178,7 +178,17 @@ def append_evidence_citations(lines: list[str], ctx: AnswerBuildContext) -> None
         url = row["url"]
         note = compact(row["note"], 96)
         if url:
-            entry = f"- [{idx}] [{label}]({url})"
+            # When the label IS the URL, use just the hostname as the display text
+            # so we don't get redundant "- [1] [https://example.com](https://example.com)"
+            display_label = label
+            if label.lower().startswith(("http://", "https://")) and label.rstrip("/") == url.rstrip("/"):
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    parsed = _urlparse(url)
+                    display_label = parsed.netloc or label
+                except Exception:
+                    display_label = label
+            entry = f"- [{idx}] [{display_label}]({url})"
         else:
             entry = f"- [{idx}] {label} | internal evidence"
         if note and not url:

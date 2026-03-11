@@ -19,6 +19,13 @@ def _default_title(tool_id: str) -> str:
     return " ".join(piece.capitalize() for piece in label.split()) or "Planned step"
 
 
+_ANALYTICS_TOOL_IDS = frozenset({
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "business.ga4_kpi_sheet_report",
+})
+
+
 def _tool_catalog_rows(
     *,
     allowed_tool_ids: list[str],
@@ -44,20 +51,77 @@ def _tool_catalog_rows(
     return rows[:140]
 
 
+def _compact_intent(intent_signals: dict[str, Any]) -> dict[str, Any]:
+    """Extract only the fields the planner needs from the full enriched intent."""
+    keys = (
+        "objective",
+        "target_url",
+        "delivery_email",
+        "requires_delivery",
+        "requires_web_inspection",
+        "requires_contact_form_submission",
+        "requested_report",
+        "wants_docs_output",
+        "wants_sheets_output",
+        "is_analytics_request",
+        "routing_mode",
+        "intent_tags",
+        "preferred_tone",
+        "preferred_format",
+    )
+    return {k: intent_signals[k] for k in keys if k in intent_signals}
+
+
+def _build_intent_guard_rules(intent: dict[str, Any]) -> str:
+    """Return hard-constraint rules derived from classified intent."""
+    rules: list[str] = []
+    is_analytics = bool(intent.get("is_analytics_request"))
+    if not is_analytics:
+        rules.append(
+            "- NEVER select analytics or GA4 tools (analytics.ga4.*, business.ga4_kpi_sheet_report) "
+            "because is_analytics_request=false in the classified intent."
+        )
+    else:
+        rules.append(
+            "- This IS a Google Analytics / GA4 request — include GA4 data tools as needed."
+        )
+    target_url = str(intent.get("target_url") or "").strip()
+    if target_url:
+        rules.append(
+            f"- A specific URL was identified: {target_url!r}. Use browser.playwright.inspect to inspect it."
+        )
+    delivery_email = str(intent.get("delivery_email") or "").strip()
+    requires_delivery = bool(intent.get("requires_delivery"))
+    if delivery_email and requires_delivery:
+        rules.append(
+            f"- Email delivery was requested to {delivery_email!r}. "
+            "Include gmail.draft and/or gmail.send steps with that address."
+        )
+    tags = intent.get("intent_tags")
+    if isinstance(tags, list) and tags:
+        rules.append(f"- Classified intent tags: {', '.join(str(t) for t in tags)}. "
+                     "Use these to validate your tool choices.")
+    return "\n".join(rules)
+
+
 def _request_openai_plan(
     *,
     request: ChatRequest,
     allowed_tool_ids: list[str],
     preferred_tool_ids: list[str],
+    intent_signals: dict[str, Any],
 ) -> dict[str, Any] | None:
     tool_catalog = _tool_catalog_rows(
         allowed_tool_ids=allowed_tool_ids,
         preferred_tool_ids=preferred_tool_ids,
     )
+    compact_intent = _compact_intent(intent_signals)
+    intent_guard_rules = _build_intent_guard_rules(compact_intent)
     user_payload = {
         "message": str(request.message or "").strip(),
         "agent_goal": str(request.agent_goal or "").strip(),
         "agent_mode": str(request.agent_mode or "").strip(),
+        "classified_intent": compact_intent,
         "allowed_tool_ids": allowed_tool_ids,
         "preferred_tool_ids": preferred_tool_ids,
         "tool_catalog": tool_catalog,
@@ -71,27 +135,28 @@ def _request_openai_plan(
         '"why_this_step":"string", "expected_evidence":["..."]}\n'
         "  ]\n"
         "}\n"
-        f"Rules:\n"
-        f"- Use only allowed_tool_ids.\n"
-        "- Prefer preferred_tool_ids when they satisfy the objective.\n"
+        "Hard constraints (enforce strictly — these come from pre-classified intent):\n"
+        f"{intent_guard_rules}\n\n"
+        "General rules:\n"
+        "- Use only allowed_tool_ids.\n"
+        "- Prefer preferred_tool_ids ONLY when they directly and specifically match the user's requested action.\n"
+        "- Let classified_intent guide tool selection; it is more reliable than keyword matching.\n"
         "- User does not need to name APIs; infer the right tools from the task intent and tool_catalog.\n"
         "- Prefer business workflow wrappers for non-technical requests when they fully satisfy the task.\n"
         "- Use direct API tools when workflow wrappers are insufficient or unavailable.\n"
         f"- 1 to {MAX_PLANNER_STEPS} steps.\n"
         "- Put practical execution order in the steps list.\n"
         "- Keep params minimal and concrete.\n"
-        "- If email delivery is requested, include draft/send style steps where applicable.\n\n"
         "- If the request asks where a company is located/found, include steps that gather location evidence.\n"
         "- If the request asks to submit a website contact form, include `browser.contact_form.send` with URL + message params.\n"
-        "- For route/travel planning requests, prefer `business.route_plan` (non-technical wrapper).\n"
-        "- For GA4 KPI report requests into Sheets, prefer `business.ga4_kpi_sheet_report`.\n"
+        "- For route/travel planning requests, prefer `business.route_plan`.\n"
+        "- For GA4 KPI report requests into Sheets, prefer `business.ga4_kpi_sheet_report` (only when is_analytics_request=true).\n"
         "- For cloud incident digest email requests, prefer `business.cloud_incident_digest_email`.\n"
         "- For invoice create/send requests, prefer `business.invoice_workflow`.\n"
         "- For meeting/calendar scheduling requests, prefer `business.meeting_scheduler`.\n"
         "- For proposal/RFP drafting requests, prefer `business.proposal_workflow`.\n"
         "- When `agent_mode` is `company_agent`, prefer server-side execution tools.\n"
-        "- Include workspace roadmap logging steps (`workspace.sheets.track_step`, `workspace.docs.research_notes`) "
-        "only when explicitly requested or clearly needed for workspace artifact tracking.\n\n"
+        "- Include workspace roadmap logging steps only when explicitly requested.\n\n"
         f"Input:\n{json.dumps(user_payload, ensure_ascii=True)}"
     )
     return call_json_response(
@@ -111,21 +176,29 @@ def plan_with_llm(
     request: ChatRequest,
     allowed_tool_ids: set[str],
     preferred_tool_ids: set[str] | None = None,
+    intent_signals: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not env_bool("MAIA_AGENT_LLM_PLANNER_ENABLED", default=True):
         return []
     if not allowed_tool_ids:
         return []
 
+    effective_intent = intent_signals if isinstance(intent_signals, dict) else {}
     preferred = {
         str(item).strip()
         for item in (preferred_tool_ids or set())
         if str(item).strip() in allowed_tool_ids
     }
+    # When analytics is not the intent, strip GA4 tools from allowed set so the LLM
+    # cannot accidentally select them even if they appear in the catalog.
+    if not bool(effective_intent.get("is_analytics_request")):
+        allowed_tool_ids = allowed_tool_ids - _ANALYTICS_TOOL_IDS
+
     payload = _request_openai_plan(
         request=request,
         allowed_tool_ids=sorted(allowed_tool_ids),
         preferred_tool_ids=sorted(preferred),
+        intent_signals=effective_intent,
     )
     if not isinstance(payload, dict):
         return []

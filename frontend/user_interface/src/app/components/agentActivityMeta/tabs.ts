@@ -1,11 +1,36 @@
 import type { PreviewTab } from "./types";
+import {
+  EVT_AGENT_HANDOFF,
+  EVT_AGENT_WAITING,
+  EVT_APPROVAL_GRANTED,
+  EVT_APPROVAL_REQUIRED,
+  EVT_EVENT_COVERAGE,
+  EVT_HANDOFF_PAUSED,
+  EVT_HANDOFF_RESUMED,
+  EVT_POLICY_BLOCKED,
+  EVT_WEB_EVIDENCE_SUMMARY,
+  EVT_WEB_KPI_SUMMARY,
+  EVT_WEB_RELEASE_GATE,
+} from "../../constants/eventTypes";
 
 function tabForEventType(eventType: string): PreviewTab {
   const normalized = String(eventType || "").toLowerCase();
   if (
-    normalized === "web_kpi_summary" ||
-    normalized === "web_evidence_summary" ||
-    normalized === "web_release_gate"
+    normalized === EVT_WEB_KPI_SUMMARY ||
+    normalized === EVT_WEB_EVIDENCE_SUMMARY ||
+    normalized === EVT_WEB_RELEASE_GATE
+  ) {
+    return "system";
+  }
+  if (
+    normalized === EVT_APPROVAL_REQUIRED ||
+    normalized === EVT_APPROVAL_GRANTED ||
+    normalized === EVT_POLICY_BLOCKED ||
+    normalized === EVT_HANDOFF_PAUSED ||
+    normalized === EVT_HANDOFF_RESUMED ||
+    normalized === EVT_AGENT_WAITING ||
+    normalized === EVT_AGENT_HANDOFF ||
+    normalized === EVT_EVENT_COVERAGE
   ) {
     return "system";
   }

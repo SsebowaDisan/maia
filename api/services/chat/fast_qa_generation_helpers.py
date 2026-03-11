@@ -128,9 +128,20 @@ def call_openai_fast_qa_impl(
         "mechanisms, comparisons, and implications. Do not leave sections at surface level.\n"
         "- For research or analytical questions, provide rich multi-section depth with 3-5 substantial paragraphs per "
         "major section — explore causes, evidence, context, trade-offs, and significance.\n"
+        "- Each section must develop its content with at least 2-3 full paragraphs of substantive prose — "
+        "a single sentence or a bare bullet list is not sufficient for any analytical or research section.\n"
+        "- Surface every relevant fact, figure, name, date, product, or measurement from the evidence — "
+        "do not leave important details out of the response or paraphrase precise values into vague terms.\n"
+        "- When the evidence contains specific company names, products, percentages, financial figures, or direct "
+        "quotes, reproduce them precisely in the answer — do not generalise or omit them.\n"
+        "- When evidence provides context around a claim (causes, history, consequences, comparisons), include "
+        "that context in the section rather than stating only the headline finding.\n"
+        "- Write the complete response — do not stop early, trail off, or skip sections from the blueprint; "
+        "every section listed in the blueprint must appear with full content in the output.\n"
         "- For direct factual questions, give a precise answer with enough supporting detail to be genuinely useful.\n"
         "- Choose structure per query (narrative paragraphs, headed sections, bullets, or tables); do not reuse a single fixed layout across responses.\n"
         "- Use natural prose by default; use headings, bullets, or tables only when they add genuine clarity.\n"
+        "- When a table or bullet list is used, precede it with at least one explanatory paragraph that contextualises the data.\n"
         "- When data or numbers are available, surface them explicitly — do not bury or omit statistics.\n"
         "- When multiple sources agree or disagree, call it out explicitly with specifics.\n"
         "- Do not lead with isolated quoted fragments or decorative callouts unless the user explicitly asks.\n"
@@ -195,6 +206,7 @@ def call_openai_fast_qa_impl(
         request_payload = {
             "model": model,
             "temperature": temperature,
+            "max_tokens": 4096,
             "messages": [
                 {
                     "role": "system",
@@ -204,13 +216,17 @@ def call_openai_fast_qa_impl(
                             "Never invent citations or pretend to have source evidence when none is provided. "
                             "Adapt structure to the question — simple lookups get a direct answer, analytical or research questions get deep, well-developed multi-section responses with specific data, examples, and expert-level context. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker: go beyond surface summaries, surface key numbers, explain mechanisms, and address implications. "
+                            "For general knowledge questions, provide comprehensive, textbook-level depth — include mechanisms, historical context, statistics, examples, and expert-level nuance. "
+                            "Never truncate a response mid-thought; complete every section fully before ending. "
                         )
                         if general_knowledge_mode
                         else (
                             "You are Maia, a research-grade AI assistant. Provide faithful answers grounded in indexed evidence. "
+                            "Treat the indexed evidence as a primary source — read every excerpt carefully and surface all specific details, figures, names, and dates, not just headlines. "
                             "Adapt structure and depth to the question — analytical and research questions deserve rich, multi-section responses with specific data, comparisons, mechanisms, and implications drawn from the evidence. "
-                            "Go beyond surface summaries: surface exact numbers, highlight agreements and contradictions across sources, and develop each section with substantive detail. "
+                            "Go beyond surface summaries: surface exact numbers, highlight agreements and contradictions across sources, and develop each section with substantive detail that would satisfy a domain expert. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker. "
+                            "Never truncate a response mid-thought; complete every section fully before ending. "
                         )
                         + f"{build_response_language_rule_fn(requested_language=requested_language, latest_message=question)} "
                         + (
@@ -228,7 +244,7 @@ def call_openai_fast_qa_impl(
                 api_key=api_key,
                 base_url=base_url,
                 request_payload=request_payload,
-                timeout_seconds=20,
+                timeout_seconds=45,
             )
             or ""
         ).strip()

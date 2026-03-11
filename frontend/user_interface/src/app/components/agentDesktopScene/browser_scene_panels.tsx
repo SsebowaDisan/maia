@@ -137,7 +137,8 @@ function ScrollMeter({
   onSelect?: (percent: number) => void;
 }) {
   const interactive = typeof onSelect === "function";
-  const normalizedPercent = typeof scrollPercent === "number" ? clampPercent(scrollPercent) : 0;
+  const hasPercent = typeof scrollPercent === "number";
+  const normalizedPercent = hasPercent ? clampPercent(scrollPercent) : 0;
   const label = typeof scrollPercent === "number" ? `${Math.round(normalizedPercent)}%` : "--";
   const handleTrackClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!onSelect) {
@@ -159,10 +160,12 @@ function ScrollMeter({
         aria-label="Set scroll position"
         className={`relative h-full w-1.5 rounded-full bg-black/20 ${interactive ? "cursor-pointer" : ""}`}
       >
-        <div
-          className="pointer-events-none absolute left-0 right-0 rounded-full bg-black/60 transition-all duration-300"
-          style={{ height: "24px", top: `${normalizedPercent}%`, transform: "translateY(-50%)" }}
-        />
+        {hasPercent ? (
+          <div
+            className="pointer-events-none absolute left-0 right-0 rounded-full bg-black/60 transition-all duration-300"
+            style={{ height: "24px", top: `${normalizedPercent}%`, transform: "translateY(-50%)" }}
+          />
+        ) : null}
       </button>
       <span className="mt-1 text-[10px] font-medium text-black/70">{label}</span>
     </div>

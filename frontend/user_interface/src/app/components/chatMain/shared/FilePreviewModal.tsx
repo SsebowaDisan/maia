@@ -1,5 +1,6 @@
 import { ExternalLink, X } from "lucide-react";
 import { useMemo } from "react";
+import { createPortal } from "react-dom";
 import { buildRawFileUrl } from "../../../../api/client";
 import type { FilePreviewAttachment } from "../types";
 
@@ -40,10 +41,14 @@ function FilePreviewModal({ attachment, onClose, emptyPreviewMessage }: FilePrev
     return null;
   }
 
-  return (
-    <div className="fixed inset-0 z-[140] bg-black/45 px-4 py-6 backdrop-blur-[2px]" onClick={onClose}>
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px] sm:p-6" onClick={onClose}>
       <div
-        className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_24px_70px_-28px_rgba(0,0,0,0.65)]"
+        className="flex h-[min(92vh,980px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_24px_70px_-28px_rgba(0,0,0,0.65)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-black/[0.06] px-4 py-3">
@@ -105,7 +110,8 @@ function FilePreviewModal({ attachment, onClose, emptyPreviewMessage }: FilePrev
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from api.schemas import ChatRequest
 from api.services.agent.llm_contracts import propose_fact_probe_steps
@@ -75,9 +78,15 @@ def build_planning_request(
         planning_message_lines.append(
             f"Conversation context: {task_prep.conversation_summary}"
         )
-    planning_message = "\n".join(
+    full_planning_message = "\n".join(
         [item for item in planning_message_lines if item]
-    ).strip()[:1600]
+    ).strip()
+    if len(full_planning_message) > 1600:
+        _log.warning(
+            "build_planning_request: planning message truncated from %d to 1600 chars",
+            len(full_planning_message),
+        )
+    planning_message = full_planning_message[:1600]
     if planning_message:
         try:
             planning_request = request.model_copy(update={"message": planning_message})
@@ -149,7 +158,9 @@ def insert_contract_probe_steps(
         tool_id = str(row.get("tool_id") or "").strip()
         if not tool_id:
             continue
-        if target_url and not _is_allowed_url_scoped_probe(tool_id):
+        # When analytics context is active, GA tools are handled by the next filter;
+        # skip the URL-scope restriction so analytics tools are not pre-filtered out.
+        if target_url and not analytics_context and not _is_allowed_url_scoped_probe(tool_id):
             continue
         if analytics_context and tool_id not in GA_PROBE_ALLOWED_TOOL_IDS:
             continue

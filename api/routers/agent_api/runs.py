@@ -32,7 +32,14 @@ def get_agent_run_events(run_id: str) -> list[dict[str, Any]]:
     rows = get_activity_store().load_events(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run events not found.")
-    return rows
+    # Unwrap stored {type, payload} rows to return event payloads directly,
+    # matching the SSE stream shape the frontend already expects.
+    events: list[dict[str, Any]] = [
+        row["payload"]
+        for row in rows
+        if isinstance(row, dict) and row.get("type") == "event" and isinstance(row.get("payload"), dict)
+    ]
+    return events if events else rows
 
 
 @router.get("/runs/{run_id}/graph-snapshots")

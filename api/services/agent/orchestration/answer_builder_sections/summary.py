@@ -193,7 +193,7 @@ def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
         summary_emitted = True
 
     unique_urls = _collect_external_source_urls(ctx)
-    if unique_urls:
+    if show_diagnostics and unique_urls:
         lines.append(f"- Source coverage: {len(unique_urls)} unique source(s).")
         lines.append(f"- Primary reference: {unique_urls[0]}")
     elif not summary_emitted:

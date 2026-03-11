@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import type { ZoomHistoryEntry } from "./types";
 
 type PdfTargetRegion = {
@@ -9,18 +10,52 @@ type PdfTargetRegion = {
   height: number;
 } | null;
 
-function PdfScrollRail({ pdfScrollPercent }: { pdfScrollPercent: number | null }) {
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function readPercentFromClick(event: MouseEvent<HTMLElement>): number | null {
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (!rect.height) {
+    return null;
+  }
+  return clampPercent(((event.clientY - rect.top) / rect.height) * 100);
+}
+
+function PdfScrollRail({
+  pdfScrollPercent,
+  onSelect,
+}: {
+  pdfScrollPercent: number | null;
+  onSelect?: (percent: number) => void;
+}) {
   if (typeof pdfScrollPercent !== "number") {
     return null;
   }
+  const interactive = typeof onSelect === "function";
   return (
-    <div className="pointer-events-none absolute right-2 top-14 bottom-4 flex flex-col items-center">
-      <div className="h-full w-1.5 rounded-full bg-black/20">
+    <div className={`absolute right-2 top-14 bottom-4 flex flex-col items-center ${interactive ? "" : "pointer-events-none"}`}>
+      <button
+        type="button"
+        disabled={!interactive}
+        aria-label="Set document scroll position"
+        onClick={(event) => {
+          if (!onSelect) {
+            return;
+          }
+          const percent = readPercentFromClick(event);
+          if (percent === null) {
+            return;
+          }
+          onSelect(percent);
+        }}
+        className={`relative h-full w-1.5 rounded-full bg-black/20 ${interactive ? "cursor-pointer" : ""}`}
+      >
         <div
-          className="w-1.5 rounded-full bg-black/60 transition-all duration-300"
+          className="pointer-events-none w-1.5 rounded-full bg-black/60 transition-all duration-300"
           style={{ height: "24px", marginTop: `calc(${pdfScrollPercent}% - 12px)` }}
         />
-      </div>
+      </button>
       <span className="mt-1 text-[10px] font-medium text-black/70">{Math.round(pdfScrollPercent)}%</span>
     </div>
   );
@@ -71,11 +106,13 @@ function PdfMiniMap({
   pdfPageTotal,
   pdfScrollPercent,
   pdfTargetRegion,
+  onSelect,
 }: {
   pdfPage: number;
   pdfPageTotal: number;
   pdfScrollPercent: number | null;
   pdfTargetRegion: PdfTargetRegion;
+  onSelect?: (percent: number) => void;
 }) {
   const pageProgress =
     pdfPageTotal <= 1 ? 0 : Math.max(0, Math.min(100, ((pdfPage - 1) / Math.max(1, pdfPageTotal - 1)) * 100));
@@ -83,8 +120,26 @@ function PdfMiniMap({
     typeof pdfScrollPercent === "number"
       ? Math.max(0, Math.min(86, Math.round(pdfScrollPercent * 0.86)))
       : Math.round(pageProgress * 0.86);
+  const interactive = typeof onSelect === "function";
   return (
-    <div className="pointer-events-none absolute bottom-20 right-4 z-20 h-28 w-20 rounded-lg border border-black/20 bg-white/88 p-1.5 text-[9px] backdrop-blur-sm">
+    <button
+      type="button"
+      disabled={!interactive}
+      aria-label="Set document mini-map position"
+      onClick={(event) => {
+        if (!onSelect) {
+          return;
+        }
+        const percent = readPercentFromClick(event);
+        if (percent === null) {
+          return;
+        }
+        onSelect(percent);
+      }}
+      className={`absolute bottom-20 right-4 z-20 h-28 w-20 rounded-lg border border-black/20 bg-white/88 p-1.5 text-[9px] backdrop-blur-sm ${
+        interactive ? "cursor-pointer" : "pointer-events-none"
+      }`}
+    >
       <p className="font-semibold uppercase tracking-[0.08em] text-[#4c4c50]">Mini-map</p>
       <div className="relative mt-1 h-[88px] w-full rounded bg-black/8">
         <div
@@ -98,7 +153,7 @@ function PdfMiniMap({
           />
         ) : null}
       </div>
-    </div>
+    </button>
   );
 }
 

@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import type { InteractionSuggestion } from "../agentActivityPanel/interactionSuggestionMerge";
 
 type AgentDesktopSceneProps = {
   snapshotUrl: string;
@@ -21,6 +22,9 @@ type AgentDesktopSceneProps = {
   activeTitle: string;
   activeDetail: string;
   activeEventType: string;
+  runId?: string;
+  activeStepIndex?: number | null;
+  interactionSuggestion?: InteractionSuggestion[] | null;
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl?: string;
   sceneSpreadsheetUrl?: string;

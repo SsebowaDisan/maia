@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { ClickRipple } from "./ClickRipple";
+import type { ClickRippleEntry } from "./ClickRipple";
+import { GhostCursor } from "./GhostCursor";
 import { InteractionOverlay } from "./InteractionOverlay";
 import {
   PdfComparePanel,
-  PdfMiniMap,
   PdfScrollRail,
   PdfTargetFocus,
   PdfVerifierConflictBadge,
@@ -52,6 +54,10 @@ type DocumentPdfSceneProps = {
   zoomEscalationRequested: boolean;
   sceneText: string;
   stageFileUrl: string;
+  cursorX?: number | null;
+  cursorY?: number | null;
+  isClickEvent?: boolean;
+  clickRipples?: ClickRippleEntry[];
 };
 
 function DocumentPdfScene({
@@ -83,6 +89,10 @@ function DocumentPdfScene({
   zoomEscalationRequested,
   sceneText,
   stageFileUrl,
+  cursorX = null,
+  cursorY = null,
+  isClickEvent = false,
+  clickRipples = [],
 }: DocumentPdfSceneProps) {
   const page = Math.max(1, Math.round(pdfPage));
   const totalPages = Math.max(page, Math.round(pdfPageTotal));
@@ -105,6 +115,24 @@ function DocumentPdfScene({
     normalizedEventType.startsWith("pdf.find") ||
     Boolean(pdfFindQuery);
   const showScanSweep = showScanFocus && normalizedActionPhase === "active";
+  const [syntheticPdfScrollPercent, setSyntheticPdfScrollPercent] = useState<number | null>(null);
+  useEffect(() => {
+    if (typeof pdfScrollPercent === "number") {
+      setSyntheticPdfScrollPercent(null);
+    }
+  }, [pdfScrollPercent]);
+  const effectivePdfScrollPercent = syntheticPdfScrollPercent ?? pdfScrollPercent;
+  const pdfViewportOffsetPx =
+    typeof effectivePdfScrollPercent === "number"
+      ? Math.max(-14, Math.min(14, (50 - effectivePdfScrollPercent) * 0.28))
+      : 0;
+  const handlePdfScrollSelect = (percent: number) => {
+    const numeric = Number(percent);
+    if (!Number.isFinite(numeric)) {
+      return;
+    }
+    setSyntheticPdfScrollPercent(Math.max(0, Math.min(100, numeric)));
+  };
   return (
     <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(168,216,255,0.92),rgba(122,176,244,0.72)_40%,rgba(98,148,232,0.9)_100%)] p-9 text-[#1d1d1f]">
       <div className="relative mx-auto flex h-full w-full max-w-[840px] flex-col overflow-hidden rounded-[20px] border border-black/[0.1] bg-[#fcfcfd] shadow-[0_26px_58px_-42px_rgba(0,0,0,0.52)]">
@@ -122,7 +150,11 @@ function DocumentPdfScene({
             src={frameUrl}
             title="Agent PDF live preview"
             className="absolute inset-0 h-full w-full border-0 bg-white"
-            style={{ transform: "translateZ(0)", backfaceVisibility: "hidden" }}
+            style={{
+              transform: `translate3d(0, ${pdfViewportOffsetPx}px, 0)`,
+              transition: "transform 220ms ease-out",
+              backfaceVisibility: "hidden",
+            }}
           />
           <PdfVerifierConflictBadge
             verifierConflict={verifierConflict}
@@ -185,7 +217,7 @@ function DocumentPdfScene({
                 <div
                   className="absolute left-0 right-0 h-[38%] animate-[pulse_1.2s_ease-in-out_infinite]"
                   style={{
-                    top: `${Math.max(2, Math.min(62, Number(pdfScrollPercent ?? 40)))}%`,
+                    top: `${Math.max(2, Math.min(62, Number(effectivePdfScrollPercent ?? 40)))}%`,
                     transform: "translateY(-50%)",
                     transition: "top 220ms ease-out, opacity 220ms ease-out",
                     background:
@@ -198,12 +230,6 @@ function DocumentPdfScene({
           <PdfTargetFocus pdfTargetRegion={pdfTargetRegion} />
           <PdfZoomBadge pdfZoomLevel={pdfZoomLevel} pdfZoomReason={pdfZoomReason} />
           <PdfZoomHistoryPanel zoomHistory={zoomHistory} />
-          <PdfMiniMap
-            pdfPage={page}
-            pdfPageTotal={totalPages}
-            pdfScrollPercent={pdfScrollPercent}
-            pdfTargetRegion={pdfTargetRegion}
-          />
           {showPageTurnBadge ? (
             <div className="pointer-events-none absolute right-4 top-16 z-20 rounded-full border border-black/15 bg-white/92 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[#2d2d31]">
               Page turn
@@ -232,7 +258,9 @@ function DocumentPdfScene({
               </div>
             </div>
           ) : null}
-          <PdfScrollRail pdfScrollPercent={pdfScrollPercent} />
+          <GhostCursor cursorX={cursorX} cursorY={cursorY} isClick={isClickEvent} />
+          <ClickRipple ripples={clickRipples} />
+          <PdfScrollRail pdfScrollPercent={effectivePdfScrollPercent} onSelect={handlePdfScrollSelect} />
         </div>
       </div>
     </div>
