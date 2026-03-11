@@ -1,5 +1,6 @@
 import type { ConversationDetail } from "../../api/client";
 import { EVT_INTERACTION_SUGGESTION } from "../constants/eventTypes";
+import { normalizeCanvasDocuments, normalizeMessageBlocks } from "../messageBlocks";
 import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
@@ -15,6 +16,8 @@ type ConversationMessageMeta = {
   web_summary?: Record<string, unknown>;
   info_panel?: Record<string, unknown>;
   mindmap?: Record<string, unknown>;
+  blocks?: unknown[];
+  documents?: unknown[];
 };
 
 type AgentEventRow = {
@@ -136,6 +139,7 @@ export function buildConversationTurns(
   const plotHistory = detail.data_source?.plot_history || [];
   const messageMeta = (detail.data_source?.message_meta || []) as ConversationMessageMeta[];
   const turns: ChatTurn[] = messages.map((entry, index) => {
+    const assistant = entry[1] || "";
     const rawMode = messageMeta[index]?.mode || "ask";
     const modeVariant = String(
       (
@@ -152,7 +156,9 @@ export function buildConversationTurns(
         : rawMode;
     return {
       user: entry[0] || "",
-      assistant: entry[1] || "",
+      assistant,
+      blocks: normalizeMessageBlocks(messageMeta[index]?.blocks, assistant),
+      documents: normalizeCanvasDocuments(messageMeta[index]?.documents),
       attachments: mapMessageAttachments(messageMeta[index]?.attachments),
       info: retrievalMessages[index] || "",
       plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,

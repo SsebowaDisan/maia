@@ -9,7 +9,6 @@ import {
   CopyPulse,
   ExecutionRoadmapOverlay,
   FindOverlay,
-  OpenedPagesRail,
   ScrollMeter,
   VerifierConflictBadge,
   ZoomBadge,
@@ -133,7 +132,7 @@ function BrowserScene({
           : action === "extract"
         ? "Extracting"
         : "";
-  const { dedupedOpenedPages, activePageUrl, setSelectedPageUrl } = useBrowserPageQueue({
+  const { activePageUrl } = useBrowserPageQueue({
     browserUrl,
     openedPages,
     pageIndex,
@@ -153,6 +152,7 @@ function BrowserScene({
       params.set("question", previewHint);
     }
     params.set("viewport", "desktop");
+    params.set("highlight_strategy", "heuristic");
     return `/api/web/preview?${params.toString()}`;
   }, [activePageUrl, previewHint, shouldAnnotatePreview]);
   const shouldUseProxyPreview =
@@ -562,9 +562,7 @@ function BrowserScene({
       )}
       {pageIndex !== null ? (
         <div
-          className={`pointer-events-none absolute right-3 rounded-full border border-black/[0.1] bg-white/92 px-2.5 py-1 text-[10px] text-[#4a4f5c] ${
-            dedupedOpenedPages.length > 0 ? "bottom-12" : "bottom-3"
-          }`}
+          className="pointer-events-none absolute right-3 bottom-3 rounded-full border border-black/[0.1] bg-white/92 px-2.5 py-1 text-[10px] text-[#4a4f5c]"
         >
           Page {Math.max(1, pageIndex)}
         </div>
@@ -574,13 +572,6 @@ function BrowserScene({
         roadmapActiveIndex={roadmapActiveIndex}
         visible={roadmapVisible}
       />
-      {dedupedOpenedPages.length > 0 ? (
-        <OpenedPagesRail
-          openedPages={dedupedOpenedPages}
-          activePageUrl={activePageUrl}
-          onSelectPage={setSelectedPageUrl}
-        />
-      ) : null}
     </div>
     </div>
   );

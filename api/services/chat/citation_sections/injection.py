@@ -328,7 +328,11 @@ def render_fast_citation_links(
             return match.group(0)
         return _citation_anchor(ref) or match.group(0)
 
-    enriched = _INLINE_REF_TOKEN_RE.sub(replace_ref, answer)
+    # Only substitute bracket markers in the body — never in the ## Evidence Citations tail,
+    # which uses [n] as list indices, not citation markers.
+    body, tail = _split_answer_for_inline_injection(answer)
+    enriched_body = _INLINE_REF_TOKEN_RE.sub(replace_ref, body)
+    enriched = f"{enriched_body.rstrip()}\n\n{tail.lstrip()}" if tail else enriched_body
     enriched = _inject_inline_citations(enriched, refs)
     enriched = _normalize_visible_inline_citations(enriched)
 

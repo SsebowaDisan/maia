@@ -105,6 +105,46 @@ def test_resolve_highlight_scope_uses_heuristic_when_llm_is_disabled(monkeypatch
     assert resolved == "sentence"
 
 
+def test_resolve_highlight_scope_skips_llm_in_heuristic_mode(monkeypatch) -> None:
+    monkeypatch.setenv("MAIA_WEB_PREVIEW_HIGHLIGHT_SCOPE_LLM_ENABLED", "1")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("LLM scope selection should be skipped in heuristic mode")
+
+    monkeypatch.setattr(web_preview, "call_json_response", fail_if_called)
+    resolved = web_preview._resolve_highlight_scope(
+        question="Give me a concise summary of this page",
+        highlight="Industrial solutions square",
+        claim="The page describes grouped domain offerings.",
+        strategy="heuristic",
+    )
+    assert resolved == "sentence"
+
+
+def test_website_preview_accepts_heuristic_highlight_strategy(monkeypatch) -> None:
+    monkeypatch.setattr(
+        web_preview,
+        "_fetch_html",
+        lambda _url: ("<html><head></head><body><p>Preview body</p></body></html>", "https://axongroup.com/"),
+    )
+
+    captured: dict[str, str] = {}
+
+    def fake_scope_resolver(*, question: str, highlight: str, claim: str, strategy: str = "auto") -> str:
+        captured["strategy"] = strategy
+        return "sentence"
+
+    monkeypatch.setattr(web_preview, "_resolve_highlight_scope", fake_scope_resolver)
+    response = web_preview.website_preview(
+        url="https://axongroup.com/",
+        highlight="Preview body",
+        question="What does this page say?",
+        highlight_strategy="heuristic",
+    )
+    assert response.status_code == 200
+    assert captured["strategy"] == "heuristic"
+
+
 def test_preview_fetch_error_html_google_workspace_auth_failure() -> None:
     rendered = web_preview._preview_fetch_error_html(
         source_url="https://docs.google.com/spreadsheets/d/abc123/edit",

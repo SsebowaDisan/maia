@@ -41,6 +41,8 @@ _SCOPE_CACHE_LOCK = threading.Lock()
 _HIGHLIGHT_SCOPE_CACHE: dict[str, tuple[float, str]] = {}
 _ALLOWED_HIGHLIGHT_SCOPES = {"tight", "sentence", "context", "block"}
 _DEFAULT_HIGHLIGHT_SCOPE = "sentence"
+_ALLOWED_HIGHLIGHT_STRATEGIES = {"auto", "heuristic"}
+_DEFAULT_HIGHLIGHT_STRATEGY = "auto"
 _ALLOWED_PREVIEW_VIEWPORTS = {"desktop", "mobile"}
 _DEFAULT_PREVIEW_VIEWPORT = "desktop"
 _ARTIFACT_URL_PATH_SEGMENTS = {
@@ -148,6 +150,13 @@ def _normalize_preview_viewport(raw_value: Any) -> str:
     return _DEFAULT_PREVIEW_VIEWPORT
 
 
+def _normalize_highlight_strategy(raw_value: Any) -> str:
+    value = " ".join(str(raw_value or "").split()).strip().lower()
+    if value in _ALLOWED_HIGHLIGHT_STRATEGIES:
+        return value
+    return _DEFAULT_HIGHLIGHT_STRATEGY
+
+
 def _normalize_scope_text(raw_value: Any, *, max_chars: int = 260) -> str:
     text = " ".join(str(raw_value or "").split()).strip()
     if not text:
@@ -183,12 +192,20 @@ def _heuristic_highlight_scope(*, question: str, highlight: str, claim: str) -> 
     return _DEFAULT_HIGHLIGHT_SCOPE
 
 
-def _resolve_highlight_scope(*, question: str, highlight: str, claim: str) -> str:
+def _resolve_highlight_scope(
+    *,
+    question: str,
+    highlight: str,
+    claim: str,
+    strategy: str = _DEFAULT_HIGHLIGHT_STRATEGY,
+) -> str:
     normalized_question = _normalize_scope_text(question, max_chars=320)
     normalized_highlight = _normalize_scope_text(highlight, max_chars=320)
     normalized_claim = _normalize_scope_text(claim, max_chars=320)
+    normalized_strategy = _normalize_highlight_strategy(strategy)
     cache_key = "||".join(
         [
+            normalized_strategy,
             normalized_question.lower(),
             normalized_highlight.lower(),
             normalized_claim.lower(),
@@ -207,7 +224,8 @@ def _resolve_highlight_scope(*, question: str, highlight: str, claim: str) -> st
     )
 
     if (
-        env_bool("MAIA_WEB_PREVIEW_HIGHLIGHT_SCOPE_LLM_ENABLED", default=True)
+        normalized_strategy == "auto"
+        and env_bool("MAIA_WEB_PREVIEW_HIGHLIGHT_SCOPE_LLM_ENABLED", default=True)
         and len(normalized_question) >= 6
     ):
         prompt = (
@@ -425,6 +443,10 @@ def website_preview(
     claim: str | None = Query(default=None, description="Claim text fallback for highlighting"),
     question: str | None = Query(default=None, description="User question used to adapt highlight scope"),
     viewport: str | None = Query(default=None, description="Preview viewport mode: desktop or mobile"),
+    highlight_strategy: str | None = Query(
+        default=None,
+        description="Highlight scope strategy: auto or heuristic",
+    ),
 ) -> HTMLResponse:
     normalized_url = _normalize_target_url(url)
     if not normalized_url:
@@ -467,6 +489,7 @@ def website_preview(
         question=question_text,
         highlight=highlight_text,
         claim=claim_text,
+        strategy=highlight_strategy or _DEFAULT_HIGHLIGHT_STRATEGY,
     )
     rendered = _sanitize_and_inject_preview_html(
         html_text=html_text,

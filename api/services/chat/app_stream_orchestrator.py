@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import re as _re
 from typing import Any, Callable, Generator
 
 from tzlocal import get_localzone
 
 from maia.mindmap.indexer import build_knowledge_map as _build_knowledge_map
 
+from api.message_blocks import normalize_turn_structured_content
 from api.schemas import ChatRequest
 from api.services import mindmap_service
 from api.services.agent.orchestrator import get_orchestrator
@@ -57,8 +59,15 @@ def run_orchestrator_stream_turn(
     existing_goal = " ".join(str(request.agent_goal or "").split()).strip()
     if existing_goal:
         agent_goal_parts.append(existing_goal)
-    if requested_mode == "company_agent" and context_summary:
-        agent_goal_parts.append(f"Conversation context: {context_summary}")
+    if requested_mode == "company_agent" and context_summary and not existing_goal:
+        # Strip emails and URLs from injected context so they cannot bleed into
+        # task_understanding.py's _extract_first_email / _extract_first_url scans.
+        # The full context is still available to the agent via agent_settings below.
+        safe_context = _re.sub(
+            r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", "[email]", context_summary
+        )
+        safe_context = _re.sub(r"https?://[^\s\])>\"',]+", "[url]", safe_context)
+        agent_goal_parts.append(f"Conversation context: {safe_context}")
     contextual_goal = " ".join(agent_goal_parts).strip()[:900]
     agent_request = request
     if contextual_goal and contextual_goal != existing_goal:
@@ -321,6 +330,7 @@ def run_orchestrator_stream_turn(
         info_panel["mode_variant"] = mode_variant
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
+    blocks, documents = normalize_turn_structured_content(answer_text=answer_text)
 
     chat_state.setdefault("app", {})
     chat_state["app"]["last_agent_run_id"] = agent_result.run_id
@@ -354,6 +364,8 @@ def run_orchestrator_stream_turn(
             "web_summary": agent_web_summary,
             "info_panel": info_panel,
             "mindmap": mindmap_payload,
+            "blocks": blocks,
+            "documents": documents,
         }
     )
 
@@ -390,6 +402,8 @@ def run_orchestrator_stream_turn(
         "conversation_name": conversation_name,
         "message": message,
         "answer": answer_text,
+        "blocks": blocks,
+        "documents": documents,
         "info": normalized_agent_info_html,
         "plot": plot_data,
         "state": chat_state,

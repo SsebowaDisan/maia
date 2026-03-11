@@ -142,15 +142,49 @@ def prioritize_primary_evidence(
     primary_rows = [row for row in ordered if bool(row.get("is_primary_source"))]
     secondary_rows = [row for row in ordered if not bool(row.get("is_primary_source"))]
     if not primary_rows:
-        return ordered[:keep_limit]
+        # No primary sources — apply source-diversity selection across all snippets.
+        return _diverse_select(ordered, keep_limit)
 
     keep_secondary = min(max(0, int(max_secondary)), max(0, keep_limit - 1))
     result: list[dict[str, Any]] = []
-    result.extend(primary_rows[:keep_limit])
+    # Fill primary slots with source diversity — don't let one file consume all slots.
+    result.extend(_diverse_select(primary_rows, keep_limit))
     if len(result) < keep_limit:
         remaining_slots = min(keep_limit - len(result), keep_secondary)
-        result.extend(secondary_rows[:remaining_slots])
+        result.extend(_diverse_select(secondary_rows, remaining_slots))
     return result[:keep_limit]
+
+
+def _diverse_select(
+    ordered: list[dict[str, Any]],
+    keep_limit: int,
+) -> list[dict[str, Any]]:
+    """Round-robin selection across unique sources so no single source dominates.
+
+    Pass 1: pick the top-scoring chunk from each unique source.
+    Pass 2: fill remaining slots with next-best chunks, still rotating sources.
+    """
+    if not ordered or keep_limit <= 0:
+        return []
+    # Group by source name (stable order preserved from pre-sorted input).
+    from collections import OrderedDict
+    buckets: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+    for row in ordered:
+        key = str(row.get("source_name", "") or row.get("source_id", "") or "").strip()
+        buckets.setdefault(key, []).append(row)
+    result: list[dict[str, Any]] = []
+    # Keep iterating through source buckets round-robin until we hit keep_limit.
+    while len(result) < keep_limit:
+        added_any = False
+        for key in list(buckets.keys()):
+            if len(result) >= keep_limit:
+                break
+            if buckets[key]:
+                result.append(buckets[key].pop(0))
+                added_any = True
+        if not added_any:
+            break
+    return result
 
 
 def build_no_relevant_evidence_answer(

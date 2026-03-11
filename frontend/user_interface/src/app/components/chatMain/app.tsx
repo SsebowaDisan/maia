@@ -5,6 +5,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
+import { CanvasPanel } from "../canvas/CanvasPanel";
+import { useCanvasStore } from "../../stores/canvasStore";
 import type { ChatTurn } from "../../types";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
@@ -48,6 +50,7 @@ function ChatMain({
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const [showComposerDuringActivity, setShowComposerDuringActivity] = useState(true);
   const maiaActive = isActivityStreaming || isSending;
+  const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
 
   const interactions = useChatMainInteractions({
     accessMode,
@@ -100,6 +103,13 @@ function ChatMain({
       activeElement.blur();
     }
   }, [maiaActive]);
+
+  useEffect(() => {
+    const documents = chatTurns.flatMap((turn) => turn.documents || []);
+    if (documents.length > 0) {
+      upsertDocuments(documents);
+    }
+  }, [chatTurns, upsertDocuments]);
 
   const handleMainMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!maiaActive) {
@@ -201,6 +211,8 @@ function ChatMain({
           onSubmit={onSubmitClarificationPrompt}
         />
       ) : null}
+
+      <CanvasPanel />
     </div>
   );
 }

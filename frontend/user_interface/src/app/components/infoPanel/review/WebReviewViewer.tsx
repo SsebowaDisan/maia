@@ -64,6 +64,7 @@ function WebReviewViewer({
     () => resolveWebReviewParagraphs(reviewSource, 24),
     [reviewSource],
   );
+  const hasExtractedText = paragraphs.length > 0;
   const activeParagraphIndex = useMemo(
     () => findBestParagraphIndex(paragraphs, focusText || reviewQuery),
     [focusText, paragraphs, reviewQuery],
@@ -71,14 +72,13 @@ function WebReviewViewer({
   const paragraphRefs = useRef<Array<HTMLParagraphElement | null>>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Default to iframe view; user can toggle to extracted text
-  const [viewMode, setViewMode] = useState<"page" | "text">("page");
+  const [viewMode, setViewMode] = useState<"page" | "text">(hasExtractedText ? "text" : "page");
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
-  // Reset iframe state when the source URL changes
   useEffect(() => {
     setIframeLoaded(false);
-  }, [sourceUrl]);
+    setViewMode(hasExtractedText ? "text" : "page");
+  }, [hasExtractedText, sourceUrl]);
 
   useEffect(() => {
     if (viewMode !== "text") return;
@@ -135,7 +135,6 @@ function WebReviewViewer({
   }, [focusText, focusSelector, iframeLoaded, scrollToHighlight]);
 
   const effectiveHeight = Math.max(280, viewerHeight);
-  const hasExtractedText = paragraphs.length > 0;
   const hasUrl = Boolean(sourceUrl);
 
   // Route through the backend proxy so X-Frame-Options never blocks rendering.
@@ -146,7 +145,7 @@ function WebReviewViewer({
         highlightParam
           ? `&highlight=${encodeURIComponent(highlightParam)}&claim=${encodeURIComponent(reviewQuery)}&question=${encodeURIComponent(reviewQuery)}`
           : ""
-      }`
+      }&viewport=desktop&highlight_strategy=heuristic`
     : "";
 
   return (
@@ -206,7 +205,7 @@ function WebReviewViewer({
             src={previewSrc}
             title={sourceTitle || "Source page"}
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-            loading="lazy"
+            loading="eager"
             className={`h-full w-full border-0 bg-white transition-opacity duration-200 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
             onLoad={handleIframeLoad}
           />

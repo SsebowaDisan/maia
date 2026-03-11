@@ -10,6 +10,7 @@ from ktem.pages.chat.common import STATE
 from ktem.utils.commands import WEB_SEARCH_COMMAND
 
 from api.context import ApiContext
+from api.message_blocks import normalize_turn_structured_content
 from api.schemas import ChatRequest
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.settings_service import load_user_settings
@@ -267,6 +268,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         timeout_info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
         if timeout_mode_variant:
             timeout_info_panel["mode_variant"] = timeout_mode_variant
+        blocks, documents = normalize_turn_structured_content(answer_text=timeout_answer)
 
         messages = deepcopy(data_source.get("messages", []))
         if message:
@@ -290,6 +292,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "web_summary": {},
                 "info_panel": timeout_info_panel,
                 "mindmap": {},
+                "blocks": blocks,
+                "documents": documents,
             }
         )
 
@@ -309,6 +313,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "conversation_name": conversation_name,
             "message": message,
             "answer": timeout_answer,
+            "blocks": blocks,
+            "documents": documents,
             "info": timeout_info,
             "plot": None,
             "state": deepcopy(data_source.get("state", STATE)),

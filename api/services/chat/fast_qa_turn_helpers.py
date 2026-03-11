@@ -5,6 +5,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from api.message_blocks import normalize_turn_structured_content
+
 
 def run_fast_chat_turn_impl(
     *,
@@ -106,6 +108,15 @@ def run_fast_chat_turn_impl(
         max_sources=retrieval_max_sources,
         max_chunks=retrieval_max_chunks,
     )
+    # Collect all unique source names from the full scan — passed to the LLM so it
+    # knows the project's total scope, even for sources that don't fit in the context.
+    _seen_sources: dict[str, None] = {}
+    for _row in raw_snippets:
+        _name = str(_row.get("source_name", "") or _row.get("source_url", "") or "").strip()
+        if _name:
+            _seen_sources[_name] = None
+    all_project_sources = list(_seen_sources.keys())
+
     snippets, primary_source_note, selection_reason = finalize_retrieved_snippets_fn(
         question=message,
         chat_history=chat_history,
@@ -283,6 +294,8 @@ def run_fast_chat_turn_impl(
             citation_mode=request.citation,
             primary_source_note=primary_source_note,
             requested_language=requested_language,
+            is_follow_up=is_follow_up,
+            all_project_sources=all_project_sources,
         )
         if not answer:
             logger.warning(
@@ -309,6 +322,8 @@ def run_fast_chat_turn_impl(
             primary_source_note=primary_source_note,
             requested_language=requested_language,
             allow_general_knowledge=True,
+            is_follow_up=is_follow_up,
+            all_project_sources=all_project_sources,
         )
         used_general_fallback = bool(answer)
         if answer:
@@ -435,6 +450,7 @@ def run_fast_chat_turn_impl(
     info_panel["citation_strength_legend"] = (
         "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."
     )
+    blocks, documents = normalize_turn_structured_content(answer_text=answer)
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
@@ -456,6 +472,8 @@ def run_fast_chat_turn_impl(
             "next_recommended_steps": [],
             "info_panel": info_panel,
             "mindmap": mindmap_payload,
+            "blocks": blocks,
+            "documents": documents,
         }
     )
 
@@ -475,6 +493,8 @@ def run_fast_chat_turn_impl(
         "conversation_name": conversation_name,
         "message": message,
         "answer": answer,
+        "blocks": blocks,
+        "documents": documents,
         "info": info_text,
         "plot": None,
         "state": chat_state,

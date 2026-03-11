@@ -123,6 +123,12 @@ _FAST_QA_NOISE_SECTION_TITLES = {
     "execution summary",
     "execution issues",
     "files and documents",
+    # LLM sometimes copies agent-answer structural sections into Fast QA responses;
+    # strip them here so the pipeline's own citation/next-steps sections take over.
+    "evidence citations",
+    "recommended next steps",
+    "next steps",
+    "suggested next steps",
 }
 _FAST_QA_NOISE_SECTION_SUBSTRINGS = (
     "delivery status",
@@ -132,6 +138,8 @@ _FAST_QA_NOISE_SECTION_SUBSTRINGS = (
     "execution summary",
     "execution issues",
     "files and documents",
+    "recommended next steps",
+    "suggested next steps",
 )
 
 

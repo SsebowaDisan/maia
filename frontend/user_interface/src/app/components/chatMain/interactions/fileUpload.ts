@@ -38,7 +38,7 @@ async function waitForIngestionJob(
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("Ingestion timed out while indexing attachments.");
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    await new Promise((resolve) => window.setTimeout(resolve, 800));
   }
 }
 

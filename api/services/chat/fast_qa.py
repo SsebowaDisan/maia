@@ -422,6 +422,8 @@ def call_openai_fast_qa(
     primary_source_note: str = "",
     requested_language: str | None = None,
     allow_general_knowledge: bool = False,
+    is_follow_up: bool = False,
+    all_project_sources: list[str] | None = None,
 ) -> str | None:
     return call_openai_fast_qa_impl(
         question=question,
@@ -432,6 +434,8 @@ def call_openai_fast_qa(
         primary_source_note=primary_source_note,
         requested_language=requested_language,
         allow_general_knowledge=allow_general_knowledge,
+        is_follow_up=is_follow_up,
+        all_project_sources=all_project_sources,
         logger=logger,
         resolve_fast_qa_llm_config_fn=_resolve_fast_qa_llm_config,
         truncate_for_log_fn=_truncate_for_log,

@@ -102,7 +102,7 @@ def extract_urls_from_history(
 ) -> list[str]:
     seen: set[str] = set()
     urls: list[str] = []
-    for turn in reversed(chat_history[-8:]):
+    for turn in reversed(chat_history[-3:]):
         if not isinstance(turn, list) or not turn:
             continue
         user_text = str(turn[0] or "")
@@ -147,7 +147,7 @@ def resolve_contextual_url_targets(
         return history_targets[:1] if len(normalized_question) <= 220 else []
 
     history_rows: list[str] = []
-    for row in chat_history[-4:]:
+    for row in chat_history[-2:]:
         if not isinstance(row, list) or len(row) < 2:
             continue
         user_text = " ".join(str(row[0] or "").split())[:220]
@@ -161,12 +161,14 @@ def resolve_contextual_url_targets(
         "Return one JSON object only with this shape:\n"
         '{"inherit":true,"url":"https://example.com","reason":"short string"}\n'
         "Rules:\n"
-        "- inherit=true only when the latest message is a follow-up that depends on prior website context.\n"
-        "- inherit=false when the latest message is a new topic unrelated to previous URLs.\n"
+        "- inherit=true ONLY when the latest message is a direct follow-up that explicitly names the URL's domain, a specific page from it, or a named entity that belongs exclusively to that URL.\n"
+        "- inherit=false when the latest message could equally refer to an uploaded file, a different document, or any other context.\n"
+        "- inherit=false when the latest message is a new topic, a different task, or does not mention the prior URL or its domain.\n"
+        "- When in doubt, set inherit=false — never carry over URL context speculatively.\n"
         "- If inherit=true, url must be one of the candidate URLs provided.\n"
         "- Prefer the most recent relevant candidate URL.\n\n"
         f"Latest user message:\n{normalized_question}\n\n"
-        f"Recent conversation:\n{history_text}\n\n"
+        f"Recent conversation (last 2 turns only):\n{history_text}\n\n"
         f"Candidate URLs:\n{chr(10).join(history_targets[:3])}"
     )
     request_payload = {
@@ -202,7 +204,7 @@ def resolve_contextual_url_targets(
         return history_targets[:1]
     except Exception:
         logger.exception("fast_qa_url_context_resolution_failed")
-        return history_targets[:1] if len(normalized_question) <= 220 else []
+        return []
 
 
 def rewrite_followup_question_for_retrieval(
@@ -223,18 +225,14 @@ def rewrite_followup_question_for_retrieval(
         return "", False, "empty-question"
     urls = [value for value in (target_urls or []) if normalize_http_url_fn(value)]
     if not chat_history:
-        if urls and not extract_urls_fn(normalized_question, max_urls=2):
-            return f"{normalized_question} {urls[0]}", False, "no-history-appended-url-context"
         return normalized_question, False, "no-history"
 
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
-        if urls and not extract_urls_fn(normalized_question, max_urls=2):
-            return f"{normalized_question} {urls[0]}", True, "llm-unavailable-appended-url-context"
-        return normalized_question, True, "llm-unavailable"
+        return normalized_question, False, "llm-unavailable"
 
     history_rows: list[str] = []
-    for row in chat_history[-6:]:
+    for row in chat_history[-3:]:
         if not isinstance(row, list) or len(row) < 2:
             continue
         user_text = " ".join(str(row[0] or "").split())[:260]
@@ -292,15 +290,13 @@ def rewrite_followup_question_for_retrieval(
 
         if len(rewritten) > 480:
             rewritten = rewritten[:480].rsplit(" ", 1)[0].strip()
-        if urls and not extract_urls_fn(rewritten, max_urls=2):
+        # Only append URL context when the LLM confirmed this is a follow-up on that URL
+        if is_follow_up and urls and not extract_urls_fn(rewritten, max_urls=2):
             rewritten = f"{rewritten} {urls[0]}".strip()
-        return rewritten, is_follow_up or bool(urls), reason
+        return rewritten, is_follow_up, reason
     except Exception:
         logger.exception("fast_qa_followup_query_rewrite_failed")
-        fallback = normalized_question
-        if urls and not extract_urls_fn(fallback, max_urls=2):
-            fallback = f"{fallback} {urls[0]}"
-        return fallback, bool(urls), "rewrite-failed"
+        return normalized_question, False, "rewrite-failed"
 
 
 def expand_retrieval_query_for_gap(
@@ -329,12 +325,10 @@ def expand_retrieval_query_for_gap(
 
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
-        if urls and not extract_urls_fn(normalized_current, max_urls=2):
-            return f"{normalized_current} {urls[0]}", "llm-unavailable-appended-url-context"
         return normalized_current, "llm-unavailable"
 
     history_rows: list[str] = []
-    for row in chat_history[-6:]:
+    for row in chat_history[-3:]:
         if not isinstance(row, list) or len(row) < 2:
             continue
         user_text = " ".join(str(row[0] or "").split())[:220]
@@ -407,13 +401,11 @@ def expand_retrieval_query_for_gap(
             expanded = normalized_current
         if len(expanded) > 480:
             expanded = expanded[:480].rsplit(" ", 1)[0].strip()
-        if urls and not extract_urls_fn(expanded, max_urls=2):
+        # Only append URL context when it was already present in the current query
+        if urls and not extract_urls_fn(expanded, max_urls=2) and extract_urls_fn(normalized_current, max_urls=2):
             expanded = f"{expanded} {urls[0]}".strip()
         reason = " ".join(str(parsed.get("reason") or "").split()).strip()[:180] or "ok"
         return expanded, reason
     except Exception:
         logger.exception("fast_qa_retrieval_query_expansion_failed")
-        fallback = normalized_current
-        if urls and not extract_urls_fn(fallback, max_urls=2):
-            fallback = f"{fallback} {urls[0]}".strip()
-        return fallback, "expand-failed"
+        return normalized_current, "expand-failed"

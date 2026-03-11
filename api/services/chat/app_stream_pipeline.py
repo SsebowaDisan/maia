@@ -10,6 +10,7 @@ from maia.base import Document
 from ktem.pages.chat.common import STATE
 
 from api.context import ApiContext
+from api.message_blocks import normalize_turn_structured_content
 from api.schemas import ChatRequest
 
 from .constants import logger
@@ -152,6 +153,7 @@ def run_pipeline_stream_turn(
     info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
+    blocks, documents = normalize_turn_structured_content(answer_text=answer_text)
 
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))
@@ -177,6 +179,8 @@ def run_pipeline_stream_turn(
             "web_summary": {},
             "info_panel": info_panel,
             "mindmap": mindmap_payload,
+            "blocks": blocks,
+            "documents": documents,
         }
     )
 
@@ -196,6 +200,8 @@ def run_pipeline_stream_turn(
         "conversation_name": conversation_name,
         "message": message,
         "answer": answer_text,
+        "blocks": blocks,
+        "documents": documents,
         "info": info_text,
         "plot": plot_data,
         "state": chat_state,

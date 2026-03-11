@@ -14,7 +14,9 @@ _PREVIEW_USER_AGENT = (
 )
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None  # None = not yet probed
-_PLAYWRIGHT_TIMEOUT_MS = 20_000  # 20 s — heavy SPAs need time for networkidle
+_PLAYWRIGHT_TIMEOUT_MS = 8_000
+_PLAYWRIGHT_SETTLE_MS = 1_200
+_PLAYWRIGHT_NETWORKIDLE_GRACE_MS = 2_500
 
 _SKELETON_MIN_HTML_BYTES = 5_000  # Ignore tiny pages — they're not skeletons
 _SKELETON_TEXT_RATIO = 0.04  # < 4% visible text / raw HTML → JS-rendered skeleton
@@ -137,7 +139,12 @@ def try_playwright_fetch(url: str) -> tuple[str, str] | None:
                     viewport={"width": 1280, "height": 900},
                 )
                 page = ctx.new_page()
-                page.goto(url, wait_until="networkidle", timeout=_PLAYWRIGHT_TIMEOUT_MS)
+                page.goto(url, wait_until="domcontentloaded", timeout=_PLAYWRIGHT_TIMEOUT_MS)
+                page.wait_for_timeout(_PLAYWRIGHT_SETTLE_MS)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=_PLAYWRIGHT_NETWORKIDLE_GRACE_MS)
+                except Exception:
+                    pass
                 return page.content(), page.url or url
             finally:
                 browser.close()

@@ -1,3 +1,5 @@
+import type { CanvasDocumentRecord, MessageBlock } from "../../app/messageBlocks";
+
 type ConversationSummary = {
   id: string;
   name: string;
@@ -88,6 +90,8 @@ type ChatResponse = {
   conversation_name: string;
   message: string;
   answer: string;
+  blocks: MessageBlock[];
+  documents: CanvasDocumentRecord[];
   info: string;
   plot: Record<string, unknown> | null;
   state: Record<string, unknown>;

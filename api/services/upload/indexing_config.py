@@ -54,7 +54,7 @@ UPLOAD_PDF_OCR_POLICY = str(
 if UPLOAD_PDF_OCR_POLICY not in {"auto", "always", "never"}:
     UPLOAD_PDF_OCR_POLICY = "auto"
 UPLOAD_PDF_OCR_SCAN_PAGES = max(
-    1, int(config("MAIA_UPLOAD_PDF_OCR_SCAN_PAGES", default=24, cast=int))
+    1, int(config("MAIA_UPLOAD_PDF_OCR_SCAN_PAGES", default=12, cast=int))
 )
 UPLOAD_PDF_OCR_MIN_TEXT_CHARS_PER_PAGE = max(
     0, int(config("MAIA_UPLOAD_PDF_OCR_MIN_TEXT_CHARS_PER_PAGE", default=40, cast=int))
@@ -129,10 +129,10 @@ UPLOAD_PADDLEOCR_USE_GPU = bool(
     config("MAIA_UPLOAD_PADDLEOCR_USE_GPU", default=False, cast=bool)
 )
 UPLOAD_PADDLEOCR_RENDER_DPI = max(
-    96, int(config("MAIA_UPLOAD_PADDLEOCR_RENDER_DPI", default=220, cast=int))
+    96, int(config("MAIA_UPLOAD_PADDLEOCR_RENDER_DPI", default=150, cast=int))
 )
 UPLOAD_PADDLEOCR_MAX_PAGES = max(
-    0, int(config("MAIA_UPLOAD_PADDLEOCR_MAX_PAGES", default=0, cast=int))
+    0, int(config("MAIA_UPLOAD_PADDLEOCR_MAX_PAGES", default=50, cast=int))
 )
 
 _PADDLE_OCR_ENGINE: Any | None = None

@@ -59,6 +59,9 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     raw_text = str(answer or "")
     if not raw_text.strip():
         return ""
+    # Agent-format answers already have clean citation sections — skip injection.
+    if _AGENT_CITATION_SECTION_RE.search(raw_text):
+        return raw_text
 
     refs = _resolve_citation_refs(info_html=info_html, answer=raw_text)
     if refs:

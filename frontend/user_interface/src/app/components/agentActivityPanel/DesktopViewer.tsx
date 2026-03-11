@@ -3,6 +3,7 @@ import { AgentDesktopScene } from "../AgentDesktopScene";
 import type { InteractionSuggestion } from "./interactionSuggestionMerge";
 import { DoneStageOverlay } from "./DoneStageOverlay";
 import { DiffViewer } from "./DiffViewer";
+import { InteractionSuggestionsPanel } from "./InteractionSuggestionsPanel";
 
 interface DesktopViewerProps {
   fullscreen?: boolean;
@@ -256,6 +257,10 @@ function DesktopViewer({
           ) : null}
         </div>
       </div>
+      {!fullscreen &&
+      (isBrowserScene || isEmailScene || isDocumentScene || isDocsScene || isSheetsScene) ? (
+        <InteractionSuggestionsPanel suggestions={interactionSuggestion} />
+      ) : null}
     </div>
   );
 }

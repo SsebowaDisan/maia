@@ -46,6 +46,8 @@ function TurnsPanel({
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
   const pendingTheatreCenterTurnRef = useRef<number | null>(null);
+  const centeredTurnFallbackRef = useRef<number | null>(null);
+  const centeredTheatreAnchorRef = useRef<number | null>(null);
   const previousTurnCountRef = useRef<number>(chatTurns.length);
   const evidenceCacheRef = useRef<Map<number, { info: string; cards: EvidenceCard[] }>>(new Map());
   const copyFeedbackTimerRef = useRef<number | null>(null);
@@ -96,6 +98,12 @@ function TurnsPanel({
       ? 0
       : String(chatTurns[latestTurnIndex]?.assistant || "").trim().length;
 
+  const queueTheatreCenter = (turnIndex: number) => {
+    pendingTheatreCenterTurnRef.current = turnIndex;
+    centeredTurnFallbackRef.current = null;
+    centeredTheatreAnchorRef.current = null;
+  };
+
   const scheduleCenteredScroll = (target: HTMLElement) => {
     const prefersReducedMotion =
       typeof window !== "undefined" &&
@@ -118,15 +126,7 @@ function TurnsPanel({
     if (!isSending || latestTurnIndex === null) {
       return;
     }
-    pendingTheatreCenterTurnRef.current = latestTurnIndex;
-    const latestTurnNode =
-      turnsRootRef.current?.querySelector<HTMLElement>(
-        `[data-turn-index="${String(latestTurnIndex)}"]`,
-      ) || null;
-    if (!latestTurnNode) {
-      return;
-    }
-    return scheduleCenteredScroll(latestTurnNode);
+    queueTheatreCenter(latestTurnIndex);
   }, [isSending, latestTurnIndex]);
 
   useEffect(() => {
@@ -143,15 +143,7 @@ function TurnsPanel({
       return;
     }
 
-    pendingTheatreCenterTurnRef.current = latestTurnIndex;
-    const latestTurnNode =
-      turnsRootRef.current?.querySelector<HTMLElement>(
-        `[data-turn-index="${String(latestTurnIndex)}"]`,
-      ) || null;
-    if (!latestTurnNode) {
-      return;
-    }
-    return scheduleCenteredScroll(latestTurnNode);
+    queueTheatreCenter(latestTurnIndex);
   }, [chatTurns.length, isSending, isActivityStreaming, latestTurnIndex]);
 
   useEffect(() => {
@@ -162,9 +154,6 @@ function TurnsPanel({
     if (pendingTheatreCenterTurnRef.current !== null && pendingTheatreCenterTurnRef.current !== latestTurnIndex) {
       pendingTheatreCenterTurnRef.current = null;
       return;
-    }
-    if (pendingTheatreCenterTurnRef.current === null && isSending) {
-      pendingTheatreCenterTurnRef.current = latestTurnIndex;
     }
     if (pendingTheatreCenterTurnRef.current !== latestTurnIndex) {
       return;
@@ -181,12 +170,20 @@ function TurnsPanel({
       return;
     }
 
-    const cleanup = scheduleCenteredScroll(target);
-
-    if (!isSending && !isActivityStreaming) {
+    if (theatreAnchor) {
+      if (centeredTheatreAnchorRef.current === latestTurnIndex) {
+        return;
+      }
+      centeredTheatreAnchorRef.current = latestTurnIndex;
       pendingTheatreCenterTurnRef.current = null;
+      return scheduleCenteredScroll(theatreAnchor);
     }
 
+    if (centeredTurnFallbackRef.current === latestTurnIndex) {
+      return;
+    }
+    centeredTurnFallbackRef.current = latestTurnIndex;
+    const cleanup = scheduleCenteredScroll(target);
     return cleanup;
   }, [
     activityEvents.length,

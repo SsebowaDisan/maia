@@ -1,3 +1,5 @@
+import type { CanvasDocumentRecord, MessageBlock } from "./messageBlocks";
+
 export type ChatAttachment = {
   name: string;
   fileId?: string;
@@ -46,6 +48,8 @@ export type ResearchTreeBranch = {
 export type ChatTurn = {
   user: string;
   assistant: string;
+  blocks?: MessageBlock[];
+  documents?: CanvasDocumentRecord[];
   attachments?: ChatAttachment[];
   info?: string;
   plot?: Record<string, unknown> | null;

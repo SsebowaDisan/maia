@@ -1,8 +1,9 @@
 import { Check, Copy, FileText, PenLine, RotateCcw } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import type { AgentActivityEvent, ChatTurn, CitationFocus } from "../../../types";
-import { renderRichText } from "../../../utils/richText";
+import { fallbackAssistantBlocks } from "../../../messageBlocks";
 import { AgentActivityPanel } from "../../AgentActivityPanel";
+import { MessageBlocks } from "../../messages/MessageBlocks";
 import { ChatTurnPlot } from "../ChatTurnPlot";
 import type { FilePreviewAttachment } from "../types";
 
@@ -88,8 +89,11 @@ function TurnListItem({
       : [];
   const stageAttachment =
     (turn.attachments || []).find((attachment) => Boolean(attachment.fileId)) || (turn.attachments || [])[0];
-  const hasAssistantText = Boolean(String(turn.assistant || "").trim());
-  const hasAssistantOutput = hasAssistantText || Boolean(turn.plot);
+  const assistantBlocks =
+    turn.blocks && turn.blocks.length > 0
+      ? turn.blocks
+      : fallbackAssistantBlocks(turn.assistant);
+  const hasAssistantOutput = assistantBlocks.length > 0 || Boolean(turn.plot);
   const userCopyFeedbackKey = `user-${index}`;
   const assistantCopyFeedbackKey = `assistant-${index}`;
   const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
@@ -266,17 +270,14 @@ function TurnListItem({
       {hasAssistantOutput ? (
         <div className="flex justify-start">
           <div className="group max-w-[90%] space-y-1.5">
-            {hasAssistantText ? (
+            {assistantBlocks.length > 0 ? (
               <div className="assistantAnswerCard">
-                <div
-                  className="chat-answer-html assistantAnswerBody"
-                  dangerouslySetInnerHTML={{ __html: renderRichText(turn.assistant) }}
-                />
+                <MessageBlocks blocks={assistantBlocks} documents={turn.documents || []} />
               </div>
             ) : null}
             <ChatTurnPlot plot={turn.plot} />
             <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
-              {hasAssistantText ? (
+              {assistantBlocks.length > 0 ? (
                 <button
                   type="button"
                   onClick={async (event) => {
@@ -320,7 +321,7 @@ function TurnListItem({
                 <RotateCcw className="h-3 w-3" />
                 <span>Retry</span>
               </button>
-              {hasAssistantText ? (
+              {assistantBlocks.length > 0 ? (
                 <button
                   type="button"
                   onClick={(event) => {

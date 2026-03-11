@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from api.message_blocks import CanvasDocumentRecord, MessageBlock
+
 
 class HealthResponse(BaseModel):
     status: str
@@ -268,6 +270,8 @@ class ChatResponse(BaseModel):
     conversation_name: str
     message: str
     answer: str
+    blocks: list[MessageBlock] = Field(default_factory=list)
+    documents: list[CanvasDocumentRecord] = Field(default_factory=list)
     info: str
     plot: dict[str, Any] | None = None
     state: dict[str, Any] = Field(default_factory=dict)

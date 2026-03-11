@@ -1,4 +1,5 @@
 import { sendChat, sendChatStream } from "../../../api/client";
+import { fallbackAssistantBlocks, normalizeCanvasDocuments, normalizeMessageBlocks } from "../../messageBlocks";
 import { DEFAULT_PROJECT_ID } from "../constants";
 import type { AgentActivityEvent, ChatTurn, CitationFocus, ChatAttachment } from "../../types";
 import { clarificationPromptFromEvent } from "./clarification";
@@ -137,6 +138,8 @@ async function sendConversationMessage({
     {
       user: message,
       assistant: delayedPendingAssistantMessage,
+      blocks: fallbackAssistantBlocks(delayedPendingAssistantMessage),
+      documents: [],
       plot: null,
       attachments: attachments && attachments.length > 0 ? attachments : undefined,
       info: "",
@@ -217,6 +220,7 @@ async function sendConversationMessage({
                   ...(last || {}),
                   user: message,
                   assistant: String(event.text || ""),
+                  blocks: fallbackAssistantBlocks(String(event.text || "")),
                 };
                 return next;
               });
@@ -339,12 +343,15 @@ async function sendConversationMessage({
           ? "web_search"
           : effectiveReturnedMode;
       const backendModeMismatch = orchestratorMode && effectiveReturnedMode === "ask";
+      const finalAssistantText = backendModeMismatch
+        ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
+        : response.answer || "";
       next[next.length - 1] = {
         ...(last || {}),
         user: message,
-        assistant: backendModeMismatch
-          ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
-          : response.answer || "",
+        assistant: finalAssistantText,
+        blocks: normalizeMessageBlocks(response.blocks, finalAssistantText),
+        documents: normalizeCanvasDocuments(response.documents),
         info: response.info || "",
         plot: response.plot || null,
         mode: resolvedTurnMode,
@@ -385,6 +392,8 @@ async function sendConversationMessage({
         ...(last || {}),
         user: message,
         assistant: `Error: ${errorMessage}`,
+        blocks: fallbackAssistantBlocks(`Error: ${errorMessage}`),
+        documents: [],
         info: "",
         plot: null,
         mode: requestedTurnMode,
