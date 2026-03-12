@@ -40,7 +40,9 @@ def plan_adaptive_outline(
         "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
         "- For analytical, research, or comparison questions: use 5-8 substantive sections that explore different "
         "dimensions (e.g. context/background, key findings, mechanisms, data/evidence, implications, competing views, limitations).\n"
-        "- For direct factual or lookup questions: use 1-2 sections with a precise answer followed by essential context.\n"
+        "- For direct factual or conceptual questions (e.g. 'what is X?', 'how does Y work?', 'define Z'): use 2-3 focused sections "
+        "with detail_level 'comprehensive'. Do NOT reduce depth — these questions deserve rich, substantive content covering "
+        "definition/overview, mechanisms/how-it-works, and real-world context/applications. The structure is simpler but the depth must be high.\n"
         "- Each section goal must specify at least 2 concrete, specific findings or data points that will be surfaced — "
         "goals like 'provide details', 'explain the topic', 'review the source', or 'list the URL' are not acceptable.\n"
         "- CRITICAL: Section goals must describe CONTENT to write (analysis, findings, data), never meta-actions "
@@ -67,8 +69,10 @@ def plan_adaptive_outline(
                 "role": "system",
                 "content": (
                     "You design deep, well-structured response blueprints for a research-grade AI assistant. "
-                    "For analytical or research questions, plan multi-section structures that cover distinct dimensions with substantive depth. "
-                    "Section goals must describe real content to write (findings, data, analysis), never meta-actions like 'review the source' or 'note the URL'. "
+                    "For ALL questions — simple or complex — section goals must specify substantive content to write with full depth. "
+                    "Simple factual questions get 2-3 focused sections with comprehensive depth (definition, mechanisms, real-world context). "
+                    "Analytical questions get 5-8 sections exploring distinct dimensions. "
+                    "Section goals must describe real content to write (findings, data, analysis, mechanisms, examples), never meta-actions like 'review the source' or 'note the URL'. "
                     "Return JSON only."
                 ),
             },

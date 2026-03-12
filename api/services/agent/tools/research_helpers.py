@@ -3,9 +3,174 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
+
+# Tracking/campaign query parameters stripped before URL deduplication.
+_TRACKING_PARAMS: frozenset[str] = frozenset([
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_name", "fbclid", "gclid", "msclkid", "ref", "source",
+    "via", "_hsenc", "_hsmi", "mc_cid", "mc_eid", "ncid", "cid", "sid",
+    "yclid", "twclid", "igshid", "dclid", "wbraid", "gbraid",
+])
+
+
+def normalize_url_for_dedup(url: str) -> str:
+    """Normalize a URL for deduplication.
+
+    Strips tracking params, canonicalizes scheme (http→https), removes www,
+    strips default ports, removes trailing path slashes.  Two URLs pointing
+    to the same content produce the same key.
+    """
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    try:
+        parsed = urlparse(raw)
+        scheme = "https" if parsed.scheme in ("http", "https") else parsed.scheme
+        netloc = parsed.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        if netloc.endswith(":80") or netloc.endswith(":443"):
+            netloc = netloc.rsplit(":", 1)[0]
+        path = parsed.path.rstrip("/") or "/"
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            clean = {k: v for k, v in params.items() if k.lower() not in _TRACKING_PARAMS}
+            clean_query = urlencode({k: v[0] for k, v in sorted(clean.items())}) if clean else ""
+        else:
+            clean_query = ""
+        return urlunparse((scheme, netloc, path, "", clean_query, ""))
+    except Exception:
+        return raw
+
+
+def normalize_result_row(row: dict[str, Any], *, provider: str = "unknown") -> dict[str, Any]:
+    """Normalize a search result from any provider into a common schema.
+
+    Handles field name differences across Brave, Bing, ArXiv, NewsAPI, SEC EDGAR.
+    Output keys: title, url, description, date, source, authors, provider, score.
+    """
+    if not isinstance(row, dict):
+        return {}
+    title = str(
+        row.get("title") or row.get("name") or row.get("headline") or ""
+    ).strip()
+    url = str(
+        row.get("url") or row.get("link") or row.get("href") or ""
+    ).strip()
+    description = str(
+        row.get("description") or row.get("snippet") or row.get("abstract")
+        or row.get("summary") or row.get("body") or row.get("content") or ""
+    ).strip()
+    date = str(
+        row.get("date") or row.get("published_date") or row.get("publishedAt")
+        or row.get("published") or row.get("datePublished") or row.get("updated") or ""
+    ).strip()
+    source = str(
+        row.get("source") or row.get("domain") or row.get("publisher")
+        or row.get("outlet") or ""
+    ).strip()
+    authors_raw = row.get("authors") or row.get("author") or []
+    if isinstance(authors_raw, str):
+        authors: list[str] = [authors_raw] if authors_raw.strip() else []
+    elif isinstance(authors_raw, list):
+        authors = [str(a).strip() for a in authors_raw if str(a).strip()][:5]
+    else:
+        authors = []
+    score: float | None = None
+    for score_key in ("relevance_score", "score", "rrf_score", "rank_score", "relevance"):
+        val = row.get(score_key)
+        if val is not None:
+            try:
+                score = float(val)
+                break
+            except Exception:
+                pass
+    return {
+        "title": title,
+        "url": url,
+        "description": description,
+        "date": date,
+        "source": source,
+        "authors": authors,
+        "provider": str(provider).strip(),
+        "score": score,
+    }
+
+
+def score_results_relevance_llm(
+    *,
+    query: str,
+    results: list[dict[str, Any]],
+    min_score: float = 0.25,
+    batch_size: int = 20,
+) -> list[dict[str, Any]]:
+    """LLM-based semantic relevance scoring — filters results below min_score.
+
+    Processes in batches to stay within token limits.  Results that cannot be
+    scored (LLM timeout, error) are passed through with a neutral score.
+    """
+    if not results:
+        return results
+    if not env_bool("MAIA_AGENT_LLM_RELEVANCE_SCORING_ENABLED", default=True):
+        return results
+
+    scored: list[dict[str, Any]] = []
+    for batch_start in range(0, len(results), batch_size):
+        batch = results[batch_start: batch_start + batch_size]
+        candidates = [
+            {
+                "idx": j,
+                "title": str(r.get("title") or "")[:120],
+                "snippet": str(r.get("description") or "")[:200],
+            }
+            for j, r in enumerate(batch)
+        ]
+        payload = {"query": str(query or "")[:300], "candidates": candidates}
+        response = call_json_response(
+            system_prompt=(
+                "You score web search results for query relevance for an enterprise research agent. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Score each candidate for semantic relevance to the query. Scale 0.0–1.0.\n"
+                "Return JSON only:\n"
+                '{ "scores": [{"idx": 0, "score": 0.85}] }\n'
+                "Guide: 0.9+= directly answers query; 0.6–0.9= relevant context; "
+                "0.3–0.6= loosely related; 0.0–0.3= off-topic.\n"
+                "Judge by semantic relevance to query intent, not keyword matching.\n\n"
+                f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
+            ),
+            temperature=0.0,
+            timeout_seconds=12,
+            max_tokens=500,
+        )
+        if not isinstance(response, dict):
+            scored.extend(batch)
+            continue
+        scores_raw = response.get("scores")
+        if not isinstance(scores_raw, list):
+            scored.extend(batch)
+            continue
+        score_map: dict[int, float] = {}
+        for entry in scores_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                idx = int(entry.get("idx", -1))
+                val = float(entry.get("score", 0.5))
+                score_map[idx] = max(0.0, min(1.0, val))
+            except Exception:
+                pass
+        for j, result in enumerate(batch):
+            relevance = score_map.get(j, 0.5)
+            if relevance >= min_score:
+                r = dict(result)
+                r["relevance_score"] = relevance
+                scored.append(r)
+    return scored
 
 
 def safe_snippet(text: str, max_len: int = 280) -> str:
@@ -78,16 +243,25 @@ def extract_search_variants(
         }
         response = call_json_response(
             system_prompt=(
-                "You improve enterprise web-search query variants. "
+                "You generate diverse, high-signal search query variants for an enterprise research agent. "
+                "Each variant should target a different retrieval angle so together they maximise recall across sources. "
                 "Return strict JSON only."
             ),
             user_prompt=(
+                "Generate diverse query variants for the search query below.\n"
                 "Return JSON in this schema only:\n"
-                "{ \"query_variants\": [\"variant one\", \"variant two\"] }\n"
+                '{ "query_variants": ["variant one", "variant two"] }\n'
+                "Produce variants across these dimensions (pick the most relevant):\n"
+                "- Temporal: add a year (e.g. '2024', '2025') or recency signal ('latest', 'recent', 'Q1 2025')\n"
+                "- Aspect: focus on a specific facet — pricing, alternatives, competitors, risks, regulation, case studies, data\n"
+                "- Competitive: frame as a comparison or ranking ('X vs Y', 'top providers of X', 'best alternatives to X')\n"
+                "- Authoritative: add source signals like 'site:gov', 'filetype:pdf', 'research paper', 'annual report'\n"
+                "- Rewrite: rephrase using domain synonyms or more precise technical terminology\n"
                 "Rules:\n"
-                "- Keep variants factual and grounded in input.\n"
-                "- Do not invent company names, URLs, or facts.\n"
-                f"- Return 1-{variant_cap} concise variants.\n\n"
+                "- Every variant must be grounded in the input — do not invent entities, names, or claims.\n"
+                "- Keep each variant concise (under 15 words).\n"
+                "- Do not repeat the original query verbatim.\n"
+                f"- Return exactly 1-{variant_cap} variants.\n\n"
                 f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
             ),
             temperature=0.0,
@@ -124,11 +298,16 @@ def fuse_search_results(
     top_k: int = 8,
     source_weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    # Reciprocal Rank Fusion (RRF): robust ranking across query rewrites and providers.
-    # source_weights: optional {domain: credibility_score} map that scales RRF scores.
-    # Callers that omit source_weights get identical behaviour to the original.
+    """Reciprocal Rank Fusion across query rewrites and providers.
+
+    Uses normalize_url_for_dedup() as the dedup key so that URLs differing
+    only in tracking parameters (utm_*, fbclid, etc.) or http/https/www
+    are treated as identical.  source_weights is an optional {domain: score}
+    map that scales RRF scores by domain credibility.
+    """
     k = 60.0
-    by_url: dict[str, dict[str, Any]] = {}
+    # Maps normalized_url → canonical_url (first seen) + accumulated state
+    by_norm_url: dict[str, dict[str, Any]] = {}
     for run in search_runs:
         results = run.get("results")
         if not isinstance(results, list):
@@ -139,25 +318,26 @@ def fuse_search_results(
             url = str(row.get("url") or "").strip()
             if not url:
                 continue
+            norm_url = normalize_url_for_dedup(url)
+            if not norm_url:
+                norm_url = url
             title = str(row.get("title") or url).strip()
-            description = str(row.get("description") or "").strip()
+            description = str(row.get("description") or row.get("snippet") or "").strip()
             source = str(row.get("source") or "").strip()
             base_score = 1.0 / (k + float(rank))
             if source_weights:
                 try:
-                    from urllib.parse import urlparse as _urlparse
-                    domain = _urlparse(url).netloc.lower()
+                    domain = urlparse(url).netloc.lower()
                     if domain.startswith("www."):
                         domain = domain[4:]
                     weight = float(source_weights.get(domain, 0.62))
-                    # weight in [0,1] → factor in [0.5, 1.5]
                     base_score = base_score * (0.5 + weight)
                 except Exception:
                     pass
-            current = by_url.get(url)
+            current = by_norm_url.get(norm_url)
             if current is None:
-                by_url[url] = {
-                    "url": url,
+                by_norm_url[norm_url] = {
+                    "url": url,  # keep canonical (first seen) URL
                     "title": title,
                     "description": description,
                     "source": source or None,
@@ -171,7 +351,7 @@ def fuse_search_results(
                 current["title"] = title
                 current["description"] = description
                 current["source"] = source or None
-    fused = list(by_url.values())
+    fused = list(by_norm_url.values())
     fused.sort(
         key=lambda item: (float(item.get("rrf_score", 0.0)), -int(item.get("best_rank", 9999))),
         reverse=True,
@@ -291,7 +471,10 @@ __all__ = [
     "extract_search_variants",
     "fuse_search_results",
     "mmr_rerank",
+    "normalize_result_row",
     "normalize_search_provider",
+    "normalize_url_for_dedup",
     "safe_snippet",
+    "score_results_relevance_llm",
     "truthy",
 ]

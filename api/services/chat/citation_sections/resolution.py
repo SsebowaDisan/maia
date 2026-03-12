@@ -69,6 +69,12 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
             page_label = summary_match.group(1).strip() if summary_match else ""
         else:
             page_label = page_match.group(1).strip()
+        source_name_match = re.search(
+            r"<div[^>]*><b>Source:</b>\s*(?:\[\d{1,4}\]\s*)?([^<]+)</div>",
+            body_html[:600],
+            flags=re.IGNORECASE,
+        )
+        source_name_extracted = html.unescape(source_name_match.group(1).strip()) if source_name_match else ""
         phrase = _extract_phrase_from_details_body(body_html)
         source_url = _normalize_source_url(
             html.unescape(source_url_match.group(1)) if source_url_match else ""
@@ -83,6 +89,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
                 "source_url": source_url,
                 "page_label": page_label,
                 "label": f"Evidence {ref_id}",
+                "source_name": source_name_extracted,
                 "phrase": phrase,
                 "highlight_boxes": highlight_boxes,
                 "unit_id": unit_id_match.group(1).strip() if unit_id_match else "",
@@ -318,6 +325,16 @@ def build_fast_info_html(
             link_block = (
                 "<div class='evidence-content'><b>Link:</b> "
                 f"<a href='{safe_source_url}' target='_blank' rel='noopener noreferrer'>{safe_source_url}</a>"
+                "</div>"
+            )
+        elif source_id:
+            viewer_url = f"/api/uploads/files/{html.escape(source_id, quote=True)}/raw"
+            if page_label:
+                viewer_url += f"#page={html.escape(page_label, quote=True)}"
+            link_block = (
+                "<div class='evidence-content'><b>View document:</b> "
+                f"<a href='{viewer_url}' target='_blank' rel='noopener noreferrer'>"
+                f"{html.escape(source_name or source_id)}</a>"
                 "</div>"
             )
         block = (

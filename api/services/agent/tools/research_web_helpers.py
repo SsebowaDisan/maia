@@ -137,9 +137,10 @@ def _apply_domain_scope(
     ]
     if filtered:
         return filtered, max(0, len(rows) - len(filtered))
-    if domain_scope_mode == "prefer":
-        return rows, 0
-    return [], len(rows)
+    # strict mode yielded no matches — fall back gracefully rather than returning
+    # an empty list that would silently kill coverage.  Prefer mode returns all
+    # rows; strict mode now degrades to prefer rather than returning nothing.
+    return rows, 0
 
 
 def _website_scene_payload(

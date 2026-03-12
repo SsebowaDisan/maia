@@ -6,6 +6,18 @@ from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
+# Patterns that indicate the step is suggesting an email action
+_EMAIL_ACTION_RE = re.compile(
+    r"\b(send|draft|compose|write|prepare|forward|reply(\s+to)?)\b.{0,60}\b(email|e-mail|message)\b",
+    re.IGNORECASE,
+)
+
+# Request signals that mean the user explicitly asked for email activity
+_EMAIL_REQUEST_RE = re.compile(
+    r"\b(send|draft|compose|write|email|e-mail|mail)\b",
+    re.IGNORECASE,
+)
+
 
 def _normalize_candidate_steps(raw_steps: list[str] | None, *, limit: int = 24) -> list[str]:
     if not isinstance(raw_steps, list):
@@ -96,6 +108,16 @@ def curate_next_steps_for_task(
     heuristic_filtered = [
         step for step in normalized_candidates if not _is_task_restatement(step)
     ]
+
+    # If the original request did not mention email, suppress any next-step that
+    # suggests drafting or sending an email — these are irrelevant and confuse users
+    # who asked a purely informational question.
+    request_mentions_email = bool(_EMAIL_REQUEST_RE.search(request_text))
+    if not request_mentions_email:
+        heuristic_filtered = [
+            step for step in heuristic_filtered
+            if not _EMAIL_ACTION_RE.search(step)
+        ]
 
     if not env_bool("MAIA_AGENT_LLM_NEXT_STEPS_ENABLED", default=True):
         return heuristic_filtered[: max(1, int(max_items))]

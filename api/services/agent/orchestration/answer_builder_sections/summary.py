@@ -8,6 +8,35 @@ from ..text_helpers import compact
 
 
 URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>\]\)]+", re.IGNORECASE)
+
+# Text patterns that indicate a bot-block / error page rather than real content.
+# Snippets matching any of these should never surface as "Key finding" or evidence.
+_ERROR_PAGE_SIGNALS = (
+    "access denied",
+    "you don't have permission",
+    "you do not have permission",
+    "403 forbidden",
+    "reference #",
+    "edgesuite.net",
+    "errors.edgesuite",
+    "cloudflare",
+    "checking your browser",
+    "ddos protection",
+    "captcha",
+    "bot challenge",
+    "verify you are human",
+    "unusual traffic",
+    "request blocked",
+    "security check",
+)
+
+
+def _is_error_page_text(text: str) -> bool:
+    """Return True if the text looks like a bot-block or server-error page."""
+    lowered = " ".join(str(text or "").split()).lower()
+    return any(signal in lowered for signal in _ERROR_PAGE_SIGNALS)
+
+
 OPERATIONAL_LABEL_PREFIXES = (
     "workspace.",
     "gmail.",
@@ -169,42 +198,62 @@ def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
         title = str(browser_findings.get("title") or "").strip()
         url = str(browser_findings.get("url") or "").strip()
         excerpt = compact(str(browser_findings.get("excerpt") or ""), 240)
+        page_blocked = bool(browser_findings.get("blocked_signal"))
         browser_keywords_raw = browser_findings.get("keywords")
         browser_keywords = (
             [str(item).strip() for item in browser_keywords_raw if str(item).strip()]
             if isinstance(browser_keywords_raw, list)
             else []
         )
-        if title and url:
-            lines.append(f"- Reviewed source: [{title}]({url})")
-            summary_emitted = True
-        elif title:
-            lines.append(f"- Reviewed source: {title}")
-            summary_emitted = True
-        elif url:
-            lines.append(f"- Reviewed source: {url}")
-            summary_emitted = True
-        # Always surface the page excerpt and keywords — these are the actual
-        # research findings from the browser visit, not diagnostic noise.
-        if _is_meaningful_excerpt(excerpt):
-            lines.append(f"- Key finding: {excerpt}")
-        if browser_keywords:
-            lines.append(f"- Observed topics: {', '.join(browser_keywords[:10])}")
+        # Only surface "Reviewed source" when the page actually loaded.
+        # A blocked page produces an error title ("Access Denied") that must not
+        # appear as a positive finding.
+        if not page_blocked:
+            if title and url:
+                lines.append(f"- Reviewed source: [{title}]({url})")
+                summary_emitted = True
+            elif title:
+                lines.append(f"- Reviewed source: {title}")
+                summary_emitted = True
+            elif url:
+                lines.append(f"- Reviewed source: {url}")
+                summary_emitted = True
+            # Surface page excerpt and keywords only when content is real.
+            if _is_meaningful_excerpt(excerpt) and not _is_error_page_text(excerpt):
+                lines.append(f"- Key finding: {excerpt}")
+            clean_keywords = [
+                kw for kw in browser_keywords
+                if not _is_error_page_text(kw) and len(kw) > 3
+            ]
+            if clean_keywords:
+                lines.append(f"- Observed topics: {', '.join(clean_keywords[:10])}")
         if show_diagnostics:
             pass  # diagnostics block preserved for future use
     else:
         lines.append("- Findings are grounded in executed tools and verified source evidence.")
         summary_emitted = True
 
-    # Include extracted content snippets from the browser visit so the response
-    # polisher has real evidence to synthesize into full paragraphs.
+    # Include extracted content snippets from the browser visit / search fallback
+    # so the response polisher has real evidence to synthesize into full paragraphs.
+    # Deduplicate by text fingerprint and strip error-page content.
     copied_highlights = ctx.runtime_settings.get("__copied_highlights")
     if isinstance(copied_highlights, list):
-        meaningful_snippets = [
-            str(item.get("text") or "").strip()
-            for item in copied_highlights
-            if isinstance(item, dict) and _is_meaningful_excerpt(str(item.get("text") or ""))
-        ]
+        seen_fingerprints: set[str] = set()
+        meaningful_snippets: list[str] = []
+        for item in copied_highlights:
+            if not isinstance(item, dict):
+                continue
+            raw_text = str(item.get("text") or "").strip()
+            if not _is_meaningful_excerpt(raw_text):
+                continue
+            if _is_error_page_text(raw_text):
+                continue
+            # Fingerprint: first 120 chars of normalized text to catch duplicates
+            fingerprint = " ".join(raw_text.split())[:120]
+            if fingerprint in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fingerprint)
+            meaningful_snippets.append(raw_text)
         if meaningful_snippets:
             lines.append("")
             lines.append("### Extracted Evidence")

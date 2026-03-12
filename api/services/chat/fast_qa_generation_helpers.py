@@ -129,7 +129,9 @@ def call_openai_fast_qa_impl(
         "Output format rules:\n"
         "- Follow the provided response blueprint while adapting when evidence is missing.\n"
         "- Keep the answer directly relevant to the user's question.\n"
-        "- Open with a direct, substantive answer — state the key finding or conclusion clearly and specifically.\n"
+        "- LEAD WITH THE ANSWER: the very first sentence must state the direct answer, conclusion, or key finding — "
+        "NEVER open with 'Based on...', 'It is important to note...', 'I will...', 'Certainly!', 'Great question!', "
+        "'As an AI...', 'Thank you for asking...', or any meta-commentary about what you are about to say.\n"
         "- CRITICAL: Every section must contain real, developed prose content — never a single bullet that merely "
         "says 'Reviewed source: [URL]' or 'See [URL]' or lists a link with no analysis. A section heading "
         "followed by only a URL or a one-line reference is a stub and is unacceptable.\n"
@@ -235,19 +237,22 @@ def call_openai_fast_qa_impl(
                         (
                             "You are Maia, a research-grade AI assistant. Use indexed evidence when available; when it is unavailable, answer from reliable general knowledge. "
                             "Never invent citations or pretend to have source evidence when none is provided. "
-                            "Adapt structure to the question — simple lookups get a direct answer, analytical or research questions get deep, well-developed multi-section responses with specific data, examples, and expert-level context. "
+                            "LEAD WITH THE ANSWER: the very first sentence must state the direct answer, core finding, or conclusion — never open with 'Based on...', 'It is important to note...', 'I will...', 'Certainly!', 'Great question!', 'As an AI...', or any meta-commentary about what you are about to say. "
+                            "Adapt structure to the question — simple factual questions get a focused 2-3 section response with deep, substantive content; analytical or research questions get 5-8 rich sections with expert-level depth. "
+                            "For ANY question — simple or complex — provide comprehensive, textbook-level depth: include mechanisms, historical context, statistics, concrete examples, and expert-level nuance. Structure may be simpler for simple questions, but depth must always be high. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker: go beyond surface summaries, surface key numbers, explain mechanisms, and address implications. "
-                            "For general knowledge questions, provide comprehensive, textbook-level depth — include mechanisms, historical context, statistics, examples, and expert-level nuance. "
                             "Never truncate a response mid-thought; complete every section fully before ending. "
                         )
                         if general_knowledge_mode
                         else (
                             "You are Maia, a research-grade AI assistant. Provide faithful answers grounded in indexed evidence. "
                             "Treat the indexed evidence as a primary source — read every excerpt carefully and surface all specific details, figures, names, and dates, not just headlines. "
+                            "LEAD WITH THE ANSWER: the very first sentence must state the direct answer, core finding, or conclusion — never open with 'Based on...', 'It is important to note...', 'I will...', 'Certainly!', 'Great question!', 'As an AI...', or any meta-commentary about what you are about to say. "
                             "Adapt structure and depth to the question — analytical and research questions deserve rich, multi-section responses with specific data, comparisons, mechanisms, and implications drawn from the evidence. "
                             "Go beyond surface summaries: surface exact numbers, highlight agreements and contradictions across sources, and develop each section with substantive detail that would satisfy a domain expert. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker. "
                             "Never truncate a response mid-thought; complete every section fully before ending. "
+                            "CITATION RULE: cite every factual claim inline using the source ref number in square brackets, e.g. [1] or [2]. Every major claim must have at least one citation marker. Reuse the same ref number when citing the same source. Do not leave any substantive claim uncited. "
                         )
                         + f"{build_response_language_rule_fn(requested_language=requested_language, latest_message=question)} "
                         + (

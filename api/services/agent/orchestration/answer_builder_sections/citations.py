@@ -167,9 +167,20 @@ def append_evidence_citations(lines: list[str], ctx: AnswerBuildContext) -> None
         return
 
     show_diagnostics = bool(ctx.runtime_settings.get("__show_response_diagnostics"))
+    depth_tier = " ".join(
+        str(ctx.runtime_settings.get("__research_depth_tier") or "").split()
+    ).strip().lower()
+    # Scale citation count to the depth of the task.  Flooding a simple
+    # "what is X?" answer with 24 citations harms readability.
+    if depth_tier in {"deep_research", "deep_analytics", "expert"}:
+        max_external_citations = 24
+    elif depth_tier in {"research", "standard_research"}:
+        max_external_citations = 12
+    else:
+        max_external_citations = 8
     external_rows = [row for row in citations if row.get("url")]
     internal_rows = [row for row in citations if not row.get("url")]
-    ordered_rows = external_rows[:24]
+    ordered_rows = external_rows[:max_external_citations]
     if show_diagnostics:
         ordered_rows += internal_rows[:3]
 

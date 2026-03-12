@@ -217,7 +217,7 @@ def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
 
     body, tail = _split_answer_for_inline_injection(text)
     lines = body.splitlines()
-    ref_limit = max(1, min(len(refs), 2))
+    ref_limit = max(1, len(refs))
     injected = 0
     ref_by_id: dict[int, dict[str, Any]] = {
         int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0

@@ -49,6 +49,11 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     ]
     if file_id:
         attrs.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
+        if not source_url:
+            viewer_url = f"/api/uploads/files/{html.escape(file_id, quote=True)}/raw"
+            if page_label:
+                viewer_url += f"#page={html.escape(page_label, quote=True)}"
+            attrs.append(f"data-viewer-url='{viewer_url}'")
     if source_url:
         attrs.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
     if page_label:
@@ -177,6 +182,15 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
 
         if file_id and not re.search(r"\bdata-file-id=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
+        if (
+            file_id
+            and not source_url
+            and not re.search(r"\bdata-viewer-url=['\"]", normalized_open, flags=re.IGNORECASE)
+        ):
+            _vurl = f"/api/uploads/files/{html.escape(file_id, quote=True)}/raw"
+            if page_label:
+                _vurl += f"#page={html.escape(page_label, quote=True)}"
+            additions.append(f"data-viewer-url='{_vurl}'")
         if source_url and not re.search(r"\bdata-source-url=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-source-url='{html.escape(source_url, quote=True)}'")
         if page_label and not re.search(r"\bdata-page=['\"]", normalized_open, flags=re.IGNORECASE):

@@ -303,6 +303,39 @@ def redact_emails(text: str, *, emails: set[str]) -> str:
     return result
 
 
+_FILLER_OPENING_RE = re.compile(
+    r"^(?:"
+    r"Based\s+on\s+(?:the\s+|this\s+|my\s+|your\s+|available\s+|retrieved\s+|indexed\s+|provided\s+)?"
+    r"(?:context|information|evidence|analysis|research|sources?|data|content|documents?)"
+    r"[^.\n]*[.\n]\s*"
+    r"|It(?:'s|\s+is)\s+(?:important|worth\s+noting|worth\s+mentioning|essential)\s+to\s+note\s+that"
+    r"[^.\n]*[.\n]\s*"
+    r"|As\s+an?\s+(?:AI|artificial\s+intelligence|language\s+model|AI\s+assistant|AI\s+language\s+model)"
+    r"[^.\n]*[.\n]\s*"
+    r"|(?:Great|Excellent|Good|Interesting)\s+question\s*[!.][^\n]*\n?"
+    r"|(?:Certainly|Of\s+course|Absolutely|Sure)\s*[!.][^\n]*\n?"
+    r"|I(?:'d|\s+would|\s+will|'ll)\s+be\s+happy\s+to[^.\n]*[.\n]\s*"
+    r"|Thank\s+you\s+for\s+(?:asking|your\s+question)[^.\n]*[.\n]\s*"
+    r")+",
+    re.IGNORECASE,
+)
+
+
+def strip_filler_openings(text: str) -> str:
+    """Remove common AI filler phrases from the start of a response."""
+    raw = str(text or "").strip()
+    if not raw:
+        return raw
+    match = _FILLER_OPENING_RE.match(raw)
+    if not match or match.end() >= len(raw):
+        return raw
+    remaining = raw[match.end():].strip()
+    if len(remaining) < 40:
+        return raw
+    # Capitalize first letter of what remains
+    return remaining[0].upper() + remaining[1:] if remaining else raw
+
+
 def coerce_bool(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value

@@ -20,6 +20,7 @@ from api.services.agent.llm_response_formatter_text_ops import (
     is_language_mismatch,
     normalize_citation_anchor_attrs,
     redact_emails,
+    strip_filler_openings,
     strip_noise_sections,
     strip_redundant_evidence_suffix,
     strip_wrapping_markdown_fence,
@@ -296,6 +297,9 @@ def polish_final_response(
         "- Develop each section fully: include specific data points, statistics, mechanisms, concrete examples, "
         "and implications. Never leave a section at a surface-level summary when the evidence supports more depth.\n"
         "- Put the delivered outcome first.\n"
+        "- LEAD WITH THE ANSWER: the very first sentence must state the core finding, conclusion, or outcome directly — "
+        "never open with 'Based on...', 'It is important to note...', 'I will...', 'This response will...', "
+        "'Certainly!', 'Great question!', or any meta-commentary about what you are about to say.\n"
         "- Open with a substantive paragraph that directly addresses the core finding or task outcome.\n"
         "- For research and analytical responses: develop 4-8 sections, each with 3-5 substantive paragraphs "
         "that explore different dimensions — do not collapse the answer into a brief overview.\n"
@@ -353,6 +357,7 @@ def polish_final_response(
         cleaned = f"{cleaned}\n\n{citation_tail}".strip()
 
     cleaned = strip_wrapping_markdown_fence(cleaned)
+    cleaned = strip_filler_openings(cleaned)
     cleaned = normalize_citation_anchor_attrs(cleaned)
     cleaned = dedupe_terminal_sections(cleaned)
     cleaned = strip_noise_sections(cleaned, keep_diagnostics=keep_diagnostics)

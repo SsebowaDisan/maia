@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Callable
+
+_logger = logging.getLogger(__name__)
 
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.agent.models import AgentSource
@@ -11,6 +14,7 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
 )
 from api.services.agent.tools.research_helpers import (
+    classify_provider_failure as _classify_provider_failure,
     fuse_search_results as _fuse_search_results,
     mmr_rerank as _mmr_rerank,
     safe_snippet as _safe_snippet,
@@ -195,19 +199,107 @@ def run_enrichment_and_finalize_stage(
                 _sup_failure["provider"] = _conn_id
                 provider_failures.append(_sup_failure)
 
-        # ── S2: Emit branch_completed events after all sources are gathered ─
+        # ── S2: Execute research tree branches ────────────────────────────────
+        # Each branch targets a different angle (Financial, Academic, News…) and
+        # uses its preferred providers.  A per-provider circuit breaker skips any
+        # provider that has already failed 3+ times in this run.
         if _research_branches:
-            _total_sources = len(sources)
-            _sources_per_branch = max(1, _total_sources // len(_research_branches))
-            for _bidx, _branch in enumerate(_research_branches):
+            # Load/init the circuit-breaker failure counter from context.
+            _circuit_failures: dict[str, int] = context.settings.get(
+                "__provider_circuit_failures"
+            )
+            if not isinstance(_circuit_failures, dict):
+                _circuit_failures = {}
+                context.settings["__provider_circuit_failures"] = _circuit_failures
+            _circuit_threshold = 3
+            _seen_branch_urls: set[str] = {str(s.url or "") for s in sources}
+
+            for _branch in _research_branches:
+                _blabel = _branch["branch_label"]
+                _bsub = _branch["sub_question"]
+                _bproviders = _branch.get("preferred_providers") or ["brave_search"]
+
+                # Pick the first provider not tripped by the circuit breaker.
+                _chosen_provider: str | None = None
+                for _bp in _bproviders:
+                    if _circuit_failures.get(_bp, 0) < _circuit_threshold:
+                        _chosen_provider = _bp
+                        break
+                if _chosen_provider is None:
+                    _logger.warning(
+                        "research_branch_skipped branch=%s reason=all_providers_circuit_open",
+                        _blabel,
+                    )
+                    continue
+
+                _branch_new = 0
+                try:
+                    _bconnector = get_connector_registry().build(
+                        _chosen_provider, settings=context.settings
+                    )
+                    _bpayload = _bconnector.search_web(query=_bsub, count=results_per_query)
+                    _brows = _bpayload.get("results") if isinstance(_bpayload, dict) else []
+                    if not isinstance(_brows, list):
+                        _brows = []
+                    from api.services.agent.research.source_credibility import (
+                        apply_freshness_weight,
+                        score_source_credibility,
+                        score_source_freshness,
+                    )
+                    for _brow in _brows:
+                        if not isinstance(_brow, dict):
+                            continue
+                        _burl = str(_brow.get("url") or "").strip()
+                        if not _burl or _burl in _seen_branch_urls:
+                            continue
+                        _seen_branch_urls.add(_burl)
+                        _bname = str(_brow.get("title") or _burl).strip()
+                        _bdesc = str(_brow.get("description") or _brow.get("snippet") or "").strip()
+                        _bexcerpt = _safe_snippet(_bdesc or _bname, 220)
+                        _bcred = score_source_credibility(_burl)
+                        _bfresh = score_source_freshness(_burl, _bdesc)
+                        _bcomp = apply_freshness_weight(_bcred, _bfresh)
+                        sources.append(
+                            AgentSource(
+                                source_type="web",
+                                label=_bname,
+                                url=_burl or None,
+                                score=max(0.5, min(0.98, 0.60 + _bcomp * 0.40)),
+                                credibility_score=_bcred,
+                                metadata={
+                                    "provider": _chosen_provider,
+                                    "branch": _blabel,
+                                    "excerpt": _bexcerpt,
+                                    "extract": _bexcerpt,
+                                },
+                            )
+                        )
+                        if len(bullets) < 48:
+                            bullets.append(f"- {_bname}: {_safe_snippet(_bdesc or _bname)}")
+                        _branch_new += 1
+                except Exception as _bexc:
+                    _bfail = _classify_provider_failure(_bexc)
+                    _circuit_failures[_chosen_provider] = (
+                        _circuit_failures.get(_chosen_provider, 0) + 1
+                    )
+                    provider_failures.append({**_bfail, "provider": _chosen_provider, "branch": _blabel})
+                    _logger.warning(
+                        "research_branch_failed branch=%s provider=%s failures=%d reason=%s",
+                        _blabel,
+                        _chosen_provider,
+                        _circuit_failures[_chosen_provider],
+                        _bfail.get("reason"),
+                    )
+
                 _branch_done = ToolTraceEvent(
                     event_type="research_branch_completed",
-                    title=f"Branch complete: {_branch['branch_label']}",
-                    detail=f"~{_sources_per_branch} result(s) contributed",
+                    title=f"Branch complete: {_blabel}",
+                    detail=f"{_branch_new} new result(s) via {_chosen_provider}",
                     data={
-                        "branch_label": _branch["branch_label"],
-                        "result_count": _sources_per_branch,
-                        "preferred_providers": _branch["preferred_providers"],
+                        "branch_label": _blabel,
+                        "result_count": _branch_new,
+                        "provider_used": _chosen_provider,
+                        "preferred_providers": _bproviders,
                     },
                 )
                 trace_events.append(_branch_done)
@@ -398,8 +490,13 @@ def run_enrichment_and_finalize_stage(
                     _gap_payload = _gap_connector.search_web(query=_gq, count=_gap_budget)
                     if isinstance(_gap_payload, dict):
                         _gap_search_runs.append({"query": _gq, "results": _gap_payload.get("results") or []})
-                except Exception:
-                    pass
+                except Exception as _gap_exc:
+                    _gfail = _classify_provider_failure(_gap_exc)
+                    _logger.warning(
+                        "gap_fill_search_failed query=%s reason=%s",
+                        _safe_snippet(_gq, 120),
+                        _gfail.get("reason"),
+                    )
 
             if _gap_search_runs:
                 _gap_fused = _fuse_search_results(_gap_search_runs, top_k=_gap_budget * len(_gap_queries))

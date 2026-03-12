@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from .anchors import _anchors_to_bracket_markers
+from .anchors import _anchors_to_bracket_markers, _augment_existing_citation_anchors
 from .cleanup import (
     _dedupe_duplicate_answer_passes,
     _format_notebook_style_layout,
@@ -33,16 +33,32 @@ def enforce_required_citations(
     if not text:
         return text
 
-    # Agent-format answers already have clean citation sections — skip injection.
-    if _AGENT_CITATION_SECTION_RE.search(text):
-        return text
+    # Agent-format answers have a structured ## Evidence Citations tail.
+    # Inject anchors into the body only; preserve the citation section unchanged.
+    agent_match = _AGENT_CITATION_SECTION_RE.search(text)
+    if agent_match:
+        body = text[: agent_match.start()].rstrip()
+        tail = text[agent_match.start() :]
+        refs = _resolve_citation_refs(info_html=info_html, answer=text)
+        if not refs:
+            return text
+        mode = resolve_required_citation_mode(citation_mode)
+        enriched_body = render_fast_citation_links(answer=body, refs=refs, citation_mode=mode)
+        enriched_body = _inject_inline_citations(enriched_body, refs)
+        enriched_body = _dedupe_duplicate_answer_passes(enriched_body)
+        return f"{enriched_body.rstrip()}\n\n{tail.lstrip()}"
+
+    # If inline citation anchors already exist (placed by render_fast_citation_links),
+    # only augment them with metadata from info_html — do not strip and reinject.
+    if "class='citation'" in text or 'class="citation"' in text:
+        refs = _resolve_citation_refs(info_html=info_html, answer=text)
+        if refs:
+            text = _augment_existing_citation_anchors(text, refs)
+        return _dedupe_duplicate_answer_passes(text)
 
     mode = resolve_required_citation_mode(citation_mode)
     refs = _resolve_citation_refs(info_html=info_html, answer=text)
-    layout_seed = text
-    if "class='citation'" in layout_seed or 'class="citation"' in layout_seed:
-        layout_seed = _anchors_to_bracket_markers(layout_seed)
-    layout_seed = _format_notebook_style_layout(layout_seed)
+    layout_seed = _format_notebook_style_layout(text)
     enriched = render_fast_citation_links(answer=layout_seed, refs=refs, citation_mode=mode)
     enriched = _inject_inline_citations(enriched, refs)
     if "class='citation'" in enriched or 'class="citation"' in enriched:
@@ -59,9 +75,34 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     raw_text = str(answer or "")
     if not raw_text.strip():
         return ""
-    # Agent-format answers already have clean citation sections — skip injection.
-    if _AGENT_CITATION_SECTION_RE.search(raw_text):
-        return raw_text
+
+    # Agent-format answers have a structured ## Evidence Citations tail.
+    # Inject anchors into the body only; preserve the citation section unchanged.
+    agent_match = _AGENT_CITATION_SECTION_RE.search(raw_text)
+    if agent_match:
+        body = raw_text[: agent_match.start()].rstrip()
+        tail = raw_text[agent_match.start() :]
+        refs = _resolve_citation_refs(info_html=info_html, answer=raw_text)
+        if not refs:
+            return raw_text
+        layout_body = body
+        if "class='citation'" in layout_body or 'class="citation"' in layout_body:
+            layout_body = _anchors_to_bracket_markers(layout_body)
+        layout_body = _format_notebook_style_layout(layout_body)
+        enriched = render_fast_citation_links(answer=layout_body, refs=refs, citation_mode="inline")
+        enriched = _inject_inline_citations(enriched, refs)
+        from .visible import _normalize_visible_inline_citations
+
+        enriched = _normalize_visible_inline_citations(enriched)
+        enriched = _dedupe_duplicate_answer_passes(enriched)
+        if "class='citation'" in enriched or 'class="citation"' in enriched:
+            return f"{enriched.rstrip()}\n\n{tail.lstrip()}"
+        from .anchors import _citation_anchor
+
+        fallback_refs = " ".join(
+            [_citation_anchor(ref) for ref in refs[: min(3, len(refs))] if _citation_anchor(ref)]
+        )
+        return f"{enriched.rstrip()}\n\nEvidence: {fallback_refs}\n\n{tail.lstrip()}"
 
     refs = _resolve_citation_refs(info_html=info_html, answer=raw_text)
     if refs:
@@ -95,10 +136,39 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     )
 
 
+_FAST_QA_FILLER_OPENING_RE = re.compile(
+    r"^(?:"
+    r"Based\s+on\s+(?:the\s+|this\s+|my\s+|your\s+|available\s+|retrieved\s+|indexed\s+|provided\s+)?"
+    r"(?:context|information|evidence|analysis|research|sources?|data|content|documents?)"
+    r"[^.\n]*[.\n]\s*"
+    r"|It(?:'s|\s+is)\s+(?:important|worth\s+noting|worth\s+mentioning|essential)\s+to\s+note\s+that"
+    r"[^.\n]*[.\n]\s*"
+    r"|As\s+an?\s+(?:AI|artificial\s+intelligence|language\s+model|AI\s+assistant|AI\s+language\s+model)"
+    r"[^.\n]*[.\n]\s*"
+    r"|(?:Great|Excellent|Good|Interesting)\s+question\s*[!.][^\n]*\n?"
+    r"|(?:Certainly|Of\s+course|Absolutely|Sure)\s*[!.][^\n]*\n?"
+    r"|I(?:'d|\s+would|\s+will|'ll)\s+be\s+happy\s+to[^.\n]*[.\n]\s*"
+    r"|Thank\s+you\s+for\s+(?:asking|your\s+question)[^.\n]*[.\n]\s*"
+    r")+",
+    re.IGNORECASE,
+)
+
+
 def normalize_fast_answer(answer: str, *, question: str = "") -> str:
     text = (answer or "").strip()
     if not text:
         return ""
+
+    # Strip filler openings (safety net — system prompt instructs model to avoid these)
+    filler_match = _FAST_QA_FILLER_OPENING_RE.match(text)
+    if filler_match and filler_match.end() < len(text):
+        remaining = text[filler_match.end():].strip()
+        if len(remaining) >= 40:
+            text = remaining[0].upper() + remaining[1:] if remaining else text
+
+    # Normalize heading hierarchy: H1 → H2, H4+ → H3
+    text = re.sub(r"(^|\n)#\s+", r"\1## ", text)
+    text = re.sub(r"(^|\n)#{4,}\s+", r"\1### ", text)
 
     text = re.sub(r"(?<!\n)(#{2,6}\s+)", r"\n\n\1", text)
     text = re.sub(r"(^|\n)\s*#{1,6}\s*#{1,6}\s*", r"\1## ", text)

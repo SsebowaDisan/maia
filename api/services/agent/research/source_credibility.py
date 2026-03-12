@@ -15,6 +15,8 @@ For unknown domains the heuristic uses TLD and subdomain patterns.
 import re
 from urllib.parse import urlparse
 
+from api.services.agent.llm_runtime import call_json_response, env_bool
+
 _HIGH: float = 0.92
 _MED_HIGH: float = 0.78
 _MEDIUM: float = 0.62
@@ -115,6 +117,78 @@ _TLD_SCORES: dict[str, float] = {
 
 _DEFAULT_SCORE: float = _MED_LOW
 
+# Known disinformation / coordinated-inauthentic-behaviour domains.
+# These are scored at floor (0.05) regardless of TLD or other signals.
+_DISINFORMATION_DOMAINS: frozenset[str] = frozenset([
+    "infowars.com",
+    "naturalnews.com",
+    "beforeitsnews.com",
+    "zerohedge.com",
+    "thegatewaypundit.com",
+    "worldnewsdailyreport.com",
+    "yournewswire.com",
+    "newspunch.com",
+    "amplifyingglass.com",
+    "conservativedailypost.com",
+    "americanpatriotdaily.com",
+    "realnewsrightnow.com",
+    "abcnews.com.co",
+    "cbsnews.com.co",
+    "nbcnews.com.co",
+    "empirenews.net",
+    "huzlers.com",
+    "nationalreport.net",
+    "theonion.com",        # satire — keep near-zero so it doesn't surface as fact
+    "clickhole.com",       # satire
+    "babylonbee.com",      # satire
+    "stuppid.com",
+    "naha24.net",
+    "eutimes.net",
+])
+
+_DISINFO_SCORE: float = 0.05
+
+
+def _score_unknown_domain_llm(domain: str) -> float | None:
+    """Ask the LLM to estimate the credibility of an unrecognised domain.
+
+    Returns a float in [0.0, 1.0] or None when the feature is disabled or
+    the call fails.  Results are NOT cached — callers should only invoke this
+    when a domain is genuinely unknown and LLM scoring is enabled.
+    """
+    if not env_bool("MAIA_AGENT_LLM_DOMAIN_CREDIBILITY_ENABLED", default=True):
+        return None
+    if not domain or len(domain) > 253:
+        return None
+    response = call_json_response(
+        system_prompt=(
+            "You assess the credibility of web domains for an enterprise research agent. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            "Rate the credibility of the following domain as an information source.\n"
+            "Consider: is it a peer-reviewed publisher, major news outlet, government site, "
+            "established trade publication, known disinformation site, low-quality blog, or unknown?\n"
+            "Return JSON only:\n"
+            '{ "score": 0.62, "reason": "established trade publication" }\n'
+            "Score guide: 0.9+=peer-reviewed/gov; 0.7-0.9=major news/established; "
+            "0.5-0.7=trade/niche pub; 0.3-0.5=blog/forum; 0.0-0.3=disinfo/satire/unknown.\n\n"
+            f"Domain: {domain}"
+        ),
+        temperature=0.0,
+        timeout_seconds=8,
+        max_tokens=80,
+    )
+    if not isinstance(response, dict):
+        return None
+    try:
+        val = float(response.get("score", -1))
+        if 0.0 <= val <= 1.0:
+            return val
+    except Exception:
+        pass
+    return None
+
 
 def _extract_domain(url: str) -> str:
     """Return registered domain in lowercase, no www."""
@@ -128,11 +202,14 @@ def _extract_domain(url: str) -> str:
 
 
 def score_source_credibility(url: str) -> float:
-    """
-    Return a credibility score in [0.0, 1.0] for a given URL.
+    """Return a credibility score in [0.0, 1.0] for a given URL.
 
-    Uses a domain lookup table first. Falls back to TLD heuristics for
-    unknown domains. Never makes external calls.
+    Resolution order:
+    1. Disinformation domain list → floor score (0.05)
+    2. Domain lookup table (exact + suffix match)
+    3. TLD heuristic
+    4. LLM-based scoring for genuinely unknown domains (opt-in via env flag)
+    5. Default score
     """
     if not url or not isinstance(url, str):
         return _DEFAULT_SCORE
@@ -141,22 +218,38 @@ def score_source_credibility(url: str) -> float:
     if not domain:
         return _DEFAULT_SCORE
 
-    # Exact match
+    # 1. Hard-block known disinformation / satire domains
+    if domain in _DISINFORMATION_DOMAINS:
+        return _DISINFO_SCORE
+    for disinfo in _DISINFORMATION_DOMAINS:
+        if domain.endswith(f".{disinfo}") or domain == disinfo:
+            return _DISINFO_SCORE
+
+    # 2. Exact match in trust table
     exact = _DOMAIN_TABLE.get(domain)
     if exact is not None:
         return exact
 
-    # Suffix match (handles subdomains like news.bbc.com)
+    # 3. Suffix match (handles subdomains like news.bbc.com)
     for suffix, score in _DOMAIN_TABLE.items():
         if domain.endswith(f".{suffix}") or domain == suffix:
             return score
 
-    # TLD-based fallback
+    # 4. TLD-based heuristic
+    tld_score: float | None = None
     for tld, score in _TLD_SCORES.items():
         if domain.endswith(tld):
-            return score
+            tld_score = score
+            break
 
-    return _DEFAULT_SCORE
+    # 5. LLM scoring for unknown domains — only invoked when the domain is
+    #    truly unrecognised (no table or TLD hit) so calls are rare.
+    if tld_score is None:
+        llm_score = _score_unknown_domain_llm(domain)
+        if llm_score is not None:
+            return llm_score
+
+    return tld_score if tld_score is not None else _DEFAULT_SCORE
 
 
 _CURRENT_YEAR: int = 2026
@@ -201,7 +294,7 @@ def score_source_freshness(url: str, snippet: str = "") -> float:
     """
     year = _extract_year(url, snippet)
     if year is None:
-        return 0.75  # neutral — no date signal available
+        return 0.65  # mild penalty for undated pages — ranked below dated sources
     years_ago = max(0, _CURRENT_YEAR - year)
     return _FRESHNESS_TABLE.get(years_ago, _FRESHNESS_FLOOR)
 
