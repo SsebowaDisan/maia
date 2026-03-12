@@ -29,11 +29,11 @@ def normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
     sections_raw = raw_outline.get("sections")
     sections: list[dict[str, str]] = []
     if isinstance(sections_raw, list):
-        for row in sections_raw[:6]:
+        for row in sections_raw[:8]:
             if not isinstance(row, dict):
                 continue
             title = " ".join(str(row.get("title") or "").split()).strip()[:120]
-            goal = " ".join(str(row.get("goal") or "").split()).strip()[:220]
+            goal = " ".join(str(row.get("goal") or "").split()).strip()[:340]
             fmt = " ".join(str(row.get("format") or "").split()).strip()[:40]
             if not title and not goal:
                 continue

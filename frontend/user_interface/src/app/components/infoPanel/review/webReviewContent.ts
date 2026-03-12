@@ -11,6 +11,9 @@ type WebReviewSource = {
   snippetCount: number;
 };
 
+const TEST_HOSTS = new Set(["example.com", "example.org", "example.net"]);
+const TEST_PARAMS = new Set(["maia_gap_test_media", "maia_no_pdf", "maia_gap_test"]);
+
 function cleanText(value: unknown, maxLength = 2400): string {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -48,6 +51,37 @@ function domainFromUrl(urlValue: string): string {
   } catch {
     return "";
   }
+}
+
+function isPlaceholderTestUrl(urlValue: string): boolean {
+  if (!urlValue) {
+    return false;
+  }
+  try {
+    const parsed = new URL(urlValue);
+    const host = String(parsed.hostname || "").replace(/^www\./i, "").toLowerCase();
+    if (TEST_HOSTS.has(host)) {
+      return true;
+    }
+    for (const key of parsed.searchParams.keys()) {
+      if (TEST_PARAMS.has(String(key || "").toLowerCase())) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function isPlaceholderTestSource(sourceId: string, sourceUrl: string): boolean {
+  if (isPlaceholderTestUrl(sourceUrl)) {
+    return true;
+  }
+  if (sourceId.toLowerCase().startsWith("url:")) {
+    return isPlaceholderTestUrl(sourceId.slice(4));
+  }
+  return false;
 }
 
 function sanitizeReadableHtmlToParagraphs(rawHtml: string): string[] {
@@ -140,6 +174,9 @@ function parseWebReviewSourceMap(rawInfoPanel: unknown): Record<string, WebRevie
     if (!sourceId) {
       continue;
     }
+    if (isPlaceholderTestSource(sourceId, sourceUrl)) {
+      continue;
+    }
     const readableText = cleanText(item.readable_text || item.readableText || "", 32000);
     const readableHtml = cleanText(item.readable_html || item.readableHtml || "", 32000);
     const title = cleanText(item.title || item.source_name || "Website source", 220) || "Website source";
@@ -170,6 +207,9 @@ function parseWebReviewSourceMap(rawInfoPanel: unknown): Record<string, WebRevie
 }
 
 function buildFallbackWebReview(sourceId: string, sourceUrl: string, sourceTitle: string, evidenceCards: EvidenceCard[]): WebReviewSource | null {
+  if (isPlaceholderTestSource(sourceId, sourceUrl)) {
+    return null;
+  }
   const snippets: string[] = [];
   const seen = new Set<string>();
   for (const card of evidenceCards) {

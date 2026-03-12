@@ -228,7 +228,10 @@ def target_character_range(
         if evidence_count >= 6:
             return 3000, 7200
         return 2200, 6200
-    return 900, 2800
+    # Standard mode: allow rich multi-section responses for research questions.
+    # Previous cap of 2800 was too tight and caused the polisher to fall back
+    # to the thin raw draft when it expanded content properly.
+    return 1800, 6000
 
 
 def is_analytical_report_question(request_message: str, *, deep_research_mode: bool = False) -> bool:

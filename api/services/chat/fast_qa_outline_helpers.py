@@ -38,11 +38,13 @@ def plan_adaptive_outline(
         '{ "style": "string", "detail_level": "high", "sections": [{"title":"string","goal":"string","format":"paragraphs|bullets|table|mixed"}], "tone": "string" }\n'
         "Rules:\n"
         "- Structure must be specific to this exact user request and evidence, not a generic reusable template.\n"
-        "- For analytical, research, or comparison questions: use 5-7 substantive sections that explore different "
+        "- For analytical, research, or comparison questions: use 5-8 substantive sections that explore different "
         "dimensions (e.g. context/background, key findings, mechanisms, data/evidence, implications, competing views, limitations).\n"
         "- For direct factual or lookup questions: use 1-2 sections with a precise answer followed by essential context.\n"
         "- Each section goal must specify at least 2 concrete, specific findings or data points that will be surfaced — "
-        "goals like 'provide details' or 'explain the topic' are not acceptable.\n"
+        "goals like 'provide details', 'explain the topic', 'review the source', or 'list the URL' are not acceptable.\n"
+        "- CRITICAL: Section goals must describe CONTENT to write (analysis, findings, data), never meta-actions "
+        "like 'note the source reviewed' or 'acknowledge the URL' — those are stubs, not content.\n"
         "- Design sections that progressively deepen the analysis: start with context, move to primary "
         "evidence/data, then mechanisms, then implications or significance.\n"
         "- Sections should cover distinct angles: do not repeat the same content across sections.\n"
@@ -59,12 +61,14 @@ def plan_adaptive_outline(
     planner_payload = {
         "model": model,
         "temperature": planner_temperature,
+        "max_tokens": 1200,
         "messages": [
             {
                 "role": "system",
                 "content": (
                     "You design deep, well-structured response blueprints for a research-grade AI assistant. "
                     "For analytical or research questions, plan multi-section structures that cover distinct dimensions with substantive depth. "
+                    "Section goals must describe real content to write (findings, data, analysis), never meta-actions like 'review the source' or 'note the URL'. "
                     "Return JSON only."
                 ),
             },
@@ -76,7 +80,7 @@ def plan_adaptive_outline(
             api_key=api_key,
             base_url=base_url,
             request_payload=planner_payload,
-            timeout_seconds=22,
+            timeout_seconds=30,
         )
         parsed_outline = parse_json_object_fn(str(planned_raw or ""))
         normalized_outline = normalize_outline_fn(parsed_outline)

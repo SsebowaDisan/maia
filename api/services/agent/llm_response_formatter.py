@@ -318,7 +318,7 @@ def polish_final_response(
         "- Return markdown text only.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
-    response_max_tokens = 8000 if deep_research_mode else 4000
+    response_max_tokens = 8000 if deep_research_mode else 6000
     polished = call_text_response(
         system_prompt=(
             "You are Maia's response writer — a research-grade analyst and expert communicator. "

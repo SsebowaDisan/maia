@@ -41,6 +41,30 @@ describe("webReviewContent", () => {
     expect(source?.evidenceIds).toEqual(["evidence-1"]);
   });
 
+  it("ignores placeholder test sources in typed web review payloads", () => {
+    const sourceMap = parseWebReviewSourceMap({
+      web_review_content: {
+        version: "web_review.v1",
+        sources: [
+          {
+            source_id: "url:https://example.com/?maia_gap_test_media=1",
+            source_url: "https://example.com/?maia_gap_test_media=1",
+            title: "Example Domain",
+            readable_text: "This should not render.",
+          },
+          {
+            source_id: "url:https://axongroup.com/about-axon",
+            source_url: "https://axongroup.com/about-axon",
+            title: "Axon Group | About",
+            readable_text: "Axon Group overview.",
+          },
+        ],
+      },
+    });
+    expect(sourceMap["url:https://example.com/?maia_gap_test_media=1"]).toBeUndefined();
+    expect(sourceMap["url:https://axongroup.com/about-axon"]?.title).toBe("Axon Group | About");
+  });
+
   it("falls back to evidence extracts when no web review payload exists", () => {
     const evidenceCards: EvidenceCard[] = [
       {
@@ -70,6 +94,27 @@ describe("webReviewContent", () => {
     expect(resolved).toBeTruthy();
     expect(resolved?.domain).toBe("axongroup.com");
     expect(String(resolved?.readableText || "")).toContain("family-owned");
+  });
+
+  it("does not build a fallback review for placeholder test urls", () => {
+    const evidenceCards: EvidenceCard[] = [
+      {
+        id: "evidence-1",
+        title: "Evidence [1]",
+        source: "Example Domain",
+        sourceType: "web",
+        sourceUrl: "https://example.com/?maia_gap_test_media=1",
+        extract: "This should never appear.",
+      },
+    ];
+    const resolved = resolveWebReviewSource({
+      sourceMap: {},
+      sourceId: "url:https://example.com/?maia_gap_test_media=1",
+      sourceUrl: "https://example.com/?maia_gap_test_media=1",
+      sourceTitle: "Example Domain",
+      evidenceCards,
+    });
+    expect(resolved).toBeNull();
   });
 
   it("matches focus text to the most relevant paragraph index", () => {

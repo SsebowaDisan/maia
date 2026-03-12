@@ -5,6 +5,10 @@ STEALTH_INIT_SCRIPT = """
   // Hide webdriver
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
+  // Spoof platform to match Windows UA
+  Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+  Object.defineProperty(navigator, 'oscpu', { get: () => undefined });
+
   // Spoof plugins (headless Chrome has 0 plugins, real Chrome has several)
   const _pluginData = [
     { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
@@ -26,11 +30,37 @@ STEALTH_INIT_SCRIPT = """
 
   // Realistic language settings
   Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
+
+  // Hardware concurrency (headless often reports 2; real machines have more)
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+  // Device memory
+  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
 
   // Add chrome runtime (missing in headless mode)
   if (!window.chrome) {
-    window.chrome = { runtime: {} };
+    window.chrome = {
+      runtime: {},
+      loadTimes: function() {},
+      csi: function() {},
+      app: {}
+    };
   }
+
+  // Mask canvas fingerprint slightly (add imperceptible noise)
+  const _origGetContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+    const ctx = _origGetContext.call(this, type, ...args);
+    if (ctx && (type === '2d')) {
+      const _origFillText = ctx.fillText.bind(ctx);
+      ctx.fillText = function(...a) {
+        ctx.shadowBlur = Math.random() * 0.01;
+        return _origFillText(...a);
+      };
+    }
+    return ctx;
+  };
 
   // Remove Automation-related properties exposed by CDP
   const _override = (obj, prop) => {

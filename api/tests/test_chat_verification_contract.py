@@ -137,3 +137,28 @@ def test_build_web_review_content_groups_web_sources_and_sanitizes_payload() -> 
     assert "family-owned" in str(first.get("readable_text") or "")
     assert "<p>" in str(first.get("readable_html") or "")
     assert first.get("evidence_ids") == ["evidence-1", "evidence-2"]
+
+
+def test_build_web_review_content_ignores_placeholder_test_sources() -> None:
+    payload = build_web_review_content(
+        [
+            {
+                "id": "evidence-test",
+                "source_type": "web",
+                "source_name": "Example Domain",
+                "source_url": "https://example.com/?maia_gap_test_media=1",
+                "extract": "This should never surface in the review panel.",
+            },
+            {
+                "id": "evidence-real",
+                "source_type": "web",
+                "source_name": "Axon Group",
+                "source_url": "https://axongroup.com/about-axon",
+                "extract": "Axon Group overview.",
+            },
+        ]
+    )
+    sources = payload.get("sources")
+    assert isinstance(sources, list)
+    assert len(sources) == 1
+    assert sources[0].get("source_url") == "https://axongroup.com/about-axon"

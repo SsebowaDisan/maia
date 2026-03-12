@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re as _re
 from typing import Any, Callable, Generator
+from urllib.parse import urlparse as _urlparse
 
 from api.services.agent.connectors.trusted_site_policy import build_trusted_site_overrides
 from api.services.agent.execution.browser_event_contract import normalize_browser_event
@@ -18,6 +20,28 @@ from api.services.agent.tools.web_quality import (
     quality_band,
     quality_remediation,
 )
+
+_SEARCH_FALLBACK_STOPWORDS = {
+    "about", "after", "also", "because", "before", "being", "between",
+    "could", "from", "have", "into", "more", "most", "other", "page",
+    "that", "their", "there", "these", "this", "those", "using", "with",
+    "your", "http", "https", "www",
+}
+
+
+def _build_search_fallback_query(*, url: str, prompt: str) -> str:
+    """Build a search query to find cached/alternative content for a blocked URL."""
+    parsed = _urlparse(url)
+    hostname = _re.sub(r"^www\.", "", parsed.netloc or "") or url[:80]
+    path_parts = [p for p in (parsed.path or "").split("/") if len(p) > 3]
+    prompt_words = [
+        w.lower()
+        for w in _re.findall(r"[A-Za-z][A-Za-z0-9]{3,}", str(prompt or ""))
+        if w.lower() not in _SEARCH_FALLBACK_STOPWORDS
+    ]
+    unique_prompt_words = list(dict.fromkeys(prompt_words))
+    parts = [hostname] + path_parts[:2] + unique_prompt_words[:4]
+    return " ".join(parts)[:200].strip()
 
 
 def execute_playwright_inspect_stream(
@@ -248,6 +272,82 @@ def execute_playwright_inspect_stream(
                     if not retry_blocked:
                         break
 
+    # --- Search-based fallback for persistently blocked pages ---
+    # When every browser retry is exhausted and the page is still blocked, query
+    # Brave (or Bing as backup) to surface cached/alternative content.  The
+    # search snippets are injected as supplementary text so the answer builder has
+    # real evidence to synthesise instead of returning an empty response.
+    _search_fallback_sources: list[dict] = []
+    if bool(capture.get("blocked_signal")):
+        _fallback_query = _build_search_fallback_query(url=inspected_url, prompt=prompt)
+        if _fallback_query:
+            fb_start_event = ToolTraceEvent(
+                event_type="tool_progress",
+                title="Browser blocked — switching to web search fallback",
+                detail=f"Searching for alternative content: {_fallback_query[:120]}",
+                data={
+                    "web_provider": web_provider,
+                    "search_fallback_query": _fallback_query[:200],
+                    "blocked_reason": str(capture.get("blocked_reason") or ""),
+                },
+            )
+            trace_events.append(fb_start_event)
+            yield fb_start_event
+            _fallback_results: list[dict] = []
+            try:
+                _brave = get_connector_registry_fn().build("brave_search", settings=context.settings)
+                _brave_payload = _brave.web_search(query=_fallback_query, count=8)
+                _fallback_results = [
+                    r for r in (_brave_payload.get("results") or []) if isinstance(r, dict)
+                ]
+            except Exception:
+                try:
+                    _bing = get_connector_registry_fn().build("bing_search", settings=context.settings)
+                    _bing_raw = _bing.search_web(query=_fallback_query, count=8)
+                    _bing_values = (_bing_raw.get("webPages") or {}).get("value") or []
+                    _fallback_results = [
+                        {
+                            "title": str(r.get("name") or "").strip(),
+                            "url": str(r.get("url") or "").strip(),
+                            "description": str(r.get("snippet") or "").strip(),
+                        }
+                        for r in _bing_values
+                        if isinstance(r, dict)
+                    ]
+                except Exception:
+                    _fallback_results = []
+            if _fallback_results:
+                _search_fallback_sources = _fallback_results
+                # Build supplementary text from search snippets
+                _snippet_lines = []
+                for _r in _fallback_results[:6]:
+                    _t = str(_r.get("title") or "").strip()
+                    _d = str(_r.get("description") or "").strip()
+                    if _d:
+                        _snippet_lines.append(f"{_t}: {_d}" if _t else _d)
+                _fallback_text = "\n\n".join(_snippet_lines)
+                _existing_excerpt = str(capture.get("text_excerpt") or "").strip()
+                _combined = f"{_fallback_text}\n\n{_existing_excerpt}".strip() if _existing_excerpt else _fallback_text
+                capture = {
+                    **capture,
+                    "text_excerpt": _combined[:12000],
+                    "render_quality": "medium",
+                    "content_density": 0.35,
+                    "search_fallback": True,
+                }
+                fb_done_event = ToolTraceEvent(
+                    event_type="tool_progress",
+                    title=f"Search fallback: {len(_fallback_results)} alternative result(s) found",
+                    detail="Web search results will supplement the blocked page content",
+                    data={
+                        "web_provider": "search_fallback",
+                        "results_count": len(_fallback_results),
+                        "search_fallback_query": _fallback_query[:200],
+                    },
+                )
+                trace_events.append(fb_done_event)
+                yield fb_done_event
+
     title = str(capture.get("title") or url)
     final_url = str(capture.get("url") or url)
     text_excerpt = str(capture.get("text_excerpt") or "").strip()
@@ -297,6 +397,23 @@ def execute_playwright_inspect_stream(
                 "title": title,
             }
         )
+    # Inject search-fallback snippets into copied_highlights so the answer
+    # builder has real evidence even when the browser was blocked.
+    for _fb_row in _search_fallback_sources[:8]:
+        _fb_desc = str(_fb_row.get("description") or "").strip()
+        _fb_title = str(_fb_row.get("title") or "").strip()
+        _fb_url = str(_fb_row.get("url") or "").strip()
+        if _fb_desc:
+            copied_highlights.append(
+                {
+                    "source": "search_fallback",
+                    "color": highlight_color,
+                    "word": "",
+                    "text": f"{_fb_title}: {_fb_desc}" if _fb_title else _fb_desc,
+                    "reference": _fb_url or final_url,
+                    "title": _fb_title or title,
+                }
+            )
     context.settings["__copied_highlights"] = copied_highlights[-64:]
 
     pages = capture.get("pages") if isinstance(capture, dict) else []
@@ -354,6 +471,24 @@ def execute_playwright_inspect_stream(
             },
         )
     ]
+    for _fb_src in _search_fallback_sources[:6]:
+        _fb_url = str(_fb_src.get("url") or "").strip()
+        _fb_title = str(_fb_src.get("title") or _fb_url or "").strip()
+        _fb_desc = str(_fb_src.get("description") or "").strip()
+        if _fb_url and _fb_title:
+            sources.append(
+                AgentSource(
+                    source_type="web",
+                    label=_fb_title,
+                    url=_fb_url,
+                    score=0.6,
+                    metadata={
+                        "excerpt": _fb_desc[:400],
+                        "via": "search_fallback",
+                        "blocked_original_url": final_url,
+                    },
+                )
+            )
     trusted_site = build_trusted_site_overrides(
         settings=context.settings,
         url=final_url or inspected_url or url,
@@ -367,6 +502,10 @@ def execute_playwright_inspect_stream(
         if human_handoff_required
         else ""
     )
+    if _search_fallback_sources and human_handoff_required:
+        # We recovered content via web search — no need to pause for human verification.
+        human_handoff_required = False
+        human_handoff_note = ""
     if trusted_site_mode and human_handoff_required:
         human_handoff_required = False
         human_handoff_note = (
@@ -465,6 +604,8 @@ def execute_playwright_inspect_stream(
             "blocked_root_retry_attempts": blocked_root_retry_attempts,
             "blocked_root_retry_used": blocked_root_retry_used,
             "blocked_root_retry_improved": blocked_root_retry_improved,
+            "search_fallback_used": bool(_search_fallback_sources),
+            "search_fallback_results_count": len(_search_fallback_sources),
             "human_handoff_required": human_handoff_required,
             "human_handoff_note": human_handoff_note,
             "trusted_site_mode": trusted_site_mode,

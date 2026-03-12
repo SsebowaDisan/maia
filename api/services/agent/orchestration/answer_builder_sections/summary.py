@@ -184,13 +184,32 @@ def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
         elif url:
             lines.append(f"- Reviewed source: {url}")
             summary_emitted = True
-        if show_diagnostics and browser_keywords:
-            lines.append(f"- Observed keywords: {', '.join(browser_keywords[:10])}")
-        if show_diagnostics and _is_meaningful_excerpt(excerpt):
-            lines.append(f"- Evidence note: {excerpt}")
+        # Always surface the page excerpt and keywords — these are the actual
+        # research findings from the browser visit, not diagnostic noise.
+        if _is_meaningful_excerpt(excerpt):
+            lines.append(f"- Key finding: {excerpt}")
+        if browser_keywords:
+            lines.append(f"- Observed topics: {', '.join(browser_keywords[:10])}")
+        if show_diagnostics:
+            pass  # diagnostics block preserved for future use
     else:
         lines.append("- Findings are grounded in executed tools and verified source evidence.")
         summary_emitted = True
+
+    # Include extracted content snippets from the browser visit so the response
+    # polisher has real evidence to synthesize into full paragraphs.
+    copied_highlights = ctx.runtime_settings.get("__copied_highlights")
+    if isinstance(copied_highlights, list):
+        meaningful_snippets = [
+            str(item.get("text") or "").strip()
+            for item in copied_highlights
+            if isinstance(item, dict) and _is_meaningful_excerpt(str(item.get("text") or ""))
+        ]
+        if meaningful_snippets:
+            lines.append("")
+            lines.append("### Extracted Evidence")
+            for snippet in meaningful_snippets[:8]:
+                lines.append(f"- {snippet[:400]}")
 
     unique_urls = _collect_external_source_urls(ctx)
     if show_diagnostics and unique_urls:

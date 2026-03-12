@@ -130,6 +130,9 @@ def call_openai_fast_qa_impl(
         "- Follow the provided response blueprint while adapting when evidence is missing.\n"
         "- Keep the answer directly relevant to the user's question.\n"
         "- Open with a direct, substantive answer — state the key finding or conclusion clearly and specifically.\n"
+        "- CRITICAL: Every section must contain real, developed prose content — never a single bullet that merely "
+        "says 'Reviewed source: [URL]' or 'See [URL]' or lists a link with no analysis. A section heading "
+        "followed by only a URL or a one-line reference is a stub and is unacceptable.\n"
         "- For every section, develop the content fully: include specific data points, statistics, concrete examples, "
         "mechanisms, comparisons, and implications. Do not leave sections at surface level.\n"
         "- For research or analytical questions, provide rich multi-section depth with 3-5 substantial paragraphs per "
@@ -224,7 +227,7 @@ def call_openai_fast_qa_impl(
         request_payload = {
             "model": model,
             "temperature": temperature,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "messages": [
                 {
                     "role": "system",

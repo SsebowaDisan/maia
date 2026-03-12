@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .verification_contract_core import (
     VERIFICATION_CONTRACT_VERSION,
@@ -49,6 +49,38 @@ def _domain_from_url(value: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+_TEST_HOSTS = {"example.com", "example.org", "example.net"}
+_TEST_PARAMS = {"maia_gap_test_media", "maia_no_pdf", "maia_gap_test"}
+
+
+def _is_placeholder_test_url(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host in _TEST_HOSTS:
+        return True
+    try:
+        query_keys = set(parse_qs(parsed.query).keys())
+    except Exception:
+        query_keys = set()
+    return bool(query_keys & _TEST_PARAMS)
+
+
+def _is_placeholder_test_source(*, source_url: str, source_id: str) -> bool:
+    if _is_placeholder_test_url(source_url):
+        return True
+    source_id_text = _clean_text(source_id, max_len=2048)
+    if source_id_text.lower().startswith("url:"):
+        return _is_placeholder_test_url(source_id_text[4:])
+    return False
 
 
 def _source_url_from_item(item: dict[str, Any]) -> str:
@@ -154,6 +186,8 @@ def build_web_review_content(
         if not source_id:
             source_id = f"url:{source_url}".lower() if source_url else ""
         if not source_id:
+            continue
+        if _is_placeholder_test_source(source_url=source_url, source_id=source_id):
             continue
         row = grouped.get(source_id)
         if row is None:
