@@ -24,7 +24,7 @@ type CitationDeepLinkPayload = {
 };
 
 const PARAM_KEY = "citation";
-const MAX_EXTRACT_CHARS = 260;
+const MAX_EXTRACT_CHARS = 420;
 const MAX_CLAIM_CHARS = 420;
 
 function normalizeText(value: unknown, maxChars: number): string {

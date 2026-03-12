@@ -251,6 +251,54 @@ class CreateMindmapPipeline(BaseComponent):
                 answer_text=answer_text,
             )
 
+    def _generate_reasoning_steps(self, question: str, answer_text: str) -> list[str]:
+        """Ask the LLM to extract 3-5 content-specific reasoning steps from the answer.
+
+        Falls back to an empty list (so the indexer uses its template) on any error.
+        """
+        q_preview = (question or "")[:400]
+        a_preview = (answer_text or "")[:800]
+        if not a_preview.strip():
+            return []
+        messages = [
+            SystemMessage(
+                content=(
+                    "You extract reasoning steps. "
+                    "Return ONLY a JSON array of 3 to 5 short strings (10–60 words each). "
+                    'Example: ["Gather relevant sources", "Identify key claims", "Synthesise findings"]'
+                )
+            ),
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "question": q_preview,
+                        "answer_excerpt": a_preview,
+                        "instruction": "List the key reasoning steps used to arrive at this answer.",
+                    },
+                    ensure_ascii=False,
+                )
+            ),
+        ]
+        try:
+            llm_output = self.get_from_path("llm").invoke(messages)
+            raw = getattr(llm_output, "content", "") or ""
+            rows = self._extract_json_array(raw)
+            steps = [str(r) for r in rows if isinstance(r, str) and str(r).strip()]
+            if not steps:
+                # _extract_json_array expects list[dict]; try list[str] directly
+                text = raw.strip()
+                if text.startswith("["):
+                    try:
+                        parsed = json.loads(text)
+                        if isinstance(parsed, list):
+                            steps = [str(s).strip() for s in parsed if str(s).strip()]
+                    except Exception:
+                        pass
+            return steps[:5]
+        except Exception as exc:
+            logger.warning("mindmap_reasoning_steps_failed error=%s", exc)
+            return []
+
     def run(self, question: str, context: str, **kwargs) -> Document:  # type: ignore
         documents = kwargs.get("documents") or kwargs.get("docs") or kwargs.get("retrieved_docs") or []
         answer_text = str(kwargs.get("answer_text", "") or "")
@@ -266,6 +314,10 @@ class CreateMindmapPipeline(BaseComponent):
         )
         use_llm_titles = bool(kwargs.get("use_llm_titles", self.default_use_llm_titles))
 
+        reasoning_steps: list[str] | None = None
+        if include_reasoning_map and answer_text.strip():
+            reasoning_steps = self._generate_reasoning_steps(str(question or ""), answer_text) or None
+
         payload = build_knowledge_map(
             question=str(question or ""),
             context=str(context or ""),
@@ -276,6 +328,7 @@ class CreateMindmapPipeline(BaseComponent):
             source_type_hint=source_type_hint,
             focus=focus if isinstance(focus, dict) else None,
             map_type=map_type,
+            reasoning_steps=reasoning_steps,
         )
 
         if use_llm_titles:

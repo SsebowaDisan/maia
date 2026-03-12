@@ -1,4 +1,4 @@
-# Maia Execution Roadmap
+﻿# Maia Execution Roadmap
 
 ## Rules For Execution
 1. Only one active slice at a time.
@@ -17,7 +17,17 @@
 11. Do not change the Theatre layout, structure, or visual design in this roadmap; limit work to behavioral/event-state fixes unless a design change is explicitly requested.
 
 ## Objective
-Improve citation interaction so web-source citations open immediately when appropriate, power users can bypass the info-panel flow with modifier clicks, and evidence-section anchors always have valid scroll targets.
+The mindmap now behaves like a NotebookLM-style research artifact: horizontal by default, branch-oriented, calmer in chrome, and finished at the bottom edge.
+
+## Analysis
+- Completed in this roadmap:
+  - first-open mindmap defaults to a horizontal left-to-right tree
+  - `collapse all` returns to a useful overview instead of a dead or fully exploded state
+  - the popup header is flatter and more editorial
+  - the toolbar is quieter and more subordinate to the content
+  - the right inspector remains stable and no bottom tray is needed
+  - the tree density and bottom finish now support scanning without large dead zones
+- No active frontend slices remain in this roadmap.
 
 ## Status Legend
 - `todo` not started
@@ -31,16 +41,14 @@ Improve citation interaction so web-source citations open immediately when appro
 
 ---
 
-## Implementation Slices
-Status: `done`
-
-No open slices. This roadmap is complete.
-
-## Delivery Order
-Completed.
+## Active Frontend Work
+- No active frontend slices remain in this roadmap.
 
 ## Exit Criteria
-- web-only citations open directly with one click
-- modifier-click and middle-click provide direct source navigation on any URL-backed citation
-- evidence citation anchors always resolve to valid scroll targets
-- no Theatre layout/structure/design changes are introduced
+- the mindmap opens as a horizontal left-to-right tree by default
+- branch disclosure works as a progressive overview rather than a fully exploded graph
+- the header and toolbar read as one calm artifact surface
+- the inspector remains in the right rail only
+- the bottom of the popup ends with a soft, deliberate finish
+- no Theatre layout, structure, or design changes are introduced
+

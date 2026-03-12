@@ -378,6 +378,7 @@ def build_knowledge_map(
     focus: dict[str, Any] | None = None,
     node_limit: int = MAX_DEFAULT_NODES,
     map_type: str = "structure",
+    reasoning_steps: list[str] | None = None,
 ) -> dict[str, Any]:
     selected_map_type = _sanitize_map_type(map_type)
     focus_payload = focus if isinstance(focus, dict) else {}
@@ -414,6 +415,16 @@ def build_knowledge_map(
     payload.setdefault("settings", {})
     payload["settings"]["map_type"] = selected_map_type
     payload["tree"] = _build_tree_view(payload)
+    # Build context_mindmap variant (structure semantics, context_mindmap label)
+    context_mindmap_payload: dict[str, Any] = {
+        **structure_payload,
+        "map_type": "context_mindmap",
+        "kind": "context_mindmap",
+    }
+    context_mindmap_payload.setdefault("settings", {})
+    context_mindmap_payload["settings"]["map_type"] = "context_mindmap"
+    context_mindmap_payload["tree"] = _build_tree_view(context_mindmap_payload)
+
     if selected_map_type == "work_graph":
         variants = payload.get("variants", {})
         if isinstance(variants, dict):
@@ -421,15 +432,22 @@ def build_knowledge_map(
                 variant_payload = variants.get(variant_key)
                 if isinstance(variant_payload, dict):
                     variant_payload["tree"] = _build_tree_view(variant_payload)
+        if isinstance(variants, dict):
+            variants["context_mindmap"] = context_mindmap_payload
+        payload["variants"] = variants
     else:
-        alternate = evidence_payload if selected_map_type == "structure" else structure_payload
-        alt_key = "evidence" if selected_map_type == "structure" else "structure"
         payload["variants"] = {
-            alt_key: {
-                **alternate,
-                "tree": _build_tree_view(alternate),
-            },
+            "structure": {**structure_payload, "tree": _build_tree_view(structure_payload)},
+            "evidence": {**evidence_payload, "tree": _build_tree_view(evidence_payload)},
+            "context_mindmap": context_mindmap_payload,
         }
+        # Remove the selected map_type from variants (it's the primary payload)
+        payload["variants"].pop(selected_map_type, None)
+
+    # Emit available_map_types so the frontend knows which views are present
+    _all_map_keys = ["work_graph", "context_mindmap", "structure", "evidence"]
+    present_keys = {selected_map_type} | set(payload.get("variants", {}).keys())
+    payload["available_map_types"] = [k for k in _all_map_keys if k in present_keys]
 
     if include_reasoning_map:
         context_nodes = _build_reasoning_context_nodes(
@@ -441,7 +459,23 @@ def build_knowledge_map(
             question=question,
             answer_text=answer_text,
             context_nodes=context_nodes,
+            reasoning_steps=reasoning_steps or None,
         )
+
+    # Metadata hints for the frontend renderer
+    payload.setdefault("view_hint", selected_map_type)
+    payload.setdefault("subtitle", truncate(question or "", 120))
+    node_count = len(payload.get("nodes", []))
+    source_count = sum(
+        1 for n in payload.get("nodes", [])
+        if isinstance(n, dict) and str(n.get("node_type") or n.get("type") or "").lower()
+        in {"source", "web_source", "page"}
+    )
+    payload.setdefault(
+        "artifact_summary",
+        f"{node_count} node(s)" + (f", {source_count} source(s)" if source_count else ""),
+    )
+
     return payload
 
 

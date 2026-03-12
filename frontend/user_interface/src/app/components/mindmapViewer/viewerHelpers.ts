@@ -1,10 +1,10 @@
 import type { MindmapPayload } from "./types";
 import { computeDepths } from "./utils";
 
-export const ROOT_X = 80;
-export const TOP_PADDING = 40;
-export const DEPTH_GAP = 260;
-export const LEAF_GAP = 54;
+export const ROOT_X = 40;
+export const TOP_PADDING = 36;
+export const DEPTH_GAP = 460;
+export const LEAF_GAP = 104;
 
 const GENERIC_PAGE_TITLE_RE = /^(?:page|p)\s*\.?\s*\d+\s*$/i;
 const CODEY_TITLE_RE = /(->|=>|::|[{}\[\]|`]|(?:\bconst\b|\blet\b|\bvar\b|\bfunction\b|\breturn\b))/i;
@@ -87,43 +87,22 @@ export function computeInitialCollapsedFromPayload(
     return [];
   }
 
-  const rootNode = nodeById.get(rootId);
-  const rootChildren = childrenByParent.get(rootId) || [];
-  if (rootNode && rootChildren.length === 1 && looksLikePromptTitle(String(rootNode.title || ""))) {
-    rootId = rootChildren[0];
-  }
-
   const depthMap = computeDepths(rootId, hierarchyEdges);
-  let parentForInitialView = rootId;
-  const children = (childrenByParent.get(rootId) || []).filter(
+  const collapsed = new Set<string>();
+  const queue = [...(childrenByParent.get(rootId) || [])].filter(
     (nodeId) => (depthMap[nodeId] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
   );
-  if (children.length === 1) {
-    const onlyChild = children[0];
-    const onlyNode = nodeById.get(onlyChild);
-    const onlyType = String(onlyNode?.node_type || onlyNode?.type || "").toLowerCase();
-    const onlyChildVisibleChildren = (childrenByParent.get(onlyChild) || []).filter(
-      (nodeId) => (depthMap[nodeId] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
-    ).length;
-    const shouldPromoteSourceLayer =
-      (onlyType === "source" || onlyType === "web_source") &&
-      onlyChildVisibleChildren > 0 &&
-      onlyChildVisibleChildren <= 8;
-    if (shouldPromoteSourceLayer) {
-      parentForInitialView = onlyChild;
-    }
-  }
-
-  const firstLayer = (childrenByParent.get(parentForInitialView) || []).filter(
-    (nodeId) => (depthMap[nodeId] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
-  );
-
-  return firstLayer.filter((nodeId) => {
-    const descendants = (childrenByParent.get(nodeId) || []).filter(
+  while (queue.length) {
+    const nodeId = queue.shift() || "";
+    const children = (childrenByParent.get(nodeId) || []).filter(
       (childId) => (depthMap[childId] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
     );
-    return descendants.length > 0;
-  });
+    if (children.length > 0) {
+      collapsed.add(nodeId);
+      children.forEach((childId) => queue.push(childId));
+    }
+  }
+  return Array.from(collapsed);
 }
 
 export type NotebookLayoutParams = {
@@ -194,8 +173,8 @@ export function computeNotebookLayout(
 // ─── Radial layout (Google NotebookLM style) ───────────────────────────────
 
 /** Approximate half-width/height of a pill node — used to convert center→top-left position. */
-export const NODE_HALF_W = 80;
-export const NODE_HALF_H = 18;
+export const NODE_HALF_W = 140;
+export const NODE_HALF_H = 34;
 
 /** Radius from root center to depth-1 branch nodes (px). */
 export const RADIAL_BASE = 200;

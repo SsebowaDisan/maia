@@ -18,7 +18,7 @@ from ..constants import (
 CITATION_MODE_INLINE = "inline"
 CITATION_MODE_FOOTNOTE = "footnote"
 ALLOWED_CITATION_MODES = {"highlight", CITATION_MODE_INLINE, CITATION_MODE_FOOTNOTE}
-CITATION_PHRASE_MAX_CHARS = 260
+CITATION_PHRASE_MAX_CHARS = 420
 CITATION_BOXES_MAX_CHARS = 2000
 MAX_HIGHLIGHT_BOXES = 24
 _CITATION_SECTION_RE = re.compile(
@@ -333,13 +333,22 @@ def _clean_text(fragment: str) -> str:
     return _SPACE_RE.sub(" ", plain).strip()
 
 
-def _snippet_signature_text(raw: Any, *, limit: int = 260) -> str:
+def _snippet_signature_text(raw: Any, *, limit: int = 420) -> str:
     text = _clean_text(str(raw or ""))
     if not text:
         return ""
     if len(text) <= limit:
         return text
     clipped = text[:limit]
+    # Prefer sentence boundary so n-gram search finds complete sentences
+    last_sentence = max(
+        clipped.rfind(". "),
+        clipped.rfind("! "),
+        clipped.rfind("? "),
+        clipped.rfind(".\n"),
+    )
+    if last_sentence >= 80:
+        return clipped[: last_sentence + 1].strip()
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped.strip()
@@ -483,6 +492,14 @@ def _extract_phrase_from_details_body(body_html: str) -> str:
     if len(phrase) <= CITATION_PHRASE_MAX_CHARS:
         return phrase
     clipped = phrase[:CITATION_PHRASE_MAX_CHARS]
+    last_sentence = max(
+        clipped.rfind(". "),
+        clipped.rfind("! "),
+        clipped.rfind("? "),
+        clipped.rfind(".\n"),
+    )
+    if last_sentence >= 80:
+        return clipped[: last_sentence + 1].strip()
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped.strip()

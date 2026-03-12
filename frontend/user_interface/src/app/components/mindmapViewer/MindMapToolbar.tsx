@@ -1,28 +1,21 @@
-﻿import {
-  Download,
-  Expand,
-  FileDown,
-  Focus,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-  Share2,
-} from "lucide-react";
+import { Expand, FileDown, Maximize2, Minimize2, Share2 } from "lucide-react";
+
+import type { MindmapMapType } from "./types";
 
 type MindMapToolbarProps = {
-  title: string;
-  mapType: string;
-  kind: string;
-  activeMapType: "structure" | "evidence" | "work_graph" | "context_mindmap";
-  hasVariants: boolean;
-  onSwitchMapType: (mapType: "structure" | "evidence" | "work_graph" | "context_mindmap") => void;
+  activeMapType: MindmapMapType;
+  availableMapTypes: MindmapMapType[];
+  maxDepth: number;
+  showReasoningMap: boolean;
+  hasReasoningMap: boolean;
+  focusNodeId: string | null;
+  onSwitchMapType: (mapType: MindmapMapType) => void;
   onExpand: () => void;
   onCollapse: () => void;
-  onToggleLayout: () => void;
-  layoutMode: "balanced" | "horizontal";
-  onResetFocus: () => void;
-  onAutoTidy: () => void;
   onFitView: () => void;
+  onMaxDepthChange: (depth: number) => void;
+  onToggleReasoningMap: () => void;
+  onClearFocus: () => void;
   onExportPng: () => void;
   onExportJson: () => void;
   onExportMarkdown: () => void;
@@ -30,156 +23,171 @@ type MindMapToolbarProps = {
   onShare: () => void | Promise<void>;
 };
 
-function MindMapToolbar({
-  title,
-  mapType,
-  kind,
+const MAP_TYPE_LABELS: Record<MindmapMapType, string> = {
+  structure: "Concept",
+  evidence: "Evidence",
+  work_graph: "Execution",
+  context_mindmap: "Sources",
+};
+
+export function MindMapToolbar({
   activeMapType,
-  hasVariants,
+  availableMapTypes,
+  maxDepth,
+  showReasoningMap,
+  hasReasoningMap,
+  focusNodeId,
   onSwitchMapType,
   onExpand,
   onCollapse,
-  onToggleLayout,
-  layoutMode,
-  onResetFocus,
-  onAutoTidy,
   onFitView,
+  onMaxDepthChange,
+  onToggleReasoningMap,
+  onClearFocus,
   onExportPng,
   onExportJson,
   onExportMarkdown,
   onSave,
   onShare,
 }: MindMapToolbarProps) {
+  const availableTypes = availableMapTypes.length > 0 ? availableMapTypes : [activeMapType];
+
   return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="min-w-0">
-        <p className="text-[12px] font-semibold text-[#1d1d1f] truncate">{title}</p>
-        <p className="text-[10px] text-[#6e6e73] uppercase tracking-[0.08em]">
-          {mapType} - {kind}
-        </p>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <div className="inline-flex items-center rounded-full border border-black/[0.08] bg-white p-0.5">
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
+        <div className="inline-flex flex-wrap items-center rounded-full border border-black/[0.06] bg-white/96 p-1 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          {availableTypes.map((mapType) => (
+            <button
+              key={mapType}
+              type="button"
+              onClick={() => onSwitchMapType(mapType)}
+              className={`h-8 rounded-full px-3.5 text-[12px] font-medium transition-colors ${
+                activeMapType === mapType
+                  ? "bg-[#17171b] text-white"
+                  : "text-[#3a3a40] hover:bg-[#f4f4f6]"
+              }`}
+            >
+              {MAP_TYPE_LABELS[mapType]}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {focusNodeId ? (
+            <button
+              type="button"
+              onClick={onClearFocus}
+              className="inline-flex h-9 items-center rounded-full border border-[#bfdbfe] bg-[#eff6ff] px-3.5 text-[12px] font-medium text-[#1d4ed8] hover:bg-[#dbeafe]"
+            >
+              Back to full map
+            </button>
+          ) : null}
+          <div className="inline-flex h-9 items-center rounded-full border border-[#d7d9e0] bg-[#f8f8f6] px-3.5 text-[12px] font-medium text-[#5c6370]">
+            Horizontal tree
+          </div>
+          <div className="inline-flex items-center gap-2 rounded-full border border-black/[0.06] bg-white px-3 py-1.5 text-[12px] font-medium text-[#3a3a40]">
+            <span>Depth {maxDepth}</span>
+            <button
+              type="button"
+              onClick={() => onMaxDepthChange(maxDepth - 1)}
+              className="flex h-5 w-5 items-center justify-center rounded-full border border-black/[0.06] hover:bg-[#f4f4f6]"
+              aria-label="Decrease depth"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              onClick={() => onMaxDepthChange(maxDepth + 1)}
+              className="flex h-5 w-5 items-center justify-center rounded-full border border-black/[0.06] hover:bg-[#f4f4f6]"
+              aria-label="Increase depth"
+            >
+              +
+            </button>
+          </div>
+          {hasReasoningMap ? (
+            <button
+              type="button"
+              onClick={onToggleReasoningMap}
+              className={`inline-flex h-9 items-center rounded-full border px-3.5 text-[12px] font-medium transition-colors ${
+                showReasoningMap
+                  ? "border-[#c4b5fd] bg-[#f5f3ff] text-[#6d28d9] hover:bg-[#ede9fe]"
+                  : "border-black/[0.06] bg-white text-[#3a3a40] hover:bg-[#f4f4f6]"
+              }`}
+            >
+              Show reasoning
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={() => onSwitchMapType("structure")}
-            className={`h-6 px-2.5 rounded-full text-[10px] transition-colors ${
-              activeMapType === "structure" ? "bg-[#1d1d1f] text-white" : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            }`}
+            onClick={onExpand}
+            className="inline-flex h-9 items-center rounded-full border border-black/[0.06] bg-white px-3.5 text-[12px] font-medium text-[#3a3a40] hover:bg-[#f4f4f6]"
           >
-            Structure
+            <Expand className="mr-1.5 h-3.5 w-3.5" />
+            Expand
           </button>
           <button
             type="button"
-            onClick={() => onSwitchMapType("evidence")}
-            disabled={!hasVariants}
-            className={`h-6 px-2.5 rounded-full text-[10px] transition-colors ${
-              activeMapType === "evidence" ? "bg-[#1d1d1f] text-white" : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            } disabled:opacity-40`}
+            onClick={onCollapse}
+            className="inline-flex h-9 items-center rounded-full border border-black/[0.06] bg-white px-3.5 text-[12px] font-medium text-[#3a3a40] hover:bg-[#f4f4f6]"
           >
-            Evidence
+            <Minimize2 className="mr-1.5 h-3.5 w-3.5" />
+            Collapse
           </button>
           <button
             type="button"
-            onClick={() => onSwitchMapType("context_mindmap")}
-            disabled={!hasVariants}
-            className={`h-6 px-2.5 rounded-full text-[10px] transition-colors ${
-              activeMapType === "context_mindmap" ? "bg-[#1d1d1f] text-white" : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-            } disabled:opacity-40`}
+            onClick={onFitView}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-black/[0.06] bg-white text-[#3a3a40] hover:bg-[#f4f4f6]"
+            title="Fit view"
           >
-            Context
+            <Maximize2 className="h-3.5 w-3.5" />
           </button>
         </div>
-        <button
-          type="button"
-          onClick={onExpand}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-        >
-          <Expand className="w-3.5 h-3.5 inline mr-1" />
-          Expand
-        </button>
-        <button
-          type="button"
-          onClick={onCollapse}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-        >
-          <Minimize2 className="w-3.5 h-3.5 inline mr-1" />
-          Collapse
-        </button>
-        <button
-          type="button"
-          onClick={onToggleLayout}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-        >
-          {layoutMode === "balanced" ? "Horizontal" : "Balanced"}
-        </button>
-        <button
-          type="button"
-          onClick={onResetFocus}
-          className="h-7 w-7 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          title="Reset focus"
-        >
-          <Focus className="w-3.5 h-3.5 mx-auto" />
-        </button>
-        <button
-          type="button"
-          onClick={onAutoTidy}
-          className="h-7 w-7 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          title="Auto tidy"
-        >
-          <RotateCcw className="w-3.5 h-3.5 mx-auto" />
-        </button>
-        <button
-          type="button"
-          onClick={onFitView}
-          className="h-7 w-7 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          title="Fit view"
-        >
-          <Maximize2 className="w-3.5 h-3.5 mx-auto" />
-        </button>
-        <button
-          type="button"
-          onClick={onExportPng}
-          className="h-7 w-7 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          title="Export PNG"
-        >
-          <Download className="w-3.5 h-3.5 mx-auto" />
-        </button>
-        <button
-          type="button"
-          onClick={onExportJson}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-          title="Export JSON"
-        >
-          JSON
-        </button>
-        <button
-          type="button"
-          onClick={onExportMarkdown}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-          title="Export Markdown"
-        >
-          <FileDown className="w-3.5 h-3.5 inline mr-1" />
-          Markdown
-        </button>
-        <button
-          type="button"
-          onClick={onSave}
-          className="h-7 px-2 rounded-full border border-black/[0.08] bg-white text-[11px] hover:bg-[#f5f5f7]"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={onShare}
-          className="h-7 w-7 rounded-full border border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
-          title="Share map"
-        >
-          <Share2 className="w-3.5 h-3.5 mx-auto" />
-        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-black/[0.05] pt-3 md:flex-row md:items-center md:justify-between">
+        <p className="text-[11px] font-medium text-[#7d818c]">
+          Switch map intent, then expand only the branch you need.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onExportPng}
+            className="inline-flex h-8 items-center rounded-full border border-black/[0.06] bg-transparent px-3 text-[11px] font-medium text-[#575b66] hover:bg-white"
+          >
+            PNG
+          </button>
+          <button
+            type="button"
+            onClick={onExportJson}
+            className="inline-flex h-8 items-center rounded-full border border-black/[0.06] bg-transparent px-3 text-[11px] font-medium text-[#575b66] hover:bg-white"
+          >
+            JSON
+          </button>
+          <button
+            type="button"
+            onClick={onExportMarkdown}
+            className="inline-flex h-8 items-center rounded-full border border-black/[0.06] bg-transparent px-3 text-[11px] font-medium text-[#575b66] hover:bg-white"
+          >
+            <FileDown className="mr-1.5 h-3.5 w-3.5" />
+            Markdown
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            className="inline-flex h-8 items-center rounded-full border border-black/[0.06] bg-transparent px-3 text-[11px] font-medium text-[#575b66] hover:bg-white"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={onShare}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.06] bg-transparent text-[#575b66] hover:bg-white"
+            title="Share map"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );
 }
-
-export { MindMapToolbar };

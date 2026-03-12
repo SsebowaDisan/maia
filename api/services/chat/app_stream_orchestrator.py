@@ -247,8 +247,10 @@ def run_orchestrator_stream_turn(
                     request_message=message,
                     actions_taken=action_rows,
                     sources_used=source_rows,
+                    answer_text=answer_text,
                     map_type="work_graph",
                     max_depth=max(2, min(8, requested_mindmap_depth)),
+                    include_reasoning_map=bool(agent_mindmap_settings.get("include_reasoning_map", True)),
                     run_id=str(getattr(agent_result, "run_id", "") or ""),
                 )
             else:
@@ -298,8 +300,10 @@ def run_orchestrator_stream_turn(
                         request_message=message,
                         actions_taken=action_rows,
                         sources_used=source_rows,
+                        answer_text=answer_text,
                         map_type="work_graph",
                         max_depth=max(2, min(8, requested_mindmap_depth)),
+                        include_reasoning_map=bool(agent_mindmap_settings.get("include_reasoning_map", True)),
                         run_id=str(getattr(agent_result, "run_id", "") or ""),
                     )
                     _variants = dict(cm_payload.get("variants") or {})
@@ -312,8 +316,10 @@ def run_orchestrator_stream_turn(
                         request_message=message,
                         actions_taken=action_rows,
                         sources_used=source_rows,
+                        answer_text=answer_text,
                         map_type=requested_map_type,
                         max_depth=max(2, min(8, requested_mindmap_depth)),
+                        include_reasoning_map=bool(agent_mindmap_settings.get("include_reasoning_map", True)),
                         run_id=str(getattr(agent_result, "run_id", "") or ""),
                     )
     info_panel = build_info_panel_copy(

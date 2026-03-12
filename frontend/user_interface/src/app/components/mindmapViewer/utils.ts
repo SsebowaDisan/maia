@@ -9,6 +9,8 @@ export type CanvasState = {
   nodePositions: Record<string, { x: number; y: number }>;
   activeMapType: MindmapMapType;
   focusedNodeId: string | null;
+  focusNodeId: string | null;
+  maxDepth: number;
 };
 
 export type MindNodeData = {
@@ -18,6 +20,7 @@ export type MindNodeData = {
   collapsed: boolean;
   nodeType: string;
   isRoot?: boolean;
+  isInteractive?: boolean;
   depth?: number;
   isSelected?: boolean;
   branchColorIndex?: number;
@@ -38,7 +41,14 @@ export type BalancedLayoutParams = {
   leafGap?: number;
 };
 
-export const STORAGE_PREFIX = "maia.mindmap.viewer.v4";
+export const STORAGE_PREFIX = "maia.mindmap.viewer.v7";
+
+export function clampMindmapDepth(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 4;
+  }
+  return Math.max(2, Math.min(8, Math.round(value)));
+}
 
 export function hashText(value: string): string {
   let hash = 2166136261;
@@ -74,7 +84,7 @@ export function parseCanvasState(value: string | null): CanvasState | null {
         ? parsed.collapsedNodeIds.filter((row): row is string => typeof row === "string")
         : [],
       showReasoningMap: Boolean(parsed.showReasoningMap),
-      layoutMode: parsed.layoutMode === "horizontal" ? "horizontal" : "balanced",
+      layoutMode: "horizontal",
       nodePositions:
         parsed.nodePositions && typeof parsed.nodePositions === "object"
           ? (parsed.nodePositions as Record<string, { x: number; y: number }>)
@@ -91,6 +101,11 @@ export function parseCanvasState(value: string | null): CanvasState | null {
         parsed.focusedNodeId && typeof parsed.focusedNodeId === "string"
           ? parsed.focusedNodeId
           : null,
+      focusNodeId:
+        parsed.focusNodeId && typeof parsed.focusNodeId === "string"
+          ? parsed.focusNodeId
+          : null,
+      maxDepth: clampMindmapDepth(Number(parsed.maxDepth ?? 4)),
     };
   } catch {
     return null;

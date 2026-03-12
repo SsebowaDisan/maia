@@ -13,6 +13,8 @@ from api.context import ApiContext
 from api.message_blocks import normalize_turn_structured_content
 from api.schemas import ChatRequest
 
+from maia.mindmap.indexer import build_reasoning_map as _build_reasoning_map_from_indexer
+
 from .constants import logger
 from .conversation_store import persist_conversation
 from .fallbacks import fallback_answer_from_exception
@@ -20,6 +22,48 @@ from .info_panel_copy import build_info_panel_copy
 from .pipeline import create_pipeline
 from .verification_contract import VERIFICATION_CONTRACT_VERSION
 from .citations import append_required_citation_suffix, normalize_info_evidence_html
+
+
+def _enrich_pipeline_mindmap_reasoning(
+    mindmap_payload: dict,
+    *,
+    question: str,
+    answer_text: str,
+    mindmap_settings: dict,
+) -> None:
+    """Post-stream: rebuild reasoning_map with the final answer text using LLM steps.
+
+    The pipeline builds its mindmap mid-stream before the full answer is available.
+    This function replaces the reasoning_map once the answer is complete, giving the
+    LLM step generator the full answer context.  Mutates mindmap_payload in-place.
+    """
+    if not bool(mindmap_settings.get("include_reasoning_map", True)):
+        return
+    if not answer_text.strip():
+        return
+    try:
+        from api.services.mindmap_service import _generate_reasoning_steps_llm
+
+        reasoning_steps = _generate_reasoning_steps_llm(answer_text, question) or None
+        if not reasoning_steps:
+            return
+
+        nodes = mindmap_payload.get("nodes", [])
+        # Re-select context nodes by Jaccard similarity (same logic as indexer)
+        from maia.mindmap.indexer import _build_reasoning_context_nodes
+        context_nodes = _build_reasoning_context_nodes(
+            list(nodes) if isinstance(nodes, list) else [],
+            question=question,
+            answer_text=answer_text,
+        )
+        mindmap_payload["reasoning_map"] = _build_reasoning_map_from_indexer(
+            question=question,
+            answer_text=answer_text,
+            context_nodes=context_nodes,
+            reasoning_steps=reasoning_steps,
+        )
+    except Exception as exc:
+        logger.warning("pipeline_mindmap_reasoning_enrich_failed error=%s", exc)
 
 
 def run_pipeline_stream_turn(
@@ -131,6 +175,17 @@ def run_pipeline_stream_turn(
         yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
 
     info_text = normalize_info_evidence_html(info_text)
+
+    # Enrich the pipeline mindmap's reasoning_map with the complete answer text.
+    # The pipeline emits its mindmap mid-stream before the answer is finished, so
+    # the reasoning steps were generated from a partial answer.  Replace them now.
+    if mindmap_payload and bool(request.use_mindmap):
+        _enrich_pipeline_mindmap_reasoning(
+            mindmap_payload,
+            question=message,
+            answer_text=answer_text,
+            mindmap_settings=mindmap_settings,
+        )
 
     answer_with_citation_suffix = append_required_citation_suffix(answer=answer_text, info_html=info_text)
     if answer_with_citation_suffix != answer_text:

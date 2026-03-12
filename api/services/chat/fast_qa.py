@@ -6,6 +6,7 @@ from decouple import config
 from ktem.llms.manager import llms
 from ktem.pages.chat.common import STATE
 from maia.mindmap.indexer import build_knowledge_map
+from api.services.mindmap_service import _generate_reasoning_steps_llm as _gen_reasoning_steps
 from api.context import ApiContext
 from api.schemas import ChatRequest
 
@@ -450,6 +451,44 @@ def call_openai_fast_qa(
     )
 
 
+def _build_knowledge_map_with_llm_steps(
+    *,
+    question: str,
+    context: str,
+    documents=None,
+    answer_text: str = "",
+    max_depth: int = 4,
+    include_reasoning_map: bool = True,
+    source_type_hint: str = "",
+    focus=None,
+    node_limit=None,
+    map_type: str = "structure",
+    reasoning_steps=None,
+    **kwargs,
+) -> dict[str, Any]:
+    """build_knowledge_map wrapper that pre-generates reasoning steps via LLM."""
+    if include_reasoning_map and answer_text.strip() and reasoning_steps is None:
+        try:
+            reasoning_steps = _gen_reasoning_steps(answer_text, question) or None
+        except Exception:
+            reasoning_steps = None
+    kw: dict[str, Any] = dict(
+        question=question,
+        context=context,
+        documents=documents,
+        answer_text=answer_text,
+        max_depth=max_depth,
+        include_reasoning_map=include_reasoning_map,
+        source_type_hint=source_type_hint,
+        focus=focus,
+        map_type=map_type,
+        reasoning_steps=reasoning_steps,
+    )
+    if node_limit is not None:
+        kw["node_limit"] = node_limit
+    return build_knowledge_map(**kw)
+
+
 def run_fast_chat_turn(
     context: ApiContext,
     user_id: str,
@@ -482,7 +521,7 @@ def run_fast_chat_turn(
         build_claim_signal_summary_fn=build_claim_signal_summary,
         build_citation_quality_metrics_fn=build_citation_quality_metrics,
         build_info_panel_copy_fn=build_info_panel_copy,
-        build_knowledge_map_fn=build_knowledge_map,
+        build_knowledge_map_fn=_build_knowledge_map_with_llm_steps,
         build_verification_evidence_items_fn=build_verification_evidence_items,
         build_web_review_content_fn=build_web_review_content,
         persist_conversation_fn=persist_conversation,

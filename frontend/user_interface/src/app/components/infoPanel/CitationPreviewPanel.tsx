@@ -121,6 +121,8 @@ function CitationPreviewPanel({
             page={preferredPage || citationFocus.page}
             highlightText={citationFocus.extract || citationFocus.claimText || ""}
             highlightQuery={reviewQuery || citationFocus.claimText}
+            charStart={citationFocus.charStart}
+            charEnd={citationFocus.charEnd}
             highlightBoxes={citationFocus.highlightBoxes}
             viewerHeight={citationViewerHeight}
             initialZoom={pdfZoom}

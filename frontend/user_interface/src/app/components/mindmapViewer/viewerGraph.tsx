@@ -1,52 +1,76 @@
 import {
   BaseEdge,
   type EdgeProps,
+  MarkerType,
 } from "@xyflow/react";
 import { MindNodeCard } from "./MindNodeCard";
 import { NODE_HALF_H, NODE_HALF_W } from "./viewerHelpers";
 import type { MindmapMapType, MindmapPayload } from "./types";
 
-function trimEdge(
-  cx: number,
-  cy: number,
-  ox: number,
-  oy: number,
-  hw: number,
-  hh: number,
-): { x: number; y: number } {
-  const dx = ox - cx;
-  const dy = oy - cy;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1) {
-    return { x: cx, y: cy };
-  }
-  const abscos = Math.abs(dx / len);
-  const abssin = Math.abs(dy / len);
-  const d = abscos > 0 && abssin > 0 ? Math.min(hw / abscos, hh / abssin) : abscos > 0 ? hw : hh;
-  return { x: cx + (dx / len) * d, y: cy + (dy / len) * d };
+function CurvedMindEdge({ id, data, style }: EdgeProps) {
+  const edge = (data ?? {}) as {
+    sx?: number;
+    sy?: number;
+    tx?: number;
+    ty?: number;
+    sourceDepth?: number;
+    targetDepth?: number;
+  };
+  const srcX = Number(edge.sx ?? 0);
+  const srcY = Number(edge.sy ?? 0);
+  const tgtX = Number(edge.tx ?? 0);
+  const tgtY = Number(edge.ty ?? 0);
+  const sourceDepth = Number(edge.sourceDepth ?? 0);
+  const targetDepth = Number(edge.targetDepth ?? sourceDepth + 1);
+
+  const sourceHalfW = sourceDepth <= 0 ? 190 : sourceDepth === 1 ? 160 : 140;
+  const targetHalfW = targetDepth <= 0 ? 190 : targetDepth === 1 ? 160 : 140;
+  const startX = srcX + sourceHalfW;
+  const startY = srcY;
+  const endX = tgtX - targetHalfW;
+  const endY = tgtY;
+  const span = Math.max(140, endX - startX);
+  const outbound = sourceDepth <= 0 ? Math.min(260, span * 0.42) : Math.min(180, span * 0.34);
+  const inbound = targetDepth <= 1 ? Math.min(210, span * 0.4) : Math.min(150, span * 0.3);
+  const c1X = startX + outbound;
+  const c1Y = startY;
+  const c2X = endX - inbound;
+  const c2Y = endY;
+  return (
+    <BaseEdge
+      id={id}
+      path={`M ${startX} ${startY} C ${c1X} ${c1Y} ${c2X} ${c2Y} ${endX} ${endY}`}
+      style={style}
+    />
+  );
 }
 
-function CurvedMindEdge({ id, data, style }: EdgeProps) {
+function ReasoningCurvedEdge({ id, data, style, markerEnd }: EdgeProps) {
   const edge = (data ?? {}) as { sx?: number; sy?: number; tx?: number; ty?: number };
   const srcX = Number(edge.sx ?? 0);
   const srcY = Number(edge.sy ?? 0);
   const tgtX = Number(edge.tx ?? 0);
   const tgtY = Number(edge.ty ?? 0);
-  const isRoot = srcX * srcX + srcY * srcY < 25;
-  const start = trimEdge(srcX, srcY, tgtX, tgtY, isRoot ? 92 : NODE_HALF_W, isRoot ? 22 : NODE_HALF_H);
-  const end = trimEdge(tgtX, tgtY, srcX, srcY, NODE_HALF_W, NODE_HALF_H);
-  const mx = (start.x + end.x) / 2;
-  const my = (start.y + end.y) / 2;
-  const midLen = Math.sqrt(mx * mx + my * my) || 1;
-  const edgeLen = Math.sqrt((end.x - start.x) ** 2 + (end.y - start.y) ** 2);
-  const bow = Math.min(32, edgeLen * 0.12);
-  const cpx = mx - (mx / midLen) * bow;
-  const cpy = my - (my / midLen) * bow;
+  const startX = srcX + NODE_HALF_W;
+  const startY = srcY;
+  const endX = tgtX - NODE_HALF_W;
+  const endY = tgtY;
+  const midX = (startX + endX) / 2;
+  const midY = (startY + endY) / 2;
+  const deltaX = endX - startX;
+  const deltaY = endY - startY;
+  const length = Math.sqrt(deltaX * deltaX + deltaY * deltaY) || 1;
+  const normalX = -(deltaY / length);
+  const normalY = deltaX / length;
+  const bow = Math.min(38, length * 0.16);
+  const cpx = midX + normalX * bow;
+  const cpy = midY + normalY * bow;
   return (
     <BaseEdge
       id={id}
-      path={`M ${start.x} ${start.y} Q ${cpx} ${cpy} ${end.x} ${end.y}`}
+      path={`M ${startX} ${startY} Q ${cpx} ${cpy} ${endX} ${endY}`}
       style={style}
+      markerEnd={markerEnd}
     />
   );
 }
@@ -101,6 +125,12 @@ function payloadSupportsMapType(payload: MindmapPayload | null, mapType: Mindmap
   if (!payload) {
     return false;
   }
+  if (Array.isArray(payload.available_map_types)) {
+    const available = payload.available_map_types.map((entry) => normalizeMapType(entry));
+    if (available.includes(mapType)) {
+      return true;
+    }
+  }
   if (normalizeMapType(payload.map_type) === mapType) {
     return true;
   }
@@ -112,12 +142,13 @@ function payloadSupportsMapType(payload: MindmapPayload | null, mapType: Mindmap
 }
 
 const nodeTypes = { mind: MindNodeCard };
-const edgeTypes = { mindCurve: CurvedMindEdge };
+const edgeTypes = { mindCurve: CurvedMindEdge, reasoningCurve: ReasoningCurvedEdge };
 
 export {
   compactNodeValue,
   detectDefaultMapType,
   edgeTypes,
+  MarkerType,
   nodeTypes,
   payloadSupportsMapType,
 };

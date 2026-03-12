@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from maia.mindmap.indexer import build_knowledge_map
+
+# Matches [1], [12], 【1】, {1} style inline citation markers
+_INLINE_REF_RE = re.compile(r"[\[\u3010\uff3b\{]\s*(\d{1,4})\s*[\]\u3011\uff3d\}]")
+# Splits answer text into sentences (keeps the delimiter)
+_SENTENCE_SPLIT_RE = re.compile(r"[^.!?\n]+(?:[.!?\n]+|$)")
 
 if TYPE_CHECKING:
     from api.context import ApiContext
@@ -26,13 +32,229 @@ def _normalize_map_type(raw: str) -> str:
     return normalize_map_type(raw)
 
 
+def _generate_reasoning_steps_llm(answer_text: str, question: str) -> list[str]:
+    """Ask the LLM to extract 3-5 key reasoning steps from the answer text.
+
+    Returns an empty list on any error so callers always fall back to the
+    indexer's built-in template when this function fails or the LLM is
+    unavailable.
+    """
+    try:
+        import json as _json
+        from decouple import config as _decouple_config
+        from ktem.llms.manager import llms as _llms
+        from .chat.pipeline import is_placeholder_api_key as _is_placeholder
+        from .chat.fast_qa_runtime_helpers import (
+            call_openai_chat_text as _call_llm,
+            extract_text_content as _extract_text,
+            resolve_fast_qa_llm_config as _resolve_config,
+        )
+
+        api_key, base_url, model, _ = _resolve_config(
+            config_fn=_decouple_config,
+            is_placeholder_api_key_fn=_is_placeholder,
+            llms_manager=_llms,
+        )
+        if not api_key:
+            return []
+
+        q_preview = (question or "")[:400]
+        a_preview = (answer_text or "")[:800]
+        prompt = (
+            "You are a reasoning analyst. Identify 3 to 5 key reasoning steps "
+            "used to answer the following question based on the answer excerpt.\n\n"
+            f"Question: {q_preview}\n\n"
+            f"Answer excerpt: {a_preview}\n\n"
+            "Return ONLY a JSON array of short strings (10–60 words each). "
+            'Example: ["Identify key sources", "Extract supporting evidence", "Synthesise findings"]'
+        )
+        raw = _call_llm(
+            api_key=api_key,
+            base_url=base_url,
+            request_payload={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 400,
+            },
+            timeout_seconds=12,
+            extract_text_content_fn=_extract_text,
+        )
+        if not raw:
+            return []
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text.strip())
+        parsed = _json.loads(text)
+        if isinstance(parsed, list):
+            return [str(s).strip() for s in parsed if str(s).strip()][:5]
+        return []
+    except Exception:
+        return []
+
+
+def _build_reasoning_map(
+    answer_text: str,
+    source_node_ids: dict[int, str],
+) -> dict[str, Any]:
+    """Extract cited sentences from answer_text and build a claim→evidence graph.
+
+    Returns a reasoning_map dict with layout, nodes, and edges matching the
+    ReasoningNode / ReasoningEdge frontend types.
+    """
+    r_nodes: list[dict[str, Any]] = []
+    r_edges: list[dict[str, Any]] = []
+    seen_claim_ids: set[str] = set()
+
+    for sentence in _SENTENCE_SPLIT_RE.findall(answer_text.strip()):
+        ref_matches = _INLINE_REF_RE.findall(sentence)
+        if not ref_matches:
+            continue
+        clean = " ".join(sentence.split()).strip()
+        if len(clean) < 20:
+            continue
+        # Stable ID: FNV-like hash of the sentence text (avoids uuid import)
+        claim_id = f"claim_{abs(hash(clean)) % 1_000_000}"
+        if claim_id not in seen_claim_ids:
+            seen_claim_ids.add(claim_id)
+            r_nodes.append(
+                {
+                    "id": claim_id,
+                    "label": compact_text(clean, max_len=140),
+                    "kind": "claim",
+                }
+            )
+        for ref_str in ref_matches:
+            ref_num = int(ref_str)
+            ev_node_id = source_node_ids.get(ref_num)
+            if ev_node_id:
+                edge_id = f"{claim_id}->{ev_node_id}"
+                r_edges.append({"id": edge_id, "source": claim_id, "target": ev_node_id})
+
+    return {"layout": "force", "nodes": r_nodes, "edges": r_edges}
+
+
+def _build_evidence_variant(
+    root_id: str,
+    root_title: str,
+    answer_text: str,
+    source_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build an evidence map variant as a proper claim→source graph.
+
+    Nodes: root task, claim sentences (from answer [n] citations), source artifacts.
+    Edges: root→claim, claim→source (by citation number).
+    Falls back to root→source direct edges when no answer citations are available.
+    """
+    ev_nodes: list[dict[str, Any]] = [
+        {
+            "id": root_id,
+            "title": root_title or "Research",
+            "text": "Claims and supporting evidence",
+            "node_type": "task",
+            "status": "active",
+            "confidence": 0.9,
+        }
+    ]
+    ev_edges: list[dict[str, Any]] = []
+
+    # Build source artifact nodes (1-indexed to align with [n] citation markers)
+    source_node_ids: dict[int, str] = {}
+    for si, row in enumerate(source_rows[:24], start=1):
+        if not isinstance(row, dict):
+            continue
+        src_id = f"ev_src_{si}"
+        source_node_ids[si] = src_id
+        label = compact_text(
+            row.get("label") or row.get("url") or row.get("file_id") or f"Source {si}",
+            max_len=120,
+        )
+        ev_nodes.append(
+            {
+                "id": src_id,
+                "title": label,
+                "text": compact_text(row.get("source_type"), max_len=80) or "source",
+                "node_type": "artifact",
+                "status": "completed",
+                "source_type": str(row.get("source_type", "") or ""),
+                "url": str(row.get("url", "") or ""),
+                "file_id": str(row.get("file_id", "") or ""),
+            }
+        )
+
+    claim_count = 0
+    seen_claim_ids: set[str] = set()
+    used_src_ids: set[str] = set()
+
+    if answer_text.strip():
+        for sentence in _SENTENCE_SPLIT_RE.findall(answer_text.strip()):
+            ref_matches = _INLINE_REF_RE.findall(sentence)
+            valid_refs = [int(m) for m in ref_matches if int(m) in source_node_ids]
+            if not valid_refs:
+                continue
+            clean = " ".join(sentence.split()).strip()
+            if len(clean) < 20:
+                continue
+            claim_id = f"ev_claim_{abs(hash(clean)) % 1_000_000}"
+            if claim_id not in seen_claim_ids:
+                seen_claim_ids.add(claim_id)
+                claim_count += 1
+                ev_nodes.append(
+                    {
+                        "id": claim_id,
+                        "title": compact_text(clean, max_len=140),
+                        "text": "Cited claim",
+                        "node_type": "plan_step",
+                        "status": "completed",
+                    }
+                )
+                ev_edges.append(
+                    {
+                        "id": f"{root_id}->{claim_id}",
+                        "source": root_id,
+                        "target": claim_id,
+                        "type": "hierarchy",
+                    }
+                )
+            for ref_num in valid_refs:
+                src_node_id = source_node_ids[ref_num]
+                used_src_ids.add(src_node_id)
+                edge_id = f"{claim_id}->{src_node_id}"
+                if not any(e.get("id") == edge_id for e in ev_edges):
+                    ev_edges.append(
+                        {
+                            "id": edge_id,
+                            "source": claim_id,
+                            "target": src_node_id,
+                            "type": "hierarchy",
+                        }
+                    )
+
+    # Fall back to direct root→source edges when no claims were extracted
+    if claim_count == 0:
+        for src_node_id in source_node_ids.values():
+            ev_edges.append(
+                {
+                    "id": f"{root_id}->{src_node_id}",
+                    "source": root_id,
+                    "target": src_node_id,
+                    "type": "hierarchy",
+                }
+            )
+
+    return {"nodes": ev_nodes, "edges": ev_edges}
+
+
 def build_agent_work_graph(
     *,
     request_message: str,
     actions_taken: list[dict[str, Any]] | None,
     sources_used: list[dict[str, Any]] | None = None,
+    answer_text: str = "",
     map_type: str = "work_graph",
     max_depth: int = 4,
+    include_reasoning_map: bool = False,
     run_id: str = "",
 ) -> dict[str, Any]:
     """Build a properly branched mindmap tree — not a linear chain.
@@ -325,23 +547,78 @@ def build_agent_work_graph(
     }
     context_payload["tree"] = build_tree_view(context_payload)
 
-    variants: dict[str, dict[str, Any]] = {}
-    variants["work_graph"] = base_payload
-    for variant_key, kind in (
-        ("context_mindmap", "context_mindmap"),
-        ("structure", "graph"),
-        ("evidence", "graph"),
-    ):
-        variant_payload = {**context_payload, "map_type": variant_key, "kind": kind}
-        variant_payload["tree"] = build_tree_view(variant_payload)
-        variants[variant_key] = variant_payload
+    # ── Build EVIDENCE VARIANT (claim→source graph) ───────────────────────────
+    ev_data = _build_evidence_variant(
+        root_id=root_id,
+        root_title=root_title,
+        answer_text=answer_text,
+        source_rows=source_rows,
+    )
+    evidence_payload: dict[str, Any] = {
+        "version": 2,
+        "map_type": "evidence",
+        "kind": "evidence",
+        "title": f"Evidence map — {root_title or 'Agent execution'}",
+        "root_id": root_id,
+        "nodes": ev_data["nodes"],
+        "edges": ev_data["edges"],
+        "graph": {
+            "schema": "evidence.v1",
+            "run_id": str(run_id or ""),
+            "source_count": len(source_rows),
+        },
+        "settings": {"map_type": "evidence", "graph_mode": "evidence"},
+    }
+    evidence_payload["tree"] = build_tree_view(evidence_payload)
+
+    # structure variant reuses the work-graph hierarchy (execution structure)
+    structure_payload: dict[str, Any] = {
+        **base_payload,
+        "map_type": "structure",
+        "kind": "structure",
+        "title": f"Structure — {root_title or 'Agent execution'}",
+        "settings": {"map_type": "structure", "graph_mode": "execution"},
+    }
+    structure_payload["tree"] = build_tree_view(structure_payload)
+
+    # ── Assemble variants ─────────────────────────────────────────────────────
+    variants: dict[str, dict[str, Any]] = {
+        "work_graph": base_payload,
+        "context_mindmap": context_payload,
+        "structure": structure_payload,
+        "evidence": evidence_payload,
+    }
+
+    # ── Build reasoning map when requested and answer text is present ─────────
+    reasoning_map: dict[str, Any] | None = None
+    if include_reasoning_map and answer_text.strip() and source_rows:
+        # Map citation [n] index → work-graph source node id for cross-linking
+        src_node_id_map: dict[int, str] = {
+            si: f"evidence_{si}" for si in range(1, min(len(source_rows), 24) + 1)
+        }
+        rm = _build_reasoning_map(answer_text=answer_text, source_node_ids=src_node_id_map)
+        if rm.get("nodes") or rm.get("edges"):
+            reasoning_map = rm
+
+    all_variant_keys: list[str] = ["work_graph", "context_mindmap", "structure", "evidence"]
+    available_map_types: list[str] = [k for k in all_variant_keys if k in variants]
 
     selected_payload = dict(variants.get(map_type_norm, variants["context_mindmap"]))
     selected_payload["variants"] = {
         key: value for key, value in variants.items() if key != selected_payload["map_type"]
     }
+    selected_payload["available_map_types"] = available_map_types
+    if reasoning_map is not None:
+        selected_payload["reasoning_map"] = reasoning_map
     selected_payload.setdefault("settings", {})
     selected_payload["settings"]["map_type"] = selected_payload["map_type"]
+    # Metadata hints for the frontend renderer
+    selected_payload.setdefault("view_hint", selected_payload["map_type"])
+    selected_payload.setdefault("subtitle", compact_text(request_message, max_len=120))
+    selected_payload.setdefault(
+        "artifact_summary",
+        f"{len(action_rows)} action(s), {len(source_rows)} source(s)",
+    )
     return selected_payload
 
 
@@ -367,18 +644,44 @@ def build_source_mindmap(
     clipped_depth = max(2, min(8, int(max_depth)))
     map_title = f"Map for {source_name}"
     context_preview = "\n\n".join(str(row.get("text", "") or "") for row in documents[:8])
+    # Derive a document summary from the first chunks to improve reasoning map quality
+    _summary_sentences = [
+        s.strip()
+        for row in documents[:4]
+        for s in (str(row.get("text", "") or "")).split(". ")
+        if len(s.strip()) > 30
+    ]
+    document_summary = ". ".join(_summary_sentences[:6]).strip()
+    if document_summary and not document_summary.endswith("."):
+        document_summary += "."
+    # Generate LLM reasoning steps when include_reasoning_map is enabled
+    llm_reasoning_steps: list[str] | None = None
+    if bool(include_reasoning_map) and document_summary:
+        llm_reasoning_steps = _generate_reasoning_steps_llm(
+            answer_text=document_summary, question=map_title
+        ) or None
     payload = build_knowledge_map(
         question=map_title,
         context=context_preview,
         documents=documents,
-        answer_text="",
+        answer_text=document_summary,
         max_depth=clipped_depth,
         include_reasoning_map=bool(include_reasoning_map),
         source_type_hint=source_hint(source_name),
         focus={"source_id": source_id, "source_name": source_name},
         map_type=build_map_type,
+        reasoning_steps=llm_reasoning_steps,
     )
+    # Ensure available_map_types is always present regardless of path taken
+    _all_map_keys = ["work_graph", "context_mindmap", "structure", "evidence"]
+
     if map_type_norm != "context_mindmap":
+        if isinstance(payload, dict) and "available_map_types" not in payload:
+            known = set(_all_map_keys)
+            present = {payload.get("map_type")} | set(
+                (payload.get("variants") or {}).keys()
+            )
+            payload["available_map_types"] = [k for k in _all_map_keys if k in present & known]
         return payload
 
     normalized = dict(payload)
@@ -396,6 +699,8 @@ def build_source_mindmap(
         context_variant["kind"] = "context_mindmap"
         variants["context_mindmap"] = context_variant
         normalized["variants"] = variants
+    present = {"context_mindmap"} | set((normalized.get("variants") or {}).keys())
+    normalized["available_map_types"] = [k for k in _all_map_keys if k in present]
     return normalized
 
 

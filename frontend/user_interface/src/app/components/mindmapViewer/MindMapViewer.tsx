@@ -1,39 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeMouseHandler,
-  type ReactFlowInstance,
-} from "@xyflow/react";
+import { type Edge, type Node, type NodeMouseHandler, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-
+import { MindMapFlowCanvas } from "./MindMapFlowCanvas";
 import { MindMapToolbar } from "./MindMapToolbar";
-import type { MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
-import {
-  computeDepths,
-  isDescendant,
-  parseCanvasState,
-  storageKey,
-  type CanvasState,
-  type MindNodeData,
-} from "./utils";
-import {
-  computeInitialCollapsedFromPayload,
-  computeNotebookLayout,
-  computeRadialLayout,
-  NODE_HALF_H,
-  NODE_HALF_W,
-  looksLikePromptTitle,
-  looksNoisyTitle,
-  toMindmapPayload,
-} from "./viewerHelpers";
-import { compactNodeValue, detectDefaultMapType, edgeTypes, nodeTypes, payloadSupportsMapType } from "./viewerGraph";
-
-// Six branch color families — matches MindNodeCard palettes.
-const BRANCH_EDGE_COLORS = ["#F97316", "#06B6D4", "#8B5CF6", "#22C55E", "#F59E0B", "#EC4899"];
-
+import { MindMapViewerDetails } from "./MindMapViewerDetails";
+import type { FocusNodePayload, MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
+import { clampMindmapDepth, computeDepths, drawPngFromLayout, focusedBranchIds, isDescendant, parseCanvasState, storageKey, type CanvasState, type MindNodeData } from "./utils";
+import { computeInitialCollapsedFromPayload, computeNotebookLayout, computeRadialLayout, toMindmapPayload } from "./viewerHelpers";
+import { payloadSupportsMapType } from "./viewerGraph";
+import { collectAvailableMindmapTypes, detectMindmapMapType, preferredLayoutForPayload } from "./presentation";
+import { buildBranchColorIndexMap, buildChildrenByParent, buildNodeOrder, buildParentCount, resolveRootId, toFocusPayload } from "./viewerDerive";
+import { buildFlowEdges, buildFlowNodes, buildReasoningOverlayEdges } from "./viewerElements";
+import { normalizeMindmapPayloadForViewer } from "./viewerNormalize";
+import { downloadMindmapJson, downloadMindmapMarkdown } from "./exporters";
+import { MindMapEmptyState } from "./MindMapEmptyState";
 export function MindMapViewer({
   payload: rawPayload,
   conversationId = null,
@@ -43,27 +23,27 @@ export function MindMapViewer({
   onFocusNode,
   onSaveMap,
   onShareMap,
+  onMapTypeChange,
 }: MindMapViewerProps) {
   const effectiveViewerHeight = Math.max(260, Math.min(1200, Math.round(Number(viewerHeight) || 520)));
   const basePayload = useMemo(() => toMindmapPayload(rawPayload), [rawPayload]);
+  const detectedBaseMapType = useMemo(() => detectMindmapMapType(basePayload), [basePayload]);
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<string[]>([]);
   const [activeMapType, setActiveMapType] = useState<MindmapMapType>("structure");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [showReasoningMap, setShowReasoningMap] = useState(false);
+  const [viewerMaxDepth, setViewerMaxDepth] = useState(() => clampMindmapDepth(maxDepth));
   const [lastFitKey, setLastFitKey] = useState("");
-  const [layoutMode, setLayoutMode] = useState<"balanced" | "horizontal">("balanced");
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
-
   useEffect(() => {
-    const detected = detectDefaultMapType(basePayload);
-    setActiveMapType(detected);
-  }, [basePayload]);
-
+    setActiveMapType(detectedBaseMapType);
+  }, [basePayload, detectedBaseMapType]);
   const payload = useMemo(() => {
     if (!basePayload) {
       return null;
     }
-    const detected = detectDefaultMapType(basePayload);
-    if (activeMapType === detected) {
+    if (activeMapType === detectedBaseMapType) {
       return basePayload;
     }
     const variants = basePayload.variants;
@@ -75,126 +55,83 @@ export function MindMapViewer({
       return basePayload;
     }
     return variant as MindmapPayload;
-  }, [activeMapType, basePayload]);
-
+  }, [activeMapType, basePayload, detectedBaseMapType]);
+  const viewerPayload = useMemo(
+    () => normalizeMindmapPayloadForViewer(payload, activeMapType),
+    [activeMapType, payload],
+  );
   useEffect(() => {
-    const key = storageKey(payload, conversationId);
+    const key = storageKey(viewerPayload, conversationId);
     const saved = parseCanvasState(window.localStorage.getItem(key));
-    if (!saved) {
-      setCollapsedNodeIds(computeInitialCollapsedFromPayload(payload, maxDepth));
-      setSelectedNodeId(null);
-      return;
-    }
-    setCollapsedNodeIds(saved.collapsedNodeIds);
-    setActiveMapType(
-      payloadSupportsMapType(payload, saved.activeMapType)
-        ? saved.activeMapType
-        : detectDefaultMapType(payload),
+    const nextMapType = saved && payloadSupportsMapType(basePayload, saved.activeMapType)
+      ? saved.activeMapType
+      : detectMindmapMapType(basePayload);
+    const initialDepth = clampMindmapDepth(saved?.maxDepth ?? maxDepth);
+    const variantPayload =
+      basePayload && nextMapType !== detectedBaseMapType && basePayload.variants?.[nextMapType]
+        ? (basePayload.variants[nextMapType] as MindmapPayload)
+        : basePayload;
+    const normalizedVariantPayload = normalizeMindmapPayloadForViewer(variantPayload, nextMapType);
+    const variantNodeIds = new Set(
+      (normalizedVariantPayload?.nodes || [])
+        .map((node) => String(node?.id || "").trim())
+        .filter(Boolean),
     );
-    setSelectedNodeId(saved.focusedNodeId);
-    if (saved.layoutMode === "horizontal" || saved.layoutMode === "balanced") {
-      setLayoutMode(saved.layoutMode);
-    }
-  }, [conversationId, maxDepth, payload]);
-
+    const restoredFocusNodeId =
+      saved?.focusNodeId && variantNodeIds.has(saved.focusNodeId) ? saved.focusNodeId : null;
+    const restoredSelectedNodeId =
+      saved?.focusedNodeId && variantNodeIds.has(saved.focusedNodeId)
+        ? saved.focusedNodeId
+        : restoredFocusNodeId;
+    setCollapsedNodeIds(computeInitialCollapsedFromPayload(normalizedVariantPayload, initialDepth));
+    setSelectedNodeId(restoredSelectedNodeId);
+    setFocusNodeId(restoredFocusNodeId);
+    setActiveMapType(nextMapType);
+    setViewerMaxDepth(initialDepth);
+    setShowReasoningMap(false);
+  }, [basePayload, conversationId, detectedBaseMapType, maxDepth, viewerPayload]);
   useEffect(() => {
-    const key = storageKey(payload, conversationId);
+    const key = storageKey(viewerPayload, conversationId);
     const state: CanvasState = {
       collapsedNodeIds,
-      showReasoningMap: false,
-      layoutMode,
+      showReasoningMap,
+      layoutMode: "horizontal",
       nodePositions: {},
       activeMapType,
       focusedNodeId: selectedNodeId,
+      focusNodeId,
+      maxDepth: viewerMaxDepth,
     };
     window.localStorage.setItem(key, JSON.stringify(state));
-  }, [activeMapType, collapsedNodeIds, conversationId, layoutMode, payload, selectedNodeId]);
-
-  const parsedNodes = useMemo(() => payload?.nodes || [], [payload]);
-  const parsedEdges = useMemo(() => payload?.edges || [], [payload]);
+  }, [
+    activeMapType,
+    collapsedNodeIds,
+    conversationId,
+    focusNodeId,
+    viewerPayload,
+    selectedNodeId,
+    showReasoningMap,
+    viewerMaxDepth,
+  ]);
+  const parsedNodes = useMemo(() => viewerPayload?.nodes || [], [viewerPayload]);
+  const parsedEdges = useMemo(() => viewerPayload?.edges || [], [viewerPayload]);
   const hierarchyEdges = useMemo(
     () => parsedEdges.filter((edge) => !edge.type || edge.type === "hierarchy"),
     [parsedEdges],
   );
   const nodeById = useMemo(() => new Map(parsedNodes.map((node) => [node.id, node])), [parsedNodes]);
-
-  const childrenByParent = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const edge of hierarchyEdges) {
-      const rows = map.get(edge.source) || [];
-      rows.push(edge.target);
-      map.set(edge.source, rows);
-    }
-    return map;
-  }, [hierarchyEdges]);
-
-  const parentCount = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const edge of hierarchyEdges) {
-      map.set(edge.target, (map.get(edge.target) || 0) + 1);
-    }
-    return map;
-  }, [hierarchyEdges]);
-
-  const rootId = useMemo(() => {
-    let candidate = String(payload?.root_id || "");
-    if (!candidate || !nodeById.has(candidate)) {
-      const topLevel = parsedNodes
-        .filter((node) => (parentCount.get(node.id) || 0) === 0)
-        .sort(
-          (left, right) =>
-            (childrenByParent.get(right.id)?.length || 0) - (childrenByParent.get(left.id)?.length || 0),
-        );
-      candidate = topLevel[0]?.id || parsedNodes[0]?.id || "";
-    }
-    if (!candidate || !nodeById.has(candidate)) {
-      return "";
-    }
-    const candidateNode = nodeById.get(candidate);
-    const childRows = (childrenByParent.get(candidate) || []).filter((nodeId) => nodeById.has(nodeId));
-    if (candidateNode && childRows.length === 1 && looksLikePromptTitle(String(candidateNode.title || ""))) {
-      const childId = childRows[0];
-      const childNode = nodeById.get(childId);
-      const childType = String(childNode?.node_type || childNode?.type || "").toLowerCase();
-      const childVisibleChildren = (childrenByParent.get(childId) || []).length;
-      if ((childType === "source" || childType === "web_source") && childVisibleChildren > 8) {
-        return candidate;
-      }
-      return childId;
-    }
-    return candidate;
-  }, [childrenByParent, nodeById, parentCount, parsedNodes, payload]);
-
+  const childrenByParent = useMemo(() => buildChildrenByParent(hierarchyEdges), [hierarchyEdges]);
+  const parentCount = useMemo(() => buildParentCount(hierarchyEdges), [hierarchyEdges]);
+  const rootId = useMemo(
+    () => resolveRootId(viewerPayload, parsedNodes, nodeById, parentCount, childrenByParent),
+    [childrenByParent, nodeById, parentCount, parsedNodes, viewerPayload],
+  );
   const depthMap = useMemo(() => computeDepths(rootId, hierarchyEdges), [hierarchyEdges, rootId]);
-
-  const branchColorIndexMap = useMemo(() => {
-    const map = new Map<string, number>();
-    const topLevelChildren = (childrenByParent.get(rootId) || []).filter((id) => nodeById.has(id));
-    topLevelChildren.forEach((childId, branchIndex) => {
-      const queue = [childId];
-      while (queue.length) {
-        const id = queue.shift()!;
-        if (!map.has(id)) {
-          map.set(id, branchIndex);
-          (childrenByParent.get(id) || []).forEach((c) => queue.push(c));
-        }
-      }
-    });
-    return map;
-  }, [childrenByParent, nodeById, rootId]);
-
-  const nodeOrder = useMemo(() => {
-    const order = new Map<string, number>();
-    parsedNodes.forEach((node, index) => {
-      const pageRaw = String(node.page_ref || node.page || "");
-      const pageMatch = pageRaw.match(/\d+/)?.[0];
-      const pageNumber = pageMatch ? Number.parseInt(pageMatch, 10) : Number.NaN;
-      const rank = Number.isFinite(pageNumber) ? pageNumber * 1000 : (depthMap[node.id] ?? 99) * 1000 + index;
-      order.set(node.id, rank + index / 1000);
-    });
-    return order;
-  }, [depthMap, parsedNodes]);
-
+  const branchColorIndexMap = useMemo(
+    () => buildBranchColorIndexMap(childrenByParent, nodeById, rootId),
+    [childrenByParent, nodeById, rootId],
+  );
+  const nodeOrder = useMemo(() => buildNodeOrder(parsedNodes, depthMap), [depthMap, parsedNodes]);
   const hiddenIds = useMemo(() => {
     const result = new Set<string>();
     for (const collapsedId of collapsedNodeIds) {
@@ -206,283 +143,226 @@ export function MindMapViewer({
     }
     return result;
   }, [childrenByParent, collapsedNodeIds, parsedNodes]);
-
+  const focusVisibleIds = useMemo(() => (focusNodeId ? focusedBranchIds(focusNodeId, hierarchyEdges) : null), [focusNodeId, hierarchyEdges]);
   const visibleBaseNodes = useMemo(
     () =>
       parsedNodes
-        .filter((node) => !hiddenIds.has(node.id))
+        .filter((node) => (focusVisibleIds ? focusVisibleIds.has(node.id) : !hiddenIds.has(node.id)))
         .filter((node) => typeof depthMap[node.id] === "number")
-        .filter((node) => (depthMap[node.id] ?? 0) <= maxDepth),
-    [depthMap, hiddenIds, maxDepth, parsedNodes],
+        .filter((node) => (depthMap[node.id] ?? 0) <= viewerMaxDepth),
+    [depthMap, focusVisibleIds, hiddenIds, parsedNodes, viewerMaxDepth],
   );
-
   const allNodeIds = useMemo(() => new Set(parsedNodes.map((node) => node.id)), [parsedNodes]);
   const visibleIds = useMemo(() => new Set(visibleBaseNodes.map((node) => node.id)), [visibleBaseNodes]);
-
   const layoutParams = useMemo(
     () => ({
       rootId,
       nodeIds: visibleIds,
       childrenByParent,
       depthMap,
-      collapsedSet: new Set(collapsedNodeIds),
-      maxDepth,
+      collapsedSet: focusVisibleIds ? new Set<string>() : new Set(collapsedNodeIds),
+      maxDepth: viewerMaxDepth,
       nodeOrder,
     }),
-    [childrenByParent, collapsedNodeIds, depthMap, maxDepth, nodeOrder, rootId, visibleIds],
+    [childrenByParent, collapsedNodeIds, depthMap, focusVisibleIds, nodeOrder, rootId, viewerMaxDepth, visibleIds],
   );
-
-  // Switch between radial (balanced) and horizontal (notebook tree) layouts.
-  // Radial returns CENTER positions; notebook returns TOP-LEFT positions.
-  const layout = useMemo(
-    () =>
-      layoutMode === "horizontal"
-        ? computeNotebookLayout(layoutParams)
-        : computeRadialLayout(layoutParams),
-    [layoutMode, layoutParams],
-  );
-
-  // Returns the CENTER of a node for edge drawing, regardless of layout mode.
+  const layoutMode = "horizontal" as const;
+  const layout = useMemo(() => computeNotebookLayout(layoutParams), [layoutParams]);
   const getCenter = useCallback(
     (nodeId: string): { x: number; y: number } => {
       const pos = layout[nodeId] ?? { x: 0, y: 0 };
       if (layoutMode === "horizontal") {
-        const hw = nodeId === rootId ? 92 : NODE_HALF_W;
-        const hh = nodeId === rootId ? 22 : NODE_HALF_H;
-        return { x: pos.x + hw, y: pos.y + hh };
+        const depth = depthMap[nodeId] ?? 1;
+        const halfWidth = depth <= 0 ? 200 : depth === 1 ? 160 : 140;
+        const halfHeight = depth <= 0 ? 38 : 34;
+        return { x: pos.x + halfWidth, y: pos.y + halfHeight };
       }
       return pos;
     },
-    [layout, layoutMode, rootId],
+    [depthMap, layout, layoutMode],
   );
-
-  const handleAsk = useCallback(
-    (nodeId: string) => {
-      setSelectedNodeId(nodeId);
-      if (!onAskNode) {
-        return;
-      }
-      const selected = parsedNodes.find((row) => row.id === nodeId);
-      if (!selected) {
-        return;
-      }
-      onAskNode({
-        nodeId: selected.id,
-        title: selected.title || "",
-        text: selected.text || "",
-        pageRef: selected.page_ref || selected.page || undefined,
-        sourceId: selected.source_id,
-        sourceName: selected.source_name,
-      });
-    },
-    [onAskNode, parsedNodes],
-  );
-
+  const hasReasoningMap = Boolean(payload?.reasoning_map?.edges?.length);
   const resolveNodePayload = useCallback(
-    (nodeId: string) => {
-      const selected = parsedNodes.find((row) => row.id === nodeId);
-      if (!selected) {
-        return null;
-      }
-      return {
-        nodeId: selected.id,
-        title: selected.title || "",
-        text: selected.text || "",
-        pageRef: selected.page_ref || selected.page || undefined,
-        sourceId: selected.source_id,
-        sourceName: selected.source_name,
-      };
-    },
+    (nodeId: string) => toFocusPayload(parsedNodes.find((row) => row.id === nodeId) || null),
     [parsedNodes],
   );
-
   const fitView = useCallback(() => {
-    flowRef.current?.fitView({ padding: 0.24, maxZoom: 1.05, minZoom: 0.2, duration: 220 });
+    flowRef.current?.fitView({ padding: 0.14, maxZoom: 1.1, minZoom: 0.2, duration: 220 });
   }, []);
-
-  // ── Toolbar callbacks ──────────────────────────────────────────────────────
-
+  const handleFlowInit = useCallback((instance: ReactFlowInstance<Node<MindNodeData>, Edge>) => {
+    flowRef.current = instance;
+    setLastFitKey("");
+  }, []);
   const handleExpand = useCallback(() => setCollapsedNodeIds([]), []);
-
   const handleCollapse = useCallback(() => {
-    const ids = parsedNodes
-      .filter((node) => (childrenByParent.get(node.id) || []).some((child) => allNodeIds.has(child)))
-      .map((node) => node.id);
-    setCollapsedNodeIds(ids);
-  }, [allNodeIds, childrenByParent, parsedNodes]);
-
-  const handleToggleLayout = useCallback(
-    () => setLayoutMode((prev) => (prev === "balanced" ? "horizontal" : "balanced")),
-    [],
-  );
-
-  const handleResetFocus = useCallback(() => setSelectedNodeId(null), []);
-
-  const handleExportJson = useCallback(() => {
-    if (!payload) return;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `mindmap-${activeMapType}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeMapType, payload]);
-
-  const handleExportMarkdown = useCallback(() => {
-    if (!payload?.nodes?.length) return;
-    const lines: string[] = [`# ${payload.title || "Knowledge Map"}\n`];
-    const buildLines = (nodeId: string, depth: number) => {
-      const node = nodeById.get(nodeId);
-      if (!node) return;
-      const indent = "  ".repeat(Math.max(0, depth - 1));
-      const prefix = depth === 0 ? "" : `${indent}- `;
-      lines.push(`${prefix}**${node.title || node.id}**${node.text ? `: ${node.text}` : ""}`);
-      for (const childId of childrenByParent.get(nodeId) || []) {
-        buildLines(childId, depth + 1);
+    setCollapsedNodeIds(computeInitialCollapsedFromPayload(viewerPayload, viewerMaxDepth));
+  }, [viewerPayload, viewerMaxDepth]);
+  const toggleNodeCollapse = useCallback((nodeId: string) => {
+    setCollapsedNodeIds((previous) => {
+      const isCollapsed = previous.includes(nodeId);
+      if (!isCollapsed) {
+        return [...previous, nodeId];
       }
-    };
-    if (rootId) buildLines(rootId, 0);
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `mindmap-${activeMapType}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+      const next = new Set(previous.filter((entry) => entry !== nodeId));
+      const directChildren = (childrenByParent.get(nodeId) || []).filter(
+        (childId) => (depthMap[childId] ?? Number.MAX_SAFE_INTEGER) <= viewerMaxDepth,
+      );
+      directChildren.forEach((childId) => {
+        const grandChildren = (childrenByParent.get(childId) || []).filter(
+          (grandChildId) => (depthMap[grandChildId] ?? Number.MAX_SAFE_INTEGER) <= viewerMaxDepth,
+        );
+        if (grandChildren.length > 0) {
+          next.add(childId);
+        }
+      });
+      return Array.from(next);
+    });
+  }, [childrenByParent, depthMap, viewerMaxDepth]);
+  const handleSwitchMapType = useCallback(
+    (mapType: MindmapMapType) => {
+      const variantPayload =
+        basePayload && mapType !== detectedBaseMapType && basePayload.variants?.[mapType]
+          ? (basePayload.variants[mapType] as MindmapPayload)
+          : basePayload;
+      const normalizedVariantPayload = normalizeMindmapPayloadForViewer(variantPayload, mapType);
+      setCollapsedNodeIds(computeInitialCollapsedFromPayload(normalizedVariantPayload, viewerMaxDepth));
+      setActiveMapType(mapType);
+      setSelectedNodeId(null);
+      setFocusNodeId(null);
+      setShowReasoningMap(false);
+      onMapTypeChange?.(mapType);
+    },
+    [basePayload, detectedBaseMapType, onMapTypeChange, viewerMaxDepth],
+  );
+  const handleExportJson = useCallback(() => {
+    if (!payload) {
+      return;
+    }
+    downloadMindmapJson(payload, activeMapType);
+  }, [activeMapType, payload]);
+  const handleExportMarkdown = useCallback(() => {
+    if (!payload) {
+      return;
+    }
+    downloadMindmapMarkdown({
+      payload,
+      activeMapType,
+      nodeById,
+      childrenByParent,
+      rootId,
+    });
   }, [activeMapType, childrenByParent, nodeById, payload, rootId]);
-
-  const handleExportPng = useCallback(() => {
-    window.print();
-  }, []);
-
   const handleSave = useCallback(() => {
-    if (payload && onSaveMap) onSaveMap(payload);
+    if (payload && onSaveMap) {
+      onSaveMap(payload);
+    }
   }, [onSaveMap, payload]);
-
   const handleShare = useCallback(async () => {
-    if (payload && onShareMap) await onShareMap(payload);
+    if (payload && onShareMap) {
+      await onShareMap(payload);
+    }
   }, [onShareMap, payload]);
-
-  // ── Flow nodes ─────────────────────────────────────────────────────────────
-
+  const normalizedReasoningEdges = useMemo(() => {
+    if (!payload?.reasoning_map?.edges?.length) {
+      return [];
+    }
+    const reasoningNodeTargetById = new Map(
+      (payload.reasoning_map.nodes || []).map((node) => [node.id, node.node_id || node.id]),
+    );
+    return payload.reasoning_map.edges
+      .map((edge) => ({
+        id: edge.id,
+        source: String(reasoningNodeTargetById.get(edge.source) || edge.source || ""),
+        target: String(reasoningNodeTargetById.get(edge.target) || edge.target || ""),
+      }))
+      .filter((edge) => edge.source && edge.target && nodeById.has(edge.source) && nodeById.has(edge.target));
+  }, [nodeById, payload?.reasoning_map]);
   const flowNodes = useMemo(
     () =>
-      visibleBaseNodes.map((node, index): Node<MindNodeData> => {
-        const depth = depthMap[node.id] ?? 0;
-        const hasChildren = (childrenByParent.get(node.id) || []).some(
-          (child) => allNodeIds.has(child) && (depthMap[child] ?? Number.MAX_SAFE_INTEGER) <= maxDepth,
-        );
-        const nodeTitle = String(node.title || node.id || "").trim();
-        let displayTitle = nodeTitle || node.id;
-        if (looksNoisyTitle(nodeTitle)) {
-          const promotedTitle = (childrenByParent.get(node.id) || [])
-            .map((childId) => String(nodeById.get(childId)?.title || "").trim())
-            .find((candidate) => candidate && !looksNoisyTitle(candidate));
-          if (promotedTitle) {
-            displayTitle = promotedTitle;
-          }
-        }
-        if (looksNoisyTitle(displayTitle)) {
-          const pageValue = String(node.page_ref || node.page || "").trim();
-          displayTitle = pageValue || String(node.id || "");
-        }
-
-        return {
-          id: node.id,
-          type: "mind",
-          draggable: false,
-          sourcePosition: Position.Right,
-          targetPosition: Position.Left,
-          position: (() => {
-            const pos = layout[node.id];
-            if (!pos) return { x: depth * 200, y: index * 54 };
-            // Notebook layout returns top-left directly; radial returns center.
-            if (layoutMode === "horizontal") return pos;
-            const hw = node.id === rootId ? 92 : NODE_HALF_W;
-            const hh = node.id === rootId ? 22 : NODE_HALF_H;
-            return { x: pos.x - hw, y: pos.y - hh };
-          })(),
-          data: {
-            title: displayTitle,
-            subtitle:
-              activeMapType === "work_graph"
-                ? [
-                    compactNodeValue((node as Record<string, unknown>)["status"]),
-                    compactNodeValue((node as Record<string, unknown>)["tool_id"]),
-                  ]
-                    .filter((row) => row.length > 0)
-                    .join(" • ") || undefined
-                : undefined,
-            hasChildren,
-            collapsed: collapsedNodeIds.includes(node.id),
-            nodeType: String(node.type || node.node_type || ""),
-            isRoot: node.id === rootId,
-            depth,
-            isSelected: selectedNodeId === node.id,
-            branchColorIndex: branchColorIndexMap.get(node.id) ?? -1,
-            onToggle: (targetNodeId: string) =>
-              setCollapsedNodeIds((prev) =>
-                prev.includes(targetNodeId)
-                  ? prev.filter((entry) => entry !== targetNodeId)
-                  : [...prev, targetNodeId],
-              ),
-            onAsk: onAskNode ? handleAsk : undefined,
-          },
-        };
+      buildFlowNodes({
+        visibleNodes: visibleBaseNodes,
+        activeMapType,
+        allNodeIds,
+        branchColorIndexMap,
+        childrenByParent,
+        collapsedNodeIds,
+        depthMap,
+        layout,
+        layoutMode,
+        maxDepth: viewerMaxDepth,
+        nodeById,
+        rootId,
+        selectedNodeId,
+        onToggleNode: toggleNodeCollapse,
+        isInteractive: Boolean(onFocusNode || onAskNode),
       }),
     [
       activeMapType,
+      allNodeIds,
       branchColorIndexMap,
       childrenByParent,
       collapsedNodeIds,
       depthMap,
-      allNodeIds,
-      handleAsk,
       layout,
       layoutMode,
+      viewerMaxDepth,
       nodeById,
       onAskNode,
+      onFocusNode,
       rootId,
       selectedNodeId,
+      toggleNodeCollapse,
       visibleBaseNodes,
-      visibleIds,
     ],
   );
-
-  const flowEdges = useMemo(
+  const hierarchyFlowEdges = useMemo(
     () =>
-      hierarchyEdges
-        .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
-        .map((edge): Edge => {
-          const sourceDepth = depthMap[edge.source] ?? 0;
-          const colorIndex = branchColorIndexMap.get(edge.target) ?? branchColorIndexMap.get(edge.source) ?? -1;
-          const branchColor = colorIndex >= 0 ? BRANCH_EDGE_COLORS[colorIndex % BRANCH_EDGE_COLORS.length] : "#A3A3A3";
-          const isHighlighted = !selectedNodeId || edge.source === selectedNodeId || edge.target === selectedNodeId;
-          const srcCenter = getCenter(edge.source);
-          const tgtCenter = getCenter(edge.target);
-          return {
-            id: edge.id || `${edge.source}->${edge.target}`,
-            source: edge.source,
-            target: edge.target,
-            type: "mindCurve",
-            data: { sx: srcCenter.x, sy: srcCenter.y, tx: tgtCenter.x, ty: tgtCenter.y },
-            style: {
-              stroke: branchColor,
-              strokeWidth: sourceDepth === 0 ? 2.8 : sourceDepth === 1 ? 2.2 : 1.6,
-              opacity: isHighlighted ? 0.85 : 0.35,
-              strokeLinecap: "round",
-            },
-          };
-        }),
+      buildFlowEdges({
+        hierarchyEdges,
+        visibleIds,
+        depthMap,
+        branchColorIndexMap,
+        selectedNodeId,
+        getCenter,
+      }),
     [branchColorIndexMap, depthMap, getCenter, hierarchyEdges, selectedNodeId, visibleIds],
   );
-
+  const reasoningFlowEdges = useMemo(
+    () =>
+      showReasoningMap && hasReasoningMap && layoutMode === "balanced"
+        ? buildReasoningOverlayEdges({
+            reasoningEdges: normalizedReasoningEdges,
+            visibleIds,
+            getCenter,
+          })
+        : [],
+    [getCenter, hasReasoningMap, layoutMode, normalizedReasoningEdges, showReasoningMap, visibleIds],
+  );
+  const flowEdges = useMemo(
+    () => [...hierarchyFlowEdges, ...reasoningFlowEdges],
+    [hierarchyFlowEdges, reasoningFlowEdges],
+  );
+  const handleExportPng = useCallback(() => {
+    if (!flowNodes.length) {
+      return;
+    }
+    drawPngFromLayout(flowNodes, flowEdges, String(payload?.title || activeMapType || "mindmap"));
+  }, [activeMapType, flowEdges, flowNodes, payload?.title]);
+  useEffect(() => {
+    if (!hasReasoningMap && showReasoningMap) {
+      setShowReasoningMap(false);
+    }
+  }, [hasReasoningMap, showReasoningMap]);
+  useEffect(() => {
+    if (focusNodeId && !nodeById.has(focusNodeId)) {
+      setFocusNodeId(null);
+    }
+  }, [focusNodeId, nodeById]);
   useEffect(() => {
     if (!flowRef.current || !flowNodes.length) {
       return;
     }
-    const key = `${activeMapType}:${layoutMode}:${collapsedNodeIds.join(",")}:${flowNodes.length}:${maxDepth}`;
+    const key = `${activeMapType}:${layoutMode}:${focusNodeId || ""}:${viewerMaxDepth}`;
     if (key === lastFitKey) {
       return;
     }
@@ -491,46 +371,57 @@ export function MindMapViewer({
       setLastFitKey(key);
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [activeMapType, collapsedNodeIds, fitView, flowNodes, lastFitKey, layoutMode, maxDepth]);
-
-  const hasVariants = Boolean(
-    payload?.variants && Object.keys(payload.variants as Record<string, unknown>).length > 0,
+  }, [activeMapType, fitView, focusNodeId, flowNodes, lastFitKey, layoutMode, viewerMaxDepth]);
+  const availableMapTypes = useMemo(() => collectAvailableMindmapTypes(basePayload), [basePayload]);
+  const selectedNode = useMemo(
+    () => (selectedNodeId ? parsedNodes.find((node) => node.id === selectedNodeId) || null : null),
+    [parsedNodes, selectedNodeId],
   );
-
-  if (!payload || !parsedNodes.length) {
-    return (
-      <div className="rounded-xl border border-black/[0.08] bg-white p-4 text-[12px] text-[#6e6e73]">
-        <p className="font-medium text-[#1d1d1f] mb-1">Mind map unavailable</p>
-        <p>No knowledge map was produced for this answer. Ask a research or analytical question to generate one.</p>
-      </div>
-    );
-  }
-
   const handleNodeClick: NodeMouseHandler<Node<MindNodeData>> = (_event, node) => {
     const focusPayload = resolveNodePayload(node.id);
+    if (focusPayload && onFocusNode) onFocusNode(focusPayload);
+    setSelectedNodeId(node.id);
+  };
+  const handleSelectNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    const focusPayload = resolveNodePayload(nodeId);
     if (focusPayload && onFocusNode) {
       onFocusNode(focusPayload);
     }
-    setSelectedNodeId(node.id);
-  };
-
+  }, [onFocusNode, resolveNodePayload]);
+  const handleAskSelectedNode = useCallback((focusPayload: FocusNodePayload) => {
+    setSelectedNodeId(focusPayload.nodeId);
+    onAskNode?.(focusPayload);
+  }, [onAskNode]);
+  const handleFocusBranch = useCallback((nodeId: string | null) => {
+    if (!nodeId) {
+      setFocusNodeId(null);
+      return;
+    }
+    setFocusNodeId((previous) => (previous === nodeId ? null : nodeId));
+    setSelectedNodeId(nodeId);
+  }, []);
+  const handleClearFocus = useCallback(() => setFocusNodeId(null), []);
+  if (!payload || !parsedNodes.length) {
+    return <MindMapEmptyState />;
+  }
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-sm">
-      <div className="px-3 py-2 border-b border-[#e5e5ea]">
+    <div className="overflow-hidden rounded-[28px] border border-[#dedfd7] bg-[linear-gradient(180deg,#fcfcfa_0%,#f6f5f1_100%)] shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+      <div className="border-b border-black/[0.06] bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(251,251,248,0.78))] px-5 py-4 backdrop-blur md:px-6">
         <MindMapToolbar
-          title={String(payload.title || "Knowledge Map")}
-          mapType={String(payload.map_type || "structure")}
-          kind={String(payload.kind || "map")}
           activeMapType={activeMapType}
-          hasVariants={hasVariants}
-          layoutMode={layoutMode}
-          onSwitchMapType={setActiveMapType}
+          availableMapTypes={availableMapTypes}
+          maxDepth={viewerMaxDepth}
+          showReasoningMap={showReasoningMap}
+          hasReasoningMap={hasReasoningMap}
+          focusNodeId={focusNodeId}
+          onSwitchMapType={handleSwitchMapType}
           onExpand={handleExpand}
           onCollapse={handleCollapse}
-          onToggleLayout={handleToggleLayout}
-          onResetFocus={handleResetFocus}
-          onAutoTidy={fitView}
           onFitView={fitView}
+          onMaxDepthChange={(depth) => setViewerMaxDepth(clampMindmapDepth(depth))}
+          onToggleReasoningMap={() => setShowReasoningMap((previous) => !previous)}
+          onClearFocus={handleClearFocus}
           onExportPng={handleExportPng}
           onExportJson={handleExportJson}
           onExportMarkdown={handleExportMarkdown}
@@ -538,31 +429,36 @@ export function MindMapViewer({
           onShare={handleShare}
         />
       </div>
-      <div className="w-full" style={{ height: `${effectiveViewerHeight}px` }}>
-        <ReactFlow
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          nodes={flowNodes}
-          edges={flowEdges}
-          onInit={(instance) => {
-            flowRef.current = instance;
-            window.setTimeout(() => fitView(), 50);
-          }}
-          onNodeClick={handleNodeClick}
-          fitView
-          fitViewOptions={{ padding: 0.24, maxZoom: 1.05 }}
-          minZoom={0.2}
-          maxZoom={1.7}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          zoomOnDoubleClick={false}
-          panOnDrag
-          zoomOnPinch
-          zoomOnScroll
-          proOptions={{ hideAttribution: true }}
-          className="bg-white"
-        />
+      <div className="relative">
+        <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 px-4 pb-6 pt-4 md:px-5 md:pb-8 md:pt-5">
+          <div
+            className="overflow-hidden rounded-[24px] border border-black/[0.06] bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.88)]"
+            style={{ height: `${effectiveViewerHeight}px` }}
+          >
+            <MindMapFlowCanvas
+              height={effectiveViewerHeight}
+              nodes={flowNodes}
+              edges={flowEdges}
+              onInit={handleFlowInit}
+              onNodeClick={handleNodeClick}
+            />
+          </div>
+          </div>
+          <aside className="border-t border-black/[0.06] bg-[linear-gradient(180deg,#f8f7f3_0%,#f3f1eb_100%)] px-4 pb-6 pt-4 xl:border-l xl:border-t-0 xl:px-5 xl:pb-8 xl:pt-5">
+            <div className="xl:sticky xl:top-5">
+            <MindMapViewerDetails
+              activeMapType={activeMapType}
+              selectedNode={selectedNode}
+              onFocusBranch={handleFocusBranch}
+              isFocusActive={Boolean(selectedNode && focusNodeId === selectedNode.id)}
+              onAskNode={onAskNode ? handleAskSelectedNode : undefined}
+            />
+            </div>
+          </aside>
+        </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,rgba(246,245,241,0)_0%,rgba(246,245,241,0.82)_62%,rgba(246,245,241,1)_100%)]" />
+        <div className="pointer-events-none h-5 bg-[linear-gradient(180deg,rgba(246,245,241,0.78),rgba(246,245,241,1))]" />
       </div>
     </div>
   );

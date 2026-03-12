@@ -32,4 +32,23 @@ describe("mindmap viewer canvas state", () => {
     );
     expect(parsed?.activeMapType).toBe("structure");
   });
+
+  it("preserves focus state, reasoning toggle, and clamps max depth", () => {
+    const parsed = parseCanvasState(
+      JSON.stringify({
+        collapsedNodeIds: ["node-3"],
+        activeMapType: "evidence",
+        focusedNodeId: "node-3",
+        focusNodeId: "node-7",
+        showReasoningMap: true,
+        layoutMode: "balanced",
+        maxDepth: 99,
+      }),
+    );
+    expect(parsed?.focusedNodeId).toBe("node-3");
+    expect(parsed?.focusNodeId).toBe("node-7");
+    expect(parsed?.showReasoningMap).toBe(true);
+    expect(parsed?.maxDepth).toBe(8);
+    expect(parsed?.layoutMode).toBe("horizontal");
+  });
 });

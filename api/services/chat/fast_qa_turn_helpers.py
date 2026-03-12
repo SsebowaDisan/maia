@@ -421,6 +421,15 @@ def run_fast_chat_turn_impl(
             settings_payload = mindmap_payload.get("settings")
             if isinstance(settings_payload, dict):
                 settings_payload["map_type"] = "context_mindmap"
+        # Backfill available_map_types when the indexer path omits it
+        if "available_map_types" not in mindmap_payload:
+            _all_map_keys = ["work_graph", "context_mindmap", "structure", "evidence"]
+            _present = {mindmap_payload.get("map_type")} | set(
+                (mindmap_payload.get("variants") or {}).keys()
+            )
+            mindmap_payload["available_map_types"] = [
+                k for k in _all_map_keys if k in _present
+            ]
         info_panel["mindmap"] = mindmap_payload
 
     if source_usage:

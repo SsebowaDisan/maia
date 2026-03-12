@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import type { CitationHighlightBox } from "../types";
 import {
   buildOverlayPath,
-  buildOverlayRectsForRange,
   buildSearchCandidates,
-  collectSpanSegments,
-  findHighlightRange,
   normalizeExternalOverlayRects,
   normalizeSearchText,
   overlayRectsEqual,
   parsePageNumber,
   type OverlayRect,
 } from "./citationPdfHighlight";
+import {
+  PageFallbackState,
+  PageLoadingState,
+  PdfPreviewToolbar,
+} from "./CitationPdfPreviewChrome";
+import { tryFocusHighlight } from "./citationPdfPreviewFocus";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
@@ -27,6 +29,8 @@ interface CitationPdfPreviewProps {
   page?: string;
   highlightText: string;
   highlightQuery?: string;
+  charStart?: number;
+  charEnd?: number;
   highlightBoxes?: CitationHighlightBox[];
   viewerHeight?: number;
   initialZoom?: number;
@@ -36,65 +40,13 @@ interface CitationPdfPreviewProps {
 
 type PageRenderState = "loading" | "ready" | "error" | "stalled";
 
-function buildPdfPageUrl(fileUrl: string, pageNumber: number): string {
-  try {
-    const base = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1";
-    const resolved = new URL(fileUrl, base);
-    resolved.hash = `page=${Math.max(1, Math.round(pageNumber))}`;
-    return resolved.toString();
-  } catch {
-    return fileUrl;
-  }
-}
-
-function PageLoadingState() {
-  return (
-    <div className="flex min-h-[440px] w-full min-w-[240px] items-center justify-center rounded-[14px] bg-[#fbfbfd] text-[#6e6e73]">
-      <div className="flex flex-col items-center gap-2">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        <p className="text-[11px] font-medium">Rendering page preview</p>
-      </div>
-    </div>
-  );
-}
-
-function PageFallbackState({
-  fileUrl,
-  pageNumber,
-  stalled = false,
-}: {
-  fileUrl: string;
-  pageNumber: number;
-  stalled?: boolean;
-}) {
-  return (
-    <div className="flex min-h-[440px] w-full min-w-[240px] items-center justify-center rounded-[14px] bg-[#fbfbfd] px-6 text-center">
-      <div className="max-w-[280px] space-y-3">
-        <p className="text-[12px] font-medium text-[#1d1d1f]">
-          {stalled ? "Page preview is taking too long." : "Unable to render this PDF page."}
-        </p>
-        <p className="text-[11px] leading-5 text-[#6e6e73]">
-          Open the document directly if you need the full page immediately.
-        </p>
-        <a
-          href={buildPdfPageUrl(fileUrl, pageNumber)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1d1d1f] transition-colors hover:bg-[#f3f3f5]"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Open document
-        </a>
-      </div>
-    </div>
-  );
-}
-
 export function CitationPdfPreview({
   fileUrl,
   page,
   highlightText,
   highlightQuery,
+  charStart,
+  charEnd,
   highlightBoxes,
   viewerHeight = 420,
   initialZoom = 1,
@@ -218,54 +170,6 @@ export function CitationPdfPreview({
     }, 240);
   };
 
-  const tryFocusHighlight = (targetPage: number, appliedKey: string) => {
-    const safePage = clampPage(targetPage);
-    const pageSurface = pageSurfaceRefs.current[safePage];
-    if (!pageSurface) {
-      return false;
-    }
-    const currentRects = overlayRectsByPageRef.current[safePage] || [];
-    if (appliedHighlightKeyRef.current === appliedKey && currentRects.length > 0) {
-      return true;
-    }
-    if (externalOverlayRects.length) {
-      applyOverlayRects(safePage, externalOverlayRects);
-      scrollToOverlayRect({
-        pageSurface,
-        page: safePage,
-        overlayRect: externalOverlayRects[0],
-      });
-      appliedHighlightKeyRef.current = appliedKey;
-      return true;
-    }
-    if (!searchCandidates.length) {
-      appliedHighlightKeyRef.current = appliedKey;
-      return true;
-    }
-    const { segments, combined } = collectSpanSegments(pageSurface);
-    const highlightRange = findHighlightRange({
-      segments,
-      combined,
-      candidates: searchCandidates,
-    });
-    if (!highlightRange) {
-      return false;
-    }
-
-    const overlayRects = buildOverlayRectsForRange(pageSurface, segments, highlightRange);
-    if (!overlayRects.length) {
-      return false;
-    }
-    applyOverlayRects(safePage, overlayRects);
-    scrollToOverlayRect({
-      pageSurface,
-      page: safePage,
-      overlayRect: overlayRects[0],
-    });
-    appliedHighlightKeyRef.current = appliedKey;
-    return true;
-  };
-
   const scheduleHighlightFocus = (targetPage: number, options?: { force?: boolean }) => {
     const force = Boolean(options?.force);
     const safePage = clampPage(targetPage);
@@ -279,7 +183,20 @@ export function CitationPdfPreview({
     highlightFocusAttemptsRef.current = 0;
     const maxAttempts = externalOverlayRects.length ? 18 : 80;
     const tick = () => {
-      const hitFound = tryFocusHighlight(safePage, appliedKey);
+      const hitFound = tryFocusHighlight({
+        targetPage: safePage,
+        appliedKey,
+        charStart,
+        charEnd,
+        searchCandidates,
+        externalOverlayRects,
+        pageSurfaceRefs,
+        overlayRectsByPageRef,
+        appliedHighlightKeyRef,
+        clampPage,
+        applyOverlayRects,
+        scrollToOverlayRect,
+      });
       if (hitFound) {
         stopHighlightFocusTimer();
         return;
@@ -427,83 +344,42 @@ export function CitationPdfPreview({
   }, [currentPage, docReady, onPageChange]);
 
   return (
-    <div className="citation-pdf rounded-xl border border-black/[0.08] bg-white overflow-hidden">
-      <div className="h-8 px-2.5 flex items-center justify-between border-b border-black/[0.06] bg-[#f8f8fa]">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              const next = clampPage(currentPage - 1);
-              setActiveTargetPage(next);
-              scrollToPage(next, "smooth");
-              scheduleHighlightFocus(next);
-            }}
-            disabled={currentPage <= 1}
-            className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setZoomLevel((previous) => {
-                const next = Math.max(0.75, Number((previous - 0.2).toFixed(2)));
-                onZoomChange?.(next);
-                return next;
-              });
-            }}
-            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
-            aria-label="Zoom out"
-          >
-            -
-          </button>
-        </div>
-        <p className="text-[10px] text-[#6e6e73]">
-          Page {currentPage} of {numPages} | {Math.round(zoomLevel * 100)}%
-        </p>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              setZoomLevel((previous) => {
-                const next = Math.min(2.25, Number((previous + 0.2).toFixed(2)));
-                onZoomChange?.(next);
-                return next;
-              });
-            }}
-            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
-            aria-label="Zoom in"
-          >
-            +
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setZoomLevel(1);
-              onZoomChange?.(1);
-            }}
-            className="rounded-md border border-black/[0.08] px-1.5 py-0.5 text-[10px] text-[#4c4c50] hover:bg-black/[0.03]"
-            aria-label="Reset zoom"
-          >
-            1x
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const next = clampPage(currentPage + 1);
-              setActiveTargetPage(next);
-              scrollToPage(next, "smooth");
-              scheduleHighlightFocus(next);
-            }}
-            disabled={currentPage >= numPages}
-            className="p-1 rounded-md text-[#6e6e73] hover:bg-black/[0.05] disabled:opacity-30"
-            aria-label="Next page"
-          >
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
+    <div className="citation-pdf overflow-hidden rounded-xl border border-black/[0.08] bg-white">
+      <PdfPreviewToolbar
+        currentPage={currentPage}
+        numPages={numPages}
+        zoomLevel={zoomLevel}
+        onPreviousPage={() => {
+          const next = clampPage(currentPage - 1);
+          setActiveTargetPage(next);
+          scrollToPage(next, "smooth");
+          scheduleHighlightFocus(next);
+        }}
+        onNextPage={() => {
+          const next = clampPage(currentPage + 1);
+          setActiveTargetPage(next);
+          scrollToPage(next, "smooth");
+          scheduleHighlightFocus(next);
+        }}
+        onZoomOut={() => {
+          setZoomLevel((previous) => {
+            const next = Math.max(0.75, Number((previous - 0.2).toFixed(2)));
+            onZoomChange?.(next);
+            return next;
+          });
+        }}
+        onZoomIn={() => {
+          setZoomLevel((previous) => {
+            const next = Math.min(2.25, Number((previous + 0.2).toFixed(2)));
+            onZoomChange?.(next);
+            return next;
+          });
+        }}
+        onResetZoom={() => {
+          setZoomLevel(1);
+          onZoomChange?.(1);
+        }}
+      />
 
       <div
         ref={scrollRef}

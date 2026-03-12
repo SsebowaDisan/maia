@@ -5,7 +5,7 @@ import type { AgentActivityEvent, AgentSourceRecord, ChatAttachment, CitationFoc
 import { parseEvidence } from "../utils/infoInsights";
 import type { EvidenceCard } from "../utils/infoInsights";
 import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
-import { MindmapViewer } from "./MindmapViewer";
+import { MindmapArtifactDialog } from "./MindmapArtifactDialog";
 import { getMindmapPayload } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
 import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
@@ -21,6 +21,8 @@ import {
 import {
   normalizeEvidenceId,
 } from "./infoPanel/urlHelpers";
+import { buildMindmapArtifactSummary } from "./mindmapViewer/presentation";
+import { toMindmapPayload } from "./mindmapViewer/viewerHelpers";
 
 interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
@@ -79,6 +81,7 @@ export function InfoPanel({
   const { memory, updateMemory } = useVerificationMemory(selectedConversationId);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [pdfZoom, setPdfZoom] = useState(1);
+  const [isMindmapDialogOpen, setIsMindmapDialogOpen] = useState(false);
 
   const evidenceCards = useMemo(
     () =>
@@ -202,6 +205,14 @@ export function InfoPanel({
     ? ((mindmapPayload as { nodes?: unknown[] }).nodes as unknown[]).length > 0
     : false;
   const workspaceGraphPayload = mindmapPayload;
+  const typedMindmapPayload = useMemo(
+    () => toMindmapPayload(workspaceGraphPayload as Record<string, unknown>),
+    [workspaceGraphPayload],
+  );
+  const mindmapSummary = useMemo(
+    () => buildMindmapArtifactSummary(typedMindmapPayload),
+    [typedMindmapPayload],
+  );
 
   const selectEvidence = (card: EvidenceCard, index: number) => {
     const nextCitation = toCitationFromEvidence(card, index);
@@ -259,6 +270,26 @@ export function InfoPanel({
     }
   };
 
+  const handleSaveMindmap = (payload: Record<string, unknown>) => {
+    const storageKey = "maia.saved-mindmaps";
+    try {
+      const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+      const conversationKey = String(selectedConversationId || "global");
+      const history = Array.isArray(existing[conversationKey]) ? (existing[conversationKey] as unknown[]) : [];
+      existing[conversationKey] = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
+      window.localStorage.setItem(storageKey, JSON.stringify(existing));
+      toast.success("Mind-map saved");
+    } catch {
+      toast.error("Unable to save mind-map");
+    }
+  };
+
+  const handleShareMindmap = (payload: Record<string, unknown>) =>
+    buildMindmapShareLink({
+      map: payload,
+      conversationId: selectedConversationId,
+    });
+
   return (
     <div
       className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
@@ -273,42 +304,71 @@ export function InfoPanel({
 
       <div className="relative min-h-0 flex-1">
         <div className="h-full space-y-4 overflow-y-auto px-5 pb-10 pt-5">
-          {/* Mindmap */}
-          <section className="space-y-2 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-            <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Context Mindmap</p>
+          <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                  {mindmapSummary?.presentation.eyebrow || "Research artifact"}
+                </p>
+                <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
+                  {mindmapSummary?.presentation.label || "Knowledge map"}
+                </h4>
+                <p className="mt-1 text-[12px] leading-5 text-[#6b6b70]">
+                  {mindmapSummary?.presentation.summary ||
+                    "Open a dedicated artifact surface to inspect the answer map without crowding the Sources panel."}
+                </p>
+              </div>
+              {hasMindmapPayload ? (
+                <button
+                  type="button"
+                  onClick={() => setIsMindmapDialogOpen(true)}
+                  className="shrink-0 rounded-full bg-[#17171b] px-3 py-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#2a2a30]"
+                >
+                  Open map
+                </button>
+              ) : null}
+            </div>
+
             {hasMindmapPayload ? (
-              <div>
-                <MindmapViewer
-                  payload={workspaceGraphPayload as Record<string, unknown>}
-                  conversationId={selectedConversationId}
-                  viewerHeight={viewerHeights.mindmap}
-                  onAskNode={onAskMindmapNode}
-                  onFocusNode={handleMindmapFocus}
-                  onSaveMap={(payload) => {
-                    const storageKey = "maia.saved-mindmaps";
-                    try {
-                      const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
-                      const convKey = String(selectedConversationId || "global");
-                      const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
-                      existing[convKey] = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
-                      window.localStorage.setItem(storageKey, JSON.stringify(existing));
-                      toast.success("Mind-map saved");
-                    } catch {
-                      toast.error("Unable to save mind-map");
-                    }
-                  }}
-                  onShareMap={(payload) =>
-                    buildMindmapShareLink({
-                      map: payload as unknown as Record<string, unknown>,
-                      conversationId: selectedConversationId,
-                    })
-                  }
-                />
-                {renderViewerResizeHandle("mindmap", "mindmap")}
+              <div className="rounded-2xl border border-black/[0.06] bg-white/80 p-3">
+                <div className="flex flex-wrap gap-2">
+                  {mindmapSummary?.availableMapTypes.map((mapType) => (
+                    <span
+                      key={mapType}
+                      className="rounded-full border border-black/[0.06] bg-white px-2.5 py-1 text-[11px] font-medium text-[#4a4a50]"
+                    >
+                      {mapType === "context_mindmap"
+                        ? "Sources"
+                        : mapType === "work_graph"
+                          ? "Execution"
+                          : mapType === "evidence"
+                            ? "Evidence"
+                            : "Concept"}
+                    </span>
+                  ))}
+                  {mindmapSummary?.nodeCount ? (
+                    <span className="rounded-full border border-black/[0.06] bg-white px-2.5 py-1 text-[11px] font-medium text-[#4a4a50]">
+                      {mindmapSummary.nodeCount} nodes
+                    </span>
+                  ) : null}
+                  {mindmapSummary?.sourceCount ? (
+                    <span className="rounded-full border border-black/[0.06] bg-white px-2.5 py-1 text-[11px] font-medium text-[#4a4a50]">
+                      {mindmapSummary.sourceCount} sources
+                    </span>
+                  ) : null}
+                  {mindmapSummary?.actionCount ? (
+                    <span className="rounded-full border border-black/[0.06] bg-white px-2.5 py-1 text-[11px] font-medium text-[#4a4a50]">
+                      {mindmapSummary.actionCount} actions
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-3 text-[12px] leading-5 text-[#6b6b70]">
+                  The full map now opens in its own artifact surface so the right panel can stay focused on source preview.
+                </p>
               </div>
             ) : (
-              <div className="rounded-xl bg-[#f5f5f7] p-3 text-[12px] text-[#6e6e73]">
-                Context mindmap is not available for this answer yet.
+              <div className="rounded-2xl border border-dashed border-black/[0.08] bg-white/65 p-4 text-[12px] leading-5 text-[#6e6e73]">
+                No mindmap artifact was produced for this answer yet. Research-heavy or comparative questions will populate this surface when the backend emits a structured map.
               </div>
             )}
           </section>
@@ -362,6 +422,17 @@ export function InfoPanel({
         </div>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
       </div>
+
+      <MindmapArtifactDialog
+        open={isMindmapDialogOpen}
+        onOpenChange={setIsMindmapDialogOpen}
+        payload={workspaceGraphPayload as Record<string, unknown>}
+        conversationId={selectedConversationId}
+        onAskNode={onAskMindmapNode}
+        onFocusNode={handleMindmapFocus}
+        onSaveMap={(payload) => handleSaveMindmap(payload as unknown as Record<string, unknown>)}
+        onShareMap={(payload) => handleShareMindmap(payload as unknown as Record<string, unknown>)}
+      />
     </div>
   );
 }

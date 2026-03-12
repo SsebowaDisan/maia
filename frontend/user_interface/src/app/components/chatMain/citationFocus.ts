@@ -176,7 +176,7 @@ function normalizePageLabel(...candidates: Array<string | undefined | null>): st
 }
 
 function normalizeCitationExtract(...candidates: Array<string | undefined | null>): string {
-  const MAX_EXTRACT_CHARS = 260;
+  const MAX_EXTRACT_CHARS = 420;
   for (const candidate of candidates) {
     const raw = String(candidate || "").replace(/\s+/g, " ").trim();
     if (!raw) {
@@ -190,11 +190,11 @@ function normalizeCitationExtract(...candidates: Array<string | undefined | null
     }
     const clipped = raw.slice(0, MAX_EXTRACT_CHARS);
     const sentenceCut = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-    if (sentenceCut >= 120) {
+    if (sentenceCut >= 200) {
       return clipped.slice(0, sentenceCut + 1).trim();
     }
     const wordCut = clipped.lastIndexOf(" ");
-    if (wordCut >= 120) {
+    if (wordCut >= 200) {
       return clipped.slice(0, wordCut).trim();
     }
     return clipped.trim();

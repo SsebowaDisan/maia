@@ -306,6 +306,23 @@ function rangeForMatch(
   return { startIndex, endIndex };
 }
 
+export function findRangeByCharOffsets(
+  segments: SpanSegment[],
+  charStart?: number,
+  charEnd?: number,
+): SpanRange | null {
+  const start = Number(charStart);
+  const end = Number(charEnd);
+  if (!segments.length || !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+    return null;
+  }
+  return rangeForMatch({
+    segments,
+    matchStart: start,
+    matchEnd: end,
+  });
+}
+
 export function findHighlightRange(
   params: {
     segments: SpanSegment[];
