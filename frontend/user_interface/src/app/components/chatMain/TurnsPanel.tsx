@@ -18,6 +18,7 @@ type TurnsPanelProps = {
   isActivityStreaming: boolean;
   isSending: boolean;
   onTurnClick: (event: ReactMouseEvent<HTMLDivElement>, turn: ChatTurn, index: number) => void;
+  onTurnAuxClick: (event: ReactMouseEvent<HTMLDivElement>, turn: ChatTurn, index: number) => void;
   quoteAssistant: (turn: ChatTurn) => void;
   retryTurn: (turn: ChatTurn) => void;
   saveInlineEdit: () => Promise<void>;
@@ -37,6 +38,7 @@ function TurnsPanel({
   isActivityStreaming,
   isSending,
   onTurnClick,
+  onTurnAuxClick,
   quoteAssistant,
   retryTurn,
   saveInlineEdit,
@@ -97,6 +99,11 @@ function TurnsPanel({
     latestTurnIndex === null
       ? 0
       : String(chatTurns[latestTurnIndex]?.assistant || "").trim().length;
+  const latestTurnMode = latestTurnIndex === null ? null : chatTurns[latestTurnIndex]?.mode || null;
+  const latestTurnUsesTheatre =
+    latestTurnMode === "company_agent" ||
+    latestTurnMode === "deep_search" ||
+    latestTurnMode === "web_search";
 
   const queueTheatreCenter = (turnIndex: number) => {
     pendingTheatreCenterTurnRef.current = turnIndex;
@@ -109,17 +116,10 @@ function TurnsPanel({
       typeof window !== "undefined" &&
       (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
     const behavior: ScrollBehavior = prefersReducedMotion ? "auto" : "smooth";
-    const centerTarget = () => {
+    const rafId = window.requestAnimationFrame(() => {
       target.scrollIntoView({ behavior, block: "center", inline: "nearest" });
-    };
-    const rafId = window.requestAnimationFrame(centerTarget);
-    const t1 = window.setTimeout(centerTarget, 140);
-    const t2 = window.setTimeout(centerTarget, 320);
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
+    });
+    return () => window.cancelAnimationFrame(rafId);
   };
 
   useEffect(() => {
@@ -165,6 +165,11 @@ function TurnsPanel({
       turnsRootRef.current?.querySelector<HTMLElement>(
         `[data-turn-index="${String(latestTurnIndex)}"]`,
       ) || null;
+
+    if (!theatreAnchor && latestTurnUsesTheatre && (isSending || isActivityStreaming)) {
+      return;
+    }
+
     const target = theatreAnchor || latestTurnNode;
     if (!target) {
       return;
@@ -192,6 +197,7 @@ function TurnsPanel({
     isSending,
     latestAssistantLength,
     latestTurnIndex,
+    latestTurnUsesTheatre,
   ]);
 
   useCitationPreview({
@@ -241,6 +247,7 @@ function TurnsPanel({
           editingFeedbackTurnIndex={editingFeedbackTurnIndex}
           copyFeedback={copyFeedback}
           onTurnClick={onTurnClick}
+          onTurnAuxClick={onTurnAuxClick}
           onSetEditingText={setEditingText}
           onBeginInlineEdit={beginInlineEdit}
           onCancelInlineEdit={cancelInlineEdit}

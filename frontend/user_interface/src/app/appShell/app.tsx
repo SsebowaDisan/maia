@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { InfoPanel } from "../components/InfoPanel";
-import { TopNav } from "../components/TopNav";
 import { WorkspaceOverlayModal } from "../components/WorkspaceOverlayModal";
 import { NodeFollowUpModal } from "../components/mindmapViewer/NodeFollowUpModal";
 import { getSharedMindmap } from "../../api/client";
@@ -264,21 +263,11 @@ export default function App() {
     }
   };
 
-  const handleTopNavTabChange = (tab: string) => {
-    if (isWorkspaceModalTab(tab)) {
-      openWorkspaceModal(tab);
-      return;
-    }
-    layout.setActiveTab("Chat");
-  };
-
-  const effectiveTopNavTab = isWorkspaceModalTab(layout.activeTab) ? "Chat" : layout.activeTab;
   const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
 
   return (
-    <div className="size-full flex flex-col bg-[#f5f5f7] overflow-hidden">
-      <TopNav activeTab={effectiveTopNavTab} onTabChange={handleTopNavTabChange} />
-      <div ref={layout.layoutRef} className="flex-1 min-h-0 flex overflow-hidden">
+    <div className="size-full bg-[#eef1f5] overflow-hidden">
+      <div ref={layout.layoutRef} className="flex h-full min-h-0 gap-3 overflow-hidden px-3 py-2">
         {layout.activeTab === "Chat" || isWorkspaceModalTab(layout.activeTab) ? (
           <>
             <ChatSidebar
@@ -460,8 +449,10 @@ export default function App() {
             ) : null}
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center bg-white">
-            <p className="text-[15px] text-[#86868b]">{layout.activeTab} content coming soon...</p>
+          <div className="flex-1 overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
+            <div className="flex h-full items-center justify-center bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)]">
+              <p className="text-[15px] text-[#86868b]">{layout.activeTab} content coming soon...</p>
+            </div>
           </div>
         )}
       </div>

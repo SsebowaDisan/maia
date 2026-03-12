@@ -47,6 +47,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "target",
     "data-file-id",
     "data-source-url",
+    "data-viewer-url",
     "data-page",
     "data-phrase",
     "data-strength",
@@ -73,6 +74,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "open",
     "data-file-id",
     "data-source-url",
+    "data-viewer-url",
     "data-page",
     "data-strength",
     "data-strength-tier",
@@ -363,10 +365,97 @@ function toHtml(input: string): string {
   return marked.parse(normalized, { gfm: true, breaks: true }) as string;
 }
 
+function normalizeHeadingText(value: string): string {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function extractEvidenceWrapperId(item: HTMLLIElement, fallbackIndex: number): string {
+  const directId = String(item.getAttribute("id") || "").trim().match(/^(evidence-\d{1,4})$/i)?.[1];
+  if (directId) {
+    return directId.toLowerCase();
+  }
+  const annotated = item.querySelector<HTMLElement>("[data-evidence-id], [aria-controls], a[href^='#evidence-']");
+  if (annotated) {
+    const explicitEvidenceId = String(annotated.getAttribute("data-evidence-id") || "")
+      .trim()
+      .match(/(evidence-\d{1,4})/i)?.[1];
+    if (explicitEvidenceId) {
+      return explicitEvidenceId.toLowerCase();
+    }
+    const explicitHref = String(annotated.getAttribute("href") || "")
+      .trim()
+      .match(/#(evidence-\d{1,4})/i)?.[1];
+    if (explicitHref) {
+      return explicitHref.toLowerCase();
+    }
+    const explicitControls = String(annotated.getAttribute("aria-controls") || "")
+      .trim()
+      .match(/(evidence-\d{1,4})/i)?.[1];
+    if (explicitControls) {
+      return explicitControls.toLowerCase();
+    }
+  }
+  const leadingRef = String(item.textContent || "").match(/^\s*(?:\[|【)?\s*(\d{1,4})\s*(?:\]|】|\))/);
+  if (leadingRef?.[1]) {
+    return `evidence-${leadingRef[1]}`;
+  }
+  return `evidence-${fallbackIndex}`;
+}
+
+function wrapEvidenceCitationTargets(html: string): string {
+  if (!html || html.toLowerCase().indexOf("evidence citations") < 0) {
+    return html;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  const headings = Array.from(doc.body.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+
+  for (const heading of headings) {
+    if (normalizeHeadingText(heading.textContent || "") !== "evidence citations") {
+      continue;
+    }
+    let sibling = heading.nextElementSibling;
+    while (sibling) {
+      if (/^H[1-6]$/i.test(sibling.tagName)) {
+        break;
+      }
+      if (sibling instanceof HTMLUListElement || sibling instanceof HTMLOListElement) {
+        const items = Array.from(sibling.children).filter(
+          (child): child is HTMLLIElement => child instanceof HTMLLIElement,
+        );
+        items.forEach((item, index) => {
+          const evidenceId = extractEvidenceWrapperId(item, index + 1);
+          const existingWrapper =
+            item.children.length === 1 && item.firstElementChild instanceof HTMLDivElement
+              ? item.firstElementChild
+              : null;
+          if (existingWrapper?.id === evidenceId) {
+            return;
+          }
+          const wrapper = doc.createElement("div");
+          wrapper.id = evidenceId;
+          while (item.firstChild) {
+            wrapper.appendChild(item.firstChild);
+          }
+          item.appendChild(wrapper);
+        });
+        break;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+  }
+
+  return doc.body.innerHTML;
+}
+
 export function renderRichText(input: string): string {
   if (!input.trim()) {
     return "";
   }
   const deduped = dedupeDuplicateCitationPasses(input);
-  return sanitizeHtml(toHtml(deduped));
+  return sanitizeHtml(wrapEvidenceCitationTargets(toHtml(deduped)));
 }

@@ -293,7 +293,7 @@ export function ChatSidebar({
 
   if (isCollapsed) {
     return (
-      <div className="w-16 min-h-0 bg-[#f6f6f7] flex flex-col items-center py-4">
+      <div className="w-16 min-h-0 rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)] flex flex-col items-center py-4">
         <button
           onClick={onToggleCollapse}
           className="p-2 rounded-xl hover:bg-black/5 transition-colors"
@@ -307,12 +307,15 @@ export function ChatSidebar({
 
   return (
     <div
-      className="min-h-0 bg-[#f6f6f7] flex flex-col overflow-hidden"
+      className="min-h-0 rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)] flex flex-col overflow-hidden"
       style={{ width: `${Math.round(width)}px` }}
     >
-      <div className="px-4 pt-4 pb-3 border-b border-black/[0.06]">
+      <div className="border-b border-black/[0.06] px-4 pb-4 pt-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-[17px] font-medium tracking-tight text-[#1d1d1f]">Chats</h2>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">Workspace</p>
+            <h2 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Chats</h2>
+          </div>
           <div className="inline-flex items-center gap-1.5">
             <button
               onClick={() => {

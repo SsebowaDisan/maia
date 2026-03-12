@@ -260,99 +260,107 @@ export function InfoPanel({
   };
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden bg-white" style={{ width: `${Math.round(width)}px` }}>
+    <div
+      className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
+      style={{ width: `${Math.round(width)}px` }}
+    >
       <div className="border-b border-black/[0.06] px-5 py-4">
-        <h3 className="text-[15px] tracking-tight text-[#1d1d1f]">Sources</h3>
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">Evidence</p>
+          <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Sources</h3>
+        </div>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
-        {/* Mindmap */}
-        <section className="space-y-2 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
-          <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Context Mindmap</p>
-          {hasMindmapPayload ? (
-            <div>
-              <MindmapViewer
-                payload={workspaceGraphPayload as Record<string, unknown>}
-                conversationId={selectedConversationId}
-                viewerHeight={viewerHeights.mindmap}
-                onAskNode={onAskMindmapNode}
-                onFocusNode={handleMindmapFocus}
-                onSaveMap={(payload) => {
-                  const storageKey = "maia.saved-mindmaps";
-                  try {
-                    const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
-                    const convKey = String(selectedConversationId || "global");
-                    const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
-                    existing[convKey] = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
-                    window.localStorage.setItem(storageKey, JSON.stringify(existing));
-                    toast.success("Mind-map saved");
-                  } catch {
-                    toast.error("Unable to save mind-map");
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full space-y-4 overflow-y-auto px-5 pb-10 pt-5">
+          {/* Mindmap */}
+          <section className="space-y-2 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-3 shadow-sm">
+            <p className="text-[10px] uppercase tracking-wide text-[#8e8e93]">Context Mindmap</p>
+            {hasMindmapPayload ? (
+              <div>
+                <MindmapViewer
+                  payload={workspaceGraphPayload as Record<string, unknown>}
+                  conversationId={selectedConversationId}
+                  viewerHeight={viewerHeights.mindmap}
+                  onAskNode={onAskMindmapNode}
+                  onFocusNode={handleMindmapFocus}
+                  onSaveMap={(payload) => {
+                    const storageKey = "maia.saved-mindmaps";
+                    try {
+                      const existing = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+                      const convKey = String(selectedConversationId || "global");
+                      const history = Array.isArray(existing[convKey]) ? (existing[convKey] as unknown[]) : [];
+                      existing[convKey] = [...history.slice(-9), { saved_at: new Date().toISOString(), map: payload }];
+                      window.localStorage.setItem(storageKey, JSON.stringify(existing));
+                      toast.success("Mind-map saved");
+                    } catch {
+                      toast.error("Unable to save mind-map");
+                    }
+                  }}
+                  onShareMap={(payload) =>
+                    buildMindmapShareLink({
+                      map: payload as unknown as Record<string, unknown>,
+                      conversationId: selectedConversationId,
+                    })
                   }
-                }}
-                onShareMap={(payload) =>
-                  buildMindmapShareLink({
-                    map: payload as unknown as Record<string, unknown>,
-                    conversationId: selectedConversationId,
-                  })
+                />
+                {renderViewerResizeHandle("mindmap", "mindmap")}
+              </div>
+            ) : (
+              <div className="rounded-xl bg-[#f5f5f7] p-3 text-[12px] text-[#6e6e73]">
+                Context mindmap is not available for this answer yet.
+              </div>
+            )}
+          </section>
+
+          {/* Citation page preview */}
+          {activeCitation ? (
+            <CitationPreviewPanel
+              citationFocus={activeCitation}
+              citationOpenUrl={citationOpenState.citationOpenUrl}
+              citationRawUrl={citationOpenState.citationRawUrl}
+              citationUsesWebsite={citationOpenState.citationUsesWebsite}
+              citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
+              citationIsPdf={citationOpenState.citationIsPdf}
+              citationIsImage={citationOpenState.citationIsImage}
+              citationViewerHeight={viewerHeights.citation}
+              reviewQuery={userPrompt || activeCitation?.claimText || ""}
+              preferredPage={preferredCitationPage}
+              webReviewSource={activeWebReviewSource}
+              hasPreviousEvidence={activeEvidenceIndex > 0}
+              hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
+              onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
+              onNextEvidence={() => jumpToNeighborEvidence(1)}
+              pdfZoom={pdfZoom}
+              onPdfZoomChange={(next) => {
+                setPdfZoom(next);
+                updateMemory({ reviewZoom: next });
+              }}
+              onPdfPageChange={(nextPage) => {
+                if (!activeCitationSourceKey || nextPage <= 0) {
+                  return;
                 }
-              />
-              {renderViewerResizeHandle("mindmap", "mindmap")}
+                const previous = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
+                if (previous === nextPage) {
+                  return;
+                }
+                updateMemory({
+                  reviewPageBySource: {
+                    ...memory.reviewPageBySource,
+                    [activeCitationSourceKey]: nextPage,
+                  },
+                });
+              }}
+              onClear={onClearCitationFocus}
+              renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
+            />
+          ) : sources.length > 0 ? (
+            <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6e6e73]">
+              Click any citation in the answer to preview the source page here.
             </div>
-          ) : (
-            <div className="rounded-xl bg-[#f5f5f7] p-3 text-[12px] text-[#6e6e73]">
-              Context mindmap is not available for this answer yet.
-            </div>
-          )}
-        </section>
-
-
-        {/* Citation page preview */}
-        {activeCitation ? (
-          <CitationPreviewPanel
-            citationFocus={activeCitation}
-            citationOpenUrl={citationOpenState.citationOpenUrl}
-            citationRawUrl={citationOpenState.citationRawUrl}
-            citationUsesWebsite={citationOpenState.citationUsesWebsite}
-            citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
-            citationIsPdf={citationOpenState.citationIsPdf}
-            citationIsImage={citationOpenState.citationIsImage}
-            citationViewerHeight={viewerHeights.citation}
-            reviewQuery={userPrompt || activeCitation?.claimText || ""}
-            preferredPage={preferredCitationPage}
-            webReviewSource={activeWebReviewSource}
-            hasPreviousEvidence={activeEvidenceIndex > 0}
-            hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
-            onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
-            onNextEvidence={() => jumpToNeighborEvidence(1)}
-            pdfZoom={pdfZoom}
-            onPdfZoomChange={(next) => {
-              setPdfZoom(next);
-              updateMemory({ reviewZoom: next });
-            }}
-            onPdfPageChange={(nextPage) => {
-              if (!activeCitationSourceKey || nextPage <= 0) {
-                return;
-              }
-              const previous = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
-              if (previous === nextPage) {
-                return;
-              }
-              updateMemory({
-                reviewPageBySource: {
-                  ...memory.reviewPageBySource,
-                  [activeCitationSourceKey]: nextPage,
-                },
-              });
-            }}
-            onClear={onClearCitationFocus}
-            renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
-          />
-        ) : sources.length > 0 ? (
-          <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6e6e73]">
-            Click any citation in the answer to preview the source page here.
-          </div>
-        ) : null}
+          ) : null}
+        </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
       </div>
     </div>
   );

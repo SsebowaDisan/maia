@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import { MindMapToolbar } from "./MindMapToolbar";
 import type { MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
 import {
   computeDepths,
@@ -20,6 +21,7 @@ import {
 } from "./utils";
 import {
   computeInitialCollapsedFromPayload,
+  computeNotebookLayout,
   computeRadialLayout,
   NODE_HALF_H,
   NODE_HALF_W,
@@ -39,6 +41,8 @@ export function MindMapViewer({
   viewerHeight = 520,
   onAskNode,
   onFocusNode,
+  onSaveMap,
+  onShareMap,
 }: MindMapViewerProps) {
   const effectiveViewerHeight = Math.max(260, Math.min(1200, Math.round(Number(viewerHeight) || 520)));
   const basePayload = useMemo(() => toMindmapPayload(rawPayload), [rawPayload]);
@@ -46,6 +50,7 @@ export function MindMapViewer({
   const [activeMapType, setActiveMapType] = useState<MindmapMapType>("structure");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [lastFitKey, setLastFitKey] = useState("");
+  const [layoutMode, setLayoutMode] = useState<"balanced" | "horizontal">("balanced");
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
 
   useEffect(() => {
@@ -87,6 +92,9 @@ export function MindMapViewer({
         : detectDefaultMapType(payload),
     );
     setSelectedNodeId(saved.focusedNodeId);
+    if (saved.layoutMode === "horizontal" || saved.layoutMode === "balanced") {
+      setLayoutMode(saved.layoutMode);
+    }
   }, [conversationId, maxDepth, payload]);
 
   useEffect(() => {
@@ -94,13 +102,13 @@ export function MindMapViewer({
     const state: CanvasState = {
       collapsedNodeIds,
       showReasoningMap: false,
-      layoutMode: "balanced",
+      layoutMode,
       nodePositions: {},
       activeMapType,
       focusedNodeId: selectedNodeId,
     };
     window.localStorage.setItem(key, JSON.stringify(state));
-  }, [activeMapType, collapsedNodeIds, conversationId, payload, selectedNodeId]);
+  }, [activeMapType, collapsedNodeIds, conversationId, layoutMode, payload, selectedNodeId]);
 
   const parsedNodes = useMemo(() => payload?.nodes || [], [payload]);
   const parsedEdges = useMemo(() => payload?.edges || [], [payload]);
@@ -159,7 +167,6 @@ export function MindMapViewer({
 
   const depthMap = useMemo(() => computeDepths(rootId, hierarchyEdges), [hierarchyEdges, rootId]);
 
-  // Assign each node a branch color index based on which top-level child it descends from
   const branchColorIndexMap = useMemo(() => {
     const map = new Map<string, number>();
     const topLevelChildren = (childrenByParent.get(rootId) || []).filter((id) => nodeById.has(id));
@@ -210,23 +217,43 @@ export function MindMapViewer({
   );
 
   const allNodeIds = useMemo(() => new Set(parsedNodes.map((node) => node.id)), [parsedNodes]);
-
   const visibleIds = useMemo(() => new Set(visibleBaseNodes.map((node) => node.id)), [visibleBaseNodes]);
 
-  // Radial layout — returns CENTER positions for each node.
-  // Root is at (0, 0); branches radiate outward proportionally by leaf count.
+  const layoutParams = useMemo(
+    () => ({
+      rootId,
+      nodeIds: visibleIds,
+      childrenByParent,
+      depthMap,
+      collapsedSet: new Set(collapsedNodeIds),
+      maxDepth,
+      nodeOrder,
+    }),
+    [childrenByParent, collapsedNodeIds, depthMap, maxDepth, nodeOrder, rootId, visibleIds],
+  );
+
+  // Switch between radial (balanced) and horizontal (notebook tree) layouts.
+  // Radial returns CENTER positions; notebook returns TOP-LEFT positions.
   const layout = useMemo(
     () =>
-      computeRadialLayout({
-        rootId,
-        nodeIds: visibleIds,
-        childrenByParent,
-        depthMap,
-        collapsedSet: new Set(collapsedNodeIds),
-        maxDepth,
-        nodeOrder,
-      }),
-    [childrenByParent, collapsedNodeIds, depthMap, maxDepth, nodeOrder, rootId, visibleIds],
+      layoutMode === "horizontal"
+        ? computeNotebookLayout(layoutParams)
+        : computeRadialLayout(layoutParams),
+    [layoutMode, layoutParams],
+  );
+
+  // Returns the CENTER of a node for edge drawing, regardless of layout mode.
+  const getCenter = useCallback(
+    (nodeId: string): { x: number; y: number } => {
+      const pos = layout[nodeId] ?? { x: 0, y: 0 };
+      if (layoutMode === "horizontal") {
+        const hw = nodeId === rootId ? 92 : NODE_HALF_W;
+        const hh = nodeId === rootId ? 22 : NODE_HALF_H;
+        return { x: pos.x + hw, y: pos.y + hh };
+      }
+      return pos;
+    },
+    [layout, layoutMode, rootId],
   );
 
   const handleAsk = useCallback(
@@ -269,6 +296,76 @@ export function MindMapViewer({
     [parsedNodes],
   );
 
+  const fitView = useCallback(() => {
+    flowRef.current?.fitView({ padding: 0.24, maxZoom: 1.05, minZoom: 0.2, duration: 220 });
+  }, []);
+
+  // ── Toolbar callbacks ──────────────────────────────────────────────────────
+
+  const handleExpand = useCallback(() => setCollapsedNodeIds([]), []);
+
+  const handleCollapse = useCallback(() => {
+    const ids = parsedNodes
+      .filter((node) => (childrenByParent.get(node.id) || []).some((child) => allNodeIds.has(child)))
+      .map((node) => node.id);
+    setCollapsedNodeIds(ids);
+  }, [allNodeIds, childrenByParent, parsedNodes]);
+
+  const handleToggleLayout = useCallback(
+    () => setLayoutMode((prev) => (prev === "balanced" ? "horizontal" : "balanced")),
+    [],
+  );
+
+  const handleResetFocus = useCallback(() => setSelectedNodeId(null), []);
+
+  const handleExportJson = useCallback(() => {
+    if (!payload) return;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mindmap-${activeMapType}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [activeMapType, payload]);
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!payload?.nodes?.length) return;
+    const lines: string[] = [`# ${payload.title || "Knowledge Map"}\n`];
+    const buildLines = (nodeId: string, depth: number) => {
+      const node = nodeById.get(nodeId);
+      if (!node) return;
+      const indent = "  ".repeat(Math.max(0, depth - 1));
+      const prefix = depth === 0 ? "" : `${indent}- `;
+      lines.push(`${prefix}**${node.title || node.id}**${node.text ? `: ${node.text}` : ""}`);
+      for (const childId of childrenByParent.get(nodeId) || []) {
+        buildLines(childId, depth + 1);
+      }
+    };
+    if (rootId) buildLines(rootId, 0);
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mindmap-${activeMapType}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [activeMapType, childrenByParent, nodeById, payload, rootId]);
+
+  const handleExportPng = useCallback(() => {
+    window.print();
+  }, []);
+
+  const handleSave = useCallback(() => {
+    if (payload && onSaveMap) onSaveMap(payload);
+  }, [onSaveMap, payload]);
+
+  const handleShare = useCallback(async () => {
+    if (payload && onShareMap) await onShareMap(payload);
+  }, [onShareMap, payload]);
+
+  // ── Flow nodes ─────────────────────────────────────────────────────────────
+
   const flowNodes = useMemo(
     () =>
       visibleBaseNodes.map((node, index): Node<MindNodeData> => {
@@ -297,13 +394,14 @@ export function MindMapViewer({
           draggable: false,
           sourcePosition: Position.Right,
           targetPosition: Position.Left,
-          // layout returns CENTER positions; ReactFlow needs top-left corner
           position: (() => {
-            const center = layout[node.id];
-            if (!center) return { x: depth * 200, y: index * 54 };
+            const pos = layout[node.id];
+            if (!pos) return { x: depth * 200, y: index * 54 };
+            // Notebook layout returns top-left directly; radial returns center.
+            if (layoutMode === "horizontal") return pos;
             const hw = node.id === rootId ? 92 : NODE_HALF_W;
             const hh = node.id === rootId ? 22 : NODE_HALF_H;
-            return { x: center.x - hw, y: center.y - hh };
+            return { x: pos.x - hw, y: pos.y - hh };
           })(),
           data: {
             title: displayTitle,
@@ -342,6 +440,7 @@ export function MindMapViewer({
       allNodeIds,
       handleAsk,
       layout,
+      layoutMode,
       nodeById,
       onAskNode,
       rootId,
@@ -360,9 +459,8 @@ export function MindMapViewer({
           const colorIndex = branchColorIndexMap.get(edge.target) ?? branchColorIndexMap.get(edge.source) ?? -1;
           const branchColor = colorIndex >= 0 ? BRANCH_EDGE_COLORS[colorIndex % BRANCH_EDGE_COLORS.length] : "#A3A3A3";
           const isHighlighted = !selectedNodeId || edge.source === selectedNodeId || edge.target === selectedNodeId;
-          // Pass radial CENTER positions so CurvedMindEdge can draw node-boundary-to-boundary paths
-          const srcCenter = layout[edge.source] ?? { x: 0, y: 0 };
-          const tgtCenter = layout[edge.target] ?? { x: 0, y: 0 };
+          const srcCenter = getCenter(edge.source);
+          const tgtCenter = getCenter(edge.target);
           return {
             id: edge.id || `${edge.source}->${edge.target}`,
             source: edge.source,
@@ -377,18 +475,14 @@ export function MindMapViewer({
             },
           };
         }),
-    [branchColorIndexMap, depthMap, hierarchyEdges, layout, selectedNodeId, visibleIds],
+    [branchColorIndexMap, depthMap, getCenter, hierarchyEdges, selectedNodeId, visibleIds],
   );
-
-  const fitView = useCallback(() => {
-    flowRef.current?.fitView({ padding: 0.24, maxZoom: 1.05, minZoom: 0.2, duration: 220 });
-  }, []);
 
   useEffect(() => {
     if (!flowRef.current || !flowNodes.length) {
       return;
     }
-    const key = `${activeMapType}:${collapsedNodeIds.join(",")}:${flowNodes.length}:${maxDepth}`;
+    const key = `${activeMapType}:${layoutMode}:${collapsedNodeIds.join(",")}:${flowNodes.length}:${maxDepth}`;
     if (key === lastFitKey) {
       return;
     }
@@ -397,12 +491,17 @@ export function MindMapViewer({
       setLastFitKey(key);
     }, 60);
     return () => window.clearTimeout(timer);
-  }, [activeMapType, collapsedNodeIds, fitView, flowNodes, lastFitKey, maxDepth]);
+  }, [activeMapType, collapsedNodeIds, fitView, flowNodes, lastFitKey, layoutMode, maxDepth]);
+
+  const hasVariants = Boolean(
+    payload?.variants && Object.keys(payload.variants as Record<string, unknown>).length > 0,
+  );
 
   if (!payload || !parsedNodes.length) {
     return (
       <div className="rounded-xl border border-black/[0.08] bg-white p-4 text-[12px] text-[#6e6e73]">
-        Mind-map is not available for this answer.
+        <p className="font-medium text-[#1d1d1f] mb-1">Mind map unavailable</p>
+        <p>No knowledge map was produced for this answer. Ask a research or analytical question to generate one.</p>
       </div>
     );
   }
@@ -417,6 +516,28 @@ export function MindMapViewer({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[#e5e5ea] bg-white shadow-sm">
+      <div className="px-3 py-2 border-b border-[#e5e5ea]">
+        <MindMapToolbar
+          title={String(payload.title || "Knowledge Map")}
+          mapType={String(payload.map_type || "structure")}
+          kind={String(payload.kind || "map")}
+          activeMapType={activeMapType}
+          hasVariants={hasVariants}
+          layoutMode={layoutMode}
+          onSwitchMapType={setActiveMapType}
+          onExpand={handleExpand}
+          onCollapse={handleCollapse}
+          onToggleLayout={handleToggleLayout}
+          onResetFocus={handleResetFocus}
+          onAutoTidy={fitView}
+          onFitView={fitView}
+          onExportPng={handleExportPng}
+          onExportJson={handleExportJson}
+          onExportMarkdown={handleExportMarkdown}
+          onSave={handleSave}
+          onShare={handleShare}
+        />
+      </div>
       <div className="w-full" style={{ height: `${effectiveViewerHeight}px` }}>
         <ReactFlow
           nodeTypes={nodeTypes}

@@ -11,7 +11,7 @@ export function TopNav({ activeTab, onTabChange }: TopNavProps) {
   const isChatPage = activeTab === "Chat";
 
   return (
-    <div className="relative flex items-center justify-center h-12 bg-white border-b border-[#ececef] px-4">
+    <div className="relative flex h-12 items-center justify-center border-b border-black/[0.05] bg-[#eef1f5] px-4">
       <div className="absolute left-4">
         {isChatPage ? (
           <span className="text-[12px] text-[#8d8d93]">Chat</span>

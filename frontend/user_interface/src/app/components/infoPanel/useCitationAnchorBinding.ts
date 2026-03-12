@@ -4,8 +4,10 @@ import type { EvidenceCard } from "../../utils/infoInsights";
 import { normalizeEvidenceId } from "./urlHelpers";
 import {
   CITATION_ANCHOR_SELECTOR,
+  resolveCitationAnchorInteractionPolicy,
   resolveCitationFocusFromAnchor,
   resolveStrengthTier,
+  shouldOpenCitationSourceUrlForPointerEvent,
 } from "../chatMain/citationFocus";
 
 type UseCitationAnchorBindingParams = {
@@ -34,6 +36,7 @@ function useCitationAnchorBinding({
     }
     const citationAnchors = Array.from(container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"));
     for (const anchor of citationAnchors) {
+      const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
       const tier = resolveStrengthTier(
         Number(anchor.getAttribute("data-strength-tier") || ""),
         Number(anchor.getAttribute("data-strength") || ""),
@@ -42,6 +45,11 @@ function useCitationAnchorBinding({
         anchor.setAttribute("data-strength-tier-resolved", String(tier));
       } else {
         anchor.removeAttribute("data-strength-tier-resolved");
+      }
+      if (interactionPolicy.openDirectOnPrimaryClick) {
+        anchor.setAttribute("data-direct-url", "true");
+      } else {
+        anchor.removeAttribute("data-direct-url");
       }
       if (!anchor.hasAttribute("href")) {
         anchor.setAttribute("tabindex", "0");
@@ -69,6 +77,7 @@ function useCitationAnchorBinding({
         href.startsWith("#evidence-") ||
         anchor.hasAttribute("data-file-id") ||
         anchor.hasAttribute("data-source-url") ||
+        anchor.hasAttribute("data-viewer-url") ||
         anchor.hasAttribute("data-evidence-id")
       );
     };
@@ -81,6 +90,10 @@ function useCitationAnchorBinding({
         return null;
       }
       return target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+    };
+
+    const openSourceUrl = (url: string) => {
+      window.open(url, "_blank", "noopener,noreferrer");
     };
 
     const focusEvidenceDetails = (evidenceId: string | undefined) => {
@@ -117,6 +130,19 @@ function useCitationAnchorBinding({
       if (!anchor || !isCitationAnchor(anchor)) {
         return;
       }
+      const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
+      if (
+        shouldOpenCitationSourceUrlForPointerEvent(event, interactionPolicy) ||
+        interactionPolicy.openDirectOnPrimaryClick
+      ) {
+        if (!interactionPolicy.directOpenUrl) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        openSourceUrl(interactionPolicy.directOpenUrl);
+        return;
+      }
       const selected = selectCitationFromAnchor(anchor);
       if (!selected) {
         return;
@@ -125,12 +151,39 @@ function useCitationAnchorBinding({
       event.stopPropagation();
     };
 
+    const onAuxClick = (event: MouseEvent) => {
+      if (event.button !== 1) {
+        return;
+      }
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !isCitationAnchor(anchor)) {
+        return;
+      }
+      const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
+      if (!interactionPolicy.directOpenUrl) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      openSourceUrl(interactionPolicy.directOpenUrl);
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }
       const anchor = findCitationAnchor(event.target);
       if (!anchor || !isCitationAnchor(anchor)) {
+        return;
+      }
+      const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
+      if (
+        interactionPolicy.directOpenUrl &&
+        (interactionPolicy.openDirectOnPrimaryClick || event.ctrlKey || event.metaKey)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        openSourceUrl(interactionPolicy.directOpenUrl);
         return;
       }
       const selected = selectCitationFromAnchor(anchor);
@@ -142,9 +195,11 @@ function useCitationAnchorBinding({
     };
 
     container.addEventListener("click", onClick);
+    container.addEventListener("auxclick", onAuxClick);
     container.addEventListener("keydown", onKeyDown);
     return () => {
       container.removeEventListener("click", onClick);
+      container.removeEventListener("auxclick", onAuxClick);
       container.removeEventListener("keydown", onKeyDown);
     };
   }, [assistantHtml, containerRef, evidenceCards, infoHtml, onSelectCitationFocus, userPrompt]);

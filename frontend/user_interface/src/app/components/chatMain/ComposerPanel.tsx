@@ -167,8 +167,8 @@ function ComposerPanel({
   };
 
   return (
-    <div className="border-t border-black/[0.06] bg-white">
-      <div className="mx-auto w-full max-w-[1460px] px-6 py-4">
+    <div className="bg-transparent">
+      <div className="mx-auto w-full max-w-[1460px] px-3 py-2">
         <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
           <div className="assistantComposerInputShell relative rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">

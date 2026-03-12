@@ -2,7 +2,12 @@ import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type S
 import type { ChatTurn } from "../../../types";
 import { parseEvidence } from "../../../utils/infoInsights";
 import type { EvidenceCard } from "../../../utils/infoInsights";
-import { CITATION_ANCHOR_SELECTOR, resolveCitationFocusFromAnchor, resolveStrengthTier } from "../citationFocus";
+import {
+  CITATION_ANCHOR_SELECTOR,
+  resolveCitationAnchorInteractionPolicy,
+  resolveCitationFocusFromAnchor,
+  resolveStrengthTier,
+} from "../citationFocus";
 import type { CitationPreview } from "./CitationPreviewTooltip";
 
 const CHAT_CITATION_SELECTOR = CITATION_ANCHOR_SELECTOR
@@ -73,6 +78,7 @@ function useCitationPreview({
       container.querySelectorAll<HTMLAnchorElement>(CHAT_CITATION_SELECTOR),
     );
     for (const anchor of citationAnchors) {
+      const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
       const tier = resolveStrengthTier(
         Number(anchor.getAttribute("data-strength-tier") || ""),
         Number(anchor.getAttribute("data-strength") || ""),
@@ -81,6 +87,11 @@ function useCitationPreview({
         anchor.setAttribute("data-strength-tier-resolved", String(tier));
       } else {
         anchor.removeAttribute("data-strength-tier-resolved");
+      }
+      if (interactionPolicy.openDirectOnPrimaryClick) {
+        anchor.setAttribute("data-direct-url", "true");
+      } else {
+        anchor.removeAttribute("data-direct-url");
       }
       if (!anchor.hasAttribute("href")) {
         anchor.setAttribute("tabindex", "0");
@@ -103,6 +114,9 @@ function useCitationPreview({
       }
       if (pageLabel) {
         labelParts.push(`page ${pageLabel}`);
+      }
+      if (interactionPolicy.openDirectOnPrimaryClick) {
+        labelParts.push("opens source directly");
       }
       anchor.setAttribute("aria-label", labelParts.join(", "));
     }

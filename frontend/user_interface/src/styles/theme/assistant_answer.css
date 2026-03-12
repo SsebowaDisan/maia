@@ -18,7 +18,8 @@
   font-size: 15px;
   line-height: 1.74;
   letter-spacing: -0.003em;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .assistantAnswerBody > *:first-child {
@@ -77,6 +78,15 @@
 
 .assistantAnswerBody li {
   margin: 0.18rem 0;
+}
+
+.assistantAnswerBody p,
+.assistantAnswerBody li,
+.assistantAnswerBody blockquote,
+.assistantAnswerBody td,
+.assistantAnswerBody th {
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .assistantAnswerBody pre {
@@ -224,16 +234,18 @@
 }
 
 .assistantAnswerBody ul li {
-  display: flex;
-  gap: 0.55em;
-  padding: 0.12rem 0;
+  position: relative;
+  display: block;
+  padding: 0.12rem 0 0.12rem 1rem;
 }
 
 .assistantAnswerBody ul li::before {
-  content: "•";
+  content: "\2022";
   color: #6e6e73;
-  flex-shrink: 0;
-  margin-top: 0.03em;
+  position: absolute;
+  left: 0;
+  top: 0.16rem;
+  line-height: 1;
 }
 
 /* ── Evidence citation list (## Evidence Citations section) ─── */
@@ -293,7 +305,8 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
   text-decoration-color: rgba(10, 102, 217, 0.35);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   transition: color 120ms ease, text-decoration-color 120ms ease;
 }
 
@@ -365,4 +378,8 @@
 .dark .chat-answer-html mark {
   background: linear-gradient(180deg, transparent 56%, rgba(249, 207, 81, 0.28) 56%);
 }
+
+
+
+
 

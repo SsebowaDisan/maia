@@ -26,6 +26,7 @@ type TurnListItemProps = {
   editingFeedbackTurnIndex: number | null;
   copyFeedback: TurnCopyFeedback;
   onTurnClick: (event: ReactMouseEvent<HTMLDivElement>, turn: ChatTurn, index: number) => void;
+  onTurnAuxClick: (event: ReactMouseEvent<HTMLDivElement>, turn: ChatTurn, index: number) => void;
   onSetEditingText: (value: string) => void;
   onBeginInlineEdit: (turn: ChatTurn, turnIndex: number) => void;
   onCancelInlineEdit: () => void;
@@ -70,6 +71,7 @@ function TurnListItem({
   editingFeedbackTurnIndex,
   copyFeedback,
   onTurnClick,
+  onTurnAuxClick,
   onSetEditingText,
   onBeginInlineEdit,
   onCancelInlineEdit,
@@ -104,6 +106,7 @@ function TurnListItem({
       data-turn-index={index}
       className={`space-y-2 rounded-2xl px-2 py-1 transition-colors ${selected ? "bg-[#f5f5f7]" : ""}`}
       onClick={(event) => onTurnClick(event, turn, index)}
+      onAuxClick={(event) => onTurnAuxClick(event, turn, index)}
     >
       <div className="flex justify-end">
         <div className="group max-w-[80%] space-y-2">

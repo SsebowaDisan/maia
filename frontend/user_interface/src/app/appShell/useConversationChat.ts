@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { ACTIVE_USER_ID } from "../../api/client/core";
 import {
   createConversation,
@@ -29,7 +29,7 @@ import {
   type SendMessageOptions,
 } from "./conversationChat/constants";
 import { sendConversationMessage } from "./conversationChat/sendMessage";
-import { readStoredText } from "./storage";
+import { readStoredJson, readStoredText } from "./storage";
 
 type UseConversationChatParams = {
   projects: SidebarProject[];
@@ -40,6 +40,13 @@ type UseConversationChatParams = {
   conversationModes: Record<string, AgentMode>;
   setConversationModes: Dispatch<SetStateAction<Record<string, AgentMode>>>;
   defaultIndexId: number | null;
+};
+
+type CachedConversationSnapshot = {
+  turns: ChatTurn[];
+  selectedTurnIndex: number | null;
+  infoText: string;
+  composerMode: AgentMode;
 };
 
 function storageScopeForUser(rawUserId: string | null): string {
@@ -95,12 +102,33 @@ export function useConversationChat({
   const userStorageScope = storageScopeForUser(ACTIVE_USER_ID);
   const mindmapSettingsStorageKey = `${MINDMAP_SETTINGS_STORAGE_KEY}:${userStorageScope}`;
   const lastConversationStorageKey = `maia.last-conversation-id:${userStorageScope}`;
+  const conversationsCacheStorageKey = `maia.conversations-cache:${userStorageScope}`;
+  const conversationDetailCacheStorageKey = `maia.conversation-detail-cache:${userStorageScope}`;
+  const cachedConversationId = readStoredText(lastConversationStorageKey, "").trim() || null;
+  const cachedConversationSnapshots = readStoredJson<Record<string, CachedConversationSnapshot>>(
+    conversationDetailCacheStorageKey,
+    {},
+  );
+  const initialCachedSnapshot = cachedConversationId
+    ? cachedConversationSnapshots[cachedConversationId] || null
+    : null;
 
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
-  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(null);
-  const [infoText, setInfoText] = useState("");
+  const [conversations, setConversations] = useState<ConversationSummary[]>(() =>
+    readStoredJson<ConversationSummary[]>(conversationsCacheStorageKey, []),
+  );
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(cachedConversationId);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>(() => initialCachedSnapshot?.turns || []);
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(() => {
+    if (!initialCachedSnapshot?.turns?.length) {
+      return null;
+    }
+    const candidate = Number(initialCachedSnapshot.selectedTurnIndex);
+    if (Number.isFinite(candidate) && candidate >= 0 && candidate < initialCachedSnapshot.turns.length) {
+      return candidate;
+    }
+    return initialCachedSnapshot.turns.length - 1;
+  });
+  const [infoText, setInfoText] = useState(() => initialCachedSnapshot?.infoText || "");
   const [citationMode, setCitationMode] = useState("inline");
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
   const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
@@ -110,13 +138,67 @@ export function useConversationChat({
     Record<string, ConversationMindmapSettings>
   >(() => readStoredMindmapSettings(mindmapSettingsStorageKey, MINDMAP_SETTINGS_STORAGE_KEY));
   const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
-  const [composerMode, setComposerMode] = useState<AgentMode>("ask");
+  const [composerMode, setComposerMode] = useState<AgentMode>(() => initialCachedSnapshot?.composerMode || "ask");
   const [accessMode, setAccessMode] = useState<AccessMode>("restricted");
   const [activityEvents, setActivityEvents] = useState<AgentActivityEvent[]>([]);
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [clarificationPrompt, setClarificationPrompt] = useState<ClarificationPrompt | null>(null);
   const [initialConversationHydrated, setInitialConversationHydrated] = useState(false);
+  const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
+  const selectedTurnIndexRef = useRef<number | null>(selectedTurnIndex);
+
+  const applyConversationState = useCallback(
+    (
+      conversationId: string,
+      turns: ChatTurn[],
+      mode: AgentMode,
+      preferredTurnIndex?: number | null,
+      fallbackInfoText = "",
+    ) => {
+      setChatTurns(turns);
+      setComposerMode(mode);
+      const mapSettings = conversationMindmapSettings[conversationId];
+      if (mapSettings) {
+        setMindmapEnabled(Boolean(mapSettings.enabled));
+        setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
+        setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
+        setMindmapMapType(normalizeMindmapMapType(mapSettings.mapType));
+      } else {
+        setMindmapEnabled(true);
+        setMindmapMaxDepth(4);
+        setMindmapIncludeReasoning(true);
+        setMindmapMapType("structure");
+      }
+
+      if (!turns.length) {
+        setSelectedTurnIndex(null);
+        setInfoText("");
+        setActivityEvents([]);
+        return;
+      }
+
+      const requestedIndex = Number(preferredTurnIndex);
+      const safeIndex =
+        Number.isFinite(requestedIndex) && requestedIndex >= 0 && requestedIndex < turns.length
+          ? requestedIndex
+          : turns.length - 1;
+      setSelectedTurnIndex(safeIndex);
+      setInfoText(turns[safeIndex]?.info || fallbackInfoText || "");
+      setActivityEvents(turns[safeIndex]?.activityEvents || []);
+    },
+    [conversationMindmapSettings],
+  );
+
+  const stripTurnActivityForCache = useCallback(
+    (turns: ChatTurn[]): ChatTurn[] =>
+      turns.map((turn) =>
+        turn.activityEvents && turn.activityEvents.length > 0
+          ? { ...turn, activityEvents: [] }
+          : turn,
+      ),
+    [],
+  );
 
   const refreshConversations = useCallback(async () => {
     const items = await listConversations();
@@ -151,11 +233,30 @@ export function useConversationChat({
   }, [conversationProjects, resetConversationDetail, selectedConversationId, selectedProjectId]);
 
   useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
+  useEffect(() => {
+    selectedTurnIndexRef.current = selectedTurnIndex;
+  }, [selectedTurnIndex]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
     window.localStorage.setItem(mindmapSettingsStorageKey, JSON.stringify(conversationMindmapSettings));
   }, [conversationMindmapSettings, mindmapSettingsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(conversationsCacheStorageKey, JSON.stringify(conversations));
+    } catch {
+      // Keep the UI responsive even if cache persistence fails.
+    }
+  }, [conversations, conversationsCacheStorageKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -168,61 +269,108 @@ export function useConversationChat({
     window.localStorage.removeItem(lastConversationStorageKey);
   }, [lastConversationStorageKey, selectedConversationId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedConversationId) {
+      return;
+    }
+    try {
+      const nextSnapshot: CachedConversationSnapshot = {
+        turns: stripTurnActivityForCache(chatTurns),
+        selectedTurnIndex,
+        infoText,
+        composerMode,
+      };
+      const existing = readStoredJson<Record<string, CachedConversationSnapshot>>(
+        conversationDetailCacheStorageKey,
+        {},
+      );
+      window.localStorage.setItem(
+        conversationDetailCacheStorageKey,
+        JSON.stringify({
+          ...existing,
+          [selectedConversationId]: nextSnapshot,
+        }),
+      );
+    } catch {
+      // Do not block interaction on cache write failures.
+    }
+  }, [
+    chatTurns,
+    composerMode,
+    conversationDetailCacheStorageKey,
+    infoText,
+    selectedConversationId,
+    selectedTurnIndex,
+    stripTurnActivityForCache,
+  ]);
+
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
       setSelectedConversationId(conversationId);
-      const detail = await getConversation(conversationId);
-      const { turns, runIds } = buildConversationTurns(detail);
-
-      const runEventsMap: Record<string, AgentActivityEvent[]> = {};
-      if (runIds.length > 0) {
-        await Promise.all(
-          runIds.map(async (runId) => {
-            try {
-              const rows = await getAgentRunEvents(runId);
-              runEventsMap[runId] = extractAgentEvents(rows);
-            } catch {
-              runEventsMap[runId] = [];
-            }
-          }),
+      const cachedSnapshots = readStoredJson<Record<string, CachedConversationSnapshot>>(
+        conversationDetailCacheStorageKey,
+        {},
+      );
+      const cachedSnapshot = cachedSnapshots[conversationId] || null;
+      const savedMode = conversationModes[conversationId] || cachedSnapshot?.composerMode || "ask";
+      if (cachedSnapshot) {
+        applyConversationState(
+          conversationId,
+          cachedSnapshot.turns || [],
+          savedMode,
+          cachedSnapshot.selectedTurnIndex,
+          cachedSnapshot.infoText,
         );
       }
 
-      const hydratedTurns = turns.map((turn) =>
-        turn.activityRunId
-          ? { ...turn, activityEvents: runEventsMap[turn.activityRunId] || [] }
-          : { ...turn, activityEvents: turn.activityEvents || [] },
+      const detail = await getConversation(conversationId);
+      const { turns, runIds } = buildConversationTurns(detail);
+      const baseTurns = turns.map((turn) => ({
+        ...turn,
+        activityEvents: turn.activityEvents || [],
+      }));
+      applyConversationState(
+        conversationId,
+        baseTurns,
+        savedMode,
+        cachedSnapshot?.selectedTurnIndex,
+        cachedSnapshot?.infoText || "",
       );
 
-      setChatTurns(hydratedTurns);
-      setActivityEvents([]);
-
-      const savedMode = conversationModes[conversationId] || "ask";
-      setComposerMode(savedMode);
-      const mapSettings = conversationMindmapSettings[conversationId];
-      if (mapSettings) {
-        setMindmapEnabled(Boolean(mapSettings.enabled));
-        setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
-        setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
-        setMindmapMapType(normalizeMindmapMapType(mapSettings.mapType));
-      } else {
-        setMindmapEnabled(true);
-        setMindmapMaxDepth(4);
-        setMindmapIncludeReasoning(true);
-        setMindmapMapType("structure");
+      if (runIds.length > 0) {
+        void Promise.all(
+          runIds.map(async (runId) => {
+            try {
+              const rows = await getAgentRunEvents(runId);
+              return [runId, extractAgentEvents(rows)] as const;
+            } catch {
+              return [runId, [] as AgentActivityEvent[]] as const;
+            }
+          }),
+        ).then((entries) => {
+          if (selectedConversationIdRef.current !== conversationId) {
+            return;
+          }
+          const runEventsMap = Object.fromEntries(entries);
+          const hydratedTurns = baseTurns.map((turn) =>
+            turn.activityRunId
+              ? { ...turn, activityEvents: runEventsMap[turn.activityRunId] || [] }
+              : turn,
+          );
+          setChatTurns(hydratedTurns);
+          const activeIndex = selectedTurnIndexRef.current;
+          if (
+            Number.isFinite(activeIndex) &&
+            activeIndex !== null &&
+            activeIndex >= 0 &&
+            activeIndex < hydratedTurns.length
+          ) {
+            setActivityEvents(hydratedTurns[activeIndex]?.activityEvents || []);
+          }
+        });
       }
-
-      if (hydratedTurns.length > 0) {
-        const lastIdx = hydratedTurns.length - 1;
-        setSelectedTurnIndex(lastIdx);
-        setInfoText(hydratedTurns[lastIdx].info || "");
-        setActivityEvents(hydratedTurns[lastIdx].activityEvents || []);
-        return;
-      }
-      setSelectedTurnIndex(null);
-      setInfoText("");
     },
-    [conversationMindmapSettings, conversationModes],
+    [applyConversationState, conversationDetailCacheStorageKey, conversationModes],
   );
 
   const handleCreateConversation = useCallback(
@@ -379,6 +527,13 @@ export function useConversationChat({
   ]);
 
   useEffect(() => {
+    if (selectedConversationId && !initialConversationHydrated) {
+      setInitialConversationHydrated(true);
+      void handleSelectConversation(selectedConversationId).catch(() => {
+        // Keep the app usable even if hydration selection fails.
+      });
+      return;
+    }
     if (!conversations.length || initialConversationHydrated || selectedConversationId) {
       return;
     }

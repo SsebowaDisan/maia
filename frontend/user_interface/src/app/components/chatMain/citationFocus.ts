@@ -2,7 +2,18 @@ import type { ChatTurn, CitationFocus, CitationHighlightBox } from "../../types"
 import { parseEvidence } from "../../utils/infoInsights";
 import type { EvidenceCard } from "../../utils/infoInsights";
 
-const CITATION_ANCHOR_SELECTOR = "a.citation, a[href^='#evidence-'], a[data-file-id], a[data-source-url]";
+const CITATION_ANCHOR_SELECTOR =
+  "a.citation, a[href^='#evidence-'], a[data-file-id], a[data-source-url], a[data-viewer-url]";
+
+type CitationAnchorInteractionPolicy = {
+  sourceUrl: string;
+  viewerUrl: string;
+  directOpenUrl: string;
+  fileId: string;
+  hasUsableFileId: boolean;
+  openDirectOnPrimaryClick: boolean;
+  openDirectOnModifiedClick: boolean;
+};
 
 function normalizeHttpUrl(rawValue: unknown): string {
   const value = String(rawValue || "").split(/\s+/).join(" ").trim();
@@ -26,6 +37,50 @@ function normalizeUrlToken(rawValue: unknown): string {
     .replace(/^[("'`<\[]+/, "")
     .replace(/[>"'`)\],.;:!?]+$/, "");
   return normalizeHttpUrl(value);
+}
+
+function normalizeViewerUrl(rawValue: unknown): string {
+  const value = String(rawValue || "").split(/\s+/).join(" ").trim();
+  if (!value) {
+    return "";
+  }
+  const lowered = value.toLowerCase();
+  if (lowered.startsWith("javascript:") || lowered.startsWith("data:text/html")) {
+    return "";
+  }
+  if (value.startsWith("/") && !value.startsWith("//")) {
+    return value;
+  }
+  return normalizeHttpUrl(value);
+}
+
+function resolveCitationAnchorInteractionPolicy(
+  citationAnchor: HTMLAnchorElement,
+): CitationAnchorInteractionPolicy {
+  const fileId = String(citationAnchor.getAttribute("data-file-id") || "").trim();
+  const sourceUrl = normalizeHttpUrl(citationAnchor.getAttribute("data-source-url") || "");
+  const viewerUrl = normalizeViewerUrl(citationAnchor.getAttribute("data-viewer-url") || "");
+  const directOpenUrl = sourceUrl || viewerUrl;
+  const hasUsableFileId = fileId.length > 0;
+  return {
+    sourceUrl,
+    viewerUrl,
+    directOpenUrl,
+    fileId,
+    hasUsableFileId,
+    openDirectOnPrimaryClick: Boolean(directOpenUrl),
+    openDirectOnModifiedClick: Boolean(directOpenUrl),
+  };
+}
+
+function shouldOpenCitationSourceUrlForPointerEvent(
+  event: Pick<MouseEvent, "button" | "ctrlKey" | "metaKey">,
+  policy: CitationAnchorInteractionPolicy,
+): boolean {
+  if (!policy.openDirectOnModifiedClick) {
+    return false;
+  }
+  return event.button === 1 || Boolean(event.ctrlKey || event.metaKey);
 }
 
 const ARTIFACT_URL_PATH_SEGMENTS = new Set([
@@ -482,6 +537,8 @@ export {
   normalizeCitationExtract,
   parseEvidenceRefId,
   resolveCitationFocusFromAnchor,
+  resolveCitationAnchorInteractionPolicy,
   resolveStrengthTier,
+  shouldOpenCitationSourceUrlForPointerEvent,
 };
-export type { ResolvedCitationFocus };
+export type { CitationAnchorInteractionPolicy, ResolvedCitationFocus };

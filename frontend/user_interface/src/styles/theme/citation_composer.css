@@ -77,6 +77,19 @@
   box-shadow: var(--citation-chip-shadow-hover);
 }
 
+.chat-answer-html a.citation[data-direct-url="true"] {
+  padding-right: 0.42rem;
+}
+
+.chat-answer-html a.citation[data-direct-url="true"]::after {
+  content: "\2197";
+  margin-left: 0.16rem;
+  color: var(--citation-chip-text);
+  font-size: 0.58rem;
+  line-height: 1;
+  font-weight: 700;
+}
+
 .chat-answer-html a.citation[data-strength-tier-resolved="3"] {
   border-color: color-mix(in srgb, var(--citation-tier-3) 32%, var(--citation-chip-border));
 }

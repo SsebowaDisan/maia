@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 import type { CitationHighlightBox } from "../types";
 import {
@@ -34,6 +34,62 @@ interface CitationPdfPreviewProps {
   onPageChange?: (page: number) => void;
 }
 
+type PageRenderState = "loading" | "ready" | "error" | "stalled";
+
+function buildPdfPageUrl(fileUrl: string, pageNumber: number): string {
+  try {
+    const base = typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1";
+    const resolved = new URL(fileUrl, base);
+    resolved.hash = `page=${Math.max(1, Math.round(pageNumber))}`;
+    return resolved.toString();
+  } catch {
+    return fileUrl;
+  }
+}
+
+function PageLoadingState() {
+  return (
+    <div className="flex min-h-[440px] w-full min-w-[240px] items-center justify-center rounded-[14px] bg-[#fbfbfd] text-[#6e6e73]">
+      <div className="flex flex-col items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <p className="text-[11px] font-medium">Rendering page preview</p>
+      </div>
+    </div>
+  );
+}
+
+function PageFallbackState({
+  fileUrl,
+  pageNumber,
+  stalled = false,
+}: {
+  fileUrl: string;
+  pageNumber: number;
+  stalled?: boolean;
+}) {
+  return (
+    <div className="flex min-h-[440px] w-full min-w-[240px] items-center justify-center rounded-[14px] bg-[#fbfbfd] px-6 text-center">
+      <div className="max-w-[280px] space-y-3">
+        <p className="text-[12px] font-medium text-[#1d1d1f]">
+          {stalled ? "Page preview is taking too long." : "Unable to render this PDF page."}
+        </p>
+        <p className="text-[11px] leading-5 text-[#6e6e73]">
+          Open the document directly if you need the full page immediately.
+        </p>
+        <a
+          href={buildPdfPageUrl(fileUrl, pageNumber)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1d1d1f] transition-colors hover:bg-[#f3f3f5]"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Open document
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export function CitationPdfPreview({
   fileUrl,
   page,
@@ -58,6 +114,7 @@ export function CitationPdfPreview({
     return Math.max(0.75, Math.min(2.25, parsed));
   });
   const [docReady, setDocReady] = useState(false);
+  const [pageRenderState, setPageRenderState] = useState<Record<number, PageRenderState>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const pageSurfaceRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -242,6 +299,7 @@ export function CitationPdfPreview({
     setNumPages(1);
     setCurrentPage(requestedPageSafe);
     setActiveTargetPage(requestedPageSafe);
+    setPageRenderState({});
     stopHighlightFocusTimer();
     highlightFocusAttemptsRef.current = 0;
     appliedHighlightKeyRef.current = "";
@@ -253,6 +311,10 @@ export function CitationPdfPreview({
       scrollRef.current.scrollTop = 0;
     }
   }, [fileUrl, requestedPageSafe]);
+
+  useEffect(() => {
+    setPageRenderState({});
+  }, [fileUrl, pageWidth, zoomLevel]);
 
   useEffect(() => {
     setZoomLevel(() => {
@@ -291,6 +353,36 @@ export function CitationPdfPreview({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [docReady, numPages, requestedPageSafe, searchCandidates, highlightText, externalOverlayRects]);
+
+  useEffect(() => {
+    if (!docReady) {
+      return;
+    }
+    const timers: number[] = [];
+    for (let pageNumber = 1; pageNumber <= numPages; pageNumber += 1) {
+      const state = pageRenderState[pageNumber];
+      if (state === "ready" || state === "error" || state === "stalled") {
+        continue;
+      }
+      timers.push(
+        window.setTimeout(() => {
+          setPageRenderState((previous) => {
+            const current = previous[pageNumber];
+            if (current === "ready" || current === "error") {
+              return previous;
+            }
+            return {
+              ...previous,
+              [pageNumber]: "stalled",
+            };
+          });
+        }, 9000),
+      );
+    }
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [docReady, numPages, pageRenderState]);
 
   useEffect(() => {
     return () => {
@@ -368,7 +460,7 @@ export function CitationPdfPreview({
           </button>
         </div>
         <p className="text-[10px] text-[#6e6e73]">
-          Page {currentPage} of {numPages} • {Math.round(zoomLevel * 100)}%
+          Page {currentPage} of {numPages} | {Math.round(zoomLevel * 100)}%
         </p>
         <div className="flex items-center gap-1">
           <button
@@ -462,12 +554,47 @@ export function CitationPdfPreview({
                   width={Math.round(pageWidth * zoomLevel)}
                   renderAnnotationLayer
                   renderTextLayer
+                  loading={<PageLoadingState />}
+                  error={<PageFallbackState fileUrl={fileUrl} pageNumber={pageNumber} />}
+                  onLoadSuccess={() => {
+                    setPageRenderState((previous) => {
+                      if (previous[pageNumber] === "ready") {
+                        return previous;
+                      }
+                      return {
+                        ...previous,
+                        [pageNumber]: "loading",
+                      };
+                    });
+                  }}
+                  onRenderSuccess={() => {
+                    setPageRenderState((previous) => {
+                      if (previous[pageNumber] === "ready") {
+                        return previous;
+                      }
+                      return {
+                        ...previous,
+                        [pageNumber]: "ready",
+                      };
+                    });
+                  }}
+                  onRenderError={() => {
+                    setPageRenderState((previous) => ({
+                      ...previous,
+                      [pageNumber]: "error",
+                    }));
+                  }}
                   onRenderTextLayerSuccess={() => {
                     if (pageNumber === activeTargetPage && !overlayRectsByPage[pageNumber]?.length) {
                       scheduleHighlightFocus(pageNumber);
                     }
                   }}
                 />
+                {pageRenderState[pageNumber] === "stalled" ? (
+                  <div className="absolute inset-0">
+                    <PageFallbackState fileUrl={fileUrl} pageNumber={pageNumber} stalled />
+                  </div>
+                ) : null}
                 <div className="citation-pdf-overlay" aria-hidden>
                   {overlayRectsByPage[pageNumber]?.length ? (
                     <svg
@@ -490,3 +617,4 @@ export function CitationPdfPreview({
     </div>
   );
 }
+
