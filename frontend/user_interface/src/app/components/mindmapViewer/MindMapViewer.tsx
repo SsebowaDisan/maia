@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Edge, type Node, type NodeMouseHandler, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Info } from "lucide-react";
 import { MindMapFlowCanvas } from "./MindMapFlowCanvas";
-import { MindMapToolbar } from "./MindMapToolbar";
+import { MindMapActionMenuButton, MindMapToolbar } from "./MindMapToolbar";
 import { MindMapViewerDetails } from "./MindMapViewerDetails";
-import type { FocusNodePayload, MindMapViewerProps, MindmapMapType, MindmapPayload } from "./types";
+import type { FocusNodePayload, MindMapViewerProps, MindmapMapType, MindmapNode, MindmapPayload } from "./types";
 import { clampMindmapDepth, computeDepths, drawPngFromLayout, focusedBranchIds, isDescendant, parseCanvasState, storageKey, type CanvasState, type MindNodeData } from "./utils";
-import { computeInitialCollapsedFromPayload, computeNotebookLayout, computeRadialLayout, toMindmapPayload } from "./viewerHelpers";
+import { computeInitialCollapsedFromPayload, computeNotebookLayout, toMindmapPayload } from "./viewerHelpers";
 import { payloadSupportsMapType } from "./viewerGraph";
-import { collectAvailableMindmapTypes, detectMindmapMapType, preferredLayoutForPayload } from "./presentation";
+import { collectAvailableMindmapTypes, detectMindmapMapType } from "./presentation";
 import { buildBranchColorIndexMap, buildChildrenByParent, buildNodeOrder, buildParentCount, resolveRootId, toFocusPayload } from "./viewerDerive";
 import { buildFlowEdges, buildFlowNodes, buildReasoningOverlayEdges } from "./viewerElements";
 import { normalizeMindmapPayloadForViewer } from "./viewerNormalize";
 import { downloadMindmapJson, downloadMindmapMarkdown } from "./exporters";
 import { MindMapEmptyState } from "./MindMapEmptyState";
+
+const DETAILS_AUTO_COLLAPSE_MS = 12000;
+const TOOLBAR_AUTO_HIDE_MS = 7000;
+
 export function MindMapViewer({
   payload: rawPayload,
   conversationId = null,
@@ -34,8 +39,47 @@ export function MindMapViewer({
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [showReasoningMap, setShowReasoningMap] = useState(false);
   const [viewerMaxDepth, setViewerMaxDepth] = useState(() => clampMindmapDepth(maxDepth));
-  const [lastFitKey, setLastFitKey] = useState("");
+  const [isDetailsCollapsed, setIsDetailsCollapsed] = useState(false);
+  const [isToolbarHidden, setIsToolbarHidden] = useState(false);
+  const [fitRequestSeq, setFitRequestSeq] = useState(0);
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
+  const detailsCollapseTimerRef = useRef<number | null>(null);
+  const toolbarHideTimerRef = useRef<number | null>(null);
+  const fitTimerRef = useRef<number | null>(null);
+
+  const clearDetailsCollapseTimer = useCallback(() => {
+    if (detailsCollapseTimerRef.current !== null) {
+      window.clearTimeout(detailsCollapseTimerRef.current);
+      detailsCollapseTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleDetailsCollapseTimer = useCallback(() => {
+    clearDetailsCollapseTimer();
+    detailsCollapseTimerRef.current = window.setTimeout(() => {
+      setIsDetailsCollapsed(true);
+    }, DETAILS_AUTO_COLLAPSE_MS);
+  }, [clearDetailsCollapseTimer]);
+  const clearToolbarHideTimer = useCallback(() => {
+    if (toolbarHideTimerRef.current !== null) {
+      window.clearTimeout(toolbarHideTimerRef.current);
+      toolbarHideTimerRef.current = null;
+    }
+  }, []);
+  const scheduleToolbarHideTimer = useCallback(() => {
+    clearToolbarHideTimer();
+    toolbarHideTimerRef.current = window.setTimeout(() => {
+      setIsToolbarHidden(true);
+    }, TOOLBAR_AUTO_HIDE_MS);
+  }, [clearToolbarHideTimer]);
+  const revealToolbar = useCallback(() => {
+    if (isToolbarHidden) {
+      setIsToolbarHidden(false);
+    }
+  }, [isToolbarHidden]);
+  const requestFit = useCallback(() => {
+    setFitRequestSeq((previous) => previous + 1);
+  }, []);
   useEffect(() => {
     setActiveMapType(detectedBaseMapType);
   }, [basePayload, detectedBaseMapType]);
@@ -89,7 +133,10 @@ export function MindMapViewer({
     setActiveMapType(nextMapType);
     setViewerMaxDepth(initialDepth);
     setShowReasoningMap(false);
-  }, [basePayload, conversationId, detectedBaseMapType, maxDepth, viewerPayload]);
+    setIsDetailsCollapsed(false);
+    setIsToolbarHidden(false);
+    requestFit();
+  }, [basePayload, conversationId, detectedBaseMapType, maxDepth, requestFit, viewerPayload]);
   useEffect(() => {
     const key = storageKey(viewerPayload, conversationId);
     const state: CanvasState = {
@@ -187,16 +234,28 @@ export function MindMapViewer({
     [parsedNodes],
   );
   const fitView = useCallback(() => {
-    flowRef.current?.fitView({ padding: 0.14, maxZoom: 1.1, minZoom: 0.2, duration: 220 });
+    flowRef.current?.fitView({
+      padding: 0.16,
+      maxZoom: 1.06,
+      minZoom: 0.18,
+      duration: 320,
+      ease: (t: number) => 1 - Math.pow(1 - t, 3),
+    });
   }, []);
   const handleFlowInit = useCallback((instance: ReactFlowInstance<Node<MindNodeData>, Edge>) => {
     flowRef.current = instance;
-    setLastFitKey("");
-  }, []);
-  const handleExpand = useCallback(() => setCollapsedNodeIds([]), []);
+    requestFit();
+  }, [requestFit]);
+  const handleExpand = useCallback(() => {
+    setCollapsedNodeIds([]);
+    scheduleToolbarHideTimer();
+    requestFit();
+  }, [requestFit, scheduleToolbarHideTimer]);
   const handleCollapse = useCallback(() => {
     setCollapsedNodeIds(computeInitialCollapsedFromPayload(viewerPayload, viewerMaxDepth));
-  }, [viewerPayload, viewerMaxDepth]);
+    scheduleToolbarHideTimer();
+    requestFit();
+  }, [requestFit, scheduleToolbarHideTimer, viewerPayload, viewerMaxDepth]);
   const toggleNodeCollapse = useCallback((nodeId: string) => {
     setCollapsedNodeIds((previous) => {
       const isCollapsed = previous.includes(nodeId);
@@ -217,7 +276,9 @@ export function MindMapViewer({
       });
       return Array.from(next);
     });
-  }, [childrenByParent, depthMap, viewerMaxDepth]);
+    scheduleToolbarHideTimer();
+    requestFit();
+  }, [childrenByParent, depthMap, requestFit, scheduleToolbarHideTimer, viewerMaxDepth]);
   const handleSwitchMapType = useCallback(
     (mapType: MindmapMapType) => {
       const variantPayload =
@@ -231,8 +292,10 @@ export function MindMapViewer({
       setFocusNodeId(null);
       setShowReasoningMap(false);
       onMapTypeChange?.(mapType);
+      scheduleToolbarHideTimer();
+      requestFit();
     },
-    [basePayload, detectedBaseMapType, onMapTypeChange, viewerMaxDepth],
+    [basePayload, detectedBaseMapType, onMapTypeChange, requestFit, scheduleToolbarHideTimer, viewerMaxDepth],
   );
   const handleExportJson = useCallback(() => {
     if (!payload) {
@@ -362,33 +425,52 @@ export function MindMapViewer({
     if (!flowRef.current || !flowNodes.length) {
       return;
     }
-    const key = `${activeMapType}:${layoutMode}:${focusNodeId || ""}:${viewerMaxDepth}`;
-    if (key === lastFitKey) {
-      return;
+    if (fitTimerRef.current !== null) {
+      window.clearTimeout(fitTimerRef.current);
+      fitTimerRef.current = null;
     }
-    const timer = window.setTimeout(() => {
+    fitTimerRef.current = window.setTimeout(() => {
       fitView();
-      setLastFitKey(key);
-    }, 60);
-    return () => window.clearTimeout(timer);
-  }, [activeMapType, fitView, focusNodeId, flowNodes, lastFitKey, layoutMode, viewerMaxDepth]);
+      fitTimerRef.current = null;
+    }, 72);
+    return () => {
+      if (fitTimerRef.current !== null) {
+        window.clearTimeout(fitTimerRef.current);
+        fitTimerRef.current = null;
+      }
+    };
+  }, [fitRequestSeq, fitView, flowEdges.length, flowNodes.length]);
   const availableMapTypes = useMemo(() => collectAvailableMindmapTypes(basePayload), [basePayload]);
   const selectedNode = useMemo(
     () => (selectedNodeId ? parsedNodes.find((node) => node.id === selectedNodeId) || null : null),
     [parsedNodes, selectedNodeId],
   );
+  const selectedChildNodes = useMemo(() => {
+    if (!selectedNode || !Array.isArray(selectedNode.children) || !selectedNode.children.length) {
+      return [];
+    }
+    return selectedNode.children
+      .map((childId) => nodeById.get(String(childId || "").trim()) || null)
+      .filter((node): node is MindmapNode => Boolean(node));
+  }, [nodeById, selectedNode]);
   const handleNodeClick: NodeMouseHandler<Node<MindNodeData>> = (_event, node) => {
     const focusPayload = resolveNodePayload(node.id);
     if (focusPayload && onFocusNode) onFocusNode(focusPayload);
+    setIsDetailsCollapsed(false);
+    scheduleDetailsCollapseTimer();
+    scheduleToolbarHideTimer();
     setSelectedNodeId(node.id);
   };
   const handleSelectNode = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
+    setIsDetailsCollapsed(false);
+    scheduleDetailsCollapseTimer();
+    scheduleToolbarHideTimer();
     const focusPayload = resolveNodePayload(nodeId);
     if (focusPayload && onFocusNode) {
       onFocusNode(focusPayload);
     }
-  }, [onFocusNode, resolveNodePayload]);
+  }, [onFocusNode, resolveNodePayload, scheduleDetailsCollapseTimer, scheduleToolbarHideTimer]);
   const handleAskSelectedNode = useCallback((focusPayload: FocusNodePayload) => {
     setSelectedNodeId(focusPayload.nodeId);
     onAskNode?.(focusPayload);
@@ -396,70 +478,201 @@ export function MindMapViewer({
   const handleFocusBranch = useCallback((nodeId: string | null) => {
     if (!nodeId) {
       setFocusNodeId(null);
+      scheduleToolbarHideTimer();
+      requestFit();
       return;
     }
     setFocusNodeId((previous) => (previous === nodeId ? null : nodeId));
     setSelectedNodeId(nodeId);
-  }, []);
-  const handleClearFocus = useCallback(() => setFocusNodeId(null), []);
+    scheduleToolbarHideTimer();
+    requestFit();
+  }, [requestFit, scheduleToolbarHideTimer]);
+  const handleClearFocus = useCallback(() => {
+    setFocusNodeId(null);
+    scheduleToolbarHideTimer();
+    requestFit();
+  }, [requestFit, scheduleToolbarHideTimer]);
+  const handleHideDetailsCard = useCallback(() => {
+    clearDetailsCollapseTimer();
+    setIsDetailsCollapsed(true);
+  }, [clearDetailsCollapseTimer]);
+  const handleShowDetailsCard = useCallback(() => {
+    setIsDetailsCollapsed(false);
+    scheduleDetailsCollapseTimer();
+  }, [scheduleDetailsCollapseTimer]);
+  const handleDetailsCardActivity = useCallback(() => {
+    if (isDetailsCollapsed) {
+      return;
+    }
+    scheduleDetailsCollapseTimer();
+  }, [isDetailsCollapsed, scheduleDetailsCollapseTimer]);
+
+  useEffect(() => {
+    if (isDetailsCollapsed) {
+      clearDetailsCollapseTimer();
+      return;
+    }
+    scheduleDetailsCollapseTimer();
+    return clearDetailsCollapseTimer;
+  }, [clearDetailsCollapseTimer, isDetailsCollapsed, scheduleDetailsCollapseTimer, selectedNodeId]);
+
+  useEffect(() => () => clearDetailsCollapseTimer(), [clearDetailsCollapseTimer]);
+  useEffect(() => () => clearToolbarHideTimer(), [clearToolbarHideTimer]);
+  useEffect(() => {
+    requestFit();
+  }, [effectiveViewerHeight, requestFit]);
+  useEffect(
+    () => () => {
+      if (fitTimerRef.current !== null) {
+        window.clearTimeout(fitTimerRef.current);
+      }
+    },
+    [],
+  );
+  const handleViewerMaxDepthChange = useCallback(
+    (depth: number) => {
+      setViewerMaxDepth(clampMindmapDepth(depth));
+      scheduleToolbarHideTimer();
+      requestFit();
+    },
+    [requestFit, scheduleToolbarHideTimer],
+  );
+  const handleCanvasMouseMove = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!isToolbarHidden) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      if (x <= 460 && y <= 120) {
+        revealToolbar();
+        scheduleToolbarHideTimer();
+      }
+    },
+    [isToolbarHidden, revealToolbar, scheduleToolbarHideTimer],
+  );
+  const handleCanvasInteraction = useCallback(() => {
+    scheduleToolbarHideTimer();
+  }, [scheduleToolbarHideTimer]);
   if (!payload || !parsedNodes.length) {
     return <MindMapEmptyState />;
   }
   return (
-    <div className="overflow-hidden rounded-[28px] border border-[#dedfd7] bg-[linear-gradient(180deg,#fcfcfa_0%,#f6f5f1_100%)] shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-      <div className="border-b border-black/[0.06] bg-[linear-gradient(180deg,rgba(255,255,255,0.84),rgba(251,251,248,0.78))] px-5 py-4 backdrop-blur md:px-6">
-        <MindMapToolbar
-          activeMapType={activeMapType}
-          availableMapTypes={availableMapTypes}
-          maxDepth={viewerMaxDepth}
-          showReasoningMap={showReasoningMap}
-          hasReasoningMap={hasReasoningMap}
-          focusNodeId={focusNodeId}
-          onSwitchMapType={handleSwitchMapType}
-          onExpand={handleExpand}
-          onCollapse={handleCollapse}
-          onFitView={fitView}
-          onMaxDepthChange={(depth) => setViewerMaxDepth(clampMindmapDepth(depth))}
-          onToggleReasoningMap={() => setShowReasoningMap((previous) => !previous)}
-          onClearFocus={handleClearFocus}
-          onExportPng={handleExportPng}
-          onExportJson={handleExportJson}
-          onExportMarkdown={handleExportMarkdown}
-          onSave={handleSave}
-          onShare={handleShare}
-        />
-      </div>
-      <div className="relative">
-        <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-w-0 px-4 pb-6 pt-4 md:px-5 md:pb-8 md:pt-5">
+    <div
+      className="relative overflow-hidden rounded-[24px] bg-[#eef2f7]"
+      style={{ height: `${effectiveViewerHeight}px` }}
+      onMouseMove={handleCanvasMouseMove}
+    >
           <div
-            className="overflow-hidden rounded-[24px] border border-black/[0.06] bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.88)]"
-            style={{ height: `${effectiveViewerHeight}px` }}
+            className={`pointer-events-none absolute inset-x-3 top-4 z-40 flex justify-start transition-opacity duration-200 md:inset-x-4 md:top-4 ${
+              isToolbarHidden ? "opacity-0" : "opacity-100"
+            }`}
           >
-            <MindMapFlowCanvas
-              height={effectiveViewerHeight}
-              nodes={flowNodes}
-              edges={flowEdges}
-              onInit={handleFlowInit}
-              onNodeClick={handleNodeClick}
-            />
-          </div>
-          </div>
-          <aside className="border-t border-black/[0.06] bg-[linear-gradient(180deg,#f8f7f3_0%,#f3f1eb_100%)] px-4 pb-6 pt-4 xl:border-l xl:border-t-0 xl:px-5 xl:pb-8 xl:pt-5">
-            <div className="xl:sticky xl:top-5">
-            <MindMapViewerDetails
-              activeMapType={activeMapType}
-              selectedNode={selectedNode}
-              onFocusBranch={handleFocusBranch}
-              isFocusActive={Boolean(selectedNode && focusNodeId === selectedNode.id)}
-              onAskNode={onAskNode ? handleAskSelectedNode : undefined}
-            />
+            <div
+              className={`pointer-events-auto transition-transform duration-200 ${
+                isToolbarHidden ? "-translate-y-1" : "translate-y-0"
+              }`}
+              onMouseEnter={() => {
+                revealToolbar();
+                clearToolbarHideTimer();
+              }}
+              onMouseLeave={() => {
+                scheduleToolbarHideTimer();
+              }}
+            >
+              <MindMapToolbar
+                activeMapType={activeMapType}
+                availableMapTypes={availableMapTypes}
+                maxDepth={viewerMaxDepth}
+                showReasoningMap={showReasoningMap}
+                hasReasoningMap={hasReasoningMap}
+                focusNodeId={focusNodeId}
+                onSwitchMapType={handleSwitchMapType}
+                onExpand={handleExpand}
+                onCollapse={handleCollapse}
+                onFitView={fitView}
+                onMaxDepthChange={handleViewerMaxDepthChange}
+                onToggleReasoningMap={() => setShowReasoningMap((previous) => !previous)}
+                onClearFocus={handleClearFocus}
+                onExportPng={handleExportPng}
+                onExportJson={handleExportJson}
+                onExportMarkdown={handleExportMarkdown}
+                onSave={handleSave}
+                onShare={handleShare}
+              />
             </div>
-          </aside>
-        </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-[linear-gradient(180deg,rgba(246,245,241,0)_0%,rgba(246,245,241,0.82)_62%,rgba(246,245,241,1)_100%)]" />
-        <div className="pointer-events-none h-5 bg-[linear-gradient(180deg,rgba(246,245,241,0.78),rgba(246,245,241,1))]" />
-      </div>
+          </div>
+
+          <div className="pointer-events-none absolute right-3 top-4 z-40 md:right-4 md:top-4">
+            <div className="pointer-events-auto">
+              <MindMapActionMenuButton
+                onExportPng={handleExportPng}
+                onExportJson={handleExportJson}
+                onExportMarkdown={handleExportMarkdown}
+                onSave={handleSave}
+                onShare={handleShare}
+              />
+            </div>
+          </div>
+
+          <MindMapFlowCanvas
+            height={effectiveViewerHeight}
+            nodes={flowNodes}
+            edges={flowEdges}
+            onInit={handleFlowInit}
+            onNodeClick={handleNodeClick}
+            onCanvasInteraction={handleCanvasInteraction}
+          />
+
+          {isDetailsCollapsed ? (
+            <div className="pointer-events-none absolute right-3 top-[3.25rem] z-30 hidden md:right-4 lg:block">
+              <button
+                type="button"
+                onClick={handleShowDetailsCard}
+                className="pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-full border border-transparent bg-transparent text-[#5b6473] shadow-none transition-colors hover:bg-black/[0.06] hover:text-[#17171b]"
+                title="Show details"
+              >
+                <Info className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="pointer-events-none absolute inset-y-0 right-5 z-20 hidden items-center lg:flex">
+              <div
+                className="pointer-events-auto h-[400px] max-h-[calc(100%-5rem)] w-[360px] rounded-[20px]"
+                onMouseMove={handleDetailsCardActivity}
+                onMouseDown={handleDetailsCardActivity}
+                onWheel={handleDetailsCardActivity}
+                onTouchStart={handleDetailsCardActivity}
+                onKeyDown={handleDetailsCardActivity}
+              >
+                <MindMapViewerDetails
+                  activeMapType={activeMapType}
+                  selectedNode={selectedNode}
+                  childNodes={selectedChildNodes}
+                  onFocusBranch={handleFocusBranch}
+                  isFocusActive={Boolean(selectedNode && focusNodeId === selectedNode.id)}
+                  onAskNode={onAskNode ? handleAskSelectedNode : undefined}
+                  onClose={handleHideDetailsCard}
+                  canvasMode
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 lg:hidden">
+            <div className="pointer-events-auto">
+              <MindMapViewerDetails
+                activeMapType={activeMapType}
+                selectedNode={selectedNode}
+                childNodes={selectedChildNodes}
+                onFocusBranch={handleFocusBranch}
+                isFocusActive={Boolean(selectedNode && focusNodeId === selectedNode.id)}
+                onAskNode={onAskNode ? handleAskSelectedNode : undefined}
+                canvasMode
+              />
+            </div>
+          </div>
     </div>
   );
 }

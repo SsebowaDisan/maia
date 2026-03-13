@@ -277,6 +277,28 @@ function buildSemanticSignal(
   return segments.join(" ");
 }
 
+function summarizeChildrenFromTitles(
+  childIds: string[],
+  nodeById: Map<string, MindmapNode>,
+  maxItems = 4,
+): string {
+  const titles = childIds
+    .map((childId) => {
+      const node = nodeById.get(childId);
+      if (!node) {
+        return "";
+      }
+      const candidate = cleanTopicTitle(String(node.title || node.source_name || "").trim());
+      return isUsableTopicTitle(candidate) ? candidate : "";
+    })
+    .filter(Boolean);
+  if (!titles.length) {
+    return "";
+  }
+  const uniqueTitles = Array.from(new Set(titles));
+  return uniqueTitles.slice(0, Math.max(1, maxItems)).join(" • ");
+}
+
 function classifySemanticCategory(title: string): GroupDescriptor {
   const value = title.toLowerCase();
   if (/\b(what is|overview|introduction|understanding|basics|explained|guide|fundamental|definition)\b/.test(value)) {
@@ -482,11 +504,12 @@ export function normalizeMindmapPayloadForViewer(
   const syntheticGroupNodes: MindmapNode[] = orderedGroupKeys.map((groupKey) => {
     const descriptor = descriptors.get(groupKey)!;
     const childIds = groupedChildren.get(groupKey) || [];
+    const dynamicSummary = summarizeChildrenFromTitles(childIds, nodeById);
     return {
       id: `${rootId}::group::${groupKey}`,
       title: descriptor.title,
-      text: descriptor.summary,
-      summary: descriptor.summary,
+      text: dynamicSummary,
+      summary: dynamicSummary,
       synthetic: true,
       node_type: "group",
       type: mapType,

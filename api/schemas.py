@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.message_blocks import CanvasDocumentRecord, MessageBlock
+
+
+class HaltReason(str, Enum):
+    """Named halt/fallback conditions surfaced in the response contract.
+
+    String enum so values survive JSON serialisation without conversion.
+    """
+    no_snippets = "no_snippets"
+    no_relevant_snippets = "no_relevant_snippets"
+    llm_timeout = "llm_timeout"
+    context_too_large = "context_too_large"
+    tool_failure = "tool_failure"
+    mode_downgraded = "mode_downgraded"
+    user_cancelled = "user_cancelled"
+    llm_quota_exceeded = "llm_quota_exceeded"
 
 
 class HealthResponse(BaseModel):
@@ -211,6 +227,50 @@ class IndexSelection(BaseModel):
     file_ids: list[str] = Field(default_factory=list)
 
 
+class MindmapFocusSchema(BaseModel):
+    """Typed contract for mindmap focus requests.
+
+    All fields are optional strings; omitted / null / empty values are treated
+    as "no constraint" for that dimension.
+
+    Filtering priority (highest to lowest):
+      1. node_id  — exact node-id match in a previous mindmap payload (deterministic)
+      2. source_id — exact source UUID match
+      3. source_name — case-insensitive substring match on source name
+      4. page_ref — exact page-label / page-reference match
+      5. unit_id  — exact unit/section ID match
+      6. text     — token-overlap ranking over the remaining candidates
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    node_id: str = ""
+    source_id: str = ""
+    source_name: str = ""
+    page_ref: str = ""
+    unit_id: str = ""
+    text: str = ""
+
+    @field_validator("node_id", "source_id", "source_name", "page_ref", "unit_id", "text", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> str:
+        return " ".join(str(v or "").split()).strip()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_none(cls, v: Any) -> Any:
+        # Allow None to produce an empty focus object instead of a validation error
+        if v is None:
+            return {}
+        return v
+
+    def is_empty(self) -> bool:
+        return not any([
+            self.node_id, self.source_id, self.source_name,
+            self.page_ref, self.unit_id, self.text,
+        ])
+
+
 class ChatAttachmentRecord(BaseModel):
     name: str = ""
     file_id: str | None = None
@@ -228,7 +288,7 @@ class ChatRequest(BaseModel):
     language: str | None = None
     command: str | None = None
     setting_overrides: dict[str, Any] = Field(default_factory=dict)
-    mindmap_focus: dict[str, Any] = Field(default_factory=dict)
+    mindmap_focus: MindmapFocusSchema = Field(default_factory=MindmapFocusSchema)
     mindmap_settings: dict[str, Any] = Field(default_factory=dict)
     agent_mode: Literal["ask", "company_agent", "deep_search"] = "ask"
     agent_goal: str | None = None
@@ -286,3 +346,5 @@ class ChatResponse(BaseModel):
     info_panel: dict[str, Any] = Field(default_factory=dict)
     activity_run_id: str | None = None
     mindmap: dict[str, Any] = Field(default_factory=dict)
+    halt_reason: str | None = None
+    mode_actually_used: str | None = None

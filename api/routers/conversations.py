@@ -80,6 +80,20 @@ def create_mindmap_share(
     )
 
 
+@router.get("/{conversation_id}/analytics")
+def get_conversation_analytics(
+    conversation_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    from api.services.conversation_analytics import build_analytics_response
+
+    conv = conversation_service.get_conversation(
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    return build_analytics_response(conversation_id, conv.get("data_source") or {})
+
+
 @router.delete("/{conversation_id}")
 def delete_conversation(
     conversation_id: str,

@@ -359,6 +359,44 @@ class GoogleDocsService:
             "index": insert_index,
         }
 
+    def get_document_text(self, *, doc_id: str) -> dict[str, Any]:
+        """Fetch plain text content from a Google Doc."""
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.read_started",
+            message="Reading Google Doc content",
+            data={"doc_id": doc_id},
+        )
+        document = self.session.request_json(
+            method="GET",
+            url=f"https://docs.googleapis.com/v1/documents/{doc_id}",
+        )
+        title = str(document.get("title") or "") if isinstance(document, dict) else ""
+        text_parts: list[str] = []
+        body = document.get("body") if isinstance(document, dict) else None
+        content = body.get("content") if isinstance(body, dict) else []
+        for element in content if isinstance(content, list) else []:
+            para = element.get("paragraph") if isinstance(element, dict) else None
+            if not isinstance(para, dict):
+                continue
+            for pe in para.get("elements") or []:
+                tr = pe.get("textRun") if isinstance(pe, dict) else None
+                if isinstance(tr, dict):
+                    raw = str(tr.get("content") or "")
+                    if raw:
+                        text_parts.append(raw)
+        full_text = "".join(text_parts)
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="docs.read_completed",
+            message="Google Doc content loaded",
+            data={"doc_id": doc_id, "chars": len(full_text), "source_url": doc_url},
+        )
+        return {"doc_id": doc_id, "title": title, "text": full_text, "doc_url": doc_url}
+
     def export_pdf(self, *, doc_id: str, folder_id: str | None = None) -> dict[str, Any]:
         emit_google_event(
             user_id=self.session.user_id,

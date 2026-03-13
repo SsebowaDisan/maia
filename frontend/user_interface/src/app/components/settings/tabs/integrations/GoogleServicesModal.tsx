@@ -31,7 +31,7 @@ function GoogleServicesModal({
 
   return (
     <div
-      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 px-4"
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 px-4 backdrop-blur-[10px]"
       role="dialog"
       aria-modal="true"
       aria-label="Choose Google services"

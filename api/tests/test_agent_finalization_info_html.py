@@ -2,6 +2,7 @@ from api.services.agent.models import AgentSource
 from api.services.agent.orchestration.finalization import (
     _build_evidence_items_from_sources,
     _build_info_html_from_sources,
+    _extract_citation_url_to_idx,
     _post_resume_verification_state,
 )
 
@@ -107,6 +108,51 @@ def test_build_evidence_items_from_sources_emits_info_panel_payload() -> None:
     assert payload["scene_refs"] == ["scene.pdf.reader"]
     assert payload["event_refs"] == ["evt-1", "evt-2"]
     assert payload.get("region", {}).get("x") == 0.05
+
+
+def test_extract_citation_url_to_idx_parses_evidence_citations_section() -> None:
+    answer = (
+        "## Executive Summary\n"
+        "Key finding about machine learning.\n\n"
+        "## Evidence Citations\n"
+        "- [1] [Harvard SEAS](https://seas.harvard.edu/news/article)\n"
+        "- [2] [Virginia DS](https://datascience.virginia.edu/report)\n"
+        "- [3] Internal evidence | internal evidence\n"
+    )
+    mapping = _extract_citation_url_to_idx(answer)
+    assert mapping.get("https://seas.harvard.edu/news/article") == 1
+    assert mapping.get("https://datascience.virginia.edu/report") == 2
+    # Internal (non-URL) entries must not appear
+    assert len(mapping) == 2
+
+
+def test_citation_url_to_idx_missing_section_returns_empty() -> None:
+    assert _extract_citation_url_to_idx("No citation section here.") == {}
+
+
+def test_evidence_ids_align_with_citation_list_when_sources_include_non_url_entries() -> None:
+    """Regression: before fix, source #95 (first URL source) got evidence-95
+    in info_html but [1] in the citation list, breaking anchor → panel linking."""
+    # Build 3 sources: first is file-only (no URL), second and third are web URLs.
+    sources = [
+        AgentSource(source_type="file", label="Internal report", file_id="f-1"),
+        AgentSource(source_type="web", label="Harvard", url="https://seas.harvard.edu/news/ml"),
+        AgentSource(source_type="web", label="Virginia DS", url="https://datascience.virginia.edu/ai"),
+    ]
+    citation_url_to_idx = {
+        "https://seas.harvard.edu/news/ml": 1,
+        "https://datascience.virginia.edu/ai": 2,
+    }
+    items = _build_evidence_items_from_sources(sources, citation_url_to_idx=citation_url_to_idx)
+    id_map = {item.source_url: item.evidence_id for item in items}
+
+    # The URL sources must use the citation list index, not their sequential position.
+    assert id_map.get("https://seas.harvard.edu/news/ml") == "evidence-1"
+    assert id_map.get("https://datascience.virginia.edu/ai") == "evidence-2"
+    # The non-URL source gets the first sequential ID that doesn't collide with
+    # the claimed citation IDs {1, 2}, which is 3.
+    non_url_item = next(i for i in items if not i.source_url)
+    assert non_url_item.evidence_id == "evidence-3"
 
 
 def test_post_resume_verification_state_clears_pending_barrier_when_contract_is_ready() -> None:

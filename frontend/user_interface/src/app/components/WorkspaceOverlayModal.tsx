@@ -50,7 +50,7 @@ export function WorkspaceOverlayModal({ tab, onClose, children }: WorkspaceOverl
       aria-label={`${tab} panel`}
       onClick={onClose}
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_6%,rgba(255,255,255,0.36)_0%,rgba(241,241,244,0.7)_36%,rgba(27,27,31,0.4)_100%)] backdrop-blur-[9px]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_6%,rgba(255,255,255,0.36)_0%,rgba(241,241,244,0.7)_36%,rgba(27,27,31,0.4)_100%)] backdrop-blur-[10px]" />
       <div
         className="relative z-[171] flex h-[min(90vh,980px)] w-full max-w-[1320px] min-h-[560px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-[linear-gradient(155deg,#fcfcfd_0%,#f6f6f8_44%,#ececef_100%)] shadow-[0_46px_124px_-48px_rgba(0,0,0,0.62)]"
         style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif" }}
@@ -58,11 +58,6 @@ export function WorkspaceOverlayModal({ tab, onClose, children }: WorkspaceOverl
       >
         <div className="flex items-center justify-between border-b border-black/[0.08] px-6 py-4">
           <div className="flex items-center gap-4">
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#28c940]" />
-            </div>
             <div className="inline-flex items-center gap-2.5 rounded-full border border-black/[0.08] bg-white/80 px-3 py-1">
               <TabIcon className="h-3.5 w-3.5 text-[#5f5f65]" />
               <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#4f4f55]">

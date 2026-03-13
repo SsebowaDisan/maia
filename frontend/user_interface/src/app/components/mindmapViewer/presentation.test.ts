@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMindmapArtifactSummary, collectAvailableMindmapTypes, preferredLayoutForMapType } from "./presentation";
+import {
+  buildMindmapArtifactSummary,
+  collectAvailableMindmapTypes,
+  normalizeMindmapSummaryText,
+  preferredLayoutForMapType,
+} from "./presentation";
 
 describe("mindmap presentation", () => {
   it("prefers available_map_types from the payload", () => {
@@ -24,5 +29,16 @@ describe("mindmap presentation", () => {
   it("defaults structure maps to horizontal layout", () => {
     expect(preferredLayoutForMapType("structure")).toBe("horizontal");
     expect(preferredLayoutForMapType("evidence")).toBe("horizontal");
+  });
+
+  it("removes markdown heading artifacts and trailing ellipses", () => {
+    const cleaned = normalizeMindmapSummaryText(
+      "## Detailed Research Report ## Comprehensive Overview...  \n### Executive Summary",
+      "Fallback summary.",
+    );
+
+    expect(cleaned).not.toContain("##");
+    expect(cleaned).not.toMatch(/\.{3,}$/);
+    expect(cleaned).toContain("Detailed Research Report");
   });
 });

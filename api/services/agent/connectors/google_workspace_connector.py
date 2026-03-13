@@ -188,6 +188,45 @@ class GoogleWorkspaceConnector(BaseConnector):
         except GoogleServiceError as exc:
             raise ConnectorError(str(exc)) from exc
 
+    def read_sheet_range(
+        self,
+        *,
+        spreadsheet_id: str,
+        sheet_range: str,
+    ) -> dict[str, Any]:
+        service = GoogleSheetsService(session=self._authorized_session())
+        try:
+            result = service.read_range(spreadsheet_id=spreadsheet_id, a1_range=sheet_range)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_range": sheet_range,
+            "values": result.get("values") or [],
+            "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+        }
+
+    def docs_read_text(self, *, document_id: str) -> dict[str, Any]:
+        service = GoogleDocsService(session=self._authorized_session())
+        try:
+            return service.get_document_text(doc_id=document_id)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+
+    def delete_drive_file(self, *, file_id: str) -> dict[str, Any]:
+        service = GoogleDriveService(session=self._authorized_session())
+        try:
+            return service.delete_file(file_id=file_id)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+
+    def rename_drive_file(self, *, file_id: str, name: str) -> dict[str, Any]:
+        service = GoogleDriveService(session=self._authorized_session())
+        try:
+            return service.rename_file(file_id=file_id, name=name)
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+
     def export_drive_file_pdf(self, *, file_id: str) -> bytes:
         try:
             service = GoogleDriveService(session=self._authorized_session())

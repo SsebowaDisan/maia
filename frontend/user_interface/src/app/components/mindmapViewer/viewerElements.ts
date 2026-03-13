@@ -12,6 +12,18 @@ import { compactNodeValue } from "./viewerGraph";
 import { isMachineLikeTitle, resolveProfessionalNodeTitle } from "./titleSanitizer";
 
 const BRANCH_EDGE_COLORS = ["#b6c1f5", "#b8cdef", "#c1c9f6", "#bcd9ef", "#c6cdf7", "#b6d2ee"];
+const GENERIC_CARD_TITLE_RE = /^(?:page|detail|section|topic|node|leaf|item|chunk|branch)\s*$/i;
+
+function isWeakCardTitle(value: string): boolean {
+  const text = String(value || "").trim();
+  if (!text) {
+    return true;
+  }
+  if (GENERIC_CARD_TITLE_RE.test(text)) {
+    return true;
+  }
+  return looksNoisyTitle(text) || isMachineLikeTitle(text);
+}
 
 type BuildFlowNodesParams = {
   visibleNodes: MindmapNode[];
@@ -65,7 +77,7 @@ export function buildFlowNodes({
     );
     const nodeTitle = String(node.title || node.id || "").trim();
     let displayTitle = nodeTitle || "";
-    if (looksNoisyTitle(nodeTitle) || isMachineLikeTitle(nodeTitle)) {
+    if (isWeakCardTitle(nodeTitle)) {
       const promotedTitle = (childrenByParent.get(node.id) || [])
         .map((childId) => {
           const childNode = nodeById.get(childId);
@@ -76,12 +88,12 @@ export function buildFlowNodes({
             sourceIndex: sourceIndexById.get(childId),
           });
         })
-        .find((candidate) => candidate && !looksNoisyTitle(candidate) && !isMachineLikeTitle(candidate));
+        .find((candidate) => candidate && !isWeakCardTitle(candidate));
       if (promotedTitle) {
         displayTitle = promotedTitle;
       }
     }
-    if (!displayTitle || looksNoisyTitle(displayTitle) || isMachineLikeTitle(displayTitle)) {
+    if (isWeakCardTitle(displayTitle)) {
       displayTitle = resolveProfessionalNodeTitle(node, {
         sourceIndex: sourceIndexById.get(node.id),
       });
@@ -90,6 +102,10 @@ export function buildFlowNodes({
       id: node.id,
       type: "mind",
       draggable: false,
+      style: {
+        transition:
+          "transform 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease-out",
+      },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
       position: (() => {

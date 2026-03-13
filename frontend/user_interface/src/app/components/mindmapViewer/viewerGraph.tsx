@@ -118,7 +118,16 @@ function compactNodeValue(raw: unknown): string {
   if (text.length <= 40) {
     return text;
   }
-  return `${text.slice(0, 37).trimEnd()}...`;
+  const windowed = text.slice(0, 41);
+  const sentenceCut = Math.max(windowed.lastIndexOf("."), windowed.lastIndexOf("!"), windowed.lastIndexOf("?"));
+  if (sentenceCut >= 24) {
+    return windowed.slice(0, sentenceCut + 1).trim();
+  }
+  const wordCut = windowed.lastIndexOf(" ");
+  if (wordCut >= 20) {
+    return windowed.slice(0, wordCut).trim();
+  }
+  return windowed.slice(0, 40).trim();
 }
 
 function payloadSupportsMapType(payload: MindmapPayload | null, mapType: MindmapMapType): boolean {

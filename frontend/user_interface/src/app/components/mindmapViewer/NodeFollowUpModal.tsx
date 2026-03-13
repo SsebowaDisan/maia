@@ -22,10 +22,25 @@ export function NodeFollowUpModal({
   onCancel,
   onSubmit,
 }: NodeFollowUpModalProps) {
+  const normalizeNodeText = (value: string): string =>
+    String(value || "")
+      .replace(/<a\b[^>]*>([\s\S]*?)<\/a>/gi, "$1")
+      .replace(/<\/?[^>]+>/g, " ")
+      .replace(/\b(?:href|id|class|target|rel|title|data-[a-z-]+)\s*=\s*(["']).*?\1/gi, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/^#{1,6}\s*/gm, "")
+      .replace(/\s+#{1,6}\s+/g, " ")
+      .replace(/\r?\n+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/(?:\.\.\.)+\s*$/g, "")
+      .trim();
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [errorText, setErrorText] = useState("");
   const cleanedTitle = useMemo(() => String(nodeTitle || "").trim(), [nodeTitle]);
-  const cleanedText = useMemo(() => String(nodeText || "").trim(), [nodeText]);
+  const cleanedText = useMemo(() => normalizeNodeText(nodeText || ""), [nodeText]);
   const cleanedSourceName = useMemo(() => String(sourceName || "").trim(), [sourceName]);
 
   useEffect(() => {
@@ -41,7 +56,7 @@ export function NodeFollowUpModal({
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !submitting) {
+      if (event.key === "Escape") {
         event.preventDefault();
         onCancel();
         return;
@@ -82,11 +97,7 @@ export function NodeFollowUpModal({
       role="dialog"
       aria-modal="true"
       aria-label="Ask a focused follow-up question"
-      onClick={() => {
-        if (!submitting) {
-          onCancel();
-        }
-      }}
+      onClick={onCancel}
     >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_8%,rgba(255,255,255,0.45)_0%,rgba(241,241,244,0.7)_36%,rgba(27,27,31,0.42)_100%)] backdrop-blur-[10px]" />
       <div
@@ -96,11 +107,6 @@ export function NodeFollowUpModal({
       >
         <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
           <div className="flex items-center gap-4">
-            <div className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[#28c940]" />
-            </div>
             <div className="inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/85 px-3 py-1">
               <Sparkles className="h-3.5 w-3.5 text-[#5f5f65]" />
               <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#4f4f55]">Follow-Up</span>
@@ -109,7 +115,6 @@ export function NodeFollowUpModal({
           <button
             type="button"
             onClick={onCancel}
-            disabled={submitting}
             className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.08] text-[#6e6e73] transition-colors hover:bg-white hover:text-[#1d1d1f] disabled:opacity-45"
             aria-label="Close follow-up dialog"
           >
@@ -165,7 +170,6 @@ export function NodeFollowUpModal({
             <button
               type="button"
               onClick={onCancel}
-              disabled={submitting}
               className="h-10 rounded-xl border border-black/[0.1] bg-white/90 px-4 text-[13px] text-[#2e2e32] hover:bg-white disabled:opacity-45"
             >
               Cancel

@@ -250,7 +250,31 @@ def _strength_tier_from_score(strength_score: float) -> int:
     return 1
 
 
-def _build_evidence_items_from_sources(response_sources: list[Any]) -> list[EvidenceItem]:
+def _build_evidence_items_from_sources(
+    response_sources: list[Any],
+    *,
+    citation_url_to_idx: dict[str, int] | None = None,
+) -> list[EvidenceItem]:
+    # Pass 1: pre-compute which evidence IDs are claimed by citation entries so
+    # that non-cited sources can be assigned IDs that don't collide with them.
+    url_to_citation_idx: dict[str, int] = {}
+    claimed_idxs: set[int] = set()
+    if citation_url_to_idx:
+        used: set[int] = set()
+        for source in response_sources:
+            url = _source_url(source)
+            if not url:
+                continue
+            url_key = url.lower().rstrip("/")
+            cand = citation_url_to_idx.get(url_key)
+            if cand is not None and cand not in used:
+                url_to_citation_idx[url_key] = cand
+                claimed_idxs.add(cand)
+                used.add(cand)
+
+    # Generator that yields sequential IDs skipping any claimed by citations.
+    _fallback_ids = (i for i in range(1, 100_000) if i not in claimed_idxs)
+
     evidence_items: list[EvidenceItem] = []
     for idx, source in enumerate(response_sources, start=1):
         source_url = _source_url(source)
@@ -274,13 +298,26 @@ def _build_evidence_items_from_sources(response_sources: list[Any]) -> list[Evid
             if len(highlight_boxes) >= 24:
                 break
 
-        title = f"Evidence [{idx}]"
+        # Align evidence block ID with the citation list idx so that inline
+        # citation anchors (href='#evidence-N') scroll to the correct panel block.
+        # Non-cited sources get a sequential ID that skips claimed citation slots,
+        # preventing ID collisions between cited and non-cited blocks.
+        url_key = source_url.lower().rstrip("/") if source_url else ""
+        citation_idx = url_to_citation_idx.get(url_key) if url_key else None
+        if citation_idx is not None:
+            evidence_id = f"evidence-{citation_idx}"
+            display_idx = citation_idx
+        else:
+            display_idx = next(_fallback_ids)
+            evidence_id = f"evidence-{display_idx}"
+
+        title = f"Evidence [{display_idx}]"
         if page_label:
             title += f" - page {page_label}"
 
         evidence_items.append(
             EvidenceItem(
-                evidence_id=f"evidence-{idx}",
+                evidence_id=evidence_id,
                 source_type=infer_evidence_source_type(
                     source_type=str(getattr(source, "source_type", "") or ""),
                     source_url=source_url,
@@ -314,10 +351,14 @@ def _build_info_html_from_sources(
     response_sources: list[Any],
     *,
     evidence_items: list[EvidenceItem] | None = None,
+    citation_url_to_idx: dict[str, int] | None = None,
 ) -> str:
     if not response_sources:
         return ""
-    rows = list(evidence_items or _build_evidence_items_from_sources(response_sources))
+    rows = list(
+        evidence_items
+        or _build_evidence_items_from_sources(response_sources, citation_url_to_idx=citation_url_to_idx)
+    )
     if not rows:
         return ""
     info_blocks: list[str] = ["<div class='evidence-list' data-layout='kotaemon'>"]

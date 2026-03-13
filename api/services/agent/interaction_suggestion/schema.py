@@ -30,6 +30,7 @@ class InteractionSuggestionPayload:
     confidence: float    # 0–1, model-assigned confidence
     reason: str          # one-sentence rationale, max 280 chars
     highlight_text: str = ""  # exact text to highlight or search term (empty if not applicable)
+    primary: bool = False     # True for the single recommended suggestion per step
     advisory: bool = dataclasses.field(default=True, init=False)  # always True
 
     def __post_init__(self) -> None:
@@ -67,6 +68,7 @@ def validate_and_clamp(raw: dict[str, Any]) -> InteractionSuggestionPayload | No
         confidence = round(_clamp(float(raw.get("confidence") or 0.0), 0.0, 1.0), 3)
         reason = str(raw.get("reason") or "").strip()[:280]
         highlight_text = str(raw.get("highlight_text") or "").strip()[:200]
+        primary = bool(raw.get("primary", False))
 
         return InteractionSuggestionPayload(
             action=action,
@@ -77,6 +79,7 @@ def validate_and_clamp(raw: dict[str, Any]) -> InteractionSuggestionPayload | No
             confidence=confidence,
             reason=reason,
             highlight_text=highlight_text,
+            primary=primary,
         )
     except Exception:
         return None
@@ -97,6 +100,7 @@ def payload_to_metadata(suggestion: InteractionSuggestionPayload) -> dict[str, A
         "confidence": suggestion.confidence,
         "reason": suggestion.reason,
         "highlight_text": suggestion.highlight_text,
+        "primary": suggestion.primary,
         "advisory": True,
         "__no_execution": True,
     }

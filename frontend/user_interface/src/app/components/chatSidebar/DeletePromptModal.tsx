@@ -37,7 +37,7 @@ export function DeletePromptModal({
       aria-modal="true"
       aria-label={title}
     >
-      <div className="absolute inset-0 bg-black/35 backdrop-blur-[1px]" />
+      <div className="absolute inset-0 bg-black/35 backdrop-blur-[10px]" />
       <div
         className="relative z-[131] w-full max-w-[440px] rounded-2xl border border-black/[0.1] bg-white shadow-[0_24px_70px_rgba(0,0,0,0.3)]"
         onClick={(event) => event.stopPropagation()}

@@ -10,6 +10,7 @@ type InteractionSuggestion = {
   action: string;
   targetLabel: string;
   highlightText?: string;
+  primary: boolean;
   cursorX: number | null;
   cursorY: number | null;
   scrollPercent: number | null;
@@ -101,6 +102,7 @@ function extractSuggestionLayer(events: AgentActivityEvent[]): Map<string, Inter
       action: readStringField(data["action"] ?? metadata["action"]).toLowerCase(),
       targetLabel: readStringField(data["target_label"] ?? metadata["target_label"]),
       highlightText: readStringField(data["highlight_text"] ?? metadata["highlight_text"] ?? data["highlightText"] ?? metadata["highlightText"]) || undefined,
+      primary: readBooleanField(data["primary"] ?? metadata["primary"]) === true,
       cursorX: clampPercent(readNumberField(data["cursor_x"] ?? metadata["cursor_x"])),
       cursorY: clampPercent(readNumberField(data["cursor_y"] ?? metadata["cursor_y"])),
       scrollPercent: clampPercent(

@@ -57,60 +57,121 @@ def normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
 
 def apply_mindmap_focus(
     snippets: list[dict[str, Any]],
-    focus: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    payload = dict(focus or {})
-    if not payload or not snippets:
-        return snippets
+    focus: Any,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Filter and rank snippets according to the mindmap focus contract.
 
+    Returns:
+        (filtered_snippets, focus_metadata) where focus_metadata contains:
+          focus_applied, matched_node_id, matched_source_id, matched_page_ref,
+          focus_filter_count_before, focus_filter_count_after.
+    """
+    count_before = len(snippets)
+    _empty_meta: dict[str, Any] = {
+        "focus_applied": False,
+        "matched_node_id": "",
+        "matched_source_id": "",
+        "matched_page_ref": "",
+        "focus_filter_count_before": count_before,
+        "focus_filter_count_after": count_before,
+    }
+    if not snippets:
+        return snippets, _empty_meta
+
+    # Accept MindmapFocusSchema, dict, or None
+    if hasattr(focus, "model_dump"):
+        payload = focus.model_dump()
+    else:
+        payload = dict(focus or {})
+
+    focus_node_id = str(payload.get("node_id", "") or "").strip()
     focus_source_id = str(payload.get("source_id", "") or "").strip()
     focus_source_name = str(payload.get("source_name", "") or "").strip().lower()
     focus_page = str(payload.get("page_ref") or payload.get("page_label") or "").strip()
     focus_unit_id = str(payload.get("unit_id", "") or "").strip()
     focus_text = str(payload.get("text", "") or "").strip().lower()
 
+    if not any([focus_node_id, focus_source_id, focus_source_name,
+                focus_page, focus_unit_id, focus_text]):
+        return snippets, _empty_meta
+
+    meta: dict[str, Any] = {
+        "focus_applied": True,
+        "matched_node_id": "",
+        "matched_source_id": "",
+        "matched_page_ref": "",
+        "focus_filter_count_before": count_before,
+        "focus_filter_count_after": count_before,
+    }
+
+    # ── Priority 1: node_id — deterministic exact match, short-circuits all heuristics ──
+    if focus_node_id:
+        node_filtered = [
+            row for row in snippets
+            if str(row.get("node_id", "") or "").strip() == focus_node_id
+            or str(row.get("id", "") or "").strip() == focus_node_id
+        ]
+        if node_filtered:
+            meta["matched_node_id"] = focus_node_id
+            meta["focus_filter_count_after"] = len(node_filtered)
+            return node_filtered, meta
+        # node_id supplied but no match — fall through to source-level filters
+
     filtered = snippets
+
+    # ── Priority 2/3: source_id (exact) or source_name (substring) ──
     if focus_source_id:
-        filtered = [
-            row
-            for row in filtered
+        source_filtered = [
+            row for row in filtered
             if str(row.get("source_id", "") or "").strip() == focus_source_id
         ]
+        if source_filtered:
+            filtered = source_filtered
+            meta["matched_source_id"] = focus_source_id
     elif focus_source_name:
-        filtered = [
-            row
-            for row in filtered
+        source_filtered = [
+            row for row in filtered
             if focus_source_name in str(row.get("source_name", "") or "").strip().lower()
         ]
+        if source_filtered:
+            filtered = source_filtered
+
+    # ── Priority 4: page_ref (exact, optional narrowing) ──
     if focus_page:
         page_filtered = [
-            row for row in filtered if str(row.get("page_label", "") or "").strip() == focus_page
+            row for row in filtered
+            if str(row.get("page_label", "") or "").strip() == focus_page
         ]
         if page_filtered:
             filtered = page_filtered
+            meta["matched_page_ref"] = focus_page
+
+    # ── Priority 5: unit_id (exact, optional narrowing) ──
     if focus_unit_id:
         unit_filtered = [
-            row for row in filtered if str(row.get("unit_id", "") or "").strip() == focus_unit_id
+            row for row in filtered
+            if str(row.get("unit_id", "") or "").strip() == focus_unit_id
         ]
         if unit_filtered:
             filtered = unit_filtered
 
+    # ── Priority 6: text overlap ranking ──
     if focus_text and filtered:
         focus_terms = {
-            token
-            for token in re.findall(r"[a-z0-9]{3,}", focus_text)
-            if len(token) >= 3
+            token for token in re.findall(r"[a-z0-9]{3,}", focus_text)
         }
 
-        def overlap_score(row: dict[str, Any]) -> int:
+        def _overlap_score(row: dict[str, Any]) -> int:
             text = str(row.get("text", "") or "").lower()
             return sum(1 for term in focus_terms if term in text)
 
-        ranked = sorted(filtered, key=overlap_score, reverse=True)
-        if overlap_score(ranked[0]) > 0:
+        ranked = sorted(filtered, key=_overlap_score, reverse=True)
+        if _overlap_score(ranked[0]) > 0:
             filtered = ranked[: max(4, min(10, len(ranked)))]
 
-    return filtered or snippets
+    result = filtered or snippets
+    meta["focus_filter_count_after"] = len(result)
+    return result, meta
 
 
 def select_relevant_snippets_with_llm(
@@ -344,6 +405,15 @@ def assess_evidence_sufficiency_with_llm(
         return True, 0.5, "Check failed; fail-open."
 
 
+def _estimate_tokens(text: str) -> int:
+    """Fast character-based token estimate (4 chars ≈ 1 token).
+
+    Errs on the side of leaving headroom — cheaper than calling a real tokeniser
+    at snippet assembly time.
+    """
+    return max(1, len(str(text or "")) // 4)
+
+
 def finalize_retrieved_snippets(
     *,
     question: str,
@@ -351,21 +421,32 @@ def finalize_retrieved_snippets(
     retrieved_snippets: list[dict[str, Any]],
     selected_payload: dict[str, list[Any]],
     target_urls: list[str],
-    mindmap_focus: dict[str, Any] | None,
+    mindmap_focus: Any,
     max_keep: int,
+    max_context_tokens: int = 6000,
     annotate_primary_sources_fn,
     apply_mindmap_focus_fn,
     snippet_score_fn,
     select_relevant_snippets_with_llm_fn,
     prioritize_primary_evidence_fn,
-) -> tuple[list[dict[str, Any]], str, str]:
+) -> tuple[list[dict[str, Any]], str, str, dict[str, Any]]:
     primary_source_note = (
         f"Primary source target from user or conversation context: {', '.join(target_urls[:3])}"
         if target_urls
         else ""
     )
+    _no_focus_meta: dict[str, Any] = {
+        "focus_applied": False,
+        "matched_node_id": "",
+        "matched_source_id": "",
+        "matched_page_ref": "",
+        "focus_filter_count_before": 0,
+        "focus_filter_count_after": 0,
+        "context_budget_used": 0,
+        "context_budget_limit": max_context_tokens,
+    }
     if not retrieved_snippets:
-        return [], primary_source_note, "no_snippets"
+        return [], primary_source_note, "no_snippets", _no_focus_meta
 
     # Filter out internal test/placeholder sources that should never appear in citations.
     # These are indexed during development and have no value to end users.
@@ -389,7 +470,7 @@ def finalize_retrieved_snippets(
         return False
     retrieved_snippets = [row for row in retrieved_snippets if not _is_test_snippet(row)]
     if not retrieved_snippets:
-        return [], primary_source_note, "no_snippets"
+        return [], primary_source_note, "no_snippets", _no_focus_meta
 
     snippets, primary_source_note = annotate_primary_sources_fn(
         question=question,
@@ -398,12 +479,9 @@ def finalize_retrieved_snippets(
         target_urls=target_urls,
     )
     if target_urls and not any(bool(row.get("is_primary_source")) for row in snippets):
-        return [], primary_source_note, "no_primary_for_url"
+        return [], primary_source_note, "no_primary_for_url", _no_focus_meta
 
-    snippets = apply_mindmap_focus_fn(
-        snippets,
-        mindmap_focus if isinstance(mindmap_focus, dict) else {},
-    )
+    snippets, focus_meta = apply_mindmap_focus_fn(snippets, mindmap_focus)
     prioritized_pool = sorted(
         [dict(row) for row in snippets],
         key=lambda row: (
@@ -434,10 +512,34 @@ def finalize_retrieved_snippets(
         )
 
     if target_urls and selected and not any(bool(row.get("is_primary_source")) for row in selected):
-        return [], primary_source_note, "no_primary_after_selection"
+        return [], primary_source_note, "no_primary_after_selection", focus_meta
     if target_urls and not selected:
-        return [], primary_source_note, "no_relevant_snippets_for_url"
+        return [], primary_source_note, "no_relevant_snippets_for_url", focus_meta
     if not selected:
-        return [], primary_source_note, "no_relevant_snippets"
-    return selected, primary_source_note, ""
+        return [], primary_source_note, "no_relevant_snippets", focus_meta
+
+    # ── Token budget trimming pass ──────────────────────────────────────────────
+    # Walk the already-prioritised list and drop snippets that would exceed the
+    # declared token budget.  Highest-priority snippets are kept first.
+    budget = max(200, int(max_context_tokens))
+    tokens_used = 0
+    budget_trimmed: list[dict[str, Any]] = []
+    for row in selected:
+        row_tokens = _estimate_tokens(str(row.get("text", "") or ""))
+        if tokens_used + row_tokens > budget and budget_trimmed:
+            # Budget exceeded and we already have at least one snippet — stop.
+            break
+        budget_trimmed.append(row)
+        tokens_used += row_tokens
+
+    # Populate budget telemetry into focus_meta so callers can log headroom.
+    focus_meta["context_budget_used"] = tokens_used
+    focus_meta["context_budget_limit"] = budget
+
+    if not budget_trimmed:
+        # Every snippet individually exceeds budget — return empty with halt signal.
+        focus_meta["context_budget_used"] = 0
+        return [], primary_source_note, "context_too_large", focus_meta
+
+    return budget_trimmed, primary_source_note, "", focus_meta
 

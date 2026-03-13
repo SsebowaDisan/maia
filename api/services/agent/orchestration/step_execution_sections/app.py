@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent, utc_now
@@ -22,6 +22,86 @@ from .guards import (
     should_skip_step_for_workspace_logging,
 )
 from .success import _tool_surface_info, handle_step_success
+
+if TYPE_CHECKING:
+    from api.services.agent.brain import Brain
+
+
+def _extract_content_summary(result: Any) -> str:
+    """Extract a human-readable content summary from any tool result shape.
+
+    Handles:
+    - ToolExecutionResult dataclass (.summary / .content attributes)
+    - Workspace tool dicts (document_url, spreadsheet_url, updated_rows, values, etc.)
+    - Generic dicts (summary, content, text keys)
+    - Fallback: str(result)
+    """
+    if result is None:
+        return ""
+    # ToolExecutionResult (or any dataclass/object with .summary)
+    if hasattr(result, "summary") and result.summary:
+        base = str(result.summary)[:400]
+        # Append content if it adds more detail
+        content = str(getattr(result, "content", "") or "")
+        if content and content not in base:
+            base = f"{base} | {content[:200]}"
+        return base[:600]
+    if isinstance(result, dict):
+        # Generic keys first
+        for key in ("summary", "content", "text", "answer", "output"):
+            val = result.get(key)
+            if val:
+                return str(val)[:600]
+        # Workspace tool result keys — build a descriptive summary
+        parts: list[str] = []
+        if result.get("document_id") or result.get("doc_id"):
+            doc_url = result.get("document_url") or result.get("doc_url") or ""
+            parts.append(f"Doc created: {doc_url or result.get('document_id') or result.get('doc_id')}")
+        if result.get("spreadsheet_id"):
+            sheet_url = result.get("spreadsheet_url") or ""
+            updated = result.get("updated_rows", "")
+            parts.append(f"Sheet: {sheet_url or result.get('spreadsheet_id')} updated_rows={updated}")
+        if result.get("values"):
+            rows = result["values"]
+            row_count = len(rows) if isinstance(rows, list) else 0
+            parts.append(f"Read {row_count} row(s) from sheet")
+        if result.get("file_id"):
+            parts.append(f"Drive file: {result.get('file_id')}")
+        if result.get("files") and isinstance(result["files"], list):
+            parts.append(f"Drive search: {len(result['files'])} file(s) found")
+        if result.get("deleted"):
+            parts.append(f"Deleted file: {result.get('deleted')}")
+        if parts:
+            return " | ".join(parts)[:600]
+        # Last resort: serialize non-empty dict keys
+        return str({k: v for k, v in result.items() if v and k != "events"})[:600]
+    return str(result)[:600]
+
+
+def _make_brain_signal(
+    *,
+    step: PlannedStep,
+    index: int,
+    owner_role: str,
+    status: str,
+    elapsed: float,
+    result: Any = None,
+    exc: Exception | None = None,
+) -> Any:
+    """Build a BrainSignal from step execution results (lazy import to avoid circulars)."""
+    from api.services.agent.brain import BrainSignal, StepOutcome
+    content_summary = _extract_content_summary(result)
+    outcome = StepOutcome(
+        step_index=index,
+        tool_id=step.tool_id,
+        owner_role=owner_role,
+        status=status,  # type: ignore[arg-type]
+        content_summary=content_summary,
+        evidence_count=1 if content_summary else 0,
+        error_message=str(exc)[:200] if exc else "",
+        duration_ms=int(elapsed * 1000),
+    )
+    return BrainSignal(source_role=owner_role, outcome=outcome)
 
 
 # All tool IDs that make outbound HTTP calls and qualify for one transient-error retry.
@@ -79,6 +159,7 @@ def execute_planned_steps(
     run_tool_live: Callable[..., Generator[dict[str, Any], None, Any]],
     emit_event: Callable[[AgentActivityEvent], dict[str, Any]],
     activity_event_factory: Callable[..., AgentActivityEvent],
+    brain: "Brain | None" = None,
 ) -> Generator[dict[str, Any], None, None]:
     step_cursor = 0
     display_step_index = 0
@@ -176,6 +257,18 @@ def execute_planned_steps(
             active_role = owner_role
             state.execution_context.settings["__active_execution_role"] = owner_role
 
+        # Brain: emit forward-looking rationale before the step runs.
+        if brain is not None:
+            _rationale = brain.pre_step_rationale(step=step, step_index=display_step_index)
+            if _rationale and _rationale != step.why_this_step:
+                _rationale_event = activity_event_factory(
+                    event_type="brain_rationale",
+                    title="Why this step",
+                    detail=_rationale[:400],
+                    metadata={"tool_id": step.tool_id, "step": display_step_index},
+                )
+                yield emit_event(_rationale_event)
+
         event_family, scene_surface = _tool_surface_info(step.tool_id)
         queued_event = activity_event_factory(
             event_type="tool_queued",
@@ -263,6 +356,7 @@ def execute_planned_steps(
             step_cursor += 1
             continue
 
+        _step_halt = False
         tool_started_clock = time.perf_counter()
         try:
             result = yield from run_tool_live(
@@ -294,6 +388,18 @@ def execute_planned_steps(
                 emit_event=emit_event,
                 activity_event_factory=activity_event_factory,
             )
+            if brain is not None:
+                _directive = yield from brain.observe_step(
+                    signal=_make_brain_signal(
+                        step=step, index=index, owner_role=owner_role,
+                        status="success", elapsed=elapsed, result=result,
+                    ),
+                    steps=steps,
+                    emit_event=emit_event,
+                    activity_event_factory=activity_event_factory,
+                )
+                if _directive.action == "halt":
+                    _step_halt = True
         except Exception as exc:
             elapsed = time.perf_counter() - tool_started_clock
             if _should_retry_transient_failure(
@@ -361,6 +467,18 @@ def execute_planned_steps(
                         emit_event=emit_event,
                         activity_event_factory=activity_event_factory,
                     )
+                    if brain is not None:
+                        _directive = yield from brain.observe_step(
+                            signal=_make_brain_signal(
+                                step=step, index=index, owner_role=owner_role,
+                                status="success", elapsed=retry_elapsed, result=retry_result,
+                            ),
+                            steps=steps,
+                            emit_event=emit_event,
+                            activity_event_factory=activity_event_factory,
+                        )
+                        if _directive.action == "halt":
+                            break
                     step_cursor += 1
                     continue
                 except Exception as retry_exc:
@@ -390,4 +508,18 @@ def execute_planned_steps(
                 emit_event=emit_event,
                 activity_event_factory=activity_event_factory,
             )
+            if brain is not None:
+                _directive = yield from brain.observe_step(
+                    signal=_make_brain_signal(
+                        step=step, index=index, owner_role=owner_role,
+                        status="failed", elapsed=elapsed, exc=exc,
+                    ),
+                    steps=steps,
+                    emit_event=emit_event,
+                    activity_event_factory=activity_event_factory,
+                )
+                if _directive.action == "halt":
+                    _step_halt = True
+        if _step_halt:
+            break
         step_cursor += 1

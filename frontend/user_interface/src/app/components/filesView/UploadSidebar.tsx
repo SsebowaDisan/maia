@@ -425,7 +425,7 @@ function UploadSidebar({
           aria-modal="true"
           aria-label="Upload activity"
         >
-          <div className="absolute inset-0 bg-black/35" />
+          <div className="absolute inset-0 bg-black/35 backdrop-blur-[10px]" />
           <div
             className="relative z-[151] flex max-h-[80vh] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-black/[0.12] bg-white shadow-[0_26px_70px_rgba(0,0,0,0.28)]"
             onClick={(event) => event.stopPropagation()}

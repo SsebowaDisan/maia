@@ -69,7 +69,7 @@ function FilesViewOverlays({
   return (
     <>
       {showCreateGroupModal ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/25 px-4">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/25 px-4 backdrop-blur-[10px]">
           <div className="w-full max-w-[460px] rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_20px_48px_rgba(0,0,0,0.2)]">
             <p className="text-[20px] font-semibold tracking-tight text-[#1d1d1f]">New Group</p>
             <input
@@ -158,7 +158,7 @@ function FilesViewOverlays({
       ) : null}
 
       {deleteConfirmation ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4 backdrop-blur-[10px]">
           <div className="w-full max-w-[520px] rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_52px_rgba(0,0,0,0.2)]">
             <p className="text-[18px] font-semibold tracking-tight text-[#1d1d1f]">Confirm file deletion</p>
             <p className="mt-2 text-[13px] text-[#4b4b50]">

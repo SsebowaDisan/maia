@@ -59,15 +59,29 @@ class FullQAPipeline(BaseReasoning):
         docs: list[RetrievedDocument],
         focus: dict | None,
     ) -> list[RetrievedDocument]:
-        payload = focus if isinstance(focus, dict) else {}
+        if hasattr(focus, "model_dump"):
+            payload = focus.model_dump()
+        else:
+            payload = focus if isinstance(focus, dict) else {}
         if not payload or not docs:
             return docs
 
+        node_id = str(payload.get("node_id", "") or "").strip()
         source_id = str(payload.get("source_id", "") or "").strip()
         source_name = str(payload.get("source_name", "") or "").strip().lower()
         page_ref = str(payload.get("page_ref", "") or payload.get("page_label", "") or "").strip()
         unit_id = str(payload.get("unit_id", "") or "").strip()
         focus_text = str(payload.get("text", "") or "").strip().lower()
+
+        # Priority 1: node_id — deterministic exact match, short-circuits all heuristics
+        if node_id:
+            node_filtered = [
+                doc for doc in docs
+                if str((doc.metadata or {}).get("node_id", "") or "").strip() == node_id
+                or str((doc.metadata or {}).get("id", "") or "").strip() == node_id
+            ]
+            if node_filtered:
+                return node_filtered
 
         filtered = docs
         if source_id:

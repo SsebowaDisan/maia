@@ -293,6 +293,53 @@ class GoogleDriveService:
         )
         return content
 
+    def delete_file(self, *, file_id: str) -> dict[str, Any]:
+        """Permanently delete a Drive file."""
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.delete_started",
+            message="Deleting Drive file",
+            data={"file_id": file_id},
+        )
+        self.session.request_json(
+            method="DELETE",
+            url=f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        )
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.delete_completed",
+            message="Drive file deleted",
+            data={"file_id": file_id},
+        )
+        return {"deleted": file_id, "ok": True}
+
+    def rename_file(self, *, file_id: str, name: str) -> dict[str, Any]:
+        """Rename a Drive file by updating its metadata."""
+        clean_name = str(name or "").strip()
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.rename_started",
+            message="Renaming Drive file",
+            data={"file_id": file_id, "name": clean_name},
+        )
+        self.session.request_json(
+            method="PATCH",
+            url=f"https://www.googleapis.com/drive/v3/files/{file_id}",
+            params={"fields": "id,name"},
+            payload={"name": clean_name},
+        )
+        emit_google_event(
+            user_id=self.session.user_id,
+            run_id=self.session.run_id,
+            event_type="drive.rename_completed",
+            message="Drive file renamed",
+            data={"file_id": file_id, "name": clean_name},
+        )
+        return {"file_id": file_id, "name": clean_name, "ok": True}
+
     def export_pdf_bytes(self, *, file_id: str) -> bytes:
         emit_google_event(
             user_id=self.session.user_id,

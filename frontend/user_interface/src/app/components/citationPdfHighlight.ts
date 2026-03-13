@@ -53,13 +53,15 @@ export function buildSearchCandidates(rawText: string): string[] {
   if (!normalized || normalized.length < 8) {
     return [];
   }
-  const primaryChunks = normalized
+  const sentenceChunks = String(rawText || "")
     .split(/[.!?;\n\r]+/)
     .map((chunk) => normalizeSearchText(chunk))
-    .filter((chunk) => chunk.length >= 10);
+    .filter((chunk) => chunk.length >= 10)
+    .slice(0, 8);
+  const firstSentence = sentenceChunks[0] || "";
 
   const ngrams: string[] = [];
-  const seededChunks = [normalized, ...primaryChunks.slice(0, 8)];
+  const seededChunks = [normalized, ...sentenceChunks];
   for (const chunk of seededChunks) {
     const words = chunk.split(" ").filter(Boolean);
     if (words.length < 3) {
@@ -85,10 +87,15 @@ export function buildSearchCandidates(rawText: string): string[] {
       break;
     }
   }
-  return Array.from(new Set([normalized, ...primaryChunks, ...ngrams]))
+  const uniqueCandidates = Array.from(new Set([normalized, ...sentenceChunks, ...ngrams]))
     .filter((candidate) => candidate.length >= 10)
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 80);
+    .slice(0, 120);
+  const firstSentenceLead =
+    firstSentence && uniqueCandidates.includes(firstSentence) ? [firstSentence] : [];
+  const rankedRemainder = uniqueCandidates
+    .filter((candidate) => candidate !== firstSentence)
+    .sort((a, b) => b.length - a.length);
+  return [...firstSentenceLead, ...rankedRemainder].slice(0, 80);
 }
 
 export function overlayRectsEqual(a: OverlayRect[], b: OverlayRect[]): boolean {

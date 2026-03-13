@@ -15,6 +15,7 @@ type MindMapFlowCanvasProps = {
   edges: Edge[];
   onInit: (instance: ReactFlowInstance<Node<MindNodeData>, Edge>) => void;
   onNodeClick: NodeMouseHandler<Node<MindNodeData>>;
+  onCanvasInteraction?: () => void;
 };
 
 export function MindMapFlowCanvas({
@@ -23,9 +24,15 @@ export function MindMapFlowCanvas({
   edges,
   onInit,
   onNodeClick,
+  onCanvasInteraction,
 }: MindMapFlowCanvasProps) {
   return (
-    <div className="w-full bg-[#eef2f7]" style={{ height: `${height}px` }}>
+    <div
+      className="w-full bg-[#eef2f7]"
+      style={{ height: `${height}px` }}
+      onPointerDownCapture={onCanvasInteraction}
+      onWheelCapture={onCanvasInteraction}
+    >
       <ReactFlow
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -33,8 +40,7 @@ export function MindMapFlowCanvas({
         edges={edges}
         onInit={onInit}
         onNodeClick={onNodeClick}
-        fitView
-        fitViewOptions={{ padding: 0.12, maxZoom: 1.08 }}
+        onPaneClick={onCanvasInteraction}
         minZoom={0.2}
         maxZoom={1.7}
         nodesDraggable={false}

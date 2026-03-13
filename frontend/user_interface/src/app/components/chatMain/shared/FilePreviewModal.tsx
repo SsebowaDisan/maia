@@ -46,7 +46,7 @@ function FilePreviewModal({ attachment, onClose, emptyPreviewMessage }: FilePrev
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px] sm:p-6" onClick={onClose}>
+    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4 backdrop-blur-[10px] sm:p-6" onClick={onClose}>
       <div
         className="flex h-[min(92vh,980px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-black/[0.08] bg-white shadow-[0_24px_70px_-28px_rgba(0,0,0,0.65)]"
         onClick={(event) => event.stopPropagation()}

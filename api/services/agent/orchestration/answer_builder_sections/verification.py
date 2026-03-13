@@ -51,6 +51,20 @@ def append_recommended_next_steps(lines: list[str], ctx: AnswerBuildContext) -> 
             return True
         if lowered.startswith(("extract specific", "extract key", "analyze collected sources", "set ")):
             return True
+        # Filter agent-internal reasoning / implementation notes that can leak from
+        # tool next_steps fields (e.g. "semantic understanding constraints",
+        # "hardcoded words", "note that the pipeline…").
+        if re.search(
+            r"\b(semantic\s+understanding|hardcoded\s+word|implementation\s+note|"
+            r"pipeline\s+constraint|internal\s+constraint|tool\s+limitation|"
+            r"agent\s+reasoning|brain\s+directive|execution\s+context)\b",
+            lowered,
+        ):
+            return True
+        if re.match(r"note\s*(?:that|:)\s", lowered):
+            return True
+        if re.match(r"(?:be\s+aware|please\s+note|important\s*:)\s", lowered):
+            return True
         return False
 
     show_diagnostics = bool(ctx.runtime_settings.get("__show_response_diagnostics"))

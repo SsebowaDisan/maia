@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 import type { MindmapMapType, MindmapNode } from "./types";
 import { compactNodeValue } from "./viewerGraph";
+import { resolveProfessionalNodeTitle } from "./titleSanitizer";
 
 type MindMapTreeViewProps = {
   rootNodeId: string;
@@ -135,7 +136,7 @@ function toRenderNode(
   const children = visibleChildren(nodeId, props);
   return {
     id: node.id,
-    title: node.title || node.id,
+    title: resolveProfessionalNodeTitle(node),
     subtitle: buildSubtitle(node, props.activeMapType),
     depth,
     hasChildren: children.length > 0,

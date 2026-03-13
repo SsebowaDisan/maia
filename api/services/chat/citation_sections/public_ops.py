@@ -10,7 +10,7 @@ from .cleanup import (
 )
 from .injection import _inject_inline_citations, render_fast_citation_links
 from .refs import resolve_required_citation_mode
-from .resolution import _resolve_citation_refs
+from .resolution import _extract_info_refs, _extract_refs_from_answer_citation_section, _resolve_citation_refs
 
 # Agent answers already contain structured markdown citation sections built by
 # answer_builder_sections/citations.py.  Running the Fast QA HTML-injection
@@ -39,9 +39,28 @@ def enforce_required_citations(
     if agent_match:
         body = text[: agent_match.start()].rstrip()
         tail = text[agent_match.start() :]
-        refs = _resolve_citation_refs(info_html=info_html, answer=text)
+        # Use the answer's citation section as the CANONICAL ref list (sequential
+        # IDs 1, 2, 3 … matching the ## Evidence Citations bullets).  Enrich each
+        # ref with highlight/strength metadata from the info_html panel by URL.
+        refs = _extract_refs_from_answer_citation_section(text)
         if not refs:
             return text
+        info_refs = _extract_info_refs(info_html) if info_html else []
+        if info_refs:
+            info_by_url: dict[str, dict] = {}
+            for iref in info_refs:
+                url_key = str(iref.get("source_url") or "").strip().lower().rstrip("/")
+                if url_key and url_key not in info_by_url:
+                    info_by_url[url_key] = iref
+            for ref in refs:
+                url_key = str(ref.get("source_url") or "").strip().lower().rstrip("/")
+                if not url_key or url_key not in info_by_url:
+                    continue
+                iref = info_by_url[url_key]
+                for key in ("phrase", "highlight_boxes", "unit_id", "match_quality",
+                            "strength_score", "char_start", "char_end", "source_id"):
+                    if not ref.get(key) and iref.get(key):
+                        ref[key] = iref[key]
         mode = resolve_required_citation_mode(citation_mode)
         enriched_body = render_fast_citation_links(answer=body, refs=refs, citation_mode=mode)
         enriched_body = _inject_inline_citations(enriched_body, refs)
@@ -82,9 +101,26 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
     if agent_match:
         body = raw_text[: agent_match.start()].rstrip()
         tail = raw_text[agent_match.start() :]
-        refs = _resolve_citation_refs(info_html=info_html, answer=raw_text)
+        # Same as enforce_required_citations: answer section refs are canonical.
+        refs = _extract_refs_from_answer_citation_section(raw_text)
         if not refs:
             return raw_text
+        info_refs = _extract_info_refs(info_html) if info_html else []
+        if info_refs:
+            info_by_url: dict[str, dict] = {}
+            for iref in info_refs:
+                url_key = str(iref.get("source_url") or "").strip().lower().rstrip("/")
+                if url_key and url_key not in info_by_url:
+                    info_by_url[url_key] = iref
+            for ref in refs:
+                url_key = str(ref.get("source_url") or "").strip().lower().rstrip("/")
+                if not url_key or url_key not in info_by_url:
+                    continue
+                iref = info_by_url[url_key]
+                for key in ("phrase", "highlight_boxes", "unit_id", "match_quality",
+                            "strength_score", "char_start", "char_end", "source_id"):
+                    if not ref.get(key) and iref.get(key):
+                        ref[key] = iref[key]
         layout_body = body
         if "class='citation'" in layout_body or 'class="citation"' in layout_body:
             layout_body = _anchors_to_bracket_markers(layout_body)

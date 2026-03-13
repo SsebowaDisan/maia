@@ -27,6 +27,49 @@ const MAP_TYPE_ORDER: MindmapMapType[] = [
   "work_graph",
 ];
 
+function stripMarkdownArtifacts(value: string): string {
+  return String(value || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\s+#{1,6}\s+/g, " ")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/[*_~]/g, "")
+    .replace(/\r?\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function clipReadableSummary(value: string, maxLen = 260): string {
+  const text = String(value || "").replace(/(?:\.\.\.|…)+\s*$/g, "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.length <= maxLen) {
+    return text;
+  }
+  const windowed = text.slice(0, maxLen + 1);
+  const sentenceCut = Math.max(windowed.lastIndexOf("."), windowed.lastIndexOf("!"), windowed.lastIndexOf("?"));
+  if (sentenceCut >= 120) {
+    return windowed.slice(0, sentenceCut + 1).trim();
+  }
+  const wordCut = windowed.lastIndexOf(" ");
+  if (wordCut >= 90) {
+    return windowed.slice(0, wordCut).trim();
+  }
+  return windowed.slice(0, maxLen).trim();
+}
+
+export function normalizeMindmapSummaryText(value: unknown, fallback: string): string {
+  const cleaned = clipReadableSummary(stripMarkdownArtifacts(String(value || "")));
+  if (!cleaned || cleaned.length < 24) {
+    return fallback;
+  }
+  return cleaned;
+}
+
 export function normalizeMindmapMapType(raw: unknown): MindmapMapType {
   const value = String(raw || "").trim().toLowerCase();
   if (value === "context_mindmap") {
@@ -144,12 +187,13 @@ export function buildMindmapArtifactSummary(payload: MindmapPayload | null): Min
   }
   const activeMapType = detectMindmapMapType(payload);
   const presentation = describeMindmapMapType(activeMapType);
+  const rawSummary = String(payload.artifact_summary || payload.subtitle || presentation.summary);
   return {
     title: String(payload.title || "Knowledge map"),
     activeMapType,
     presentation: {
       ...presentation,
-      summary: String(payload.artifact_summary || payload.subtitle || presentation.summary),
+      summary: normalizeMindmapSummaryText(rawSummary, presentation.summary),
     },
     availableMapTypes: collectAvailableMindmapTypes(payload),
     nodeCount: Array.isArray(payload.nodes) ? payload.nodes.length : 0,

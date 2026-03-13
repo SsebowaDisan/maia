@@ -403,19 +403,21 @@ export default function App() {
                 defaultPrompt={mindmapNodeFollowUp.defaultPrompt}
                 submitting={isSendingMindmapFollowUp}
                 onCancel={() => {
-                  if (isSendingMindmapFollowUp) {
-                    return;
-                  }
+                  setIsSendingMindmapFollowUp(false);
                   setMindmapNodeFollowUp(null);
                 }}
                 onSubmit={async (typedPrompt) => {
-                  if (!mindmapNodeFollowUp) {
+                  const focusDraft = mindmapNodeFollowUp;
+                  if (!focusDraft) {
                     return;
                   }
-                  const nextPrompt = String(typedPrompt || "").trim() || mindmapNodeFollowUp.defaultPrompt;
+                  const nextPrompt = String(typedPrompt || "").trim() || focusDraft.defaultPrompt;
                   setIsSendingMindmapFollowUp(true);
-                  try {
-                    await chatState.handleSendMessage(nextPrompt, undefined, {
+                  setMindmapNodeFollowUp(null);
+                  layout.setActiveTab("Chat");
+                  layout.setIsInfoPanelOpen(true);
+                  return chatState
+                    .handleSendMessage(nextPrompt, undefined, {
                       citationMode: chatState.citationMode,
                       useMindmap: chatState.mindmapEnabled,
                       mindmapSettings: {
@@ -424,20 +426,19 @@ export default function App() {
                         map_type: chatState.mindmapMapType,
                       },
                       mindmapFocus: {
-                        node_id: mindmapNodeFollowUp.nodeId,
-                        title: mindmapNodeFollowUp.title,
-                        text: mindmapNodeFollowUp.text,
-                        page_ref: mindmapNodeFollowUp.pageRef,
-                        source_id: mindmapNodeFollowUp.sourceId,
-                        source_name: mindmapNodeFollowUp.sourceName,
+                        node_id: focusDraft.nodeId,
+                        title: focusDraft.title,
+                        text: focusDraft.text,
+                        page_ref: focusDraft.pageRef,
+                        source_id: focusDraft.sourceId,
+                        source_name: focusDraft.sourceName,
                       },
                       agentMode: chatState.composerMode,
                       accessMode: chatState.accessMode,
+                    })
+                    .finally(() => {
+                      setIsSendingMindmapFollowUp(false);
                     });
-                    setMindmapNodeFollowUp(null);
-                  } finally {
-                    setIsSendingMindmapFollowUp(false);
-                  }
                 }}
               />
             ) : null}

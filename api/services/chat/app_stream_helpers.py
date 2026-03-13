@@ -19,6 +19,20 @@ from .conversation_store import (
 from .app_stream_orchestrator import run_orchestrator_stream_turn
 from .app_stream_pipeline import run_pipeline_stream_turn
 
+# Human-readable scope statements emitted as mode_committed events on the first
+# turn of a conversation.  Kept as constants so they are fast, deterministic,
+# and updatable without LLM access.
+_MODE_SCOPE_STATEMENTS: dict[str, str] = {
+    "company_agent": (
+        "Company Agent mode: I will use your connected tools, "
+        "execute multi-step tasks, and cite every action taken."
+    ),
+    "deep_search": (
+        "Deep Search mode: I will query multiple sources, "
+        "synthesise evidence, and cite every claim. Expect 30–90 seconds."
+    ),
+}
+
 
 def _read_persisted_workspace_ids(chat_state: dict[str, Any]) -> dict[str, str]:
     app_state = chat_state.get("app") if isinstance(chat_state.get("app"), dict) else {}
@@ -138,6 +152,14 @@ def stream_chat_turn(
     requested_mode = str(request.agent_mode or "").strip().lower() or "ask"
     mode_variant = mode_variant_from_request_fn(request=request, requested_mode=requested_mode)
     if is_orchestrator_mode_fn(requested_mode):
+        # Emit mode_committed on the first turn so the frontend can show a scope
+        # statement before any answer text arrives.
+        if not chat_history and requested_mode in _MODE_SCOPE_STATEMENTS:
+            yield {
+                "type": "mode_committed",
+                "mode": requested_mode,
+                "scope_statement": _MODE_SCOPE_STATEMENTS[requested_mode],
+            }
         return (
             yield from run_orchestrator_stream_turn(
                 request=request,

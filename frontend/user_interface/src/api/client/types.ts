@@ -106,6 +106,10 @@ type ChatResponse = {
   info_panel: Record<string, unknown>;
   activity_run_id: string | null;
   mindmap: Record<string, unknown>;
+  halt_reason?: string | null;
+  halt_message?: string | null;
+  mode_actually_used?: string | null;
+  mode_requested?: string | null;
 };
 
 type ChatStreamEvent =
@@ -113,6 +117,24 @@ type ChatStreamEvent =
   | { type: "info_delta"; delta: string }
   | { type: "plot"; plot: Record<string, unknown> | null }
   | { type: "activity"; event: AgentActivityEvent }
+  | {
+      type: "mode_committed";
+      mode?: string;
+      scope_statement?: string;
+      message?: string;
+    }
+  | {
+      type: "mode_downgraded";
+      requested_mode?: string;
+      actual_mode?: string;
+      reason?: string;
+      message?: string;
+    }
+  | {
+      type: "halt";
+      reason?: string;
+      message?: string;
+    }
   | { type: "debug"; message: string }
   | { type: string; [key: string]: unknown };
 

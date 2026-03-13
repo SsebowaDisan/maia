@@ -49,3 +49,35 @@ def test_recommended_next_steps_keeps_internal_actions_when_diagnostics_enabled(
     assert "## Recommended Next Steps" in answer
     assert "pip install" in answer.lower()
     assert "Validate the key findings" in answer
+
+
+def test_recommended_next_steps_filters_agent_internal_reasoning() -> None:
+    """Regression: agent-internal reasoning phrases must not leak into user-visible
+    Recommended Next Steps even when __show_response_diagnostics is off."""
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="summarize the research",
+            agent_mode="deep_search",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[
+            "Note that the pipeline has semantic understanding constraints.",
+            "Be aware that hardcoded words may affect retrieval quality.",
+            "Validate findings with two independent sources.",
+            "Please note: internal constraint prevents cross-shard lookup.",
+        ],
+        runtime_settings={},
+        verification_report=None,
+    )
+
+    # Useful step must survive
+    assert "Validate findings" in answer
+    # Agent-internal phrases must be stripped
+    assert "semantic understanding" not in answer
+    assert "hardcoded word" not in answer.lower()
+    assert "Note that" not in answer
+    assert "Be aware" not in answer
+    assert "Please note" not in answer

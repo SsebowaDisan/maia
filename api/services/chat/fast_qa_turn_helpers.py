@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import time
 from copy import deepcopy
 from typing import Any
 
 from fastapi import HTTPException
 
-from api.message_blocks import normalize_turn_structured_content
+from api.services.chat.block_builder import build_turn_blocks
 
 
 def run_fast_chat_turn_impl(
@@ -96,6 +97,8 @@ def run_fast_chat_turn_impl(
         constants["truncate_for_log_fn"](message, 220),
     )
 
+    _turn_start_ms = int(time.monotonic() * 1000)
+
     retrieval_max_sources = max(constants["API_FAST_QA_SOURCE_SCAN"], constants["API_FAST_QA_MAX_SOURCES"])
     retrieval_max_chunks = max(18, int(constants["API_FAST_QA_MAX_SNIPPETS"]) * 3)
     max_keep = max(1, int(constants["API_FAST_QA_MAX_SNIPPETS"]))
@@ -117,13 +120,14 @@ def run_fast_chat_turn_impl(
             _seen_sources[_name] = None
     all_project_sources = list(_seen_sources.keys())
 
-    snippets, primary_source_note, selection_reason = finalize_retrieved_snippets_fn(
+    _retrieval_end_ms = int(time.monotonic() * 1000)
+    snippets, primary_source_note, selection_reason, _focus_meta = finalize_retrieved_snippets_fn(
         question=message,
         chat_history=chat_history,
         retrieved_snippets=raw_snippets,
         selected_payload=selected_payload,
         target_urls=url_targets,
-        mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+        mindmap_focus=request.mindmap_focus,
         max_keep=max_keep,
     )
 
@@ -141,13 +145,13 @@ def run_fast_chat_turn_impl(
             max_sources=retrieval_max_sources,
             max_chunks=retrieval_max_chunks,
         )
-        snippets, primary_source_note, selection_reason = finalize_retrieved_snippets_fn(
+        snippets, primary_source_note, selection_reason, _focus_meta = finalize_retrieved_snippets_fn(
             question=message,
             chat_history=chat_history,
             retrieved_snippets=raw_snippets,
             selected_payload=selected_payload,
             target_urls=url_targets,
-            mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            mindmap_focus=request.mindmap_focus,
             max_keep=max_keep,
         )
 
@@ -228,13 +232,13 @@ def run_fast_chat_turn_impl(
                 max_sources=max(retrieval_max_sources, constants["API_FAST_QA_MAX_SOURCES"] + 16),
                 max_chunks=max(retrieval_max_chunks, int(constants["API_FAST_QA_MAX_SNIPPETS"]) * 5),
             )
-            second_snippets, second_primary_note, second_selection_reason = finalize_retrieved_snippets_fn(
+            second_snippets, second_primary_note, second_selection_reason, _second_focus_meta = finalize_retrieved_snippets_fn(
                 question=message,
                 chat_history=chat_history,
                 retrieved_snippets=second_raw_snippets,
                 selected_payload=selected_payload,
                 target_urls=url_targets,
-                mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+                mindmap_focus=request.mindmap_focus,
                 max_keep=max_keep,
             )
             if second_selection_reason in {
@@ -284,6 +288,7 @@ def run_fast_chat_turn_impl(
         )
         return None
 
+    _llm_start_ms = int(time.monotonic() * 1000)
     if snippets:
         snippets_with_refs, refs = constants["assign_fast_source_refs_fn"](snippets)
         answer = call_openai_fast_qa_fn(
@@ -412,7 +417,7 @@ def run_fast_chat_turn_impl(
             max_depth=max(2, min(8, map_depth)),
             include_reasoning_map=bool(map_settings.get("include_reasoning_map", True)),
             source_type_hint=str(map_settings.get("source_type_hint", "") or ""),
-            focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            focus=request.mindmap_focus.model_dump() if hasattr(request.mindmap_focus, "model_dump") else dict(request.mindmap_focus or {}),
             map_type=build_map_type,
         )
         if map_type == "context_mindmap":
@@ -434,6 +439,8 @@ def run_fast_chat_turn_impl(
 
     if source_usage:
         info_panel["source_usage"] = source_usage
+    if _focus_meta.get("focus_applied"):
+        info_panel["mindmap_focus_metadata"] = _focus_meta
     info_panel["verification_contract_version"] = constants["VERIFICATION_CONTRACT_VERSION"]
 
     normalized_evidence_items = build_verification_evidence_items_fn(
@@ -459,13 +466,45 @@ def run_fast_chat_turn_impl(
     info_panel["citation_strength_legend"] = (
         "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."
     )
-    blocks, documents = normalize_turn_structured_content(answer_text=answer)
+    blocks, documents = build_turn_blocks(answer_text=answer, question=message)
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
     retrieval_history.append(info_text)
     plot_history = deepcopy(data_source.get("plot_history", []))
     plot_history.append(None)
+    _turn_end_ms = int(time.monotonic() * 1000)
+    _cited_count = sum(
+        1 for row in snippets_with_refs
+        if str(row.get("ref", "") or "") and f"[{row.get('ref', '')}]" in answer
+    )
+    _score_vals = [
+        float(row.get("score", 0.0) or 0.0)
+        for row in snippets_with_refs
+        if row.get("score") is not None
+    ]
+    _perf: dict[str, Any] = {
+        "snippets_retrieved": len(raw_snippets),
+        "snippets_after_focus": _focus_meta.get("focus_filter_count_after", len(snippets)),
+        "snippets_sent_to_llm": len(snippets_with_refs),
+        "snippets_cited": _cited_count,
+        "retrieval_score_avg": round(sum(_score_vals) / len(_score_vals), 4) if _score_vals else None,
+        "retrieval_score_p50": None,
+        "context_tokens_used": _focus_meta.get("context_budget_used", 0),
+        "context_tokens_budget": _focus_meta.get("context_budget_limit", 6000),
+        "mode_requested": "ask",
+        "mode_actually_used": "ask",
+        "halt_reason": None,
+        "mindmap_generated": bool(mindmap_payload),
+        "focus_applied": bool(_focus_meta.get("focus_applied")),
+        "focus_filter_count_before": _focus_meta.get("focus_filter_count_before", 0),
+        "focus_filter_count_after": _focus_meta.get("focus_filter_count_after", 0),
+        "retrieval_ms": _retrieval_end_ms - _turn_start_ms,
+        "llm_ms": _turn_end_ms - _llm_start_ms,
+        "total_turn_ms": _turn_end_ms - _turn_start_ms,
+    }
+    info_panel["perf"] = _perf
+
     message_meta = deepcopy(data_source.get("message_meta", []))
     turn_attachments = normalize_request_attachments_fn(request)
     message_meta.append(
@@ -483,6 +522,9 @@ def run_fast_chat_turn_impl(
             "mindmap": mindmap_payload,
             "blocks": blocks,
             "documents": documents,
+            "halt_reason": None,
+            "mode_actually_used": "ask",
+            "perf": _perf,
         }
     )
 
@@ -517,4 +559,6 @@ def run_fast_chat_turn_impl(
         "activity_run_id": None,
         "info_panel": info_panel,
         "mindmap": mindmap_payload,
+        "halt_reason": None,
+        "mode_actually_used": "ask",
     }

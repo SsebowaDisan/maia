@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from copy import deepcopy
 from datetime import datetime
 import re as _re
@@ -9,13 +10,40 @@ from tzlocal import get_localzone
 
 from maia.mindmap.indexer import build_knowledge_map as _build_knowledge_map
 
-from api.message_blocks import normalize_turn_structured_content
-from api.schemas import ChatRequest
+from api.services.chat.block_builder import build_turn_blocks
+from api.schemas import ChatRequest, HaltReason
 from api.services import mindmap_service
 from api.services.agent.orchestrator import get_orchestrator
 
+from api.services.agent.session_pool import SessionPool
+
 from .constants import logger
 from .fallbacks import fallback_answer_from_exception
+
+# Human-readable messages keyed by HaltReason for the halt SSE event.
+_HALT_MESSAGES: dict[str, str] = {
+    "llm_quota_exceeded": "The agent hit a usage limit — showing best available answer.",
+    "tool_failure": "A tool failed during research — answer may be incomplete.",
+    "llm_timeout": "Response took too long — showing best available answer.",
+    "context_too_large": "Context exceeded the model limit — showing best available answer.",
+    "no_snippets": "No relevant sources found for this question.",
+    "no_relevant_snippets": "No sufficiently relevant sources found for this question.",
+    "mode_downgraded": "Switched to quick answer mode — the requested mode could not complete.",
+}
+
+
+def _classify_orchestrator_exception(exc: Exception) -> HaltReason:
+    """Map an orchestrator exception to the most specific HaltReason."""
+    msg = str(exc).lower()
+    if any(t in msg for t in ("quota", "429", "rate limit", "rate_limit", "too many requests")):
+        return HaltReason.llm_quota_exceeded
+    if any(t in msg for t in ("content policy", "content_filter", "moderation", "content filtered")):
+        return HaltReason.tool_failure
+    if any(t in msg for t in ("timeout", "timed out", "deadline")):
+        return HaltReason.llm_timeout
+    if any(t in msg for t in ("context length", "context_length", "max_tokens", "token limit")):
+        return HaltReason.context_too_large
+    return HaltReason.tool_failure
 from .info_panel_copy import build_info_panel_copy
 from .streaming import chunk_text_for_stream, make_activity_stream_event, build_agent_context_window
 from .verification_contract import (
@@ -47,6 +75,11 @@ def run_orchestrator_stream_turn(
     capture_workspace_ids_from_actions_fn: Callable[[list[Any]], dict[str, str]],
     extract_plot_from_actions_fn: Callable[[list[Any]], dict[str, Any] | None],
 ) -> Generator[dict[str, Any], None, dict[str, Any]]:
+    _turn_start_ms = int(time.monotonic() * 1000)
+    # Acquire a warm session from the pool.  The session caches resolved LLM
+    # config so repeated turns skip cold-construction overhead.  acquire() never
+    # raises — a fresh blank session is returned on first use or pool miss.
+    _session = SessionPool.acquire(user_id=user_id, conversation_id=conversation_id)
     orchestrator = get_orchestrator()
     agent_result = None
     last_activity_seq = 0
@@ -125,7 +158,16 @@ def run_orchestrator_stream_turn(
     except StopIteration as stop:
         agent_result = stop.value
     except Exception as exc:
+        _halt = _classify_orchestrator_exception(exc)
+        logger.warning(
+            "orchestrator_stop condition=%s error=%s", _halt, str(exc)[:200]
+        )
         logger.exception("Orchestrator execution failed: %s", exc)
+        yield {
+            "type": "halt",
+            "reason": _halt,
+            "message": _HALT_MESSAGES.get(_halt, "An error occurred — showing best available answer."),
+        }
         fallback = fallback_answer_from_exception(exc)
         agent_result = type(
             "_FallbackAgentResult",
@@ -141,6 +183,7 @@ def run_orchestrator_stream_turn(
                 "needs_human_review": False,
                 "human_review_notes": "",
                 "web_summary": {},
+                "__halt_reason": _halt,
             },
         )()
 
@@ -343,7 +386,6 @@ def run_orchestrator_stream_turn(
         info_panel["mode_variant"] = mode_variant
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
-    blocks, documents = normalize_turn_structured_content(answer_text=answer_text)
 
     chat_state.setdefault("app", {})
     chat_state["app"]["last_agent_run_id"] = agent_result.run_id
@@ -357,11 +399,39 @@ def run_orchestrator_stream_turn(
     if captured_workspace_ids["deep_research_sheet_url"]:
         chat_state["app"]["deep_research_sheet_url"] = captured_workspace_ids["deep_research_sheet_url"]
 
+    blocks, documents = build_turn_blocks(
+        answer_text=answer_text,
+        question=message,
+        workspace_ids=captured_workspace_ids,
+    )
+
     messages = chat_history + [[message, answer_text]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
     retrieval_history.append(normalized_agent_info_html)
     plot_history = deepcopy(data_source.get("plot_history", []))
     plot_history.append(plot_data)
+    _agent_halt_reason = getattr(agent_result, "__halt_reason", None)
+    _orch_perf: dict[str, Any] = {
+        "snippets_retrieved": None,
+        "snippets_after_focus": None,
+        "snippets_sent_to_llm": None,
+        "snippets_cited": None,
+        "retrieval_score_avg": None,
+        "retrieval_score_p50": None,
+        "context_tokens_used": None,
+        "context_tokens_budget": None,
+        "mode_requested": requested_mode,
+        "mode_actually_used": requested_mode,
+        "halt_reason": _agent_halt_reason,
+        "mindmap_generated": bool(mindmap_payload),
+        "focus_applied": False,
+        "focus_filter_count_before": None,
+        "focus_filter_count_after": None,
+        "retrieval_ms": None,
+        "llm_ms": None,
+        "total_turn_ms": int(time.monotonic() * 1000) - _turn_start_ms,
+    }
+    info_panel["perf"] = _orch_perf
     message_meta = deepcopy(data_source.get("message_meta", []))
     message_meta.append(
         {
@@ -379,6 +449,9 @@ def run_orchestrator_stream_turn(
             "mindmap": mindmap_payload,
             "blocks": blocks,
             "documents": documents,
+            "halt_reason": _agent_halt_reason,
+            "mode_actually_used": requested_mode,
+            "perf": _orch_perf,
         }
     )
 
@@ -409,6 +482,7 @@ def run_orchestrator_stream_turn(
         "agent_runs": agent_runs,
     }
     persist_conversation(conversation_id, conversation_payload)
+    SessionPool.release(user_id=user_id, conversation_id=conversation_id)
 
     return {
         "conversation_id": conversation_id,
@@ -431,4 +505,6 @@ def run_orchestrator_stream_turn(
         "activity_run_id": agent_result.run_id,
         "info_panel": info_panel,
         "mindmap": mindmap_payload,
+        "mode_actually_used": requested_mode,
+        "halt_reason": _agent_halt_reason,
     }

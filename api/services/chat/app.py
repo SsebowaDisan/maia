@@ -10,8 +10,8 @@ from ktem.pages.chat.common import STATE
 from ktem.utils.commands import WEB_SEARCH_COMMAND
 
 from api.context import ApiContext
-from api.message_blocks import normalize_turn_structured_content
-from api.schemas import ChatRequest
+from api.services.chat.block_builder import build_turn_blocks
+from api.schemas import ChatRequest, HaltReason
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.settings_service import load_user_settings
 from api.services.upload_service import index_urls
@@ -268,7 +268,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         timeout_info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
         if timeout_mode_variant:
             timeout_info_panel["mode_variant"] = timeout_mode_variant
-        blocks, documents = normalize_turn_structured_content(answer_text=timeout_answer)
+        blocks, documents = build_turn_blocks(answer_text=timeout_answer, question=message)
 
         messages = deepcopy(data_source.get("messages", []))
         if message:
@@ -294,6 +294,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "mindmap": {},
                 "blocks": blocks,
                 "documents": documents,
+                "halt_reason": HaltReason.llm_timeout,
+                "mode_actually_used": "extractive_fallback",
             }
         )
 
@@ -329,6 +331,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "activity_run_id": None,
             "info_panel": timeout_info_panel,
             "mindmap": {},
+            "halt_reason": HaltReason.llm_timeout,
+            "mode_actually_used": "extractive_fallback",
         }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)

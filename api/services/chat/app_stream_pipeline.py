@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from copy import deepcopy
 from typing import Any, Generator
 
@@ -10,10 +11,12 @@ from maia.base import Document
 from ktem.pages.chat.common import STATE
 
 from api.context import ApiContext
-from api.message_blocks import normalize_turn_structured_content
+from api.services.chat.block_builder import build_turn_blocks
 from api.schemas import ChatRequest
 
 from maia.mindmap.indexer import build_reasoning_map as _build_reasoning_map_from_indexer
+
+from api.schemas import HaltReason
 
 from .constants import logger
 from .conversation_store import persist_conversation
@@ -90,6 +93,7 @@ def run_pipeline_stream_turn(
         selected_by_index=selected_payload,
     )
 
+    _turn_start_ms = int(time.monotonic() * 1000)
     answer_text = ""
     info_text = ""
     plot_data: dict[str, Any] | None = None
@@ -109,7 +113,7 @@ def run_pipeline_stream_turn(
             message,
             conversation_id,
             chat_history,
-            mindmap_focus=request.mindmap_focus if isinstance(request.mindmap_focus, dict) else {},
+            mindmap_focus=request.mindmap_focus.model_dump() if hasattr(request.mindmap_focus, "model_dump") else dict(request.mindmap_focus or {}),
             mindmap_max_depth=max(2, min(8, requested_mindmap_depth)),
             include_reasoning_map=bool(mindmap_settings.get("include_reasoning_map", True)),
             mindmap_map_type=requested_map_type,
@@ -162,7 +166,14 @@ def run_pipeline_stream_turn(
         logger.exception("Chat pipeline raised Exception: %s", exc)
         pipeline_error = exc
 
+    pipeline_halt_reason: HaltReason | None = None
     if pipeline_error is not None and not answer_text:
+        pipeline_halt_reason = HaltReason.tool_failure
+        yield {
+            "type": "halt",
+            "reason": pipeline_halt_reason,
+            "message": "A pipeline error occurred — showing best available answer.",
+        }
         answer_text = fallback_answer_from_exception(pipeline_error)
         yield {"type": "chat_delta", "delta": answer_text, "text": answer_text}
 
@@ -208,7 +219,28 @@ def run_pipeline_stream_turn(
     info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
-    blocks, documents = normalize_turn_structured_content(answer_text=answer_text)
+    _pipeline_perf: dict[str, Any] = {
+        "snippets_retrieved": None,
+        "snippets_after_focus": None,
+        "snippets_sent_to_llm": None,
+        "snippets_cited": None,
+        "retrieval_score_avg": None,
+        "retrieval_score_p50": None,
+        "context_tokens_used": None,
+        "context_tokens_budget": None,
+        "mode_requested": "ask",
+        "mode_actually_used": "ask",
+        "halt_reason": pipeline_halt_reason,
+        "mindmap_generated": bool(mindmap_payload),
+        "focus_applied": False,
+        "focus_filter_count_before": None,
+        "focus_filter_count_after": None,
+        "retrieval_ms": None,
+        "llm_ms": None,
+        "total_turn_ms": int(time.monotonic() * 1000) - _turn_start_ms,
+    }
+    info_panel["perf"] = _pipeline_perf
+    blocks, documents = build_turn_blocks(answer_text=answer_text, question=message)
 
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))
@@ -236,6 +268,9 @@ def run_pipeline_stream_turn(
             "mindmap": mindmap_payload,
             "blocks": blocks,
             "documents": documents,
+            "halt_reason": pipeline_halt_reason,
+            "mode_actually_used": "ask",
+            "perf": _pipeline_perf,
         }
     )
 
@@ -261,6 +296,8 @@ def run_pipeline_stream_turn(
         "plot": plot_data,
         "state": chat_state,
         "mode": "ask",
+        "halt_reason": pipeline_halt_reason,
+        "mode_actually_used": "ask",
         "actions_taken": [],
         "sources_used": [],
         "source_usage": [],

@@ -74,7 +74,8 @@ Return a JSON object with EXACTLY this structure (no markdown, no extra keys):
       "scroll_percent": <float 0-100, 0 if action is not scroll>,
       "confidence": <float 0-1>,
       "reason": "one sentence why (max 80 chars)",
-      "highlight_text": "exact text to highlight or search term, empty string if not applicable"
+      "highlight_text": "exact text to highlight or search term, empty string if not applicable",
+      "primary": <true for your single top recommendation, false for all others>
     }}
   ]
 }}
@@ -100,6 +101,7 @@ Rules:
 - For highlight or search actions, always populate highlight_text with the relevant text.
 - Never suggest actions that send data, authenticate, or modify state.
 - For low-relevance steps, lower confidence values (0.3–0.5) are fine.
+- Rank your suggestions from most to least recommended. Set primary=true on EXACTLY ONE item (the best one). All others must have primary=false.
 """
 
 
@@ -173,6 +175,20 @@ def generate_interaction_suggestion(
             payload = validate_and_clamp(item)
             if payload is not None:
                 suggestions.append(payload)
+
+        # Enforce primary invariant: exactly one suggestion must be primary=True.
+        # If the LLM marked zero or multiple, programmatically assign the
+        # highest-confidence one and clear the rest.
+        primary_count = sum(1 for s in suggestions if s.primary)
+        if primary_count != 1 and suggestions:
+            import dataclasses as _dc
+            best_idx = max(range(len(suggestions)), key=lambda i: suggestions[i].confidence)
+            fixed: list[InteractionSuggestionPayload] = []
+            for idx, s in enumerate(suggestions):
+                if s.primary != (idx == best_idx):
+                    s = _dc.replace(s, primary=(idx == best_idx))
+                fixed.append(s)
+            suggestions = fixed
 
         return suggestions
     except Exception as exc:

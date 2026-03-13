@@ -11,6 +11,56 @@ import {
   type SendMessageOptions,
 } from "./constants";
 
+const MODE_SCOPE_STATEMENTS: Record<string, string> = {
+  company_agent: "Agent mode: I will execute tools and complete the workflow end-to-end.",
+  deep_search:
+    "Deep search: I will query multiple sources, synthesize evidence, and cite each key claim.",
+  web_search:
+    "Web search: I will browse relevant sources on the web and summarize findings with citations.",
+};
+
+function normalizeModeValue(value: unknown, fallback: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || fallback;
+}
+
+function deriveModeStatus({
+  isFirstTurn,
+  requestedMode,
+  actualMode,
+  existingStatus,
+  message,
+}: {
+  isFirstTurn: boolean;
+  requestedMode: string;
+  actualMode: string;
+  existingStatus: ChatTurn["modeStatus"];
+  message: string | null;
+}): ChatTurn["modeStatus"] {
+  if (requestedMode && actualMode && requestedMode !== actualMode) {
+    return {
+      state: "downgraded",
+      requestedMode,
+      actualMode,
+      message: message || `Mode changed from ${requestedMode} to ${actualMode}.`,
+      scopeStatement: existingStatus?.scopeStatement || null,
+    };
+  }
+  if (existingStatus) {
+    return existingStatus;
+  }
+  if (isFirstTurn && requestedMode !== "ask") {
+    return {
+      state: "committed",
+      requestedMode,
+      actualMode,
+      scopeStatement: MODE_SCOPE_STATEMENTS[requestedMode] || null,
+      message: message || null,
+    };
+  }
+  return null;
+}
+
 type SendConversationMessageParams = {
   message: string;
   attachments?: ChatAttachment[];
@@ -97,6 +147,18 @@ async function sendConversationMessage({
     effectiveMode === "deep_search" && Boolean(options?.settingOverrides?.["__research_web_only"]);
   const requestedTurnMode: ChatTurn["mode"] =
     effectiveMode === "deep_search" && webOnlyResearchRequested ? "web_search" : effectiveMode;
+  const isFirstTurn = chatTurnsLength === 0;
+  const initialRequestedMode = normalizeModeValue(requestedTurnMode || effectiveMode, "ask");
+  const initialModeStatus: ChatTurn["modeStatus"] =
+    isFirstTurn && initialRequestedMode !== "ask"
+      ? {
+          state: "committed",
+          requestedMode: initialRequestedMode,
+          actualMode: initialRequestedMode,
+          scopeStatement: MODE_SCOPE_STATEMENTS[initialRequestedMode] || null,
+          message: null,
+        }
+      : null;
   const delayedPendingAssistantMessage = orchestratorMode
     ? effectiveMode === "deep_search"
       ? webOnlyResearchRequested
@@ -144,6 +206,11 @@ async function sendConversationMessage({
       attachments: attachments && attachments.length > 0 ? attachments : undefined,
       info: "",
       mode: requestedTurnMode,
+      modeRequested: initialRequestedMode,
+      modeActuallyUsed: initialRequestedMode,
+      modeStatus: initialModeStatus,
+      haltReason: null,
+      haltMessage: null,
       activityEvents: [],
       needsHumanReview: false,
       humanReviewNotes: null,
@@ -203,6 +270,11 @@ async function sendConversationMessage({
       let streamedInfo = "";
       const streamedEvents: AgentActivityEvent[] = [];
       let streamedRunId = "";
+      let streamedModeRequested = initialRequestedMode;
+      let streamedModeActual = initialRequestedMode;
+      let streamedModeStatus: ChatTurn["modeStatus"] = initialModeStatus;
+      let streamedHaltReason: string | null = null;
+      let streamedHaltMessage: string | null = null;
       try {
         response = await sendChatStream(message, selectedConversationId, {
           ...sharedPayload,
@@ -242,6 +314,79 @@ async function sendConversationMessage({
                 next[next.length - 1] = {
                   ...(last || {}),
                   plot: plotPayload,
+                };
+                return next;
+              });
+              return;
+            }
+            if (event.type === "mode_committed") {
+              const committedMode = normalizeModeValue(event.mode, streamedModeRequested || "ask");
+              streamedModeRequested = committedMode;
+              streamedModeActual = committedMode;
+              streamedModeStatus = {
+                state: "committed",
+                requestedMode: committedMode,
+                actualMode: committedMode,
+                scopeStatement:
+                  String(event.scope_statement || "").trim() ||
+                  MODE_SCOPE_STATEMENTS[committedMode] ||
+                  null,
+                message: String(event.message || "").trim() || null,
+              };
+              setChatTurns((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                next[next.length - 1] = {
+                  ...(last || {}),
+                  modeRequested: streamedModeRequested,
+                  modeActuallyUsed: streamedModeActual,
+                  modeStatus: streamedModeStatus,
+                };
+                return next;
+              });
+              return;
+            }
+            if (event.type === "mode_downgraded") {
+              streamedModeRequested = normalizeModeValue(
+                event.requested_mode,
+                streamedModeRequested || initialRequestedMode,
+              );
+              streamedModeActual = normalizeModeValue(
+                event.actual_mode,
+                streamedModeActual || streamedModeRequested || "ask",
+              );
+              streamedModeStatus = {
+                state: "downgraded",
+                requestedMode: streamedModeRequested,
+                actualMode: streamedModeActual,
+                scopeStatement: streamedModeStatus?.scopeStatement || null,
+                message:
+                  String(event.message || "").trim() ||
+                  `Mode changed from ${streamedModeRequested} to ${streamedModeActual}.`,
+              };
+              setChatTurns((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                next[next.length - 1] = {
+                  ...(last || {}),
+                  modeRequested: streamedModeRequested,
+                  modeActuallyUsed: streamedModeActual,
+                  modeStatus: streamedModeStatus,
+                };
+                return next;
+              });
+              return;
+            }
+            if (event.type === "halt") {
+              streamedHaltReason = String(event.reason || "").trim() || null;
+              streamedHaltMessage = String(event.message || "").trim() || null;
+              setChatTurns((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                next[next.length - 1] = {
+                  ...(last || {}),
+                  haltReason: streamedHaltReason,
+                  haltMessage: streamedHaltMessage,
                 };
                 return next;
               });
@@ -289,6 +434,23 @@ async function sendConversationMessage({
               });
             }
           },
+        });
+        streamedModeRequested = normalizeModeValue(
+          response.mode_requested,
+          streamedModeRequested || initialRequestedMode,
+        );
+        streamedModeActual = normalizeModeValue(
+          response.mode_actually_used || response.mode,
+          streamedModeActual || streamedModeRequested || "ask",
+        );
+        streamedHaltReason = String(response.halt_reason || streamedHaltReason || "").trim() || null;
+        streamedHaltMessage = String(response.halt_message || streamedHaltMessage || "").trim() || null;
+        streamedModeStatus = deriveModeStatus({
+          isFirstTurn,
+          requestedMode: streamedModeRequested,
+          actualMode: streamedModeActual,
+          existingStatus: streamedModeStatus,
+          message: streamedModeStatus?.message || streamedHaltMessage || null,
         });
       } catch (streamError) {
         response = await sendChat(message, selectedConversationId, {
@@ -343,6 +505,23 @@ async function sendConversationMessage({
           ? "web_search"
           : effectiveReturnedMode;
       const backendModeMismatch = orchestratorMode && effectiveReturnedMode === "ask";
+      const responseModeRequested = normalizeModeValue(
+        response.mode_requested,
+        initialRequestedMode,
+      );
+      const responseModeActual = normalizeModeValue(
+        response.mode_actually_used || effectiveReturnedMode,
+        responseModeRequested,
+      );
+      const haltReason = String(response.halt_reason || "").trim() || null;
+      const haltMessage = String(response.halt_message || "").trim() || null;
+      const modeStatus = deriveModeStatus({
+        isFirstTurn,
+        requestedMode: responseModeRequested,
+        actualMode: responseModeActual,
+        existingStatus: null,
+        message: haltMessage,
+      });
       const finalAssistantText = backendModeMismatch
         ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
         : response.answer || "";
@@ -355,6 +534,11 @@ async function sendConversationMessage({
         info: response.info || "",
         plot: response.plot || null,
         mode: resolvedTurnMode,
+        modeRequested: responseModeRequested,
+        modeActuallyUsed: responseModeActual,
+        modeStatus,
+        haltReason,
+        haltMessage,
         actionsTaken: response.actions_taken || [],
         sourcesUsed: response.sources_used || [],
         sourceUsage: response.source_usage || [],
@@ -397,6 +581,11 @@ async function sendConversationMessage({
         info: "",
         plot: null,
         mode: requestedTurnMode,
+        modeRequested: initialRequestedMode,
+        modeActuallyUsed: initialRequestedMode,
+        modeStatus: initialModeStatus,
+        haltReason: null,
+        haltMessage: null,
         needsHumanReview: false,
         humanReviewNotes: null,
         infoPanel: {},

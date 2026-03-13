@@ -45,6 +45,16 @@ export type ResearchTreeBranch = {
   result_count?: number;
 };
 
+export type ChatTurnMode = "ask" | "company_agent" | "deep_search" | "web_search";
+
+export type ChatTurnModeStatus = {
+  state: "committed" | "downgraded";
+  requestedMode: string;
+  actualMode: string;
+  scopeStatement?: string | null;
+  message?: string | null;
+};
+
 export type ChatTurn = {
   user: string;
   assistant: string;
@@ -53,7 +63,12 @@ export type ChatTurn = {
   attachments?: ChatAttachment[];
   info?: string;
   plot?: Record<string, unknown> | null;
-  mode?: "ask" | "company_agent" | "deep_search" | "web_search";
+  mode?: ChatTurnMode;
+  modeRequested?: string | null;
+  modeActuallyUsed?: string | null;
+  modeStatus?: ChatTurnModeStatus | null;
+  haltReason?: string | null;
+  haltMessage?: string | null;
   actionsTaken?: AgentActionRecord[];
   sourcesUsed?: AgentSourceRecord[];
   sourceUsage?: SourceUsageRecord[];

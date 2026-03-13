@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Generator
 from typing import Any
 
@@ -24,6 +25,42 @@ from .finalization_evidence import (
     _build_info_html_from_sources,
 )
 from .finalization_scope import filter_sources_for_response_scope
+
+
+_CITATION_SECTION_HEADING_RE = re.compile(
+    r"^##\s+(?:Evidence\s+Citations|Sources|References)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_CITATION_ITEM_RE = re.compile(
+    r"^\s*-\s*\[(\d+)\]\s*\[[^\]]*\]\(([^)]+)\)",
+    re.MULTILINE,
+)
+
+
+def _extract_citation_url_to_idx(answer: str) -> dict[str, int]:
+    """Build {normalised_url_key → citation_idx} from the ## Evidence Citations section.
+
+    Used to align info_html evidence block IDs with the sequential citation numbers
+    shown in the answer so that inline citation anchors point to the correct panel block.
+    """
+    text = str(answer or "")
+    heading = _CITATION_SECTION_HEADING_RE.search(text)
+    if not heading:
+        return {}
+    section = text[heading.start():]
+    url_to_idx: dict[str, int] = {}
+    for item_match in _CITATION_ITEM_RE.finditer(section):
+        try:
+            citation_idx = int(item_match.group(1))
+        except ValueError:
+            continue
+        raw_url = item_match.group(2).strip().rstrip(".,;:!?")
+        if not raw_url.lower().startswith(("http://", "https://")):
+            continue
+        url_key = raw_url.lower().rstrip("/")
+        if url_key not in url_to_idx:
+            url_to_idx[url_key] = citation_idx
+    return url_to_idx
 
 
 def _post_resume_verification_state(
@@ -448,7 +485,11 @@ def finalize_run(
             )
             yield emit_event(approval_granted_event)
 
-    evidence_items = _build_evidence_items_from_sources(response_sources)
+    citation_url_to_idx = _extract_citation_url_to_idx(answer)
+    evidence_items = _build_evidence_items_from_sources(
+        response_sources,
+        citation_url_to_idx=citation_url_to_idx,
+    )
     info_html = _build_info_html_from_sources(
         response_sources,
         evidence_items=evidence_items,

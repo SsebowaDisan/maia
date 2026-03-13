@@ -57,6 +57,16 @@ function resolveTurnModeLabel(mode: ChatTurn["mode"]): string {
   return "Ask";
 }
 
+function resolveModeStatusLabel(modeStatus: ChatTurn["modeStatus"]): string {
+  if (!modeStatus) {
+    return "";
+  }
+  if (modeStatus.state === "downgraded") {
+    return "Downgraded";
+  }
+  return "Committed";
+}
+
 function TurnListItem({
   turn,
   index,
@@ -100,6 +110,12 @@ function TurnListItem({
   const assistantCopyFeedbackKey = `assistant-${index}`;
   const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
   const assistantCopyFeedback = copyFeedback?.key === assistantCopyFeedbackKey ? copyFeedback.status : null;
+  const modeStatusLabel = resolveModeStatusLabel(turn.modeStatus);
+  const modeStatusTitle =
+    turn.modeStatus?.message || turn.modeStatus?.scopeStatement || undefined;
+  const haltNoticeText =
+    String(turn.haltMessage || "").trim() ||
+    (turn.haltReason ? `Run halted: ${turn.haltReason.replace(/_/g, " ")}` : "");
 
   return (
     <div
@@ -111,9 +127,23 @@ function TurnListItem({
       <div className="flex justify-end">
         <div className="group max-w-[80%] space-y-2">
           <div className="flex justify-end">
-            <span className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] text-[#6e6e73]">
-              {resolveTurnModeLabel(turn.mode)}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] text-[#6e6e73]">
+                {resolveTurnModeLabel(turn.mode)}
+              </span>
+              {modeStatusLabel ? (
+                <span
+                  title={modeStatusTitle}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                    turn.modeStatus?.state === "downgraded"
+                      ? "border-[#f5c88a] bg-[#fff6ea] text-[#9a5610]"
+                      : "border-[#bfe0c6] bg-[#eef8f0] text-[#2f6a3f]"
+                  }`}
+                >
+                  {modeStatusLabel}
+                </span>
+              ) : null}
+            </div>
           </div>
           {turn.attachments && turn.attachments.length > 0 ? (
             <div className="space-y-1">
@@ -279,6 +309,21 @@ function TurnListItem({
               </div>
             ) : null}
             <ChatTurnPlot plot={turn.plot} />
+            {haltNoticeText ? (
+              <div className="group/halt mt-1.5 rounded-xl border border-black/[0.06] bg-white/80 px-3 py-2 text-[12px] text-[#6e6e73]">
+                <div className="flex items-center gap-1.5">
+                  <span aria-hidden className="text-[12px] leading-none text-[#81879a]">
+                    i
+                  </span>
+                  <span>{haltNoticeText}</span>
+                </div>
+                {turn.haltReason ? (
+                  <p className="mt-1 hidden text-[11px] text-[#8c91a3] group-hover/halt:block">
+                    reason: {turn.haltReason}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
               {assistantBlocks.length > 0 ? (
                 <button

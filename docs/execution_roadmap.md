@@ -1,4 +1,4 @@
-﻿# Maia Execution Roadmap
+# Maia Execution Roadmap
 
 ## Rules For Execution
 1. Only one active slice at a time.
@@ -17,17 +17,12 @@
 11. Do not change the Theatre layout, structure, or visual design in this roadmap; limit work to behavioral/event-state fixes unless a design change is explicitly requested.
 
 ## Objective
-The mindmap now behaves like a NotebookLM-style research artifact: horizontal by default, branch-oriented, calmer in chrome, and finished at the bottom edge.
+Complete frontend highlight reliability so backend 420-char citation phrases and char offsets are preserved end-to-end in PDF focus and citation preview.
 
 ## Analysis
-- Completed in this roadmap:
-  - first-open mindmap defaults to a horizontal left-to-right tree
-  - `collapse all` returns to a useful overview instead of a dead or fully exploded state
-  - the popup header is flatter and more editorial
-  - the toolbar is quieter and more subordinate to the content
-  - the right inspector remains stable and no bottom tray is needed
-  - the tree density and bottom finish now support scanning without large dead zones
-- No active frontend slices remain in this roadmap.
+- Backend now emits phrase windows up to 420 chars and can emit char offsets.
+- Frontend must avoid re-truncation and must prefer char-offset highlighting before fuzzy search.
+- Scanned-PDF text-layer gaps remain an ingestion concern (bounding boxes), not a frontend rendering concern.
 
 ## Status Legend
 - `todo` not started
@@ -37,18 +32,44 @@ The mindmap now behaves like a NotebookLM-style research artifact: horizontal by
 
 ## Execution Status
 - Current slice: `none`
-- Overall progress: `3/3 slices done`
+- Overall progress: `5/5 slices done`
 
 ---
 
-## Active Frontend Work
-- No active frontend slices remain in this roadmap.
+## Frontend Highlight Slices
+1. **FHI-01 - Match backend phrase length in citation extract normalization**
+   - status: `done`
+   - file: `frontend/user_interface/src/app/components/chatMain/citationFocus.ts`
+   - change: `MAX_EXTRACT_CHARS` aligned to 420
+
+2. **FHI-02 - Strengthen sentence cut threshold for long phrases**
+   - status: `done`
+   - file: `frontend/user_interface/src/app/components/chatMain/citationFocus.ts`
+   - change: sentence/word cut threshold aligned to 200 for 420-char phrases
+
+3. **FHI-03 - Char offset highlighting before fuzzy candidate search**
+   - status: `done`
+   - files:
+     - `frontend/user_interface/src/app/components/CitationPdfPreview.tsx`
+     - `frontend/user_interface/src/app/components/citationPdfPreviewFocus.ts`
+     - `frontend/user_interface/src/app/components/citationPdfHighlight.ts`
+   - change: `tryFocusHighlight` resolves `findRangeByCharOffsets(...)` before `findHighlightRange(...)`
+
+4. **FHI-04 - Pass char offsets from citation focus into PDF preview**
+   - status: `done`
+   - file: `frontend/user_interface/src/app/components/infoPanel/CitationPreviewPanel.tsx`
+   - change: pass `charStart={citationFocus.charStart}` and `charEnd={citationFocus.charEnd}` to `CitationPdfPreview`
+
+5. **FHI-05 - Prioritize first complete sentence in candidate ordering**
+   - status: `done`
+   - files:
+     - `frontend/user_interface/src/app/components/citationPdfHighlight.ts`
+     - `frontend/user_interface/src/app/components/citationPdfHighlight.test.ts`
+   - change: ensure first full sentence is candidate index 0, then rank remaining candidates by length
 
 ## Exit Criteria
-- the mindmap opens as a horizontal left-to-right tree by default
-- branch disclosure works as a progressive overview rather than a fully exploded graph
-- the header and toolbar read as one calm artifact surface
-- the inspector remains in the right rail only
-- the bottom of the popup ends with a soft, deliberate finish
-- no Theatre layout, structure, or design changes are introduced
-
+- 420-char backend phrases are never shortened again by frontend normalization
+- char offsets are used first for exact multi-span highlight reconstruction
+- citation preview passes offset metadata end-to-end
+- fuzzy candidate fallback still works when offsets are absent
+- first sentence is always the lead fuzzy candidate

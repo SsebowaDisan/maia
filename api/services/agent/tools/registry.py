@@ -59,11 +59,15 @@ from api.services.agent.tools.web_adapter_tools import WebDatasetAdapterTool
 from api.services.agent.tools.web_extract_tools import WebStructuredExtractTool
 from api.services.agent.tools.workplace_tools import SlackPostMessageTool
 from api.services.agent.tools.workspace_tools import (
+    WorkspaceDocsReadTool,
     WorkspaceDocsTemplateTool,
+    WorkspaceDriveDeleteTool,
+    WorkspaceDriveRenameTool,
     WorkspaceDriveSearchTool,
     WorkspaceResearchNotesTool,
-    WorkspaceSheetsTrackStepTool,
     WorkspaceSheetsAppendTool,
+    WorkspaceSheetsReadTool,
+    WorkspaceSheetsTrackStepTool,
 )
 
 
@@ -91,10 +95,14 @@ class ToolRegistry:
         self.register(ReportGenerationTool())
         self.register(DocumentCreateTool())
         self.register(WorkspaceDocsTemplateTool())
+        self.register(WorkspaceDocsReadTool())
         self.register(WorkspaceResearchNotesTool())
         self.register(WorkspaceSheetsTrackStepTool())
-        self.register(WorkspaceDriveSearchTool())
         self.register(WorkspaceSheetsAppendTool())
+        self.register(WorkspaceSheetsReadTool())
+        self.register(WorkspaceDriveSearchTool())
+        self.register(WorkspaceDriveDeleteTool())
+        self.register(WorkspaceDriveRenameTool())
         self.register(InvoiceCreateTool())
         self.register(InvoiceSendTool())
         self.register(SlackPostMessageTool())

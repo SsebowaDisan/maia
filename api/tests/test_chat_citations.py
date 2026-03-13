@@ -935,3 +935,59 @@ def test_build_fast_info_html_compacts_extract_for_highlight_panel() -> None:
     extract = html_lib.unescape(extract_match.group(1).strip())
     assert len(extract) <= 523
     assert extract.endswith("...")
+
+
+# ---------------------------------------------------------------------------
+# Regression: citation anchor URL must match the ## Evidence Citations list
+# ---------------------------------------------------------------------------
+
+def test_enforce_required_citations_agent_path_anchor_url_matches_citation_list() -> None:
+    """Regression: inline citation [1] anchor data-source-url must point to the
+    same URL shown as [1] in the ## Evidence Citations list.
+
+    Before the fix, info_html refs (indexed across ALL sources) were used as the
+    canonical ref list, so a source at position 95 with URL A would be used for
+    anchor [1] even though the citation list showed URL B for [1].
+    """
+    harvard_url = "https://seas.harvard.edu/news/ml-research"
+    virginia_url = "https://datascience.virginia.edu/report"
+
+    # Info panel has 95 evidence blocks; block 95 is the Harvard source.
+    # Blocks 1-94 are other sources (simulated by just including the relevant ones).
+    info_html = (
+        "<details class='evidence' id='evidence-1' "
+        f"data-source-url='{virginia_url}' open>"
+        "<summary><i>Evidence [1]</i></summary></details>"
+        "<details class='evidence' id='evidence-2' "
+        f"data-source-url='{harvard_url}'>"
+        "<summary><i>Evidence [2]</i></summary></details>"
+    )
+
+    # Agent answer: citation list uses sequential numbers matched to sources the
+    # LLM chose.  [1] = Harvard (not Virginia, which is evidence-1 in info_html).
+    answer = (
+        "## Executive Summary\n"
+        "Machine learning is transforming the field.\n\n"
+        "## Evidence Citations\n"
+        f"- [1] [Harvard SEAS]({harvard_url})\n"
+        f"- [2] [Virginia DS]({virginia_url})\n"
+    )
+
+    enriched = enforce_required_citations(
+        answer=answer,
+        info_html=info_html,
+        citation_mode="inline",
+    )
+
+    # Find all citation anchors injected into the body.
+    anchors = re.findall(r"<a\b[^>]*class='citation'[^>]*>", enriched)
+    assert anchors, "Expected at least one inline citation anchor"
+
+    first_anchor = anchors[0]
+    # data-source-url must be the Harvard URL (citation [1]), not the Virginia one.
+    assert harvard_url in first_anchor, (
+        f"First anchor data-source-url should be {harvard_url!r}, got: {first_anchor!r}"
+    )
+    assert virginia_url not in first_anchor, (
+        f"First anchor must not contain Virginia URL, got: {first_anchor!r}"
+    )

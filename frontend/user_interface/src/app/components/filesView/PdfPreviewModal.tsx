@@ -33,7 +33,7 @@ function PdfPreviewModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/30 p-4 sm:p-6" onClick={onClose}>
+    <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[10px] sm:p-6" onClick={onClose}>
       <div
         className="flex h-[min(92vh,960px)] w-full max-w-[1180px] min-h-[520px] flex-col overflow-hidden rounded-[28px] border border-white/75 bg-white shadow-[0_36px_112px_-40px_rgba(0,0,0,0.68)]"
         onClick={(event) => event.stopPropagation()}

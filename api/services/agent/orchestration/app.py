@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any, Generator
 
 from api.schemas import ChatRequest
 from api.services.agent.activity import get_activity_store
 from api.services.agent.audit import get_audit_logger
+from api.services.agent.brain import (
+    HandoffWatcher,
+    apply_memory_to_state,
+    build_brain,
+    load_brain_memory,
+    save_brain_memory,
+)
 from api.services.agent.events import RunEventEmitter
 from api.services.agent.memory import get_memory_service
 from api.services.agent.models import AgentActivityEvent
@@ -172,6 +180,23 @@ class AgentOrchestrator:
                 activity_event_factory=activity_event_factory,
             )
             steps = list(plan_prep.steps)
+
+            # Build Brain — reactive coordinator for this turn.
+            _brain_memory = load_brain_memory(
+                user_id=user_id, conversation_id=conversation_id,
+            )
+            _brain = build_brain(
+                turn_id=str(uuid.uuid4()),
+                user_id=user_id,
+                conversation_id=conversation_id,
+                user_message=request.message or "",
+                task_intelligence=task_prep.task_intelligence,
+                task_contract=task_prep.task_contract or {},
+                original_plan=list(steps),
+                registry=self.registry,
+            )
+            apply_memory_to_state(_brain.state, _brain_memory)
+
             role_dispatch_plan = build_role_dispatch_plan(steps=steps)
             settings["__role_dispatch_plan"] = role_dispatch_plan[:40]
             role_dispatch_event = activity_event_factory(
@@ -337,20 +362,30 @@ class AgentOrchestrator:
                 ),
             )
 
-            yield from execute_planned_steps(
+            _handoff_watcher = HandoffWatcher(
+                settings=state.execution_context.settings,
                 run_id=run_id,
-                request=request,
-                access_context=access_context,
-                registry=self.registry,
-                steps=steps,
-                execution_prompt=execution_prompt,
-                deep_research_mode=plan_prep.deep_research_mode,
-                task_prep=task_prep,
-                state=state,
-                run_tool_live=run_tool_live,
-                emit_event=stream.emit,
-                activity_event_factory=activity_event_factory,
             )
+            _handoff_watcher.start()
+            try:
+                yield from execute_planned_steps(
+                    run_id=run_id,
+                    request=request,
+                    access_context=access_context,
+                    registry=self.registry,
+                    steps=steps,
+                    execution_prompt=execution_prompt,
+                    deep_research_mode=plan_prep.deep_research_mode,
+                    task_prep=task_prep,
+                    state=state,
+                    run_tool_live=run_tool_live,
+                    emit_event=stream.emit,
+                    activity_event_factory=activity_event_factory,
+                    brain=_brain,
+                )
+            finally:
+                _handoff_watcher.cancel()
+                save_brain_memory(_brain.state)
             active_role = " ".join(
                 str(state.execution_context.settings.get("__active_execution_role") or "").split()
             ).strip().lower()

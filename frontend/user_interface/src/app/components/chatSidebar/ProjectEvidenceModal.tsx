@@ -75,7 +75,7 @@ export function ProjectEvidenceModal({
       aria-modal="true"
       aria-label={`Project sources for ${evidenceProject.name}`}
     >
-      <div className="absolute inset-0 bg-black/35" />
+      <div className="absolute inset-0 bg-black/35 backdrop-blur-[10px]" />
       <div
         className="relative z-[121] w-full max-w-[980px] max-h-[86vh] rounded-2xl border border-black/[0.1] bg-white shadow-[0_24px_60px_rgba(0,0,0,0.28)] flex flex-col overflow-hidden"
         onClick={(event) => event.stopPropagation()}

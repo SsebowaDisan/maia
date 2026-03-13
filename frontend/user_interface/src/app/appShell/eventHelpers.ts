@@ -5,6 +5,13 @@ import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
   mode?: "ask" | "company_agent" | "deep_search" | "web_search";
+  mode_requested?: string | null;
+  mode_actually_used?: string | null;
+  mode_scope_statement?: string | null;
+  mode_status_message?: string | null;
+  halt_reason?: string | null;
+  halt_message?: string | null;
+  perf?: Record<string, unknown>;
   actions_taken?: ChatTurn["actionsTaken"];
   sources_used?: ChatTurn["sourcesUsed"];
   source_usage?: ChatTurn["sourceUsage"];
@@ -19,6 +26,68 @@ type ConversationMessageMeta = {
   blocks?: unknown[];
   documents?: unknown[];
 };
+
+const MODE_SCOPE_STATEMENTS: Record<string, string> = {
+  company_agent: "Agent mode: I will execute tools and complete the workflow end-to-end.",
+  deep_search:
+    "Deep search: I will query multiple sources, synthesize evidence, and cite each key claim.",
+  web_search:
+    "Web search: I will browse relevant sources on the web and summarize findings with citations.",
+};
+
+function resolveTurnMode(
+  rawMode: ConversationMessageMeta["mode"],
+  infoPanel: ConversationMessageMeta["info_panel"],
+): ChatTurn["mode"] {
+  const modeVariant = String(
+    (
+      infoPanel as {
+        mode_variant?: unknown;
+      } | undefined
+    )?.mode_variant || "",
+  )
+    .trim()
+    .toLowerCase();
+  return rawMode === "deep_search" && modeVariant === "web_search"
+    ? "web_search"
+    : rawMode;
+}
+
+function resolveModeStatus({
+  index,
+  requestedMode,
+  actualMode,
+  scopeStatement,
+  message,
+}: {
+  index: number;
+  requestedMode: string;
+  actualMode: string;
+  scopeStatement: string | null;
+  message: string | null;
+}): ChatTurn["modeStatus"] {
+  if (requestedMode && actualMode && requestedMode !== actualMode) {
+    return {
+      state: "downgraded",
+      requestedMode,
+      actualMode,
+      message:
+        message ||
+        `Mode changed from ${requestedMode.replace(/_/g, " ")} to ${actualMode.replace(/_/g, " ")}.`,
+      scopeStatement: scopeStatement || undefined,
+    };
+  }
+  if (index === 0 && requestedMode && requestedMode !== "ask") {
+    return {
+      state: "committed",
+      requestedMode,
+      actualMode: actualMode || requestedMode,
+      scopeStatement: scopeStatement || MODE_SCOPE_STATEMENTS[requestedMode] || null,
+      message: message || null,
+    };
+  }
+  return null;
+}
 
 type AgentEventRow = {
   type?: unknown;
@@ -141,19 +210,22 @@ export function buildConversationTurns(
   const turns: ChatTurn[] = messages.map((entry, index) => {
     const assistant = entry[1] || "";
     const rawMode = messageMeta[index]?.mode || "ask";
-    const modeVariant = String(
-      (
-        messageMeta[index]?.info_panel as {
-          mode_variant?: unknown;
-        } | undefined
-      )?.mode_variant || "",
-    )
+    const resolvedMode = resolveTurnMode(rawMode, messageMeta[index]?.info_panel);
+    const requestedMode = String(messageMeta[index]?.mode_requested || resolvedMode || "ask")
       .trim()
       .toLowerCase();
-    const resolvedMode: ChatTurn["mode"] =
-      rawMode === "deep_search" && modeVariant === "web_search"
-        ? "web_search"
-        : rawMode;
+    const actualMode = String(messageMeta[index]?.mode_actually_used || resolvedMode || requestedMode || "ask")
+      .trim()
+      .toLowerCase();
+    const haltReason = String(messageMeta[index]?.halt_reason || "").trim();
+    const haltMessage = String(messageMeta[index]?.halt_message || "").trim();
+    const modeStatus = resolveModeStatus({
+      index,
+      requestedMode,
+      actualMode,
+      scopeStatement: messageMeta[index]?.mode_scope_statement || null,
+      message: messageMeta[index]?.mode_status_message || null,
+    });
     return {
       user: entry[0] || "",
       assistant,
@@ -163,6 +235,11 @@ export function buildConversationTurns(
       info: retrievalMessages[index] || "",
       plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,
       mode: resolvedMode,
+      modeRequested: requestedMode || "ask",
+      modeActuallyUsed: actualMode || requestedMode || "ask",
+      modeStatus,
+      haltReason: haltReason || null,
+      haltMessage: haltMessage || null,
       actionsTaken: messageMeta[index]?.actions_taken || [],
       sourcesUsed: messageMeta[index]?.sources_used || [],
       sourceUsage: messageMeta[index]?.source_usage || [],
