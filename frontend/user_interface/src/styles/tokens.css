@@ -1,0 +1,28 @@
+:root {
+  /* Baseline spacing scale (4px grid) for new Agent OS surfaces. */
+  --space-0: 0;
+  --space-1: 0.25rem;  /* 4px */
+  --space-2: 0.5rem;   /* 8px */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-7: 1.75rem;  /* 28px */
+  --space-8: 2rem;     /* 32px */
+  --space-10: 2.5rem;  /* 40px */
+  --space-12: 3rem;    /* 48px */
+
+  /* Surface sizing tokens used by new route shells and panel-level UI. */
+  --surface-radius-sm: 0.875rem;
+  --surface-radius-md: 1.125rem;
+  --surface-radius-lg: 1.5rem;
+  --surface-border-subtle: rgba(0, 0, 0, 0.08);
+  --surface-shadow-soft: 0 20px 48px rgba(15, 23, 42, 0.12);
+
+  /* Typography helper tokens for consistent hierarchy in new pages. */
+  --text-title-lg: 2.125rem;
+  --text-title-md: 1.5rem;
+  --text-body-lg: 1rem;
+  --text-body-md: 0.875rem;
+}
+

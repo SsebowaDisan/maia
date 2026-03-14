@@ -122,6 +122,24 @@ function deleteConnectorCredentials(connectorId: string) {
   );
 }
 
+function approveAgentRunGate(runId: string, gateId: string) {
+  return request<{ status: string; run_id: string; gate_id: string }>(
+    `/api/agents/runs/${encodeURIComponent(runId)}/gates/${encodeURIComponent(gateId)}/approve`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+function rejectAgentRunGate(runId: string, gateId: string) {
+  return request<{ status: string; run_id: string; gate_id: string }>(
+    `/api/agents/runs/${encodeURIComponent(runId)}/gates/${encodeURIComponent(gateId)}/reject`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 function subscribeAgentEvents(options?: {
   runId?: string;
   replay?: number;
@@ -165,6 +183,7 @@ function subscribeAgentEvents(options?: {
 }
 
 export {
+  approveAgentRunGate,
   deleteConnectorCredentials,
   exportAgentRunEvents,
   getAgentEventSnapshotUrl,
@@ -176,6 +195,7 @@ export {
   listConnectorCredentials,
   listConnectorHealth,
   listConnectorPlugins,
+  rejectAgentRunGate,
   subscribeAgentEvents,
   upsertConnectorCredentials,
 };

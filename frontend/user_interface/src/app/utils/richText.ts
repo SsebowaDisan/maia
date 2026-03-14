@@ -1,17 +1,183 @@
 import { marked } from "marked";
+import katex from "katex";
+
+const MATH_SENTINEL_PREFIX = "__MAIA_MATH_SENTINEL__";
+
+function escapeHtml(raw: string): string {
+  return String(raw || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function mathSentinelToken(index: number): string {
+  return `${MATH_SENTINEL_PREFIX}${index}__`;
+}
+
+function renderKatexMath(latex: string, displayMode: boolean): string {
+  try {
+    const rendered = katex.renderToString(latex, {
+      displayMode,
+      throwOnError: false,
+    });
+    return `<span data-math-rendered="true" data-math-display="${displayMode ? "true" : "false"}">${rendered}</span>`;
+  } catch {
+    const source = displayMode ? `$$${latex}$$` : `$${latex}$`;
+    return `<code>${escapeHtml(source)}</code>`;
+  }
+}
+
+function replaceDisplayMathSegments(
+  input: string,
+  onSegment: (latex: string, displayMode: boolean) => string,
+): string {
+  if (!input.includes("$$")) {
+    return input;
+  }
+  let result = "";
+  let cursor = 0;
+  while (cursor < input.length) {
+    const opensDisplay =
+      input[cursor] === "$" &&
+      input[cursor + 1] === "$" &&
+      (cursor === 0 || input[cursor - 1] !== "\\");
+    if (!opensDisplay) {
+      result += input[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    let end = cursor + 2;
+    let closingIndex = -1;
+    while (end < input.length - 1) {
+      const closesDisplay = input[end] === "$" && input[end + 1] === "$" && input[end - 1] !== "\\";
+      if (closesDisplay) {
+        closingIndex = end;
+        break;
+      }
+      end += 1;
+    }
+
+    if (closingIndex < 0) {
+      result += input[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    const latex = input.slice(cursor + 2, closingIndex).trim();
+    if (!latex) {
+      result += input.slice(cursor, closingIndex + 2);
+      cursor = closingIndex + 2;
+      continue;
+    }
+
+    result += onSegment(latex, true);
+    cursor = closingIndex + 2;
+  }
+  return result;
+}
+
+function replaceInlineMathSegments(
+  input: string,
+  onSegment: (latex: string, displayMode: boolean) => string,
+): string {
+  if (!input.includes("$")) {
+    return input;
+  }
+  let result = "";
+  let cursor = 0;
+  while (cursor < input.length) {
+    if (input[cursor] !== "$") {
+      result += input[cursor];
+      cursor += 1;
+      continue;
+    }
+
+    const prev = cursor > 0 ? input[cursor - 1] : "";
+    const next = input[cursor + 1] || "";
+    const isEscaped = prev === "\\";
+    const isCurrency = /\d/.test(next);
+    const startsDisplay = next === "$";
+    if (isEscaped || isCurrency || startsDisplay) {
+      result += "$";
+      cursor += 1;
+      continue;
+    }
+
+    let end = cursor + 1;
+    let closingIndex = -1;
+    while (end < input.length) {
+      const char = input[end];
+      if (char === "\n") {
+        break;
+      }
+      const closesInline = char === "$" && input[end - 1] !== "\\";
+      if (closesInline) {
+        closingIndex = end;
+        break;
+      }
+      end += 1;
+    }
+
+    if (closingIndex < 0) {
+      result += "$";
+      cursor += 1;
+      continue;
+    }
+
+    const latex = input.slice(cursor + 1, closingIndex).trim();
+    if (!latex) {
+      result += input.slice(cursor, closingIndex + 1);
+      cursor = closingIndex + 1;
+      continue;
+    }
+
+    result += onSegment(latex, false);
+    cursor = closingIndex + 1;
+  }
+  return result;
+}
+
+export function renderMathInMarkdown(markdown: string): string {
+  const source = String(markdown ?? "");
+  if (!source.trim()) {
+    return source;
+  }
+
+  const mathSegments: string[] = [];
+  const renderWithSentinel = (latex: string, displayMode: boolean): string => {
+    const token = mathSentinelToken(mathSegments.length);
+    mathSegments.push(renderKatexMath(latex, displayMode));
+    return token;
+  };
+
+  const withDisplayMath = replaceDisplayMathSegments(source, renderWithSentinel);
+  const withInlineMath = replaceInlineMathSegments(withDisplayMath, renderWithSentinel);
+
+  return mathSegments.reduce(
+    (next, renderedMath, index) => next.replaceAll(mathSentinelToken(index), renderedMath),
+    withInlineMath,
+  );
+}
 
 const ALLOWED_TAGS = new Set([
   "A",
+  "ANNOTATION",
   "B",
   "BLOCKQUOTE",
   "BR",
+  "CIRCLE",
   "CODE",
+  "DEFS",
   "DEL",
   "DETAILS",
   "DIV",
   "EM",
   "FIGCAPTION",
   "FIGURE",
+  "G",
   "H1",
   "H2",
   "H3",
@@ -21,11 +187,21 @@ const ALLOWED_TAGS = new Set([
   "HR",
   "I",
   "IMG",
+  "LINE",
   "LI",
+  "MATH",
   "MARK",
+  "MI",
+  "MN",
+  "MO",
+  "MROW",
   "OL",
+  "PATH",
   "P",
   "PRE",
+  "RECT",
+  "SEMANTICS",
+  "SVG",
   "SPAN",
   "STRONG",
   "SUMMARY",
@@ -35,7 +211,9 @@ const ALLOWED_TAGS = new Set([
   "TH",
   "THEAD",
   "TR",
+  "TITLE",
   "UL",
+  "USE",
 ]);
 
 const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
@@ -86,10 +264,14 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "data-boxes",
     "data-bboxes",
   ]),
+  ANNOTATION: new Set(["encoding"]),
   DIV: new Set(["class", "id"]),
   EM: new Set(["class", "id"]),
   FIGCAPTION: new Set(["class", "id"]),
   FIGURE: new Set(["class", "id"]),
+  CIRCLE: new Set(["class", "cx", "cy", "fill", "r", "stroke", "stroke-width"]),
+  DEFS: new Set(["class", "id"]),
+  G: new Set(["class", "fill", "opacity", "stroke", "stroke-width", "transform"]),
   H1: new Set(["class", "id"]),
   H2: new Set(["class", "id"]),
   H3: new Set(["class", "id"]),
@@ -98,12 +280,42 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
   H6: new Set(["class", "id"]),
   I: new Set(["class", "id"]),
   IMG: new Set(["alt", "class", "id", "src"]),
+  LINE: new Set(["class", "stroke", "stroke-width", "x1", "x2", "y1", "y2"]),
   LI: new Set(["class", "id"]),
+  MATH: new Set(["class", "display", "xmlns"]),
   MARK: new Set(["class", "id"]),
+  MI: new Set(["class"]),
+  MN: new Set(["class"]),
+  MO: new Set(["class"]),
+  MROW: new Set(["class"]),
   OL: new Set(["class", "id"]),
+  PATH: new Set([
+    "class",
+    "d",
+    "fill",
+    "opacity",
+    "stroke",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-width",
+    "transform",
+  ]),
   P: new Set(["class", "id"]),
   PRE: new Set(["class", "id"]),
-  SPAN: new Set(["class", "id"]),
+  RECT: new Set(["class", "fill", "height", "rx", "ry", "stroke", "stroke-width", "width", "x", "y"]),
+  SEMANTICS: new Set(["class"]),
+  SVG: new Set([
+    "aria-hidden",
+    "class",
+    "focusable",
+    "height",
+    "preserveaspectratio",
+    "role",
+    "viewbox",
+    "width",
+    "xmlns",
+  ]),
+  SPAN: new Set(["aria-hidden", "class", "data-math-display", "data-math-rendered", "id", "style"]),
   STRONG: new Set(["class", "id"]),
   SUMMARY: new Set(["class", "id"]),
   TABLE: new Set(["class", "id"]),
@@ -111,8 +323,10 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
   TD: new Set(["class", "colspan", "id", "rowspan"]),
   TH: new Set(["class", "colspan", "id", "rowspan"]),
   THEAD: new Set(["class", "id"]),
+  TITLE: new Set(["class", "id"]),
   TR: new Set(["class", "id"]),
   UL: new Set(["class", "id"]),
+  USE: new Set(["class", "href", "xlink:href"]),
   BR: new Set(),
   HR: new Set(),
 };

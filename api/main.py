@@ -19,8 +19,16 @@ from api.routers.mindmap import router as mindmap_router
 from api.routers.settings import router as settings_router
 from api.routers.uploads import router as uploads_router
 from api.routers.web_preview import router as web_preview_router
+from api.routers.tenants import router as tenants_router
+from api.routers.agent_definitions import router as agent_definitions_router
+from api.routers.connectors import router as connectors_router
+from api.routers.computer_use import router as computer_use_router
+from api.routers.agents import router as agents_router
+from api.routers.agents import webhook_router
+from api.routers.marketplace import router as marketplace_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
+from api.services.agents.scheduler import get_agent_scheduler
 from api.services.ingestion_service import get_ingestion_manager
 from api.services.upload.indexing import run_upload_startup_checks
 
@@ -93,6 +101,13 @@ app.include_router(agent_router)
 app.include_router(integrations_router)
 app.include_router(metrics_router)
 app.include_router(web_preview_router)
+app.include_router(tenants_router)
+app.include_router(agent_definitions_router)
+app.include_router(connectors_router)
+app.include_router(computer_use_router)
+app.include_router(agents_router)
+app.include_router(webhook_router)
+app.include_router(marketplace_router)
 
 
 @app.on_event("startup")
@@ -105,12 +120,20 @@ def warm_backend_context() -> None:
     get_context()
     get_ingestion_manager().start()
     get_report_scheduler().start()
+    get_agent_scheduler().start()
+    # Seed event subscriptions for on_event triggered agents
+    try:
+        from api.services.agents.event_triggers import seed_subscriptions_from_definitions
+        seed_subscriptions_from_definitions()
+    except Exception:
+        pass
 
 
 @app.on_event("shutdown")
 def stop_background_services() -> None:
     get_ingestion_manager().stop()
     get_report_scheduler().stop()
+    get_agent_scheduler().stop()
 
 
 @app.get("/api/health", response_model=HealthResponse)

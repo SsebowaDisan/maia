@@ -1,10 +1,12 @@
 import {
+  Bot,
   ArrowRightLeft,
   Check,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
+  PlugZap,
   PencilLine,
   Trash2,
   X,
@@ -106,6 +108,24 @@ export function ProjectsPane({
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3">
       <div className="space-y-1">
+        <div className="mb-2">
+          <button
+            type="button"
+            className="w-full h-10 px-2.5 rounded-xl text-left text-[15px] text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
+          >
+            <PlugZap className="w-4.5 h-4.5 text-[#1d1d1f]" />
+            <span>Connectors</span>
+          </button>
+          <button
+            type="button"
+            className="w-full h-10 px-2.5 rounded-xl text-left text-[15px] text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
+          >
+            <Bot className="w-4.5 h-4.5 text-[#1d1d1f]" />
+            <span>Agents</span>
+          </button>
+          <div className="mx-2 mt-3 h-px bg-black/[0.08]" />
+        </div>
+
         {isAddingProject ? (
           <div className="rounded-xl bg-white border border-black/[0.08] px-2 py-2 flex items-center gap-1.5">
             <input

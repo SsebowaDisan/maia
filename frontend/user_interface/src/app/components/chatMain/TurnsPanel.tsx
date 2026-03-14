@@ -117,7 +117,7 @@ function TurnsPanel({
       (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
     const behavior: ScrollBehavior = prefersReducedMotion ? "auto" : "smooth";
     const rafId = window.requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior, block: "center", inline: "nearest" });
+      target.scrollIntoView({ behavior, block: "start", inline: "nearest" });
     });
     return () => window.cancelAnimationFrame(rafId);
   };

@@ -1,5 +1,6 @@
 @import './fonts.css';
 @import './tailwind.css';
+@import './tokens.css';
 @import './theme.css';
 @import './theme/assistant_answer.css';
 @import './theme/citation_composer.css';

@@ -1,17 +1,19 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
   type UIEvent as ReactUIEvent,
 } from "react";
-import { ArrowDown } from "lucide-react";
+import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
 import { CanvasPanel } from "../canvas/CanvasPanel";
 import { useCanvasStore } from "../../stores/canvasStore";
 import type { ChatTurn } from "../../types";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
+import { GateApprovalCard } from "./GateApprovalCard";
 import {
   CITATION_ANCHOR_SELECTOR,
   resolveCitationAnchorInteractionPolicy,
@@ -27,14 +29,6 @@ const COMPOSER_HIDE_DISTANCE_PX = 320;
 const COMPOSER_ACTIVITY_REVEAL_DISTANCE_PX = 360;
 const COMPOSER_ACTIVITY_HIDE_DISTANCE_PX = 430;
 const COMPOSER_SCROLL_SETTLE_MS = 420;
-const CONVERSATION_RAIL_SCROLL_VISIBILITY_MS = 820;
-
-type ConversationRailMarker = {
-  turnIndex: number;
-  centerPx: number;
-  topPercent: number;
-  preview: string;
-};
 
 function ChatMain({
   chatTurns,
@@ -68,17 +62,59 @@ function ChatMain({
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollHideTimeoutRef = useRef<number | null>(null);
-  const conversationRailHideTimeoutRef = useRef<number | null>(null);
   const [showComposerDuringActivity, setShowComposerDuringActivity] = useState(true);
   const [composerDockedByScroll, setComposerDockedByScroll] = useState(false);
   const [scrollSettling, setScrollSettling] = useState(false);
-  const [distanceToBottom, setDistanceToBottom] = useState(0);
-  const [isConversationScrolling, setIsConversationScrolling] = useState(false);
-  const [conversationRailMarkers, setConversationRailMarkers] = useState<ConversationRailMarker[]>([]);
-  const [activeConversationRailTurn, setActiveConversationRailTurn] = useState<number | null>(null);
   const maiaActive = isActivityStreaming || isSending;
-  const canScrollToLatest = chatTurns.length > 0 && distanceToBottom > 16;
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
+  const pendingGate = useMemo(() => {
+    const orderedEvents = Array.isArray(activityEvents) ? [...activityEvents] : [];
+    if (!orderedEvents.length) {
+      return null;
+    }
+    let latestPending:
+      | {
+          runId: string;
+          gateId: string;
+          toolId: string;
+          paramsPreview: string;
+          costEstimateUsd: number | null;
+        }
+      | null = null;
+    const resolvedGates = new Set<string>();
+    for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+      const event = orderedEvents[index];
+      const eventType = String(event?.event_type || event?.type || "").trim().toLowerCase();
+      const data = (event?.data || {}) as Record<string, unknown>;
+      const metadata = (event?.metadata || {}) as Record<string, unknown>;
+      const gateId = String(data.gate_id || metadata.gate_id || "").trim();
+      if (!gateId) {
+        continue;
+      }
+      if (eventType === "gate_approved" || eventType === "gate_rejected" || eventType === "gate_resolved") {
+        resolvedGates.add(gateId);
+        continue;
+      }
+      if (eventType !== "gate_pending" || resolvedGates.has(gateId)) {
+        continue;
+      }
+      const runId = String(event?.run_id || data.run_id || metadata.run_id || "").trim();
+      const toolId = String(data.tool_id || metadata.tool_id || event.title || "tool").trim();
+      const paramsPreview = String(
+        data.params_preview || metadata.params_preview || event.detail || "Review tool call parameters before continuing.",
+      ).trim();
+      const numericCost = Number(data.cost_estimate ?? metadata.cost_estimate ?? Number.NaN);
+      latestPending = {
+        runId: runId || "active-run",
+        gateId,
+        toolId: toolId || "tool",
+        paramsPreview: paramsPreview || "Review tool call parameters before continuing.",
+        costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
+      };
+      break;
+    }
+    return latestPending;
+  }, [activityEvents]);
 
   const interactions = useChatMainInteractions({
     accessMode,
@@ -178,87 +214,32 @@ function ChatMain({
       if (scrollHideTimeoutRef.current !== null) {
         window.clearTimeout(scrollHideTimeoutRef.current);
       }
-      if (conversationRailHideTimeoutRef.current !== null) {
-        window.clearTimeout(conversationRailHideTimeoutRef.current);
-      }
     },
     [],
   );
 
-  const refreshConversationRail = (element: HTMLDivElement | null) => {
-    if (!element) {
-      setConversationRailMarkers([]);
-      setActiveConversationRailTurn(null);
-      return;
-    }
-
-    const turnNodes = Array.from(element.querySelectorAll<HTMLElement>("[data-turn-index]"));
-    const totalHeight = Math.max(1, element.scrollHeight);
-    const nextMarkers: ConversationRailMarker[] = [];
-
-    turnNodes.forEach((node) => {
-      const turnIndex = Number(node.dataset.turnIndex || NaN);
-      if (!Number.isFinite(turnIndex) || turnIndex < 0 || turnIndex >= chatTurns.length) {
-        return;
-      }
-      const prompt = String(chatTurns[turnIndex]?.user || "").trim();
-      if (!prompt) {
-        return;
-      }
-      const centerPx = node.offsetTop + node.offsetHeight / 2;
-      const topPercent = Math.max(0, Math.min(100, (centerPx / totalHeight) * 100));
-      nextMarkers.push({
-        turnIndex,
-        centerPx,
-        topPercent,
-        preview: prompt,
-      });
-    });
-
-    setConversationRailMarkers(nextMarkers);
-    if (nextMarkers.length === 0) {
-      setActiveConversationRailTurn(null);
-      return;
-    }
-
-    if (selectedTurnIndex !== null && nextMarkers.some((marker) => marker.turnIndex === selectedTurnIndex)) {
-      setActiveConversationRailTurn(selectedTurnIndex);
-      return;
-    }
-
-    const viewportCenter = element.scrollTop + element.clientHeight / 2;
-    const nearest = nextMarkers.reduce((closest, marker) => {
-      if (!closest) {
-        return marker;
-      }
-      const currentDistance = Math.abs(marker.centerPx - viewportCenter);
-      const closestDistance = Math.abs(closest.centerPx - viewportCenter);
-      return currentDistance < closestDistance ? marker : closest;
-    }, null as ConversationRailMarker | null);
-    setActiveConversationRailTurn(nearest?.turnIndex ?? null);
-  };
-
-  const updateDistanceToBottom = (element: HTMLDivElement | null) => {
-    if (!element) {
-      setDistanceToBottom(0);
-      return;
-    }
-    const nextDistance = Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
-    setDistanceToBottom(nextDistance);
-  };
-
-  const scrollToLatestMessage = () => {
+  const scrollLatestTurnToTop = () => {
     const element = contentScrollRef.current;
     if (!element) {
       return;
     }
+    const latestTurnIndex = chatTurns.length - 1;
+    const latestTurnNode = element.querySelector<HTMLElement>(
+      `[data-turn-index="${String(latestTurnIndex)}"]`,
+    );
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
-    element.scrollTo({
-      top: element.scrollHeight,
-      behavior: prefersReducedMotion ? "auto" : "smooth",
-    });
+    const behavior: ScrollBehavior = prefersReducedMotion ? "auto" : "smooth";
+    if (latestTurnNode) {
+      latestTurnNode.scrollIntoView({
+        behavior,
+        block: "start",
+        inline: "nearest",
+      });
+      return;
+    }
+    element.scrollTo({ top: element.scrollHeight, behavior });
   };
 
   const handleMainMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -276,10 +257,6 @@ function ChatMain({
       ? distanceToBottom <= hideDistance
       : distanceToBottom <= revealDistance;
     setShowComposerDuringActivity(nextVisible);
-
-    if (nextVisible && composerDockedByScroll && !maiaActive) {
-      setComposerDockedByScroll(false);
-    }
   };
 
   const handleMainMouseLeave = () => {
@@ -290,30 +267,7 @@ function ChatMain({
   };
 
   const handleContentScroll = (event: ReactUIEvent<HTMLDivElement>) => {
-    const element = event.currentTarget;
-    updateDistanceToBottom(element);
-    refreshConversationRail(element);
-    setIsConversationScrolling(true);
-    if (conversationRailHideTimeoutRef.current !== null) {
-      window.clearTimeout(conversationRailHideTimeoutRef.current);
-    }
-    conversationRailHideTimeoutRef.current = window.setTimeout(() => {
-      setIsConversationScrolling(false);
-      conversationRailHideTimeoutRef.current = null;
-    }, CONVERSATION_RAIL_SCROLL_VISIBILITY_MS);
-
-    const distanceToBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (!maiaActive && distanceToBottom <= COMPOSER_REVEAL_DISTANCE_PX) {
-      setComposerDockedByScroll(false);
-      setScrollSettling(false);
-      setShowComposerDuringActivity(true);
-      if (scrollHideTimeoutRef.current !== null) {
-        window.clearTimeout(scrollHideTimeoutRef.current);
-        scrollHideTimeoutRef.current = null;
-      }
-      return;
-    }
-
+    void event.currentTarget;
     setComposerDockedByScroll(true);
     setScrollSettling(true);
     setShowComposerDuringActivity(false);
@@ -327,47 +281,18 @@ function ChatMain({
   };
 
   useEffect(() => {
-    updateDistanceToBottom(contentScrollRef.current);
+    if (!isSending) {
+      return;
+    }
     const rafId = window.requestAnimationFrame(() => {
-      refreshConversationRail(contentScrollRef.current);
+      scrollLatestTurnToTop();
     });
     return () => window.cancelAnimationFrame(rafId);
   }, [chatTurns.length, isSending, isActivityStreaming]);
 
-  useEffect(() => {
-    const onResize = () => {
-      refreshConversationRail(contentScrollRef.current);
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [chatTurns.length, selectedTurnIndex]);
-
-  const handleConversationRailSelect = (turnIndex: number) => {
-    const scrollElement = contentScrollRef.current;
-    if (!scrollElement) {
-      return;
-    }
-    const target = scrollElement.querySelector<HTMLElement>(`[data-turn-index="${String(turnIndex)}"]`);
-    if (!target) {
-      return;
-    }
-    onSelectTurn(turnIndex);
-    setActiveConversationRailTurn(turnIndex);
-    const prefersReducedMotion =
-      typeof window !== "undefined" &&
-      (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
-    target.scrollIntoView({
-      behavior: prefersReducedMotion ? "auto" : "smooth",
-      block: "center",
-      inline: "nearest",
-    });
-  };
-
   const composerVisible = maiaActive || composerDockedByScroll
     ? showComposerDuringActivity && !scrollSettling
     : true;
-  const showJumpToLatestButton = canScrollToLatest && isConversationScrolling;
-  const showConversationRail = conversationRailMarkers.length > 1 && isConversationScrolling;
 
   return (
     <div
@@ -387,6 +312,23 @@ function ChatMain({
           className="h-full overflow-y-auto px-6 pb-10 pt-6"
           onScroll={handleContentScroll}
         >
+          {pendingGate ? (
+            <div className="mb-4">
+              <GateApprovalCard
+                runId={pendingGate.runId}
+                gateId={pendingGate.gateId}
+                toolId={pendingGate.toolId}
+                paramsPreview={pendingGate.paramsPreview}
+                costEstimateUsd={pendingGate.costEstimateUsd}
+                onApprove={async (runId, gateId) => {
+                  await approveAgentRunGate(runId, gateId);
+                }}
+                onReject={async (runId, gateId) => {
+                  await rejectAgentRunGate(runId, gateId);
+                }}
+              />
+            </div>
+          ) : null}
           {chatTurns.length === 0 ? (
             <EmptyState />
           ) : (
@@ -411,48 +353,6 @@ function ChatMain({
             />
           )}
         </div>
-        <button
-          type="button"
-          title="Jump to latest message"
-          onClick={scrollToLatestMessage}
-          className={`absolute right-5 z-20 inline-flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition-all duration-200 ${
-            composerVisible ? "bottom-5" : "bottom-4"
-          } ${
-            showJumpToLatestButton
-              ? "pointer-events-auto translate-y-0 opacity-100 border-black/[0.12] bg-white text-[#1d1d1f] hover:border-black/[0.2] hover:bg-[#f8f8fa]"
-              : "pointer-events-none translate-y-2 opacity-0 border-black/[0.06] bg-[#f4f4f6] text-[#b0b2b8]"
-          }`}
-        >
-          <ArrowDown className="h-4 w-4" />
-        </button>
-
-        <div
-          className={`absolute right-[7px] top-6 z-20 w-4 transition-opacity duration-200 ${
-            composerVisible ? "bottom-[108px]" : "bottom-6"
-          } ${showConversationRail ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
-          aria-hidden={!showConversationRail}
-        >
-          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 rounded-full bg-black/[0.12]" />
-          {conversationRailMarkers.map((marker) => {
-            const isActive = activeConversationRailTurn === marker.turnIndex;
-            return (
-              <button
-                key={`rail-marker-${marker.turnIndex}`}
-                type="button"
-                title={marker.preview}
-                onClick={() => handleConversationRailSelect(marker.turnIndex)}
-                className={`absolute left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border transition-all duration-150 ${
-                  isActive
-                    ? "h-2.5 w-2.5 border-black/60 bg-[#1d1d1f] shadow-[0_0_0_3px_rgba(255,255,255,0.9)]"
-                    : "h-2 w-2 border-black/[0.22] bg-white hover:h-2.5 hover:w-2.5 hover:border-black/[0.42]"
-                }`}
-                style={{ top: `${marker.topPercent}%` }}
-                aria-label={`Go to prompt ${marker.turnIndex + 1}`}
-              />
-            );
-          })}
-        </div>
-
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
       </div>
 

@@ -1,0 +1,308 @@
+"""B2-06 — Agent runtime REST router.
+
+Responsibility: HTTP layer for agent execution, management, and gate control.
+
+Endpoints:
+  POST   /api/agents                         — create agent definition
+  GET    /api/agents                         — list tenant's agents
+  GET    /api/agents/{agent_id}             — get agent definition
+  PUT    /api/agents/{agent_id}             — update agent (bumps version)
+  DELETE /api/agents/{agent_id}             — soft-delete agent
+  POST   /api/agents/{agent_id}/run         — start agent run (SSE stream)
+  GET    /api/agents/{agent_id}/runs        — run history
+  GET    /api/agents/runs/{run_id}          — get run status
+  POST   /api/agents/runs/{run_id}/gates/{gate_id}/approve — approve gate
+  POST   /api/agents/runs/{run_id}/gates/{gate_id}/reject  — reject gate
+  GET    /api/agents/runs/{run_id}/gates    — list pending gates
+  POST   /api/webhooks/{tenant_id}/{connector_id}          — webhook receiver
+"""
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from api.auth import get_current_user_id
+from api.services.agents import definition_store, run_store
+from api.services.agents.gate_engine import (
+    approve_gate,
+    reject_gate,
+    list_pending_gates,
+    cleanup_run,
+)
+from api.services.agents.resolver import resolve_agent
+from api.schemas.agent_definition.schema import AgentDefinitionSchema
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/agents", tags=["agents"])
+webhook_router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
+
+
+# ── Request bodies ─────────────────────────────────────────────────────────────
+
+class RunRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+    context: dict[str, Any] = {}
+    max_delegation_depth: int = 3
+
+
+# ── Agent CRUD ─────────────────────────────────────────────────────────────────
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_agent(
+    schema: AgentDefinitionSchema,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    try:
+        record = definition_store.create_agent(user_id, user_id, schema)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": record.id, "agent_id": record.agent_id, "version": record.version}
+
+
+@router.get("")
+def list_agents(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict[str, Any]]:
+    records = definition_store.list_agents(user_id)
+    return [
+        {"id": r.id, "agent_id": r.agent_id, "name": r.name, "version": r.version}
+        for r in records
+    ]
+
+
+@router.get("/{agent_id}")
+def get_agent(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    version: str | None = None,
+) -> dict[str, Any]:
+    record = definition_store.get_agent(user_id, agent_id, version)
+    if not record:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    return {"id": record.id, "agent_id": record.agent_id, "name": record.name, "version": record.version,
+            "definition": record.definition}
+
+
+@router.put("/{agent_id}")
+def update_agent(
+    agent_id: str,
+    schema: AgentDefinitionSchema,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    try:
+        record = definition_store.update_agent(user_id, agent_id, user_id, schema)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": record.id, "agent_id": record.agent_id, "version": record.version}
+
+
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    try:
+        definition_store.delete_agent(user_id, agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ── Agent execution ────────────────────────────────────────────────────────────
+
+@router.post("/{agent_id}/run")
+def run_agent(
+    agent_id: str,
+    body: RunRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> StreamingResponse:
+    """Start an agent run and stream activity events + final result as SSE."""
+    tenant_id = user_id
+    record = definition_store.get_agent(tenant_id, agent_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+
+    schema = definition_store.load_schema(record)
+    run = run_store.create_run(
+        tenant_id,
+        agent_id,
+        conversation_id=body.conversation_id,
+        trigger_type="manual",
+    )
+
+    def _generate():
+        from api.services.agents.gate_engine import GateRejectedError
+        from api.services.agents.memory import record_episode, WorkingMemory
+        from api.services.agents.runner import run_agent_task
+        from api.services.observability.telemetry import record_run_start, record_run_end
+        from api.services.observability.cost_tracker import assert_budget_ok, BudgetExceededError
+
+        try:
+            assert_budget_ok(tenant_id)
+        except BudgetExceededError as exc:
+            yield f"data: {json.dumps({'event_type': 'budget_exceeded', 'detail': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+            run_store.fail_run(run.id, error=str(exc)[:300])
+            return
+
+        record_run_start(run.id, agent_id, tenant_id, trigger_type="manual")
+
+        ttl = 3600
+        if schema.memory and schema.memory.working:
+            ttl = schema.memory.working.ttl_seconds
+
+        working_mem = WorkingMemory(
+            tenant_id=tenant_id,
+            conversation_id=body.conversation_id or run.id,
+            ttl_seconds=ttl,
+        )
+
+        # Inject prior context into working memory
+        for k, v in (body.context or {}).items():
+            working_mem.set(k, v)
+
+        # BUG-02 fix: schema.gates is a list[GateConfig]
+        gates = schema.gates or []
+
+        result_parts: list[str] = []
+        try:
+            for chunk in run_agent_task(
+                body.message,
+                tenant_id=tenant_id,
+                run_id=run.id,
+                conversation_id=body.conversation_id,
+                system_prompt=schema.system_prompt or None,
+            ):
+                yield f"data: {json.dumps(chunk)}\n\n"
+                text = chunk.get("text") or chunk.get("content") or ""
+                if text:
+                    result_parts.append(str(text))
+
+            summary = ("".join(result_parts))[:500]
+            record_episode(tenant_id, agent_id, run.id, summary=summary, outcome="success")
+            run_store.complete_run(run.id, result_summary=summary)
+            record_run_end(run.id, status="completed")
+            yield f"data: {json.dumps({'event_type': 'run_completed', 'run_id': run.id})}\n\n"
+
+        except GateRejectedError as exc:
+            run_store.fail_run(run.id, error=str(exc))
+            record_run_end(run.id, status="failed", error=str(exc)[:300])
+            yield f"data: {json.dumps({'event_type': 'gate_rejected', 'run_id': run.id, 'detail': str(exc)})}\n\n"
+        except Exception as exc:
+            logger.error("Agent run %s failed: %s", run.id, exc, exc_info=True)
+            run_store.fail_run(run.id, error=str(exc)[:300])
+            record_run_end(run.id, status="failed", error=str(exc)[:300])
+            yield f"data: {json.dumps({'event_type': 'run_failed', 'run_id': run.id, 'detail': str(exc)[:300]})}\n\n"
+        finally:
+            cleanup_run(run.id)
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── Run history ────────────────────────────────────────────────────────────────
+
+@router.get("/{agent_id}/runs")
+def list_runs(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    runs = run_store.list_runs(user_id, agent_id, limit=limit)
+    return [
+        {
+            "run_id": r.id,
+            "agent_id": r.agent_id,
+            "status": r.status,
+            "trigger_type": r.trigger_type,
+            "started_at": r.started_at,
+            "ended_at": r.ended_at,
+            "result_summary": r.result_summary,
+        }
+        for r in runs
+    ]
+
+
+@router.get("/runs/{run_id}")
+def get_run(
+    run_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    record = run_store.get_run(run_id)
+    if not record or record.tenant_id != user_id:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return {
+        "run_id": record.id,
+        "agent_id": record.agent_id,
+        "status": record.status,
+        "trigger_type": record.trigger_type,
+        "started_at": record.started_at,
+        "ended_at": record.ended_at,
+        "error": record.error,
+        "result_summary": record.result_summary,
+    }
+
+
+# ── Gate control ───────────────────────────────────────────────────────────────
+
+@router.post("/runs/{run_id}/gates/{gate_id}/approve")
+def approve(
+    run_id: str,
+    gate_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    ok = approve_gate(run_id, gate_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gate not found or already decided.")
+    return {"status": "approved", "gate_id": gate_id}
+
+
+@router.post("/runs/{run_id}/gates/{gate_id}/reject")
+def reject(
+    run_id: str,
+    gate_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    ok = reject_gate(run_id, gate_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gate not found or already decided.")
+    return {"status": "rejected", "gate_id": gate_id}
+
+
+@router.get("/runs/{run_id}/gates")
+def pending_gates(
+    run_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict[str, Any]]:
+    return list_pending_gates(run_id)
+
+
+# ── Webhook receiver ───────────────────────────────────────────────────────────
+
+@webhook_router.post("/{tenant_id}/{connector_id}")
+async def receive_webhook(
+    tenant_id: str,
+    connector_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Receive an external webhook and fan out to subscribed agents."""
+    from api.services.agents.event_triggers import handle_webhook_event
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    event_type = str(payload.get("event_type") or payload.get("type") or "unknown")
+    run_ids = handle_webhook_event(tenant_id, connector_id, event_type, payload)
+    return {"status": "queued", "run_ids": run_ids, "count": len(run_ids)}

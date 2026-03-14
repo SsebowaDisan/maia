@@ -13,6 +13,7 @@ import { AccessModeDropdown } from "../AccessModeDropdown";
 import { ComposerModeSelector } from "../ComposerModeSelector";
 import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import { ComposerAttachmentChips } from "./composer/ComposerAttachmentChips";
+import { ComposerAgentPicker } from "./composer/ComposerAgentPicker";
 import { ComposerCommandMenu } from "./composer/ComposerCommandMenu";
 import { useComposerCommandPalette } from "./composer/commandPalette";
 import { FilePreviewModal } from "./shared/FilePreviewModal";
@@ -125,6 +126,9 @@ function ComposerPanel({
     onSubmit: submitIfPossible,
   });
 
+  const trimmedMessage = message.trimStart();
+  const agentPickerVisible = trimmedMessage.startsWith("@");
+
   useEffect(() => {
     if (!previewAttachment) {
       return;
@@ -186,7 +190,17 @@ function ComposerPanel({
                 onClick={syncCommandQueryFromTextarea}
               />
             </div>
-            {commandQuery && commandOptions.length > 0 ? (
+            {agentPickerVisible ? (
+              <ComposerAgentPicker
+                query={trimmedMessage}
+                onPick={(agentName) => {
+                  const suffix = trimmedMessage.replace(/^@\S*\s*/, "");
+                  const next = `@${agentName.toLowerCase().replace(/\s+/g, "-")} ${suffix}`.trim();
+                  setMessage(`${next} `);
+                }}
+              />
+            ) : null}
+            {commandQuery && commandOptions.length > 0 && !agentPickerVisible ? (
               <ComposerCommandMenu
                 query={commandQuery}
                 options={commandOptions}

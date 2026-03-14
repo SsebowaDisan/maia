@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { InfoPanel } from "../components/InfoPanel";
@@ -26,6 +26,19 @@ import { useConversationChat } from "./useConversationChat";
 import { useFileLibrary } from "./useFileLibrary";
 import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
+import { RoutePlaceholderPage } from "./RoutePlaceholderPage";
+import { resolveAppRouteShell } from "./routeShells";
+import { AgentBuilderPage } from "../pages/AgentBuilderPage";
+import { AgentDetailPage } from "../pages/AgentDetailPage";
+import { ConnectorMarketplacePage } from "../pages/ConnectorMarketplacePage";
+import { ConnectorsPage } from "../pages/ConnectorsPage";
+import { DeveloperDocsPage } from "../pages/DeveloperDocsPage";
+import { DeveloperPortalPage } from "../pages/DeveloperPortalPage";
+import { MarketplaceAgentDetailPage } from "../pages/MarketplaceAgentDetailPage";
+import { MarketplacePage } from "../pages/MarketplacePage";
+import { OperationsDashboardPage } from "../pages/OperationsDashboardPage";
+import { WorkflowBuilderPage } from "../pages/WorkflowBuilderPage";
+import { WorkspacePage } from "../pages/WorkspacePage";
 type MindmapNodeFollowUpDraft = {
   nodeId: string;
   title: string;
@@ -36,6 +49,7 @@ type MindmapNodeFollowUpDraft = {
   defaultPrompt: string;
 };
 export default function App() {
+  const [pathname, setPathname] = useState(() => window.location.pathname || "/");
   const deepLinkHandledRef = useRef(false);
   const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
@@ -43,6 +57,7 @@ export default function App() {
   const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
   const [mindmapNodeFollowUp, setMindmapNodeFollowUp] = useState<MindmapNodeFollowUpDraft | null>(null);
   const [isSendingMindmapFollowUp, setIsSendingMindmapFollowUp] = useState(false);
+  const routeShell = useMemo(() => resolveAppRouteShell(pathname), [pathname]);
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -265,9 +280,61 @@ export default function App() {
 
   const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
 
+  useEffect(() => {
+    const handleNavigation = () => setPathname(window.location.pathname || "/");
+    window.addEventListener("popstate", handleNavigation);
+    return () => window.removeEventListener("popstate", handleNavigation);
+  }, []);
+
+  if (routeShell.kind === "page") {
+    if (routeShell.key === "marketplace") {
+      return <MarketplacePage />;
+    }
+    if (routeShell.key === "marketplace_agent_detail") {
+      return <MarketplaceAgentDetailPage agentId={String(routeShell.params?.agentId || "")} />;
+    }
+    if (routeShell.key === "workspace") {
+      return <WorkspacePage />;
+    }
+    if (routeShell.key === "connectors") {
+      return <ConnectorsPage />;
+    }
+    if (routeShell.key === "connector_marketplace") {
+      return <ConnectorMarketplacePage />;
+    }
+    if (routeShell.key === "developer") {
+      return <DeveloperPortalPage />;
+    }
+    if (routeShell.key === "developer_docs") {
+      return <DeveloperDocsPage />;
+    }
+    if (routeShell.key === "agent_builder") {
+      return <AgentBuilderPage />;
+    }
+    if (routeShell.key === "agent_detail") {
+      return <AgentDetailPage agentId={String(routeShell.params?.agentId || "")} />;
+    }
+    if (routeShell.key === "operations") {
+      return <OperationsDashboardPage />;
+    }
+    if (routeShell.key === "workflow_builder") {
+      return <WorkflowBuilderPage />;
+    }
+  }
+
+  if (routeShell.kind === "placeholder") {
+    return (
+      <RoutePlaceholderPage
+        title={routeShell.title}
+        description={routeShell.description}
+        path={routeShell.path}
+      />
+    );
+  }
+
   return (
     <div className="size-full bg-[#eef1f5] overflow-hidden">
-      <div ref={layout.layoutRef} className="flex h-full min-h-0 gap-3 overflow-hidden px-3 py-2">
+      <div ref={layout.layoutRef} className="flex h-full min-h-0 gap-1 overflow-hidden px-1 py-2">
         {layout.activeTab === "Chat" || isWorkspaceModalTab(layout.activeTab) ? (
           <>
             <ChatSidebar

@@ -1,6 +1,6 @@
 import katex from "katex";
 
-import { renderRichText } from "../../utils/richText";
+import { renderMathInMarkdown, renderRichText } from "../../utils/richText";
 import type { CanvasDocumentRecord, MessageBlock } from "../../messageBlocks";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { widgetRegistry } from "../widgets/registry";
@@ -33,7 +33,7 @@ function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
     return (
       <div
         className="chat-answer-html assistantAnswerBody"
-        dangerouslySetInnerHTML={{ __html: renderRichText(block.markdown) }}
+        dangerouslySetInnerHTML={{ __html: renderRichText(renderMathInMarkdown(block.markdown)) }}
       />
     );
   }
