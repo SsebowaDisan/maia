@@ -3,7 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   deleteConnectorCredentials,
   disconnectGoogleOAuth,
+  getComputerUseActiveModel,
+  getSettings,
   requestGoogleOAuthSetup,
+  patchSettings,
   saveGoogleOAuthConfig,
   getGoogleOAuthStatus,
   listConnectorCredentials,
@@ -68,6 +71,11 @@ export function useSettingsController(activeTab: string) {
   const [braveStatus, setBraveStatus] = useState<IntegrationStatus>({ configured: false, source: null });
   const [mapsKeyInput, setMapsKeyInput] = useState("");
   const [braveKeyInput, setBraveKeyInput] = useState("");
+  const [computerUseModelInput, setComputerUseModelInput] = useState("");
+  const [computerUseModelSaved, setComputerUseModelSaved] = useState("");
+  const [computerUseModelActive, setComputerUseModelActive] = useState("");
+  const [computerUseModelSource, setComputerUseModelSource] = useState("");
+  const [computerUseModelSaving, setComputerUseModelSaving] = useState(false);
   const [oauthClientIdInput, setOauthClientIdInput] = useState("");
   const [oauthClientSecretInput, setOauthClientSecretInput] = useState("");
   const [oauthRedirectUriInput, setOauthRedirectUriInput] = useState("");
@@ -85,10 +93,22 @@ export function useSettingsController(activeTab: string) {
     }));
   }, [healthMap]);
 
-  const refreshIntegrations = async () => {
+  const refreshConnectorStatus = async () => {
     setLoading(true);
     try {
-      const [healthRows, credentialRows, oauthRow, mapsRow, braveRow, ollamaRow, serviceAccountRow, aliasRows, ga4PropertyRow] =
+      const [
+        healthRows,
+        credentialRows,
+        oauthRow,
+        mapsRow,
+        braveRow,
+        ollamaRow,
+        serviceAccountRow,
+        aliasRows,
+        ga4PropertyRow,
+        settingsRow,
+        activeModelRow,
+      ] =
         await Promise.all([
         listConnectorHealth(),
         listConnectorCredentials(),
@@ -99,6 +119,8 @@ export function useSettingsController(activeTab: string) {
         getGoogleServiceAccountStatus(),
         listGoogleWorkspaceLinkAliases(),
         getGoogleAnalyticsProperty(),
+        getSettings(),
+        getComputerUseActiveModel(),
       ]);
       const quickstartRow = await getOllamaQuickstart(ollamaRow.base_url || undefined);
 
@@ -134,17 +156,24 @@ export function useSettingsController(activeTab: string) {
       setGa4PropertyIdInput((prev) => (prev.trim() ? prev : savedPropertyId));
       setMapsStatus(mapsRow);
       setBraveStatus(braveRow);
+      const savedComputerUseModel = String(
+        settingsRow?.values?.["agent.computer_use_model"] || "",
+      ).trim();
+      setComputerUseModelSaved(savedComputerUseModel);
+      setComputerUseModelInput(savedComputerUseModel);
+      setComputerUseModelActive(String(activeModelRow?.model || "").trim());
+      setComputerUseModelSource(String(activeModelRow?.source || "").trim());
       ollama.syncFromStatus(ollamaRow as OllamaStatus, quickstartRow as OllamaQuickstart | null);
-      setStatusMessage("Integration status synced.");
+      setStatusMessage("Connector status synced.");
     } catch (error) {
-      setStatusMessage(`Failed to load integration status: ${String(error)}`);
+      setStatusMessage(`Failed to load connector status: ${String(error)}`);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void refreshIntegrations();
+    void refreshConnectorStatus();
   }, []);
 
   useEffect(() => {
@@ -173,15 +202,15 @@ export function useSettingsController(activeTab: string) {
     const nextSearch = params.toString();
     const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}`;
     window.history.replaceState({}, "", nextUrl);
-    void refreshIntegrations();
+    void refreshConnectorStatus();
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "integrations" || typeof window === "undefined") {
+    if ((activeTab !== "integrations" && activeTab !== "connectors") || typeof window === "undefined") {
       return;
     }
     const timer = window.setInterval(() => {
-      void refreshIntegrations();
+      void refreshConnectorStatus();
     }, 20000);
     return () => {
       window.clearInterval(timer);
@@ -192,7 +221,7 @@ export function useSettingsController(activeTab: string) {
     const unsubscribe = subscribeAgentEvents({
       replay: 0,
       onEvent: (event) => {
-        ollama.handleLiveEvent(event, refreshIntegrations);
+        ollama.handleLiveEvent(event, refreshConnectorStatus);
         setLiveEvents((previous) => [event, ...previous]);
       },
       onError: () => {
@@ -232,7 +261,7 @@ export function useSettingsController(activeTab: string) {
     try {
       await upsertConnectorCredentials(connector.id, payload);
       setDraftValues((prev) => ({ ...prev, [connector.id]: {} }));
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage(`${connector.label} credentials saved.`);
     } catch (error) {
       setStatusMessage(`Failed to save ${connector.label}: ${String(error)}`);
@@ -245,7 +274,7 @@ export function useSettingsController(activeTab: string) {
     setSavingConnectorId(connector.id);
     try {
       await deleteConnectorCredentials(connector.id);
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage(`${connector.label} credentials removed.`);
     } catch (error) {
       setStatusMessage(`Failed to clear ${connector.label}: ${String(error)}`);
@@ -300,7 +329,7 @@ export function useSettingsController(activeTab: string) {
       setOauthStatus(
         result.revoked ? "Google OAuth disconnected and token revoked." : "Google OAuth disconnected locally.",
       );
-      await refreshIntegrations();
+      await refreshConnectorStatus();
     } catch (error) {
       setOauthStatus(`OAuth disconnect error: ${String(error)}`);
     }
@@ -322,7 +351,7 @@ export function useSettingsController(activeTab: string) {
         redirectUri: redirectUri || undefined,
       });
       setOauthClientSecretInput("");
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setOauthStatus("OAuth app credentials saved. Next step: connect Google account.");
     } catch (error) {
       setOauthStatus(`Failed to save OAuth app credentials: ${String(error)}`);
@@ -338,7 +367,7 @@ export function useSettingsController(activeTab: string) {
     try {
       const result = await requestGoogleOAuthSetup();
       const ownerHint = String(result.workspace_owner_user_id || "").trim();
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       const ownerText = ownerHint ? ` Workspace owner: ${ownerHint}.` : "";
       const message = `Setup request submitted.${ownerText}`;
       setOauthStatus(message);
@@ -353,7 +382,7 @@ export function useSettingsController(activeTab: string) {
   const handleGoogleWorkspaceAuthModeChange = async (mode: "oauth" | "service_account") => {
     try {
       await saveGoogleWorkspaceAuthMode(mode);
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage(
         mode === "service_account"
           ? "Google auth mode set to service account."
@@ -369,7 +398,7 @@ export function useSettingsController(activeTab: string) {
   ): Promise<{ ok: boolean; services: string[]; message: string }> => {
     try {
       const result = await saveGoogleOAuthServices(services);
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       const saved = Array.isArray(result.services) ? result.services : [];
       return {
         ok: true,
@@ -421,6 +450,41 @@ export function useSettingsController(activeTab: string) {
     }
   };
 
+  const persistComputerUseModel = async (nextValue: string) => {
+    const normalized = String(nextValue || "").trim();
+    setComputerUseModelSaving(true);
+    try {
+      const updated = await patchSettings({
+        "agent.computer_use_model": normalized,
+      });
+      const savedValue = String(
+        updated?.values?.["agent.computer_use_model"] || "",
+      ).trim();
+      setComputerUseModelSaved(savedValue);
+      setComputerUseModelInput(savedValue);
+      const activeModel = await getComputerUseActiveModel();
+      setComputerUseModelActive(String(activeModel?.model || "").trim());
+      setComputerUseModelSource(String(activeModel?.source || "").trim());
+      setStatusMessage(
+        savedValue
+          ? "Computer Use model override saved."
+          : "Computer Use model override cleared.",
+      );
+    } catch (error) {
+      setStatusMessage(`Failed to save Computer Use model override: ${String(error)}`);
+    } finally {
+      setComputerUseModelSaving(false);
+    }
+  };
+
+  const handleSaveComputerUseModel = async () => {
+    await persistComputerUseModel(computerUseModelInput);
+  };
+
+  const handleClearComputerUseModel = async () => {
+    await persistComputerUseModel("");
+  };
+
   const {
     handleSaveMapsKey,
     handleClearMapsKey,
@@ -429,7 +493,7 @@ export function useSettingsController(activeTab: string) {
   } = createSettingsControllerKeyActions({
     mapsKeyInput,
     braveKeyInput,
-    refreshIntegrations,
+    refreshConnectorStatus,
     setMapsKeyInput,
     setBraveKeyInput,
     setStatusMessage,
@@ -455,6 +519,11 @@ export function useSettingsController(activeTab: string) {
     braveStatus,
     mapsKeyInput,
     braveKeyInput,
+    computerUseModelInput,
+    computerUseModelSaved,
+    computerUseModelActive,
+    computerUseModelSource,
+    computerUseModelSaving,
     oauthClientIdInput,
     oauthClientSecretInput,
     oauthRedirectUriInput,
@@ -463,10 +532,11 @@ export function useSettingsController(activeTab: string) {
     googleToolHealth,
     setMapsKeyInput,
     setBraveKeyInput,
+    setComputerUseModelInput,
     setOauthClientIdInput,
     setOauthClientSecretInput,
     setOauthRedirectUriInput,
-    refreshIntegrations,
+    refreshConnectorStatus,
     handleDraftChange,
     handleSaveConnector,
     handleClearConnector,
@@ -483,6 +553,8 @@ export function useSettingsController(activeTab: string) {
     handleClearMapsKey,
     handleSaveBraveKey,
     handleClearBraveKey,
+    handleSaveComputerUseModel,
+    handleClearComputerUseModel,
     ollama,
   };
 }

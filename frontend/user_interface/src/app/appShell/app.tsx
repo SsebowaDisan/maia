@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AppRouteOverlayModal } from "../components/AppRouteOverlayModal";
 import { ChatMain } from "../components/ChatMain";
 import { ChatSidebar } from "../components/ChatSidebar";
 import { InfoPanel } from "../components/InfoPanel";
@@ -48,6 +49,53 @@ type MindmapNodeFollowUpDraft = {
   sourceName?: string;
   defaultPrompt: string;
 };
+
+type SidebarOverlayKey =
+  | "connectors"
+  | "workspace"
+  | "marketplace"
+  | "workflow_builder"
+  | "operations";
+
+type SidebarOverlayConfig = {
+  key: SidebarOverlayKey;
+  path: string;
+  title: string;
+  subtitle: string;
+};
+
+const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
+  "/connectors": {
+    key: "connectors",
+    path: "/connectors",
+    title: "Connectors",
+    subtitle: "Manage integration credentials, health, and permissions without leaving chat.",
+  },
+  "/workspace": {
+    key: "workspace",
+    path: "/workspace",
+    title: "Agents",
+    subtitle: "Inspect agent runs, updates, and memory context while staying in the same session.",
+  },
+  "/marketplace": {
+    key: "marketplace",
+    path: "/marketplace",
+    title: "Marketplace",
+    subtitle: "Browse and install production-ready agents in a focused overlay.",
+  },
+  "/workflow-builder": {
+    key: "workflow_builder",
+    path: "/workflow-builder",
+    title: "Workflows",
+    subtitle: "Compose multi-agent flows and preview orchestration in one canvas.",
+  },
+  "/operations": {
+    key: "operations",
+    path: "/operations",
+    title: "Operations",
+    subtitle: "Track run reliability, budgets, and system health in real time.",
+  },
+};
 export default function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname || "/");
   const deepLinkHandledRef = useRef(false);
@@ -55,9 +103,31 @@ export default function App() {
   const lastAutoOpenCitationKeyRef = useRef("");
   const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
   const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
+  const [sidebarOverlay, setSidebarOverlay] = useState<SidebarOverlayConfig | null>(null);
   const [mindmapNodeFollowUp, setMindmapNodeFollowUp] = useState<MindmapNodeFollowUpDraft | null>(null);
   const [isSendingMindmapFollowUp, setIsSendingMindmapFollowUp] = useState(false);
   const routeShell = useMemo(() => resolveAppRouteShell(pathname), [pathname]);
+  const navigateToPath = (nextPath: string) => {
+    const normalizedNext = String(nextPath || "/").trim() || "/";
+    if (window.location.pathname === normalizedNext) {
+      return;
+    }
+    window.history.pushState({}, "", normalizedNext);
+    setPathname(normalizedNext);
+  };
+  const handleSidebarAppRoute = (nextPath: string) => {
+    const normalizedNext = String(nextPath || "/").trim().toLowerCase();
+    const overlay = SIDEBAR_OVERLAY_BY_PATH[normalizedNext];
+    if (overlay) {
+      setSidebarOverlay(overlay);
+      if (layout.activeTab !== "Chat") {
+        layout.setActiveTab("Chat");
+      }
+      return;
+    }
+    setSidebarOverlay(null);
+    navigateToPath(nextPath);
+  };
   const layout = useLayoutState();
   const projectState = useProjectState();
   const fileLibrary = useFileLibrary();
@@ -244,17 +314,18 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!workspaceModalTab) {
+    if (!workspaceModalTab && !sidebarOverlay) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setWorkspaceModalTab(null);
+        setSidebarOverlay(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [workspaceModalTab]);
+  }, [workspaceModalTab, sidebarOverlay]);
 
   useEffect(() => {
     if (!isWorkspaceModalTab(layout.activeTab)) {
@@ -278,6 +349,10 @@ export default function App() {
     }
   };
 
+  const closeSidebarOverlay = () => {
+    setSidebarOverlay(null);
+  };
+
   const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
 
   useEffect(() => {
@@ -285,6 +360,28 @@ export default function App() {
     window.addEventListener("popstate", handleNavigation);
     return () => window.removeEventListener("popstate", handleNavigation);
   }, []);
+
+  const renderSidebarOverlayContent = () => {
+    if (!sidebarOverlay) {
+      return null;
+    }
+    if (sidebarOverlay.key === "connectors") {
+      return <ConnectorsPage />;
+    }
+    if (sidebarOverlay.key === "workspace") {
+      return <WorkspacePage />;
+    }
+    if (sidebarOverlay.key === "marketplace") {
+      return <MarketplacePage />;
+    }
+    if (sidebarOverlay.key === "workflow_builder") {
+      return <WorkflowBuilderPage />;
+    }
+    if (sidebarOverlay.key === "operations") {
+      return <OperationsDashboardPage />;
+    }
+    return null;
+  };
 
   if (routeShell.kind === "page") {
     if (routeShell.key === "marketplace") {
@@ -338,6 +435,7 @@ export default function App() {
         {layout.activeTab === "Chat" || isWorkspaceModalTab(layout.activeTab) ? (
           <>
             <ChatSidebar
+              currentPath={sidebarOverlay?.path || pathname}
               isCollapsed={layout.isSidebarCollapsed}
               width={layout.sidebarWidth}
               onToggleCollapse={() => layout.setIsSidebarCollapsed(!layout.isSidebarCollapsed)}
@@ -358,6 +456,7 @@ export default function App() {
               onRenameConversation={chatState.handleRenameConversation}
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={openWorkspaceModal}
+              onNavigateAppRoute={handleSidebarAppRoute}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -514,6 +613,16 @@ export default function App() {
               <WorkspaceOverlayModal tab={liveWorkspaceModalTab} onClose={closeWorkspaceModal}>
                 {renderWorkspaceTabContent(liveWorkspaceModalTab, fileLibrary)}
               </WorkspaceOverlayModal>
+            ) : null}
+
+            {sidebarOverlay ? (
+              <AppRouteOverlayModal
+                title={sidebarOverlay.title}
+                subtitle={sidebarOverlay.subtitle}
+                onClose={closeSidebarOverlay}
+              >
+                {renderSidebarOverlayContent()}
+              </AppRouteOverlayModal>
             ) : null}
           </>
         ) : (

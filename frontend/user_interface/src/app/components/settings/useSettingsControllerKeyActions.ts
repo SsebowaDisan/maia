@@ -11,7 +11,7 @@ import {
 type CreateSettingsControllerKeyActionsParams = {
   mapsKeyInput: string;
   braveKeyInput: string;
-  refreshIntegrations: () => Promise<void>;
+  refreshConnectorStatus: () => Promise<void>;
   setMapsKeyInput: Dispatch<SetStateAction<string>>;
   setBraveKeyInput: Dispatch<SetStateAction<string>>;
   setStatusMessage: Dispatch<SetStateAction<string>>;
@@ -21,7 +21,7 @@ type CreateSettingsControllerKeyActionsParams = {
 function createSettingsControllerKeyActions({
   mapsKeyInput,
   braveKeyInput,
-  refreshIntegrations,
+  refreshConnectorStatus,
   setMapsKeyInput,
   setBraveKeyInput,
   setStatusMessage,
@@ -36,7 +36,7 @@ function createSettingsControllerKeyActions({
     try {
       await saveMapsIntegrationKey(key);
       setMapsKeyInput("");
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage("Maps API key saved.");
     } catch (error) {
       setStatusMessage(`Failed to save Maps API key: ${String(error)}`);
@@ -47,7 +47,7 @@ function createSettingsControllerKeyActions({
     try {
       await clearMapsIntegrationKey();
       setMapsKeyInput("");
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage("Stored Maps API key cleared.");
     } catch (error) {
       setStatusMessage(`Failed to clear Maps API key: ${String(error)}`);
@@ -64,7 +64,7 @@ function createSettingsControllerKeyActions({
     try {
       await upsertConnectorCredentials("brave_search", { BRAVE_SEARCH_API_KEY: key });
       setBraveKeyInput("");
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage("Brave Search API key saved.");
     } catch (error) {
       setStatusMessage(`Failed to save Brave Search API key: ${String(error)}`);
@@ -78,7 +78,7 @@ function createSettingsControllerKeyActions({
     try {
       await deleteConnectorCredentials("brave_search");
       setBraveKeyInput("");
-      await refreshIntegrations();
+      await refreshConnectorStatus();
       setStatusMessage("Brave Search API key cleared.");
     } catch (error) {
       setStatusMessage(`Failed to clear Brave Search API key: ${String(error)}`);

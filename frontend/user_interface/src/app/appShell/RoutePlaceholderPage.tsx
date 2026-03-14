@@ -23,14 +23,13 @@ export function RoutePlaceholderPage({ title, description, path }: RoutePlacehol
             Back to Chat
           </a>
           <a
-            href="/?view=chat&tab=integrations"
+            href="/connectors"
             className="inline-flex items-center rounded-full border border-black/[0.14] bg-white px-5 py-2.5 text-[14px] font-medium text-[#111827] transition hover:border-black/[0.24]"
           >
-            Open Main Workspace
+            Open Connectors
           </a>
         </div>
       </div>
     </div>
   );
 }
-

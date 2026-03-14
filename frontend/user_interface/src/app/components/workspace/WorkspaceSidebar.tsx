@@ -1,12 +1,22 @@
-import type { AgentSummary, ConnectorSummary } from "../../pages/agentOsData";
+type WorkspaceSidebarConnector = {
+  id: string;
+  name: string;
+  authType: string;
+  status: "Connected" | "Not connected" | "Expired";
+};
+
+type WorkspaceSidebarAgent = {
+  id: string;
+  status: "active" | "paused" | "error";
+};
 
 type WorkspaceSidebarProps = {
-  connectors: ConnectorSummary[];
-  agents: AgentSummary[];
+  connectors: WorkspaceSidebarConnector[];
+  agents: WorkspaceSidebarAgent[];
   onOpenConnector?: (connectorId: string) => void;
 };
 
-function statusDotClass(status: ConnectorSummary["status"]): string {
+function statusDotClass(status: WorkspaceSidebarConnector["status"]): string {
   if (status === "Connected") {
     return "bg-[#16a34a]";
   }
@@ -52,4 +62,3 @@ export function WorkspaceSidebar({
     </aside>
   );
 }
-

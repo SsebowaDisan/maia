@@ -384,6 +384,13 @@ export function AgentActivityPanel({
     runId,
     activeStepIndex,
     interactionSuggestion: activeSuggestion,
+    computerUseSessionId: String(mergedSceneData["computer_use_session_id"] ?? "").trim() || undefined,
+    computerUseTask: String(mergedSceneData["computer_use_task"] ?? "").trim() || undefined,
+    computerUseModel: String(mergedSceneData["computer_use_model"] ?? "").trim() || undefined,
+    computerUseMaxIterations: (() => {
+      const value = Number(mergedSceneData["computer_use_max_iterations"] ?? Number.NaN);
+      return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+    })(),
     activeSceneData: plannedRoadmapSteps.length
       ? { ...mergedSceneData, __roadmap_steps: plannedRoadmapSteps, __roadmap_active_index: roadmapActiveIndex }
       : mergedSceneData,

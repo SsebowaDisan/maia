@@ -4,6 +4,7 @@ import { renderMathInMarkdown, renderRichText } from "../../utils/richText";
 import type { CanvasDocumentRecord, MessageBlock } from "../../messageBlocks";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { widgetRegistry } from "../widgets/registry";
+import type { LensWidgetProps } from "../widgets/LensEquationWidget";
 
 type BlockRendererProps = {
   block: MessageBlock;
@@ -19,6 +20,23 @@ function renderMathHtml(latex: string, displayMode = false): string {
   } catch {
     return `<code>${latex}</code>`;
   }
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function buildLensWidgetProps(props: Record<string, unknown>): LensWidgetProps {
+  const unitsCandidate = String(props.units || "").trim();
+  return {
+    focalLength: readFiniteNumber(props.focalLength),
+    objectDistance: readFiniteNumber(props.objectDistance),
+    showRays: typeof props.showRays === "boolean" ? props.showRays : undefined,
+    units: unitsCandidate ? unitsCandidate : undefined,
+  };
 }
 
 function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
@@ -117,11 +135,15 @@ function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
   }
 
   if (block.type === "widget") {
-    const Widget = widgetRegistry[block.widget.kind as keyof typeof widgetRegistry];
-    if (!Widget) {
+    if (block.widget.kind === "lens_equation") {
+      const Widget = widgetRegistry.lens_equation;
+      const safeProps = buildLensWidgetProps(block.widget.props || {});
+      return <Widget {...safeProps} />;
+    }
+    if (!(block.widget.kind in widgetRegistry)) {
       return null;
     }
-    return <Widget {...block.widget.props} />;
+    return null;
   }
 
   if (block.type === "document_action") {

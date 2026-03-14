@@ -19,6 +19,7 @@ import {
 import { SettingsRow } from "../ui/SettingsRow";
 import { SettingsSection } from "../ui/SettingsSection";
 import { StatusChip, toneFromBoolean } from "../ui/StatusChip";
+import { ComputerUseSettings } from "./ComputerUseSettings";
 
 type ModelsSettingsProps = {
   ollamaStatus: OllamaStatus;
@@ -50,6 +51,14 @@ type ModelsSettingsProps = {
   onPullEmbeddingModel: (modelOverride?: string) => void;
   onSelectEmbeddingModel: (model: string) => void;
   onApplyEmbeddingToAllCollections: () => void;
+  computerUseModelActive: string;
+  computerUseModelSource: string;
+  computerUseModelInput: string;
+  computerUseModelSaved: string;
+  computerUseModelSaving: boolean;
+  onComputerUseModelInputChange: (value: string) => void;
+  onSaveComputerUseModel: () => void;
+  onClearComputerUseModel: () => void;
 };
 
 function formatModelSize(sizeBytes: number) {
@@ -414,6 +423,14 @@ export function ModelsSettings({
   onPullEmbeddingModel,
   onSelectEmbeddingModel,
   onApplyEmbeddingToAllCollections,
+  computerUseModelActive,
+  computerUseModelSource,
+  computerUseModelInput,
+  computerUseModelSaved,
+  computerUseModelSaving,
+  onComputerUseModelInputChange,
+  onSaveComputerUseModel,
+  onClearComputerUseModel,
 }: ModelsSettingsProps) {
   const runtimeChip = toneFromBoolean(ollamaStatus.reachable, { trueLabel: "Online", falseLabel: "Offline" });
   const isBusy = ollamaBusyAction !== null;
@@ -661,6 +678,17 @@ export function ModelsSettings({
           noDivider
         />
       </SettingsSection>
+
+      <ComputerUseSettings
+        activeModel={computerUseModelActive}
+        activeModelSource={computerUseModelSource}
+        overrideModelInput={computerUseModelInput}
+        savedOverrideModel={computerUseModelSaved}
+        isSaving={computerUseModelSaving}
+        onOverrideModelInputChange={onComputerUseModelInputChange}
+        onSaveOverrideModel={onSaveComputerUseModel}
+        onClearOverrideModel={onClearComputerUseModel}
+      />
 
       {ollamaMessage ? (
         <div className="rounded-xl border border-[#ececf0] bg-white px-4 py-3">

@@ -1,30 +1,56 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 
-import { AGENT_OS_CONNECTORS, type MarketplaceAgentRecord } from "../../pages/agentOsData";
+import type { MarketplaceAgentDetail } from "../../../api/client";
 
 type AgentInstallModalProps = {
   open: boolean;
-  agent: MarketplaceAgentRecord | null;
+  agent: MarketplaceAgentDetail | null;
+  availableConnectorIds: string[];
+  installing?: boolean;
   onClose: () => void;
-  onInstall: (agentId: string, connectorMap: Record<string, string>) => void;
+  onInstall: (
+    agentId: string,
+    payload: { version?: string | null; connector_mapping: Record<string, string> },
+  ) => Promise<void> | void;
 };
 
 type InstallStep = 1 | 2 | 3 | 4;
 
-export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInstallModalProps) {
+function normalizeLabel(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function AgentInstallModal({
+  open,
+  agent,
+  availableConnectorIds,
+  installing = false,
+  onClose,
+  onInstall,
+}: AgentInstallModalProps) {
   const [step, setStep] = useState<InstallStep>(1);
   const [connectorMap, setConnectorMap] = useState<Record<string, string>>({});
   const [gateEnabled, setGateEnabled] = useState<Record<string, boolean>>({});
 
-  const requiredConnectors = agent?.requiredConnectors || [];
+  const requiredConnectors = agent?.required_connectors || [];
   const missingConnectors = useMemo(
-    () =>
-      requiredConnectors.filter(
-        (required) => !AGENT_OS_CONNECTORS.some((connector) => connector.id.includes(required) || connector.id === required),
-      ),
-    [requiredConnectors],
+    () => requiredConnectors.filter((required) => !availableConnectorIds.includes(required)),
+    [availableConnectorIds, requiredConnectors],
   );
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setStep(1);
+    setConnectorMap({});
+    setGateEnabled({});
+  }, [open, agent?.agent_id]);
 
   if (!open || !agent) {
     return null;
@@ -38,7 +64,9 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
       <div className="absolute left-1/2 top-1/2 w-[min(880px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-[26px] border border-black/[0.08] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.28)]">
         <div className="flex items-start justify-between border-b border-black/[0.08] px-6 py-4">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#667085]">Install agent</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#667085]">
+              Install agent
+            </p>
             <h3 className="mt-1 text-[22px] font-semibold text-[#101828]">{agent.name}</h3>
             <p className="mt-1 text-[13px] text-[#667085]">Step {step} of 4</p>
           </div>
@@ -57,8 +85,8 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
               <h4 className="text-[16px] font-semibold text-[#111827]">Review access</h4>
               <p className="mt-1 text-[13px] text-[#667085]">{agent.description}</p>
               <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
-                {agent.requiredConnectors.map((connector) => (
-                  <li key={connector}>{connector}</li>
+                {requiredConnectors.map((connector) => (
+                  <li key={connector}>{normalizeLabel(connector)}</li>
                 ))}
               </ul>
             </section>
@@ -68,20 +96,25 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
             <section>
               <h4 className="text-[16px] font-semibold text-[#111827]">Map required connectors</h4>
               <div className="mt-3 space-y-2">
-                {agent.requiredConnectors.map((required) => (
+                {requiredConnectors.map((required) => (
                   <label key={required} className="block">
-                    <span className="text-[12px] font-semibold text-[#667085]">{required}</span>
+                    <span className="text-[12px] font-semibold text-[#667085]">
+                      {normalizeLabel(required)}
+                    </span>
                     <select
                       value={connectorMap[required] || ""}
                       onChange={(event) =>
-                        setConnectorMap((previous) => ({ ...previous, [required]: event.target.value }))
+                        setConnectorMap((previous) => ({
+                          ...previous,
+                          [required]: event.target.value,
+                        }))
                       }
                       className="mt-1 w-full rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]"
                     >
-                      <option value="">Select connector</option>
-                      {AGENT_OS_CONNECTORS.map((connector) => (
-                        <option key={connector.id} value={connector.id}>
-                          {connector.name}
+                      <option value="">Auto-map to {required}</option>
+                      {availableConnectorIds.map((connectorId) => (
+                        <option key={connectorId} value={connectorId}>
+                          {normalizeLabel(connectorId)} ({connectorId})
                         </option>
                       ))}
                     </select>
@@ -90,7 +123,7 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
               </div>
               {missingConnectors.length ? (
                 <p className="mt-2 text-[12px] text-[#b42318]">
-                  Missing connector support: {missingConnectors.join(", ")}
+                  Missing connector support: {missingConnectors.map(normalizeLabel).join(", ")}
                 </p>
               ) : null}
             </section>
@@ -100,16 +133,19 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
             <section>
               <h4 className="text-[16px] font-semibold text-[#111827]">Gate preferences</h4>
               <div className="mt-3 space-y-2">
-                {agent.requiredConnectors.map((required) => (
+                {requiredConnectors.map((required) => (
                   <label key={required} className="flex items-center gap-2 text-[13px] text-[#344054]">
                     <input
                       type="checkbox"
                       checked={Boolean(gateEnabled[required])}
                       onChange={(event) =>
-                        setGateEnabled((previous) => ({ ...previous, [required]: event.target.checked }))
+                        setGateEnabled((previous) => ({
+                          ...previous,
+                          [required]: event.target.checked,
+                        }))
                       }
                     />
-                    Require approval for {required} actions
+                    Require approval for {normalizeLabel(required)} actions
                   </label>
                 ))}
               </div>
@@ -120,7 +156,8 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
             <section>
               <h4 className="text-[16px] font-semibold text-[#111827]">Confirm install</h4>
               <p className="mt-1 text-[13px] text-[#667085]">
-                Install with {Object.keys(connectorMap).length} connector mappings and {Object.values(gateEnabled).filter(Boolean).length} gate policies.
+                Install version {agent.version} with {Object.keys(connectorMap).length} connector mappings and{" "}
+                {Object.values(gateEnabled).filter(Boolean).length} gate policies.
               </p>
             </section>
           ) : null}
@@ -130,7 +167,7 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
           <button
             type="button"
             onClick={back}
-            disabled={step === 1}
+            disabled={step === 1 || installing}
             className="rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[13px] font-semibold text-[#344054] disabled:opacity-40"
           >
             Back
@@ -139,17 +176,24 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
             <button
               type="button"
               onClick={next}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white"
+              disabled={installing}
+              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
             >
               Next
             </button>
           ) : (
             <button
               type="button"
-              onClick={() => onInstall(agent.id, connectorMap)}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white"
+              disabled={installing}
+              onClick={() =>
+                onInstall(agent.agent_id, {
+                  version: agent.version,
+                  connector_mapping: connectorMap,
+                })
+              }
+              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
             >
-              Install agent
+              {installing ? "Installing..." : "Install agent"}
             </button>
           )}
         </div>
@@ -157,4 +201,3 @@ export function AgentInstallModal({ open, agent, onClose, onInstall }: AgentInst
     </div>
   );
 }
-

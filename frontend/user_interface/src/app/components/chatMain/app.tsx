@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -6,7 +7,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type UIEvent as ReactUIEvent,
 } from "react";
-import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
+import { toast } from "sonner";
+import { approveAgentRunGate, listPendingGates, rejectAgentRunGate } from "../../../api/client";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
 import { CanvasPanel } from "../canvas/CanvasPanel";
 import { useCanvasStore } from "../../stores/canvasStore";
@@ -62,12 +64,20 @@ function ChatMain({
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollHideTimeoutRef = useRef<number | null>(null);
+  const pendingGateToastRef = useRef<string>("");
   const [showComposerDuringActivity, setShowComposerDuringActivity] = useState(true);
   const [composerDockedByScroll, setComposerDockedByScroll] = useState(false);
   const [scrollSettling, setScrollSettling] = useState(false);
+  const [pendingGateFromApi, setPendingGateFromApi] = useState<{
+    runId: string;
+    gateId: string;
+    toolId: string;
+    paramsPreview: string;
+    costEstimateUsd: number | null;
+  } | null>(null);
   const maiaActive = isActivityStreaming || isSending;
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
-  const pendingGate = useMemo(() => {
+  const pendingGateFromEvents = useMemo(() => {
     const orderedEvents = Array.isArray(activityEvents) ? [...activityEvents] : [];
     if (!orderedEvents.length) {
       return null;
@@ -115,6 +125,27 @@ function ChatMain({
     }
     return latestPending;
   }, [activityEvents]);
+  const pendingGate = pendingGateFromEvents || pendingGateFromApi;
+  useEffect(() => {
+    const gateId = String(pendingGate?.gateId || "").trim();
+    if (!gateId) {
+      return;
+    }
+    if (pendingGateToastRef.current === gateId) {
+      return;
+    }
+    pendingGateToastRef.current = gateId;
+    toast.info(`Approval required for ${pendingGate?.toolId || "tool action"}.`);
+  }, [pendingGate?.gateId, pendingGate?.toolId]);
+  const activeRunId = useMemo(() => {
+    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
+      const runId = String(activityEvents[index]?.run_id || "").trim();
+      if (runId) {
+        return runId;
+      }
+    }
+    return "";
+  }, [activityEvents]);
 
   const interactions = useChatMainInteractions({
     accessMode,
@@ -147,10 +178,7 @@ function ChatMain({
     const citationAnchor = target.closest(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
     if (citationAnchor) {
       const interactionPolicy = resolveCitationAnchorInteractionPolicy(citationAnchor);
-      if (
-        shouldOpenCitationSourceUrlForPointerEvent(event.nativeEvent, interactionPolicy) ||
-        interactionPolicy.openDirectOnPrimaryClick
-      ) {
+      if (shouldOpenCitationSourceUrlForPointerEvent(event.nativeEvent, interactionPolicy)) {
         if (!interactionPolicy.directOpenUrl) {
           return;
         }
@@ -218,7 +246,47 @@ function ChatMain({
     [],
   );
 
-  const scrollLatestTurnToTop = () => {
+  useEffect(() => {
+    if (!activeRunId || pendingGateFromEvents) {
+      setPendingGateFromApi(null);
+      return;
+    }
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const rows = await listPendingGates(activeRunId);
+        if (disposed || !Array.isArray(rows) || !rows.length) {
+          if (!disposed) {
+            setPendingGateFromApi(null);
+          }
+          return;
+        }
+        const gate = rows[0];
+        const numericCost = Number(gate.cost_estimate ?? Number.NaN);
+        setPendingGateFromApi({
+          runId: String(gate.run_id || activeRunId),
+          gateId: String(gate.gate_id || ""),
+          toolId: String(gate.tool_id || "tool"),
+          paramsPreview: String(gate.params_preview || "Review tool call parameters before continuing."),
+          costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
+        });
+      } catch {
+        if (!disposed) {
+          setPendingGateFromApi(null);
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRunId, pendingGateFromEvents]);
+
+  const scrollLatestTurnToTop = useCallback(() => {
     const element = contentScrollRef.current;
     if (!element) {
       return;
@@ -240,7 +308,7 @@ function ChatMain({
       return;
     }
     element.scrollTo({ top: element.scrollHeight, behavior });
-  };
+  }, [chatTurns.length]);
 
   const handleMainMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!maiaActive && !composerDockedByScroll) {
@@ -288,7 +356,7 @@ function ChatMain({
       scrollLatestTurnToTop();
     });
     return () => window.cancelAnimationFrame(rafId);
-  }, [chatTurns.length, isSending, isActivityStreaming]);
+  }, [isSending, isActivityStreaming, scrollLatestTurnToTop]);
 
   const composerVisible = maiaActive || composerDockedByScroll
     ? showComposerDuringActivity && !scrollSettling

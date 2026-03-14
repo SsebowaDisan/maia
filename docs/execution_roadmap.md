@@ -1,275 +1,272 @@
-# Maia Agent OS Frontend Execution Roadmap
+# Maia Frontend Execution Roadmap (Wiring Phase)
+
+Updated: 2026-03-14  
+Source of truth: `docs/frontend_tasks.md`
 
 ## Principles
-1. One phase completes before the next begins.
-2. Each slice must ship with a concrete acceptance check.
-3. No slice exceeds 500 LOC of net new complexity.
-4. Every slice is end-to-end functional before moving on.
-5. Extend existing Maia architecture; do not replace core surfaces wholesale.
-6. Connectors remain first-class in UX, not hidden behind secondary flows.
-7. Keep visual language clean and consistent across all new pages.
-8. Avoid hardcoded business semantics where dynamic data is available.
-
-## Scope
-- Frontend tasks only.
-- Backend work is treated as prerequisite/completed input for this roadmap.
+1. Frontend work only; backend is treated as available unless an endpoint is truly missing.
+2. One phase completes before the next begins.
+3. Every slice must be end-to-end wired (no mock fallback left in production paths).
+4. No component should exceed 500 LOC.
+5. Do not change theatre layout, structure, or design while implementing these tasks.
+6. Move automatically from one completed slice to the next until phase completion.
 
 ## Status Legend
-- `todo` not started
-- `in_progress` active
-- `done` completed and validated
-- `blocked` waiting on prerequisite
+- `done` wired to real API and verified
+- `in_progress` partially wired, not yet end-to-end
+- `todo` not wired yet
+- `blocked` waiting on missing backend contract
 
-## Execution Status
-- Current phase: `Phase 6`
-- Current slice: `Completed`
-- Overall progress: `32/32 slices done`
+## Current Snapshot
+- Current phase: `P1`
+- Current slice: `F-09 Observability`
+- Overall progress: `3/13 done` (strictly end-to-end)
 
----
-
-## Phase 0 - Foundation Cleanup (Frontend)
-Goal: Stabilize rendering and navigation foundation for upcoming Agent OS surfaces.
-
-1. **F0-01 - Inline math rendering hardening**
-   - status: `done`
-   - files: `src/app/utils/richText.ts`, `src/app/components/messages/BlockRenderer.tsx`
-   - scope: robust `$...$` and `$$...$$` rendering with currency-safe handling.
-   - acceptance: `$F = ma$` renders as KaTeX, `$5.00` stays plain text.
-
-2. **F0-02 - Route scaffolding for new product areas**
-   - status: `done`
-   - files: `src/app/App.tsx` or router module
-   - scope: add routes for `/marketplace`, `/workspace`, `/agents/:agentId`, `/connectors`, `/developer`.
-   - acceptance: all routes resolve without 404 and mount placeholder shells.
-
-3. **F0-03 - Design token audit baseline**
-   - status: `done`
-   - files: `src/styles/index.css`
-   - scope: normalize spacing/color/typography token usage for new surfaces.
-   - acceptance: no new magic-number styling in this phase.
-
-Phase 0 completion notes:
-- F0-01 validated via existing math tests/build (`renderMathInMarkdown` + markdown path integration).
-- F0-02 implemented path shells for `/marketplace`, `/workspace`, `/agents/:agentId`, `/connectors`, `/developer`.
-- F0-03 added token baseline at `src/styles/tokens.css` and audit doc at `docs/frontend_design_tokens_audit.md`.
+## Area Status (from report)
+| Area | Status |
+|---|---|
+| Agent Run SSE | done |
+| Gate approvals (approve/reject actions) | done |
+| Connector credentials/plugins CRUD | done |
+| Agent CRUD | done |
+| Computer Use / BrowserScene | todo |
+| Marketplace (agents) | done |
+| Marketplace (connectors) | in_progress |
+| Webhooks UI | todo |
+| Workflow Builder | todo |
+| Observability | todo |
+| Feedback / improvement | todo |
+| Scheduled/event triggers UI | todo |
+| Memory config UI | todo |
+| Developer portal/docs deep content | todo |
 
 ---
 
-## Phase 1 - Connector Infrastructure UX
-Goal: Ship connector connection, status, and permission management surfaces.
+## Phase P0 (Critical Wiring)
+Goal: remove the highest-impact blockers first.
 
-1. **F1-01 - Connectors page scaffold**
-   - status: `done`
-   - file: `src/app/pages/ConnectorsPage.tsx`
-   - scope: connector catalog grid with status badges.
-   - acceptance: all connector definitions render with accurate status.
-   - completion note: `/connectors` now renders a live connector grid with status/auth/action badges and refresh.
+### Sidebar navigation extension
+- status: `done`
+- files:
+  - `frontend/user_interface/src/app/components/chatSidebar/ProjectsPane.tsx`
+  - `frontend/user_interface/src/app/components/ChatSidebar.tsx`
+  - `frontend/user_interface/src/app/appShell/app.tsx`
+- acceptance:
+  - new entries (Marketplace, Workflows, Operations) are rendered in the same section as Connectors/Agents
+  - entries route through app shell navigation without full-page reload
+  - completed 2026-03-14
 
-2. **F1-02 - Connector detail slide-over**
-   - status: `done`
-   - file: `src/app/components/connectors/ConnectorDetailPanel.tsx`
-   - scope: auth-specific connect flows, test, revoke, timestamps.
-   - acceptance: OAuth/API-key connectors transition to Connected state without full reload.
+### F-01 Agent CRUD
+- status: `done`
+- files:
+  - `frontend/user_interface/src/app/pages/AgentBuilderPage.tsx`
+  - `frontend/user_interface/src/app/pages/AgentDetailPage.tsx`
+  - `frontend/user_interface/src/api/client/agent.ts`
+- required APIs:
+  - `POST /api/agents`
+  - `GET /api/agents`
+  - `GET /api/agents/{id}`
+  - `PUT /api/agents/{id}`
+  - `DELETE /api/agents/{id}`
+- acceptance:
+  - create/edit/delete agent works from UI
+  - detail page loads real definition/version data
+  - no mock agent list in CRUD flows
+  - completed 2026-03-14
 
-3. **F1-03 - OAuth popup utility**
-   - status: `done`
-   - file: `src/app/utils/oauthPopup.ts`
-   - scope: centered popup + `postMessage` handshake + lifecycle handling.
-   - acceptance: successful OAuth resolves promise and auto-closes popup.
-
-4. **F1-04 - Workspace connector sidebar**
-   - status: `done`
-   - file: `src/app/components/workspace/WorkspaceSidebar.tsx`
-   - scope: live connector status rail + quick config access + active-agent count.
-   - acceptance: status dots refresh after connector changes.
-
-5. **F1-05 - Tool permission matrix**
-   - status: `done`
-   - file: `src/app/components/connectors/ToolPermissionMatrix.tsx`
-   - scope: agents x connectors permission toggles with PATCH wiring.
-   - acceptance: revoking access removes restricted tools from agent tool selection.
-
----
-
-## Phase 2 - Agent Runtime UX
-Goal: Build complete agent creation, gating, history, and memory exploration surfaces.
-
-1. **F2-01 - Agent builder page**
-   - status: `done`
-   - file: `src/app/pages/AgentBuilderPage.tsx`
-   - scope: visual builder + YAML mode with two-way sync.
-   - acceptance: visual config and YAML remain semantically equivalent.
-
-2. **F2-02 - System prompt editor**
-   - status: `done`
-   - file: `src/app/components/agentBuilder/SystemPromptEditor.tsx`
-   - scope: variable autocomplete, highlighting, token estimate.
-   - acceptance: typing `{{` opens variable suggestions and token count updates live.
-
-3. **F2-03 - Tool selector**
-   - status: `done`
-   - file: `src/app/components/agentBuilder/ToolSelector.tsx`
-   - scope: grouped tool selection by connector with disabled-until-connected behavior.
-   - acceptance: connected tools selectable, unconnected tools blocked with guidance.
-
-4. **F2-04 - Gate configuration UI**
-   - status: `done`
-   - file: `src/app/components/agentBuilder/GateConfig.tsx`
-   - scope: per-tool approval toggles, timeout behavior, cost gate controls.
-   - acceptance: gate settings serialize correctly into agent definition payload.
-
-5. **F2-05 - Chat gate approval card**
-   - status: `done`
-   - file: `src/app/components/chatMain/GateApprovalCard.tsx`
-   - scope: inline approve/reject UI for `gate_pending` activity events.
-   - acceptance: approve resumes run stream; reject cancels with visible state update.
-
-6. **F2-06 - Workspace dashboard**
-   - status: `done`
-   - file: `src/app/pages/WorkspacePage.tsx`
-   - scope: installed agents grid with run/edit/pause/delete actions.
-   - acceptance: manual run action starts run and links to output.
-
-7. **F2-07 - Agent run history panel**
-   - status: `done`
-   - file: `src/app/components/agents/AgentRunHistory.tsx`
-   - scope: paged historical runs + theatre replay entry.
-   - acceptance: selecting a history row loads accurate historical replay.
-
-8. **F2-08 - Memory explorer**
-   - status: `done`
-   - file: `src/app/components/agents/MemoryExplorer.tsx`
-   - scope: Episodes, Knowledge, Working tabs with read-only visibility and delete action.
-   - acceptance: memory views reflect recent runs and recall responses.
+### F-04 Computer Use / BrowserScene
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/agentDesktopScene/BrowserScene.tsx`
+  - `frontend/user_interface/src/app/components/agentDesktopScene/api_scene_state.ts`
+  - `frontend/user_interface/src/api/client/computerUse.ts` (new)
+- required APIs:
+  - `POST /api/computer-use/sessions`
+  - `GET /api/computer-use/sessions`
+  - `GET /api/computer-use/sessions/{id}/stream` (SSE)
+  - `DELETE /api/computer-use/sessions/{id}`
+- acceptance:
+  - BrowserScene updates live from screenshot stream
+  - session status + step count visible
+  - cancel action works
+  - theatre auto-opens BrowserScene when computer-use tool appears
 
 ---
 
-## Phase 3 - Marketplace UX
-Goal: Enable discovery, install, updates, and publisher workflows for agents.
+## Phase P1 (Core Product Loop)
+Goal: complete daily operational loop for agents.
 
-1. **F3-01 - Marketplace discovery page**
-   - status: `done`
-   - file: `src/app/pages/MarketplacePage.tsx`
-   - scope: searchable/filterable listing with install state.
-   - acceptance: combined filters + debounced search return expected results.
+### F-02 Agent Run History
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/agents/AgentRunHistory.tsx`
+  - `frontend/user_interface/src/app/pages/AgentDetailPage.tsx`
+  - `frontend/user_interface/src/api/client/agent.ts`
+- required APIs:
+  - `GET /api/agents/{agentId}/runs`
+  - `GET /api/agents/runs/{runId}`
+  - `POST /api/agents/{agentId}/run`
+- acceptance:
+  - run list loads from API with real statuses
+  - run detail opens replay/theatre
+  - "Run now" launches real run stream
 
-2. **F3-02 - Marketplace agent detail page**
-   - status: `done`
-   - file: `src/app/pages/MarketplaceAgentDetailPage.tsx`
-   - scope: hero, details, required connectors, changelog, reviews.
-   - acceptance: connector availability shows correctly for current tenant.
+### F-05 Marketplace (Agents)
+- status: `done`
+- files:
+  - `frontend/user_interface/src/app/pages/MarketplacePage.tsx`
+  - `frontend/user_interface/src/app/pages/MarketplaceAgentDetailPage.tsx`
+  - `frontend/user_interface/src/app/components/marketplace/AgentInstallModal.tsx`
+  - `frontend/user_interface/src/api/client/marketplace.ts` (new)
+- required APIs:
+  - `GET /api/marketplace/agents`
+  - `GET /api/marketplace/agents/{agentId}`
+  - `POST /api/marketplace/install`
+- acceptance:
+  - marketplace list/detail from API (no `agentOsData.ts` mocks)
+  - install flow handles `missing_connectors` path
+  - completed 2026-03-14
 
-3. **F3-03 - Agent install modal**
-   - status: `done`
-   - file: `src/app/components/marketplace/AgentInstallModal.tsx`
-   - scope: multi-step install including connector mapping and inline connect.
-   - acceptance: missing connector flow can be completed inside modal.
-
-4. **F3-04 - Developer portal page**
-   - status: `done`
-   - file: `src/app/pages/DeveloperPortalPage.tsx`
-   - scope: publisher inventory, analytics, reviews, publish/update entry.
-   - acceptance: publisher can submit a new version and view outcome state.
-
-5. **F3-05 - Composer @agent picker**
-   - status: `done`
-   - file: `src/app/components/chatMain/composer/ComposerAgentPicker.tsx`
-   - scope: keyboard-first fuzzy picker for installed agents + marketplace entry point.
-   - acceptance: `@` opens picker, keyboard navigation selects an agent tag.
-
-6. **F3-06 - Update notification banner**
-   - status: `done`
-   - file: `src/app/components/workspace/UpdateBanner.tsx`
-   - scope: update availability banner + review/update slide-over.
-   - acceptance: banner lifecycle respects dismiss/update actions per version.
-
----
-
-## Phase 4 - Advanced Connector Ecosystem UX
-Goal: Add connector marketplace discovery, SDK docs, and webhook operations UI.
-
-1. **F4-01 - Connector marketplace page**
-   - status: `done`
-   - file: `src/app/pages/ConnectorMarketplacePage.tsx`
-   - scope: connector catalog by category with install flow entry.
-   - acceptance: installed connector appears immediately in available connector list.
-
-2. **F4-02 - Connector SDK docs page**
-   - status: `done`
-   - file: `src/app/pages/DeveloperDocsPage.tsx`
-   - scope: markdown docs with code examples, copy actions, sandbox links.
-   - acceptance: docs render correctly and sandbox link opens.
-
-3. **F4-03 - Webhook manager**
-   - status: `done`
-   - file: `src/app/components/connectors/WebhookManager.tsx`
-   - scope: list/register/delete webhook endpoints per connector.
-   - acceptance: newly registered webhook appears with live metadata.
+### F-09 Observability
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/pages/OperationsDashboardPage.tsx`
+  - `frontend/user_interface/src/app/components/observability/LiveRunMonitor.tsx`
+  - `frontend/user_interface/src/app/components/observability/RunErrorLog.tsx`
+  - `frontend/user_interface/src/app/components/workspace/BudgetSettings.tsx`
+  - `frontend/user_interface/src/api/client/observability.ts` (new)
+- required APIs:
+  - `GET /api/observability/runs`
+  - `GET /api/observability/runs/aggregate`
+  - `GET /api/observability/cost`
+  - `POST /api/observability/budget`
+- acceptance:
+  - dashboard metrics from API
+  - live runs refresh every 5 seconds (or SSE)
+  - error log and budget settings fully wired
 
 ---
 
-## Phase 5 - Observability and Operations UX
-Goal: Expose reliability, cost, and error operations to tenant admins.
+## Phase P2 (Workflow + HITL Quality)
+Goal: complete orchestration and approval ergonomics.
 
-1. **F5-01 - Operations dashboard page**
-   - status: `done`
-   - file: `src/app/pages/OperationsDashboardPage.tsx`
-   - scope: KPI cards, trends, cost/error charts, health table.
-   - acceptance: values align with telemetry API aggregates.
+### F-03 Gate Pending List
+- status: `in_progress`
+- files:
+  - `frontend/user_interface/src/app/components/chatMain/GateApprovalCard.tsx`
+  - `frontend/user_interface/src/app/components/chatMain/app.tsx`
+  - `frontend/user_interface/src/api/client/agent.ts`
+- required API:
+  - `GET /api/agents/runs/{runId}/gates`
+- acceptance:
+  - pending gates surface automatically via polling or SSE
+  - toast displayed when a new gate becomes pending
+  - no manual refresh needed
 
-2. **F5-02 - Live run monitor**
-   - status: `done`
-   - file: `src/app/components/observability/LiveRunMonitor.tsx`
-   - scope: near-real-time active run stream with theatre deep-link.
-   - acceptance: started runs appear within 5s and clear on completion.
+### F-08 Workflow Builder
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/pages/WorkflowBuilderPage.tsx`
+  - `frontend/user_interface/src/api/client/agent.ts`
+- required APIs:
+  - `POST /api/agents/workflows`
+  - `GET /api/agents/workflows`
+  - `POST /api/agents/workflows/{id}/run` (SSE)
+- acceptance:
+  - save/load workflows from backend
+  - run workflow streams to theatre
+  - step agent picker driven by real `listAgents()`
 
-3. **F5-03 - Budget settings UI**
-   - status: `done`
-   - file: `src/app/components/workspace/BudgetSettings.tsx`
-   - scope: daily limits, alert threshold, billing history, progress state.
-   - acceptance: budget threshold behavior matches backend limit enforcement.
-
-4. **F5-04 - Error log and replay**
-   - status: `done`
-   - file: `src/app/components/observability/RunErrorLog.tsx`
-   - scope: filterable errors + theatre link + replay action.
-   - acceptance: failed run opens accurate theatre trace and replay triggers new run.
-
----
-
-## Phase 6 - Agent Composition UX
-Goal: Enable workflow construction and multi-agent operation visibility.
-
-1. **F6-01 - Workflow builder page**
-   - status: `done`
-   - file: `src/app/pages/WorkflowBuilderPage.tsx`
-   - scope: visual DAG builder with edge conditions and run action.
-   - acceptance: two-step workflow can be built and executed from canvas.
-
-2. **F6-02 - Multi-agent theatre**
-   - status: `done`
-   - file: `src/app/components/agentActivityPanel/MultiAgentTheatre.tsx`
-   - scope: side-by-side activity columns with delegation cues and gate pauses.
-   - acceptance: three-step workflow shows synchronized multi-column runtime.
-
-3. **F6-03 - Improvement suggestion UI**
-   - status: `done`
-   - file: `src/app/components/agents/ImprovementSuggestion.tsx`
-   - scope: prompt-diff review card with apply/dismiss actions.
-   - acceptance: applying suggestion updates agent definition for next run.
+### F-11 Scheduled & Event Triggers UI
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/agentBuilder/TriggerConfigEditor.tsx` (new)
+  - `frontend/user_interface/src/app/pages/AgentBuilderPage.tsx`
+- acceptance:
+  - conversational/scheduled/on_event trigger editors present
+  - cron preview readable (via `cronstrue`)
+  - connector/event binding serialized correctly into agent schema
 
 ---
 
-## Dependency Order
-1. Phase 0
-2. Phase 1
-3. Phase 2
-4. Phase 3
-5. Phase 4
-6. Phase 5
-7. Phase 6
+## Phase P3 (Ecosystem Completion)
+Goal: finish connector/event ecosystem and quality loops.
+
+### F-06 Marketplace (Connectors)
+- status: `in_progress`
+- files:
+  - `frontend/user_interface/src/app/pages/ConnectorMarketplacePage.tsx`
+  - `frontend/user_interface/src/api/client/marketplace.ts` (new)
+- required APIs:
+  - `GET /api/marketplace/connectors`
+  - `POST /api/marketplace/connectors/{id}/install`
+- acceptance:
+  - connector cards + filters use live connector catalog API
+  - install redirects to connector credential setup
+  - remaining: move from `/api/connectors` fallback to `/api/marketplace/connectors` once backend route exists
+
+### F-07 Webhooks UI
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/connectors/WebhookManager.tsx`
+  - `frontend/user_interface/src/api/client/connectors.ts` (new or extend agent client)
+- required APIs:
+  - `GET /api/connectors/webhooks`
+  - `POST /api/connectors/{id}/webhooks`
+  - `DELETE /api/connectors/webhooks/{id}`
+- acceptance:
+  - list/register/delete fully wired
+  - per-webhook status shown
+
+### F-10 Agent Feedback & Improvement
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/agents/ImprovementSuggestion.tsx`
+  - `frontend/user_interface/src/app/pages/AgentDetailPage.tsx`
+  - `frontend/user_interface/src/api/client/agent.ts`
+- required APIs:
+  - `POST /api/agents/{id}/feedback`
+  - `GET /api/agents/{id}/improvement`
+  - `PUT /api/agents/{id}` (apply suggestion)
+- acceptance:
+  - feedback collection in run history
+  - improvement suggestion loads from backend
+  - apply updates system prompt successfully
+
+### F-12 Memory Config UI
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/components/agentBuilder/MemoryConfigEditor.tsx` (new)
+  - `frontend/user_interface/src/app/pages/AgentBuilderPage.tsx`
+- acceptance:
+  - working memory TTL, episodic controls, semantic controls available
+  - state serializes into agent definition save payload
+
+---
+
+## Phase P4 (Developer Surfaces)
+Goal: finish publisher/developer experience.
+
+### F-13 Developer Portal
+- status: `todo`
+- files:
+  - `frontend/user_interface/src/app/pages/DeveloperPortalPage.tsx`
+  - `frontend/user_interface/src/app/pages/DeveloperDocsPage.tsx`
+- acceptance:
+  - portal has SDK/API key/webhook-signing sections
+  - docs page includes production docs links or embedded content
+
+---
+
+## Client File Plan
+1. Extend: `frontend/user_interface/src/api/client/agent.ts`
+2. New: `frontend/user_interface/src/api/client/marketplace.ts`
+3. New: `frontend/user_interface/src/api/client/observability.ts`
+4. New: `frontend/user_interface/src/api/client/computerUse.ts`
+5. Optional split: `frontend/user_interface/src/api/client/connectors.ts`
 
 ## Exit Criteria
-1. All 32 frontend slices are marked `done` with acceptance evidence.
-2. No unresolved UX blockers remain for connector, agent, marketplace, observability, or workflow surfaces.
-3. Cross-surface navigation and state are consistent across all new routes.
+1. No production page reads from `agentOsData.ts` for runtime data.
+2. All F-01 to F-13 slices are `done`.
+3. All route surfaces run against real backend APIs with error/loading states.
+4. Build and tests pass after each phase, with no theatre layout/design regressions.

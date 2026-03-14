@@ -1,41 +1,291 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+  applyMarketplaceUpdate,
+  checkMarketplaceUpdates,
+  getAgent,
+  listAgentRuns,
+  listAgents,
+  listConnectorCatalog,
+  listConnectorCredentials,
+  listConnectorHealth,
+  type AgentRunRecord,
+  type MarketplaceAgentUpdateRecord,
+} from "../../api/client";
 
-import { AgentRunHistory } from "../components/agents/AgentRunHistory";
+import { AgentRunHistory, type AgentRunHistoryRecord } from "../components/agents/AgentRunHistory";
 import { MemoryExplorer } from "../components/agents/MemoryExplorer";
 import { WorkspaceSidebar } from "../components/workspace/WorkspaceSidebar";
 import { UpdateBanner } from "../components/workspace/UpdateBanner";
-import { AGENT_OS_AGENTS, AGENT_OS_CONNECTORS, AGENT_OS_RUNS, formatRelativeTime } from "./agentOsData";
+
+type WorkspaceAgentCard = {
+  id: string;
+  name: string;
+  description: string;
+  status: "active" | "paused" | "error";
+  lastRun: string;
+  totalRuns: number;
+  runs: AgentRunHistoryRecord[];
+};
+
+type WorkspaceConnectorCard = {
+  id: string;
+  name: string;
+  description: string;
+  authType: string;
+  status: "Connected" | "Not connected" | "Expired";
+};
+
+type ConnectorHealthEntry = {
+  ok: boolean;
+  message: string;
+};
+
+function formatRelativeTime(isoLike: string): string {
+  const date = new Date(isoLike);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+  const diffMs = Date.now() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) {
+    return "just now";
+  }
+  if (diffMins < 60) {
+    return `${diffMins}m ago`;
+  }
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) {
+    return `${diffHours}h ago`;
+  }
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
+function deriveDurationMs(startedAt: string, endedAt?: string | null): number {
+  const start = new Date(startedAt).getTime();
+  const end = endedAt ? new Date(endedAt).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return 0;
+  }
+  return end - start;
+}
+
+function inferAgentStatus(runs: AgentRunHistoryRecord[]): WorkspaceAgentCard["status"] {
+  if (!runs.length) {
+    return "paused";
+  }
+  const latest = String(runs[0]?.status || "").toLowerCase();
+  if (latest === "failed" || latest === "error") {
+    return "error";
+  }
+  return "active";
+}
+
+function normalizeRun(run: AgentRunRecord): AgentRunHistoryRecord {
+  const startedAt = String(run.started_at || new Date().toISOString());
+  const endedAt = run.ended_at || null;
+  return {
+    runId: String(run.run_id || ""),
+    agentId: String(run.agent_id || ""),
+    triggerType: String(run.trigger_type || "manual"),
+    status: String(run.status || "unknown"),
+    durationMs: deriveDurationMs(startedAt, endedAt),
+    llmCostUsd: 0,
+    startedAt,
+    outputSummary: String(run.result_summary || ""),
+    errorMessage: String(run.error || ""),
+  };
+}
+
+function resolveConnectorStatus(
+  health: ConnectorHealthEntry | null,
+  hasCredential: boolean,
+): "Connected" | "Not connected" | "Expired" {
+  const message = String(health?.message || "").toLowerCase();
+  if (health?.ok) {
+    return "Connected";
+  }
+  if (hasCredential && /(expired|refresh|unauthorized|forbidden|invalid)/i.test(message)) {
+    return "Expired";
+  }
+  return "Not connected";
+}
+
+function safeAuthKind(raw: unknown): string {
+  const kind = String(raw || "").trim().toLowerCase();
+  if (!kind) {
+    return "none";
+  }
+  return kind;
+}
 
 export function WorkspacePage() {
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
-  const [episodes, setEpisodes] = useState([
-    { id: "ep_1", summary: "Drafted healthcare proposal for Acme account", createdAt: "2026-03-13T10:42:00Z" },
-    { id: "ep_2", summary: "Summarized pipeline stage transitions for sales standup", createdAt: "2026-03-13T09:15:00Z" },
-  ]);
+  const [updatesLoading, setUpdatesLoading] = useState(false);
+  const [updatesError, setUpdatesError] = useState("");
+  const [updatesPanelOpen, setUpdatesPanelOpen] = useState(false);
+  const [updates, setUpdates] = useState<MarketplaceAgentUpdateRecord[]>([]);
+  const [updatingAgentIds, setUpdatingAgentIds] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [agentCards, setAgentCards] = useState<WorkspaceAgentCard[]>([]);
+  const [allRuns, setAllRuns] = useState<AgentRunHistoryRecord[]>([]);
+  const [connectorCards, setConnectorCards] = useState<WorkspaceConnectorCard[]>([]);
 
-  const updatesAvailable = 3;
-  const activeConnector = AGENT_OS_CONNECTORS.find((connector) => connector.id === selectedConnectorId) || null;
+  const loadUpdates = async () => {
+    setUpdatesLoading(true);
+    setUpdatesError("");
+    try {
+      const rows = await checkMarketplaceUpdates();
+      setUpdates(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      const message = String(error || "Failed to check marketplace updates.");
+      setUpdatesError(message);
+    } finally {
+      setUpdatesLoading(false);
+    }
+  };
+
+  const loadWorkspaceData = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    try {
+      const [agentRows, connectorCatalog, healthRows, credentialRows] = await Promise.all([
+        listAgents(),
+        listConnectorCatalog(),
+        listConnectorHealth(),
+        listConnectorCredentials(),
+      ]);
+
+      const healthMap: Record<string, ConnectorHealthEntry> = {};
+      for (const row of healthRows) {
+        const connectorId = String(row?.connector_id || "").trim();
+        if (!connectorId) {
+          continue;
+        }
+        healthMap[connectorId] = {
+          ok: Boolean(row?.ok),
+          message: String(row?.message || ""),
+        };
+      }
+
+      const credentialSet = new Set(
+        credentialRows
+          .map((row) => String(row?.connector_id || "").trim())
+          .filter(Boolean),
+      );
+
+      const connectors: WorkspaceConnectorCard[] = (connectorCatalog || [])
+        .map((connector) => {
+          const connectorId = String(connector.id || "").trim();
+          return {
+            id: connectorId,
+            name: String(connector.name || connectorId),
+            description: String(connector.description || ""),
+            authType: safeAuthKind(connector.auth?.kind),
+            status: resolveConnectorStatus(healthMap[connectorId] || null, credentialSet.has(connectorId)),
+          };
+        })
+        .filter((connector) => connector.id)
+        .sort((left, right) => left.name.localeCompare(right.name));
+
+      const agentCardRows = await Promise.all(
+        (agentRows || []).map(async (agent) => {
+          const [runsRaw, definition] = await Promise.all([
+            listAgentRuns(agent.agent_id, { limit: 100 }),
+            getAgent(agent.agent_id).catch(() => null),
+          ]);
+          const runs = (runsRaw || [])
+            .map(normalizeRun)
+            .sort(
+              (left, right) =>
+                new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime(),
+            );
+          return {
+            id: agent.agent_id,
+            name: agent.name,
+            description: String(definition?.definition?.description || "Agent definition ready."),
+            status: inferAgentStatus(runs),
+            lastRun: runs[0]?.startedAt || "",
+            totalRuns: runs.length,
+            runs,
+          } satisfies WorkspaceAgentCard;
+        }),
+      );
+
+      const mergedRuns = agentCardRows
+        .flatMap((agent) => agent.runs)
+        .sort(
+          (left, right) =>
+            new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime(),
+        );
+
+      setConnectorCards(connectors);
+      setAgentCards(agentCardRows);
+      setAllRuns(mergedRuns);
+    } catch (error) {
+      setLoadError(`Failed to load workspace data: ${String(error)}`);
+      setConnectorCards([]);
+      setAgentCards([]);
+      setAllRuns([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void Promise.all([loadWorkspaceData(), loadUpdates()]);
+  }, [loadWorkspaceData]);
+
+  const updatesAvailable = updates.length;
+  const activeConnector = connectorCards.find((connector) => connector.id === selectedConnectorId) || null;
   const connectorHint = activeConnector
     ? `${activeConnector.name} selected from workspace sidebar.`
     : "Select a connector from the sidebar for quick context.";
 
   const runsByAgent = useMemo(
     () =>
-      AGENT_OS_AGENTS.map((agent) => ({
+      agentCards.map((agent) => ({
         agent,
-        runs: AGENT_OS_RUNS.filter((run) => run.agentId === agent.id),
+        runs: agent.runs,
       })),
-    [],
+    [agentCards],
   );
+
+  const episodes = useMemo(
+    () =>
+      allRuns
+        .filter((run) => run.outputSummary)
+        .slice(0, 20)
+        .map((run) => ({
+          id: run.runId,
+          summary: run.outputSummary,
+          createdAt: run.startedAt,
+        })),
+    [allRuns],
+  );
+
+  const workingMemory = useMemo(() => {
+    const latest = allRuns[0];
+    if (!latest) {
+      return [];
+    }
+    return [
+      { key: "run_id", value: latest.runId },
+      { key: "agent_id", value: latest.agentId },
+      { key: "trigger_type", value: latest.triggerType },
+      { key: "status", value: latest.status },
+    ];
+  }, [allRuns]);
 
   return (
     <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
       <div className="mx-auto flex max-w-[1360px] gap-4">
         <WorkspaceSidebar
-          connectors={AGENT_OS_CONNECTORS}
-          agents={AGENT_OS_AGENTS}
+          connectors={connectorCards}
+          agents={agentCards.map((agent) => ({ id: agent.id, status: agent.status }))}
           onOpenConnector={setSelectedConnectorId}
         />
 
@@ -49,9 +299,109 @@ export function WorkspacePage() {
           {!bannerDismissed ? (
             <UpdateBanner
               totalUpdates={updatesAvailable}
-              onOpenUpdates={() => toast.message("Update review panel will open in the marketplace phase.")}
+              onOpenUpdates={() => setUpdatesPanelOpen(true)}
               onDismiss={() => setBannerDismissed(true)}
             />
+          ) : null}
+
+          {updatesPanelOpen ? (
+            <section className="rounded-2xl border border-black/[0.08] bg-white p-4 shadow-[0_14px_36px_rgba(15,23,42,0.08)]">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[16px] font-semibold text-[#111827]">Available agent updates</h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void loadUpdates()}
+                    disabled={updatesLoading}
+                    className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#344054] disabled:opacity-50"
+                  >
+                    {updatesLoading ? "Refreshing..." : "Refresh"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUpdatesPanelOpen(false)}
+                    className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#344054]"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              {updatesError ? (
+                <p className="mt-3 rounded-xl border border-[#fca5a5] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#9f1239]">
+                  {updatesError}
+                </p>
+              ) : null}
+              {!updatesError && updates.length === 0 ? (
+                <p className="mt-3 text-[13px] text-[#667085]">Everything is up to date.</p>
+              ) : null}
+              {updates.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {updates.map((update) => {
+                    const isApplying = Boolean(updatingAgentIds[update.agent_id]);
+                    return (
+                      <article
+                        key={`${update.agent_id}:${update.latest_version}`}
+                        className="rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2.5"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-[13px] font-semibold text-[#111827]">{update.agent_id}</p>
+                            <p className="text-[12px] text-[#667085]">
+                              {update.current_version} {"->"} {update.latest_version}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isApplying}
+                            onClick={async () => {
+                              setUpdatingAgentIds((previous) => ({
+                                ...previous,
+                                [update.agent_id]: true,
+                              }));
+                              try {
+                                const result = await applyMarketplaceUpdate(
+                                  update.agent_id,
+                                  update.latest_version,
+                                );
+                                if (!result.success) {
+                                  toast.error(result.error || "Update failed.");
+                                  return;
+                                }
+                                toast.success(`${update.agent_id} updated to ${update.latest_version}.`);
+                                await loadUpdates();
+                              } catch (error) {
+                                toast.error(`Update failed: ${String(error)}`);
+                              } finally {
+                                setUpdatingAgentIds((previous) => ({
+                                  ...previous,
+                                  [update.agent_id]: false,
+                                }));
+                              }
+                            }}
+                            className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                          >
+                            {isApplying ? "Updating..." : "Update"}
+                          </button>
+                        </div>
+                        <p className="mt-1 text-[12px] text-[#475467]">{update.changelog}</p>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {loadError ? (
+            <section className="rounded-2xl border border-[#fca5a5] bg-[#fff1f2] p-4 text-[13px] text-[#9f1239]">
+              {loadError}
+            </section>
+          ) : null}
+
+          {loading ? (
+            <section className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">
+              Loading agents and run history...
+            </section>
           ) : null}
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -65,7 +415,7 @@ export function WorkspacePage() {
                     <h2 className="text-[18px] font-semibold text-[#111827]">{agent.name}</h2>
                     <p className="mt-1 text-[13px] text-[#667085]">{agent.description}</p>
                     <p className="mt-1 text-[12px] text-[#98a2b3]">
-                      Last run {formatRelativeTime(agent.lastRun)} · {agent.totalRuns} total runs
+                      Last run {agent.lastRun ? formatRelativeTime(agent.lastRun) : "never"} · {agent.totalRuns} total runs
                     </p>
                   </div>
                   <span
@@ -81,26 +431,20 @@ export function WorkspacePage() {
                   </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => toast.success(`Started run for ${agent.name}.`)}
-                    className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white"
-                  >
-                    Run manually
-                  </button>
                   <a
                     href={`/agents/${encodeURIComponent(agent.id)}`}
-                    className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#344054]"
+                    className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white"
                   >
-                    Edit
+                    Open agent
                   </a>
                 </div>
                 <div className="mt-3 space-y-1 text-[12px] text-[#667085]">
                   {runs.slice(0, 2).map((run) => (
-                    <p key={run.id}>
-                      {run.id}: {run.status} · ${(run.llmCostUsd || 0).toFixed(2)}
+                    <p key={run.runId}>
+                      {run.runId}: {run.status} · ${(run.llmCostUsd || 0).toFixed(2)}
                     </p>
                   ))}
+                  {runs.length === 0 ? <p>No runs yet.</p> : null}
                 </div>
               </article>
             ))}
@@ -108,14 +452,12 @@ export function WorkspacePage() {
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <AgentRunHistory
-              runs={AGENT_OS_RUNS}
+              runs={allRuns}
               onOpenReplay={(runId) => toast.message(`Opening theatre replay for ${runId}.`)}
             />
             <MemoryExplorer
               episodes={episodes}
-              onDeleteEpisode={(episodeId) =>
-                setEpisodes((previous) => previous.filter((episode) => episode.id !== episodeId))
-              }
+              workingMemory={workingMemory}
             />
           </section>
         </div>
@@ -123,4 +465,3 @@ export function WorkspacePage() {
     </div>
   );
 }
-

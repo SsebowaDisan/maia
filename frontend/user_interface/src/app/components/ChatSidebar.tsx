@@ -27,6 +27,7 @@ interface SidebarProject {
 }
 
 interface ChatSidebarProps {
+  currentPath: string;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   conversations: ConversationSummary[];
@@ -46,10 +47,12 @@ interface ChatSidebarProps {
   onRenameConversation: (conversationId: string, name: string) => Promise<void>;
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onOpenWorkspaceTab: (tab: "Files" | "Resources" | "Settings" | "Help") => void;
+  onNavigateAppRoute: (path: string) => void;
   width?: number;
 }
 
 export function ChatSidebar({
+  currentPath,
   isCollapsed,
   onToggleCollapse,
   conversations,
@@ -69,6 +72,7 @@ export function ChatSidebar({
   onRenameConversation,
   onDeleteConversation,
   onOpenWorkspaceTab,
+  onNavigateAppRoute,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -338,6 +342,7 @@ export function ChatSidebar({
       </div>
 
       <ProjectsPane
+        currentPath={currentPath}
         isAddingProject={isAddingProject}
         projectDraft={projectDraft}
         editingProjectId={editingProjectId}
@@ -375,6 +380,7 @@ export function ChatSidebar({
         onSetMovingConversationId={setMovingConversationId}
         onMoveConversationToProject={onMoveConversationToProject}
         onRequestDeleteConversation={requestDeleteConversation}
+        onNavigateAppRoute={onNavigateAppRoute}
       />
 
       <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7] space-y-2.5">

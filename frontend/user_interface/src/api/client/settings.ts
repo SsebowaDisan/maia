@@ -5,4 +5,12 @@ function getSettings() {
   return request<SettingsResponse>("/api/settings");
 }
 
-export { getSettings };
+function patchSettings(values: Record<string, unknown>) {
+  return request<SettingsResponse>("/api/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+}
+
+export { getSettings, patchSettings };

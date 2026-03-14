@@ -41,6 +41,7 @@ def _allowed_keys(context: ApiContext) -> set[str]:
             "agent.llamacpp.model_dir",
             "agent.llamacpp.active_model",
             "agent.llamacpp.active_embedding",
+            "agent.computer_use_model",
         }
     )
     return base
@@ -80,6 +81,7 @@ def load_user_settings(context: ApiContext, user_id: str) -> dict[str, Any]:
     values.setdefault("agent.llamacpp.model_dir", "")
     values.setdefault("agent.llamacpp.active_model", "")
     values.setdefault("agent.llamacpp.active_embedding", "")
+    values.setdefault("agent.computer_use_model", "")
     return values
 
 

@@ -28,6 +28,10 @@ type AgentDesktopSceneProps = {
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl?: string;
   sceneSpreadsheetUrl?: string;
+  computerUseSessionId?: string;
+  computerUseTask?: string;
+  computerUseModel?: string;
+  computerUseMaxIterations?: number | null;
   onSnapshotError?: () => void;
 };
 

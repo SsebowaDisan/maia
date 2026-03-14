@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { startComputerUseSession } from "../../../api/client";
 import { renderRichText } from "../../utils/richText";
 import { emitTheatreMetric } from "../agentActivityPanel/theatreTelemetry";
 import {
@@ -70,6 +71,10 @@ function AgentDesktopScene({
   activeSceneData,
   sceneDocumentUrl,
   sceneSpreadsheetUrl,
+  computerUseSessionId: computerUseSessionIdProp = "",
+  computerUseTask: computerUseTaskProp = "",
+  computerUseModel: computerUseModelProp = "",
+  computerUseMaxIterations: computerUseMaxIterationsProp = null,
   onSnapshotError,
 }: AgentDesktopSceneProps) {
   const highlightRegions = parseHighlightRegions(activeSceneData);
@@ -110,6 +115,10 @@ function AgentDesktopScene({
     activeSceneData["action_target"] && typeof activeSceneData["action_target"] === "object"
       ? (activeSceneData["action_target"] as Record<string, unknown>)
       : {};
+  const actionMetadata =
+    activeSceneData["action_metadata"] && typeof activeSceneData["action_metadata"] === "object"
+      ? (activeSceneData["action_metadata"] as Record<string, unknown>)
+      : {};
   const actionTargetLabel =
     compactValue(actionTarget["field_label"]) ||
     compactValue(actionTarget["field"]) ||
@@ -135,6 +144,133 @@ function AgentDesktopScene({
     compactValue(compareMode["region_b"]);
   const compareVerdict =
     compactValue(activeSceneData["compare_verdict"]) || compactValue(compareMode["verdict"]);
+  const [fallbackComputerUseSessionId, setFallbackComputerUseSessionId] = useState("");
+  const [fallbackComputerUseTask, setFallbackComputerUseTask] = useState("");
+  const [fallbackComputerUseModel, setFallbackComputerUseModel] = useState("");
+  const [fallbackComputerUseMaxIterations, setFallbackComputerUseMaxIterations] = useState<number | null>(null);
+  const computerUseBootstrapRef = useRef("");
+  const computerUseSessionId =
+    compactValue(computerUseSessionIdProp) ||
+    compactValue(activeSceneData["computer_use_session_id"]) ||
+    compactValue(actionMetadata["computer_use_session_id"]) ||
+    compactValue(actionTarget["computer_use_session_id"]) ||
+    compactValue(fallbackComputerUseSessionId);
+  const computerUseTask =
+    compactValue(computerUseTaskProp) ||
+    compactValue(activeSceneData["computer_use_task"]) ||
+    compactValue(actionMetadata["computer_use_task"]) ||
+    compactValue(actionTarget["computer_use_task"]) ||
+    compactValue(fallbackComputerUseTask) ||
+    (computerUseSessionId
+      ? compactValue(activeDetail || sceneText || activeTitle)
+      : "");
+  const computerUseModel =
+    compactValue(computerUseModelProp) ||
+    compactValue(activeSceneData["computer_use_model"]) ||
+    compactValue(actionMetadata["computer_use_model"]) ||
+    compactValue(actionTarget["computer_use_model"]) ||
+    compactValue(fallbackComputerUseModel);
+  const computerUseMaxIterationsRaw = Number(
+    computerUseMaxIterationsProp ??
+      activeSceneData["computer_use_max_iterations"] ??
+      actionMetadata["computer_use_max_iterations"] ??
+      actionTarget["computer_use_max_iterations"] ??
+      fallbackComputerUseMaxIterations,
+  );
+  const computerUseMaxIterations =
+    Number.isFinite(computerUseMaxIterationsRaw) && computerUseMaxIterationsRaw > 0
+      ? Math.round(computerUseMaxIterationsRaw)
+      : null;
+  useEffect(() => {
+    if (computerUseSessionId) {
+      return;
+    }
+    const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
+    const toolHintCandidates = [
+      activeSceneData["tool_id"],
+      activeSceneData["tool_name"],
+      actionMetadata["tool_id"],
+      actionMetadata["tool_name"],
+      actionTarget["tool_id"],
+      actionTarget["tool_name"],
+    ]
+      .map((value) => compactValue(value).toLowerCase())
+      .filter(Boolean);
+    const isComputerUseToolEvent =
+      normalizedEventType.includes("computer_use") ||
+      toolHintCandidates.some((value) => value.includes("computer_use"));
+    if (!isComputerUseToolEvent) {
+      return;
+    }
+    const startUrl =
+      compactValue(activeSceneData["computer_use_start_url"]) ||
+      compactValue(actionMetadata["start_url"]) ||
+      compactValue(activeSceneData["start_url"]) ||
+      compactValue(activeSceneData["url"]) ||
+      compactValue(activeSceneData["source_url"]) ||
+      compactValue(browserUrl);
+    if (!startUrl || (!startUrl.startsWith("http://") && !startUrl.startsWith("https://"))) {
+      return;
+    }
+    const bootstrapTask =
+      compactValue(computerUseTaskProp) ||
+      compactValue(activeSceneData["computer_use_task"]) ||
+      compactValue(activeDetail || sceneText || activeTitle) ||
+      "Review this page and continue the requested task.";
+    const bootstrapKey = [
+      runId || "run",
+      String(activeStepIndex ?? "step"),
+      startUrl,
+      bootstrapTask,
+    ].join("::");
+    if (computerUseBootstrapRef.current === bootstrapKey) {
+      return;
+    }
+    computerUseBootstrapRef.current = bootstrapKey;
+    let disposed = false;
+    void startComputerUseSession({ url: startUrl })
+      .then((session) => {
+        if (disposed) {
+          return;
+        }
+        const sessionId = String(session?.session_id || "").trim();
+        if (!sessionId) {
+          return;
+        }
+        setFallbackComputerUseSessionId(sessionId);
+        setFallbackComputerUseTask(bootstrapTask);
+        setFallbackComputerUseModel(
+          compactValue(computerUseModelProp) ||
+            compactValue(activeSceneData["computer_use_model"]) ||
+            "",
+        );
+        setFallbackComputerUseMaxIterations(computerUseMaxIterations);
+      })
+      .catch(() => {
+        if (disposed) {
+          return;
+        }
+        computerUseBootstrapRef.current = "";
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    activeDetail,
+    activeEventType,
+    activeSceneData,
+    activeStepIndex,
+    activeTitle,
+    actionMetadata,
+    actionTarget,
+    browserUrl,
+    computerUseMaxIterations,
+    computerUseModelProp,
+    computerUseSessionId,
+    computerUseTaskProp,
+    runId,
+    sceneText,
+  ]);
   const verifierConflict = Boolean(activeSceneData["verifier_conflict"]);
   const verifierConflictReason = compactValue(activeSceneData["verifier_conflict_reason"]);
   const verifierRecheckRequired = Boolean(activeSceneData["verifier_recheck_required"]);
@@ -472,6 +608,17 @@ function AgentDesktopScene({
         narration={compactValue(activeSceneData["narration"]) || null}
         roadmapSteps={roadmapSteps}
         roadmapActiveIndex={roadmapActiveIdx}
+        computerUseSessionId={computerUseSessionId || undefined}
+        computerUseTask={computerUseTask || undefined}
+        computerUseModel={computerUseModel || undefined}
+        computerUseMaxIterations={computerUseMaxIterations}
+        onComputerUseCancelled={() => {
+          setFallbackComputerUseSessionId("");
+          setFallbackComputerUseTask("");
+          setFallbackComputerUseModel("");
+          setFallbackComputerUseMaxIterations(null);
+          computerUseBootstrapRef.current = "";
+        }}
       />
     );
   }

@@ -6,8 +6,11 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  LayoutGrid,
+  LineChart,
   PlugZap,
   PencilLine,
+  Route,
   Trash2,
   X,
 } from "lucide-react";
@@ -27,6 +30,7 @@ type SidebarProject = {
 };
 
 type ProjectsPaneProps = {
+  currentPath: string;
   isAddingProject: boolean;
   projectDraft: string;
   editingProjectId: string | null;
@@ -64,9 +68,11 @@ type ProjectsPaneProps = {
   onSetMovingConversationId: (value: string | null) => void;
   onMoveConversationToProject: (conversationId: string, projectId: string) => void;
   onRequestDeleteConversation: (conversation: ConversationSummary) => void;
+  onNavigateAppRoute: (path: string) => void;
 };
 
 export function ProjectsPane({
+  currentPath,
   isAddingProject,
   projectDraft,
   editingProjectId,
@@ -104,25 +110,39 @@ export function ProjectsPane({
   onSetMovingConversationId,
   onMoveConversationToProject,
   onRequestDeleteConversation,
+  onNavigateAppRoute,
 }: ProjectsPaneProps) {
+  const quickLinks = [
+    { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
+    { id: "agents", label: "Agents", icon: Bot, path: "/workspace" },
+    { id: "marketplace", label: "Marketplace", icon: LayoutGrid, path: "/marketplace" },
+    { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
+    { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
+  ] as const;
+  const normalizedPath = String(currentPath || "/").toLowerCase();
+
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3">
       <div className="space-y-1">
         <div className="mb-2">
-          <button
-            type="button"
-            className="w-full h-10 px-2.5 rounded-xl text-left text-[15px] text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
-          >
-            <PlugZap className="w-4.5 h-4.5 text-[#1d1d1f]" />
-            <span>Connectors</span>
-          </button>
-          <button
-            type="button"
-            className="w-full h-10 px-2.5 rounded-xl text-left text-[15px] text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
-          >
-            <Bot className="w-4.5 h-4.5 text-[#1d1d1f]" />
-            <span>Agents</span>
-          </button>
+          {quickLinks.map((entry) => {
+            const active =
+              normalizedPath === entry.path ||
+              (entry.path !== "/" && normalizedPath.startsWith(`${entry.path}/`));
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => onNavigateAppRoute(entry.path)}
+                className={`w-full h-9 px-2.5 rounded-xl text-left text-[14px] font-normal transition-colors inline-flex items-center gap-2 ${
+                  active ? "bg-[#e7e7ea] text-[#0a0a0a]" : "text-[#0a0a0a] hover:bg-[#ececef]"
+                }`}
+              >
+                <entry.icon className="h-4 w-4 text-[#1d1d1f]" />
+                <span>{entry.label}</span>
+              </button>
+            );
+          })}
           <div className="mx-2 mt-3 h-px bg-black/[0.08]" />
         </div>
 
@@ -150,9 +170,9 @@ export function ProjectsPane({
         ) : (
           <button
             onClick={() => onSetIsAddingProject(true)}
-            className="w-full h-10 px-2.5 rounded-xl text-left text-[15px] text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
+            className="w-full h-9 px-2.5 rounded-xl text-left text-[14px] font-normal text-[#0a0a0a] hover:bg-[#ececef] transition-colors inline-flex items-center gap-2"
           >
-            <FolderPlus className="w-4.5 h-4.5 text-[#1d1d1f]" />
+            <FolderPlus className="h-4 w-4 text-[#1d1d1f]" />
             <span>New project</span>
           </button>
         )}
@@ -199,7 +219,7 @@ export function ProjectsPane({
                 </div>
               ) : (
                 <div
-                  className={`group h-10 px-2.5 rounded-xl inline-flex items-center gap-2 w-full ${isActive ? "bg-[#e7e7ea]" : "hover:bg-[#ececef]"}`}
+                  className={`group h-9 px-2.5 rounded-xl inline-flex items-center gap-2 w-full ${isActive ? "bg-[#e7e7ea]" : "hover:bg-[#ececef]"}`}
                 >
                   <button
                     onClick={() => onHandleProjectClick(project.id)}
@@ -211,11 +231,11 @@ export function ProjectsPane({
                     className="flex-1 min-w-0 inline-flex items-center gap-2 text-left"
                   >
                     {isProjectOpen ? (
-                      <FolderOpen className="w-4.5 h-4.5 text-[#1d1d1f] shrink-0" />
+                      <FolderOpen className="h-4 w-4 text-[#1d1d1f] shrink-0" />
                     ) : (
-                      <Folder className="w-4.5 h-4.5 text-[#1d1d1f] shrink-0" />
+                      <Folder className="h-4 w-4 text-[#1d1d1f] shrink-0" />
                     )}
-                    <span className="text-[15px] text-[#1d1d1f] truncate">{project.name}</span>
+                    <span className="truncate text-[14px] font-normal text-[#1d1d1f]">{project.name}</span>
                   </button>
                   <button
                     onClick={(event) => {

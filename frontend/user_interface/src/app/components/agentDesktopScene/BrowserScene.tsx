@@ -1,4 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  cancelComputerUseSession,
+  streamComputerUseSession,
+  type ComputerUseStreamEvent,
+} from "../../../api/client";
 import { ClickRipple } from "./ClickRipple";
 import type { ClickRippleEntry } from "./ClickRipple";
 import { GhostCursor } from "./GhostCursor";
@@ -65,6 +70,11 @@ type BrowserSceneProps = {
   narration?: string | null;
   roadmapSteps?: Array<{ toolId: string; title: string; whyThisStep: string }>;
   roadmapActiveIndex?: number;
+  computerUseSessionId?: string;
+  computerUseTask?: string;
+  computerUseModel?: string;
+  computerUseMaxIterations?: number | null;
+  onComputerUseCancelled?: () => void;
 };
 
 function BrowserScene({
@@ -113,6 +123,11 @@ function BrowserScene({
   narration = null,
   roadmapSteps = [],
   roadmapActiveIndex = -1,
+  computerUseSessionId = "",
+  computerUseTask = "",
+  computerUseModel = "",
+  computerUseMaxIterations = null,
+  onComputerUseCancelled,
 }: BrowserSceneProps) {
   const normalizedAction = String(action || "").trim().toLowerCase();
   const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
@@ -120,16 +135,189 @@ function BrowserScene({
   const actionIndicatesScroll = normalizedAction === "scroll" || normalizedAction.includes("scroll");
   const eventIndicatesScroll = normalizedEventType.includes("scroll");
   const hasDirectionalScroll = normalizedScrollDirection === "up" || normalizedScrollDirection === "down";
+  const [computerUseScreenshotUrl, setComputerUseScreenshotUrl] = useState("");
+  const [computerUseNarration, setComputerUseNarration] = useState("");
+  const [computerUseStreamStatus, setComputerUseStreamStatus] = useState<
+    "idle" | "streaming" | "done" | "max_iterations" | "error"
+  >("idle");
+  const [computerUseIteration, setComputerUseIteration] = useState<number | null>(null);
+  const [computerUseError, setComputerUseError] = useState("");
+  const [computerUseStreamUrl, setComputerUseStreamUrl] = useState("");
+  const [computerUseCancelling, setComputerUseCancelling] = useState(false);
+  const computerUseCleanupRef = useRef<(() => void) | null>(null);
+  const computerUseStreamKeyRef = useRef("");
+  useEffect(
+    () => () => {
+      if (computerUseCleanupRef.current) {
+        computerUseCleanupRef.current();
+        computerUseCleanupRef.current = null;
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    const sessionId = String(computerUseSessionId || "").trim();
+    const task = String(computerUseTask || "").trim();
+    if (!sessionId || !task) {
+      if (computerUseCleanupRef.current) {
+        computerUseCleanupRef.current();
+        computerUseCleanupRef.current = null;
+      }
+      computerUseStreamKeyRef.current = "";
+      setComputerUseScreenshotUrl("");
+      setComputerUseNarration("");
+      setComputerUseStreamStatus("idle");
+      setComputerUseIteration(null);
+      setComputerUseError("");
+      setComputerUseStreamUrl("");
+      return;
+    }
+    const streamKey = [
+      sessionId,
+      task,
+      String(computerUseModel || ""),
+      String(computerUseMaxIterations ?? ""),
+    ].join("::");
+    if (computerUseStreamKeyRef.current === streamKey) {
+      return;
+    }
+    if (computerUseCleanupRef.current) {
+      computerUseCleanupRef.current();
+      computerUseCleanupRef.current = null;
+    }
+    computerUseStreamKeyRef.current = streamKey;
+    setComputerUseScreenshotUrl("");
+    setComputerUseNarration("");
+    setComputerUseStreamStatus("streaming");
+    setComputerUseIteration(null);
+    setComputerUseError("");
+    setComputerUseStreamUrl("");
+    computerUseCleanupRef.current = streamComputerUseSession(sessionId, {
+      task,
+      model: String(computerUseModel || "").trim() || undefined,
+      maxIterations:
+        typeof computerUseMaxIterations === "number" && Number.isFinite(computerUseMaxIterations)
+          ? computerUseMaxIterations
+          : undefined,
+      onEvent: (event: ComputerUseStreamEvent) => {
+        const eventType = String(event.event_type || "").trim().toLowerCase();
+        const iterationRaw = Number(event.iteration ?? Number.NaN);
+        if (Number.isFinite(iterationRaw) && iterationRaw > 0) {
+          setComputerUseIteration(Math.round(iterationRaw));
+        }
+        if (eventType === "screenshot") {
+          const screenshotB64 = String(event.screenshot_b64 || "").trim();
+          if (screenshotB64) {
+            setComputerUseScreenshotUrl(`data:image/png;base64,${screenshotB64}`);
+          }
+          const streamUrl = String(event.url || "").trim();
+          if (streamUrl) {
+            setComputerUseStreamUrl(streamUrl);
+          }
+          return;
+        }
+        if (eventType === "text") {
+          const nextText = String(event.text || "").trim();
+          if (!nextText) {
+            return;
+          }
+          setComputerUseNarration((previous) => {
+            const combined = previous ? `${previous}\n${nextText}` : nextText;
+            return combined.length > 480 ? combined.slice(combined.length - 480) : combined;
+          });
+          return;
+        }
+        if (eventType === "action") {
+          const actionLabel = String(event.action || "").trim();
+          if (actionLabel) {
+            setComputerUseNarration(`Running action: ${actionLabel}`);
+          }
+          return;
+        }
+        if (eventType === "done") {
+          setComputerUseStreamStatus("done");
+          const streamUrl = String(event.url || "").trim();
+          if (streamUrl) {
+            setComputerUseStreamUrl(streamUrl);
+          }
+          return;
+        }
+        if (eventType === "max_iterations") {
+          setComputerUseStreamStatus("max_iterations");
+          return;
+        }
+        if (eventType === "error") {
+          setComputerUseStreamStatus("error");
+          setComputerUseError(String(event.detail || "Computer Use stream failed.").trim());
+        }
+      },
+      onDone: () => {
+        setComputerUseStreamStatus((previous) => (previous === "streaming" ? "done" : previous));
+      },
+      onError: (error) => {
+        setComputerUseStreamStatus("error");
+        setComputerUseError(String(error?.message || "Computer Use stream disconnected."));
+      },
+    });
+    return () => {
+      if (computerUseCleanupRef.current) {
+        computerUseCleanupRef.current();
+        computerUseCleanupRef.current = null;
+      }
+    };
+  }, [computerUseMaxIterations, computerUseModel, computerUseSessionId, computerUseTask]);
+  const streamStatusChip =
+    computerUseStreamStatus === "streaming"
+      ? `Computer Use${computerUseIteration ? ` · Step ${computerUseIteration}` : ""}`
+      : computerUseStreamStatus === "done"
+        ? "Computer Use done"
+        : computerUseStreamStatus === "max_iterations"
+          ? "Computer Use limit reached"
+          : computerUseStreamStatus === "error"
+            ? "Computer Use error"
+            : "";
+  const sceneSnapshotUrl = computerUseScreenshotUrl || snapshotUrl;
+  const sceneNarration = computerUseNarration || narration;
+  const handleCancelComputerUse = async () => {
+    const sessionId = String(computerUseSessionId || "").trim();
+    if (!sessionId || computerUseCancelling) {
+      return;
+    }
+    setComputerUseCancelling(true);
+    try {
+      await cancelComputerUseSession(sessionId);
+      if (computerUseCleanupRef.current) {
+        computerUseCleanupRef.current();
+        computerUseCleanupRef.current = null;
+      }
+      computerUseStreamKeyRef.current = "";
+      setComputerUseStreamStatus("done");
+      setComputerUseNarration((previous) =>
+        previous || "Computer Use session stopped.",
+      );
+      onComputerUseCancelled?.();
+    } catch (error) {
+      const message = String(
+        (error as { message?: string } | undefined)?.message || error || "Failed to stop session.",
+      ).trim();
+      setComputerUseStreamStatus("error");
+      setComputerUseError(message);
+    } finally {
+      setComputerUseCancelling(false);
+    }
+  };
   const [snapshotErrored, setSnapshotErrored] = useState(false);
   const statusChipLabel = blockedSignal
     ? "Needs attention"
+      : streamStatusChip
+        ? streamStatusChip
       : readingMode
         ? "Reading"
         : action === "navigate"
           ? "Navigating"
         : actionIndicatesScroll
           ? "Scanning"
-          : action === "extract"
+        : action === "extract"
         ? "Extracting"
         : "";
   const { activePageUrl } = useBrowserPageQueue({
@@ -137,10 +325,11 @@ function BrowserScene({
     openedPages,
     pageIndex,
   });
+  const resolvedPageUrl = computerUseStreamUrl || activePageUrl;
   const previewHint = (findQuery || actionTargetLabel || "").slice(0, 180);
   const shouldAnnotatePreview = showFindOverlay || normalizedAction === "find";
   const proxyPreviewUrl = useMemo(() => {
-    const source = String(activePageUrl || "").trim();
+    const source = String(resolvedPageUrl || "").trim();
     if (!source || (!source.startsWith("http://") && !source.startsWith("https://"))) {
       return "";
     }
@@ -154,7 +343,7 @@ function BrowserScene({
     params.set("viewport", "desktop");
     params.set("highlight_strategy", "heuristic");
     return `/api/web/preview?${params.toString()}`;
-  }, [activePageUrl, previewHint, shouldAnnotatePreview]);
+  }, [previewHint, resolvedPageUrl, shouldAnnotatePreview]);
   const shouldUseProxyPreview =
     Boolean(proxyPreviewUrl) &&
     (blockedSignal ||
@@ -162,31 +351,31 @@ function BrowserScene({
       !canRenderLiveUrl);
   const preferPreviewProxy =
     shouldUseProxyPreview &&
-    (!snapshotUrl || snapshotErrored);
+    (!sceneSnapshotUrl || snapshotErrored);
   const [snapshotReady, setSnapshotReady] = useState(false);
   const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
   const [proxyLoaded, setProxyLoaded] = useState(false);
   const [frameScrollPercent, setFrameScrollPercent] = useState<number | null>(null);
-  const prevSnapshotUrlRef = useRef<string>(snapshotUrl);
+  const prevSnapshotUrlRef = useRef<string>(sceneSnapshotUrl);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const frameScrollObserverCleanupRef = useRef<(() => void) | null>(null);
-  const showSnapshotPrimary = Boolean(snapshotUrl) && !snapshotErrored && !preferPreviewProxy;
+  const showSnapshotPrimary = Boolean(sceneSnapshotUrl) && !snapshotErrored && !preferPreviewProxy;
   const frameUrl = useMemo(() => {
     if (shouldUseProxyPreview && proxyPreviewUrl) {
       return proxyPreviewUrl;
     }
-    return activePageUrl;
-  }, [activePageUrl, proxyPreviewUrl, shouldUseProxyPreview]);
+    return resolvedPageUrl;
+  }, [proxyPreviewUrl, resolvedPageUrl, shouldUseProxyPreview]);
   const showFramePreview = Boolean(frameUrl);
   useEffect(() => {
-    if (!snapshotUrl || snapshotUrl === prevSnapshotUrlRef.current) return;
+    if (!sceneSnapshotUrl || sceneSnapshotUrl === prevSnapshotUrlRef.current) return;
     if (prevSnapshotUrlRef.current) setCrossFadeUrl(prevSnapshotUrlRef.current);
     setSnapshotReady(false);
     setSnapshotErrored(false);
-  }, [snapshotUrl]);
+  }, [sceneSnapshotUrl]);
   const handleSnapshotLoad = () => {
     setSnapshotReady(true);
-    prevSnapshotUrlRef.current = snapshotUrl;
+    prevSnapshotUrlRef.current = sceneSnapshotUrl;
     setTimeout(() => setCrossFadeUrl(""), 400);
   };
   useEffect(() => {
@@ -216,13 +405,15 @@ function BrowserScene({
       return;
     }
     try {
-      const frameWindow = frame.contentWindow;
-      const frameDocument = frameWindow?.document;
-      if (!frameWindow || !frameDocument) {
-        return;
-      }
       const computePercent = () => {
         try {
+          const liveFrame = frameRef.current;
+          const frameWindow = liveFrame?.contentWindow;
+          const frameDocument = frameWindow?.document;
+          if (!frameWindow || !frameDocument) {
+            setFrameScrollPercent(null);
+            return;
+          }
           const doc = frameDocument.documentElement;
           const body = frameDocument.body;
           const scrollTop = Number(frameWindow.scrollY || doc?.scrollTop || body?.scrollTop || 0);
@@ -239,12 +430,24 @@ function BrowserScene({
           setFrameScrollPercent(null);
         }
       };
+      const frameWindow = frame.contentWindow;
+      if (!frameWindow) {
+        return;
+      }
       frameWindow.addEventListener("scroll", computePercent, { passive: true });
+      frameWindow.addEventListener("hashchange", computePercent);
+      frameWindow.addEventListener("popstate", computePercent);
+      frame.addEventListener("load", computePercent);
       computePercent();
       const syncTimer = window.setTimeout(computePercent, 150);
+      const syncInterval = window.setInterval(computePercent, 900);
       frameScrollObserverCleanupRef.current = () => {
         frameWindow.removeEventListener("scroll", computePercent);
+        frameWindow.removeEventListener("hashchange", computePercent);
+        frameWindow.removeEventListener("popstate", computePercent);
+        frame.removeEventListener("load", computePercent);
         window.clearTimeout(syncTimer);
+        window.clearInterval(syncInterval);
       };
     } catch {
       setFrameScrollPercent(null);
@@ -288,7 +491,7 @@ function BrowserScene({
     }
   };
   const { navigationHint, effectiveScrollPercent, handleScrollSelect } = useBrowserSceneScrollState({
-    activePageUrl,
+    activePageUrl: resolvedPageUrl,
     actionIndicatesScroll,
     eventIndicatesScroll,
     hasDirectionalScroll,
@@ -323,14 +526,31 @@ function BrowserScene({
         <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
         <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
         <div className="ml-2 flex-1 truncate rounded-full border border-black/[0.08] bg-[#f7f8fb] px-3 py-1 text-[11px] text-[#2b3140]">
-          {activePageUrl || "Searching the web and opening result pages..."}
+          {resolvedPageUrl || "Searching the web and opening result pages..."}
         </div>
         {statusChipLabel ? (
           <span className="rounded-full border border-black/[0.1] bg-[#f7f8fb] px-2 py-0.5 text-[10px] text-[#4a4f5c]">
             {statusChipLabel}
           </span>
         ) : null}
+        {computerUseSessionId ? (
+          <button
+            type="button"
+            onClick={() => {
+              void handleCancelComputerUse();
+            }}
+            disabled={computerUseCancelling}
+            className="rounded-full border border-[#fca5a5]/70 bg-[#fff5f5] px-2.5 py-0.5 text-[10px] font-semibold text-[#b42318] transition hover:bg-[#ffeaea] disabled:opacity-60"
+          >
+            {computerUseCancelling ? "Stopping..." : "Stop"}
+          </button>
+        ) : null}
       </div>
+      {computerUseError ? (
+        <div className="pointer-events-none absolute left-3 top-12 z-30 rounded-full border border-[#7f1d1d]/40 bg-[#7f1d1d]/88 px-2.5 py-1 text-[10px] text-white/95 backdrop-blur-sm">
+          {computerUseError}
+        </div>
+      ) : null}
       {navigationHint ? (
         <div className="pointer-events-none absolute right-3 top-12 z-30 rounded-full border border-white/20 bg-black/58 px-2.5 py-1 text-[10px] text-white/90 backdrop-blur-sm">
           {navigationHint}
@@ -363,7 +583,7 @@ function BrowserScene({
             />
           ) : null}
           <img
-            src={snapshotUrl}
+            src={sceneSnapshotUrl}
             alt="Live browser capture"
             className={`absolute inset-0 h-full w-full object-contain object-top bg-transparent ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
@@ -420,7 +640,7 @@ function BrowserScene({
               <ClickRipple ripples={clickRipples} />
             </>
           ) : null}
-          <ThoughtBubble text={narration} />
+          <ThoughtBubble text={sceneNarration} />
         </div>
       ) : showFramePreview ? (
         <div className="relative flex-1 overflow-hidden bg-[#f5f7fb]">
@@ -435,7 +655,7 @@ function BrowserScene({
           ) : null}
           <iframe
             ref={frameRef}
-            src={frameUrl || activePageUrl}
+            src={frameUrl || resolvedPageUrl}
             title="Live website preview"
             className="absolute inset-0 h-full w-full border-0"
             style={{
@@ -492,7 +712,7 @@ function BrowserScene({
             advisory={cursorSource === "suggested"}
           />
           <ClickRipple ripples={clickRipples} />
-          <ThoughtBubble text={narration} />
+          <ThoughtBubble text={sceneNarration} />
         </div>
       ) : (
         <div className="relative flex-1 space-y-3 p-4">
@@ -539,9 +759,9 @@ function BrowserScene({
             </div>
           ) : null}
           {scrollControls}
-          {snapshotUrl && snapshotReady ? (
+          {sceneSnapshotUrl && snapshotReady ? (
             <img
-              src={snapshotUrl}
+              src={sceneSnapshotUrl}
               alt="Browser capture"
               className="absolute bottom-3 right-3 h-24 w-36 rounded-lg border border-black/[0.08] object-contain bg-[#f5f7fb]"
               onError={() => { setSnapshotReady(false); onSnapshotError?.(); }}

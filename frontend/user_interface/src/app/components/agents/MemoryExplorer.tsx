@@ -8,21 +8,22 @@ type MemoryEpisode = {
 
 type MemoryExplorerProps = {
   episodes: MemoryEpisode[];
+  workingMemory?: Array<{ key: string; value: string }>;
   onDeleteEpisode?: (episodeId: string) => void;
 };
 
 type MemoryTab = "episodes" | "knowledge" | "working";
 
-export function MemoryExplorer({ episodes, onDeleteEpisode }: MemoryExplorerProps) {
+export function MemoryExplorer({ episodes, workingMemory = [], onDeleteEpisode }: MemoryExplorerProps) {
   const [activeTab, setActiveTab] = useState<MemoryTab>("episodes");
   const [query, setQuery] = useState("open opportunities in healthcare");
   const simulatedKnowledge = useMemo(
-    () => [
-      `Top documents matching "${query}"`,
-      "Quarterly pipeline report - healthcare segment",
-      "Retention analysis notes - enterprise accounts",
-    ],
-    [query],
+    () =>
+      episodes
+        .filter((episode) => episode.summary.toLowerCase().includes(query.trim().toLowerCase()))
+        .slice(0, 5)
+        .map((episode) => episode.summary),
+    [episodes, query],
   );
 
   return (
@@ -44,6 +45,11 @@ export function MemoryExplorer({ episodes, onDeleteEpisode }: MemoryExplorerProp
 
       {activeTab === "episodes" ? (
         <div className="space-y-2">
+          {episodes.length === 0 ? (
+            <p className="rounded-xl border border-black/[0.06] bg-[#fcfcfd] p-3 text-[12px] text-[#667085]">
+              No episodic memory entries yet.
+            </p>
+          ) : null}
           {episodes.map((episode) => (
             <div key={episode.id} className="rounded-xl border border-black/[0.06] bg-[#fcfcfd] p-3">
               <p className="text-[13px] font-semibold text-[#111827]">{episode.summary}</p>
@@ -70,22 +76,33 @@ export function MemoryExplorer({ episodes, onDeleteEpisode }: MemoryExplorerProp
             onChange={(event) => setQuery(event.target.value)}
             className="mt-1 w-full rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]"
           />
-          <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
-            {simulatedKnowledge.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          {simulatedKnowledge.length === 0 ? (
+            <p className="mt-3 rounded-xl border border-black/[0.06] bg-[#fcfcfd] p-3 text-[12px] text-[#667085]">
+              No matching memory snippets for this query.
+            </p>
+          ) : (
+            <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
+              {simulatedKnowledge.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
         </div>
       ) : null}
 
       {activeTab === "working" ? (
         <div className="rounded-xl border border-black/[0.06] bg-[#f8fafc] p-3 text-[13px] text-[#475467]">
-          <p>conversation.intent: proposal_generation</p>
-          <p>conversation.prospect: Axon Group</p>
-          <p>tool.last_result: CRM opportunity score 0.82</p>
+          {workingMemory.length === 0 ? (
+            <p>No working memory keys available for the selected context.</p>
+          ) : (
+            workingMemory.map((entry) => (
+              <p key={entry.key}>
+                {entry.key}: {entry.value}
+              </p>
+            ))
+          )}
         </div>
       ) : null}
     </div>
   );
 }
-

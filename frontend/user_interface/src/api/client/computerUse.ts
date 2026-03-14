@@ -1,0 +1,175 @@
+import { API_BASE, request, withUserIdQuery } from "./core";
+
+type StartComputerUseSessionInput = {
+  url: string;
+};
+
+type StartComputerUseSessionResponse = {
+  session_id: string;
+  url: string;
+};
+
+type ComputerUseSessionRecord = {
+  session_id: string;
+  url: string;
+  viewport?: Record<string, unknown>;
+};
+
+type ComputerUseSessionListRecord = {
+  session_id: string;
+  user_id: string;
+  start_url: string;
+  status: "active" | "closed" | "stale";
+  live: boolean;
+  date_created: string;
+  date_closed: string | null;
+};
+
+type NavigateComputerUseSessionResponse = {
+  session_id: string;
+  url: string;
+  title: string;
+};
+
+type ComputerUseActiveModelResponse = {
+  model: string;
+  source: string;
+};
+
+type ComputerUseStreamEvent =
+  | {
+      event_type: "screenshot";
+      iteration?: number;
+      url?: string;
+      screenshot_b64?: string;
+    }
+  | {
+      event_type: "text";
+      iteration?: number;
+      text?: string;
+    }
+  | {
+      event_type: "action";
+      iteration?: number;
+      action?: string;
+      input?: Record<string, unknown>;
+      tool_id?: string;
+    }
+  | {
+      event_type: "done" | "max_iterations";
+      iteration?: number;
+      url?: string;
+    }
+  | {
+      event_type: "error";
+      iteration?: number;
+      detail?: string;
+    };
+
+type StreamComputerUseSessionOptions = {
+  task: string;
+  model?: string;
+  maxIterations?: number;
+  onEvent?: (event: ComputerUseStreamEvent) => void;
+  onDone?: () => void;
+  onError?: (error: Error) => void;
+};
+
+function startComputerUseSession(body: StartComputerUseSessionInput) {
+  return request<StartComputerUseSessionResponse>("/api/computer-use/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function getComputerUseSession(sessionId: string) {
+  return request<ComputerUseSessionRecord>(
+    `/api/computer-use/sessions/${encodeURIComponent(sessionId)}`,
+  );
+}
+
+function listComputerUseSessions() {
+  return request<ComputerUseSessionListRecord[]>("/api/computer-use/sessions");
+}
+
+function navigateComputerUseSession(sessionId: string, url: string) {
+  return request<NavigateComputerUseSessionResponse>(
+    `/api/computer-use/sessions/${encodeURIComponent(sessionId)}/navigate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    },
+  );
+}
+
+function cancelComputerUseSession(sessionId: string) {
+  return request<void>(`/api/computer-use/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
+function getComputerUseActiveModel() {
+  return request<ComputerUseActiveModelResponse>("/api/computer-use/active-model");
+}
+
+function streamComputerUseSession(
+  sessionId: string,
+  { task, model, maxIterations, onEvent, onDone, onError }: StreamComputerUseSessionOptions,
+) {
+  const query = new URLSearchParams();
+  query.set("task", task);
+  if (model) {
+    query.set("model", model);
+  }
+  if (typeof maxIterations === "number" && Number.isFinite(maxIterations) && maxIterations > 0) {
+    query.set("max_iterations", String(Math.round(maxIterations)));
+  }
+  const basePath = `/api/computer-use/sessions/${encodeURIComponent(sessionId)}/stream?${query.toString()}`;
+  const eventSource = new EventSource(`${API_BASE}${withUserIdQuery(basePath)}`);
+
+  eventSource.onmessage = (message) => {
+    const chunk = String(message.data || "").trim();
+    if (!chunk) {
+      return;
+    }
+    if (chunk === "[DONE]") {
+      onDone?.();
+      return;
+    }
+    try {
+      const parsed = JSON.parse(chunk) as ComputerUseStreamEvent;
+      onEvent?.(parsed);
+    } catch {
+      // Ignore malformed chunks and keep the stream alive.
+    }
+  };
+  eventSource.onerror = () => {
+    onError?.(new Error("Computer Use SSE stream disconnected."));
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}
+
+export {
+  cancelComputerUseSession,
+  getComputerUseActiveModel,
+  getComputerUseSession,
+  listComputerUseSessions,
+  navigateComputerUseSession,
+  startComputerUseSession,
+  streamComputerUseSession,
+};
+export type {
+  ComputerUseActiveModelResponse,
+  ComputerUseSessionListRecord,
+  ComputerUseSessionRecord,
+  ComputerUseStreamEvent,
+  NavigateComputerUseSessionResponse,
+  StartComputerUseSessionInput,
+  StartComputerUseSessionResponse,
+  StreamComputerUseSessionOptions,
+};

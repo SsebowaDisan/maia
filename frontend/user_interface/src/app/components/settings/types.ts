@@ -11,7 +11,7 @@ import type {
 } from "../../../api/integrations";
 import type { ConnectorDefinition } from "./connectorDefinitions";
 
-export type SettingsTabId = "general" | "integrations" | "models" | "apis";
+export type SettingsTabId = "general" | "models" | "apis";
 
 export type SettingsTabItem = {
   id: SettingsTabId;
@@ -24,11 +24,6 @@ export const SETTINGS_TABS: SettingsTabItem[] = [
     id: "general",
     label: "General",
     subtitle: "Workspace preferences and system status.",
-  },
-  {
-    id: "integrations",
-    label: "Integrations",
-    subtitle: "Connected services and OAuth access.",
   },
   {
     id: "models",

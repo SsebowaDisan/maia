@@ -54,16 +54,23 @@ function applyUploadResult({
   showActionStatus: (text: string) => void;
 }) {
   const failedMessages: string[] = [];
+  const pendingUploadIndexById = new Map<string, number>(
+    pending.map((attachment, index) => [attachment.id, index]),
+  );
   let successCursor = 0;
   setAttachments((previous) =>
     previous.map((attachment) => {
-      const pendingIdx = pending.findIndex((item) => item.id === attachment.id);
-      if (pendingIdx === -1) {
+      const uploadIndex = pendingUploadIndexById.get(attachment.id);
+      if (typeof uploadIndex !== "number") {
         return attachment;
       }
-      const item = result.items[pendingIdx];
+      const item = result.items[uploadIndex];
       if (item?.status === "success") {
-        const mappedFileId = item.file_id || result.file_ids[successCursor] || undefined;
+        const mappedFileId =
+          item.file_id ||
+          result.file_ids[uploadIndex] ||
+          result.file_ids[successCursor] ||
+          undefined;
         successCursor += 1;
         return {
           ...attachment,

@@ -9,7 +9,7 @@ import { clamp, readStoredText, readStoredWidth } from "./storage";
 import type { ResizeSide, WorkspaceTab } from "./types";
 
 const WORKSPACE_TABS: WorkspaceTab[] = ["Chat", "Files", "Resources", "Settings", "Help"];
-const SETTINGS_TABS = new Set(["general", "integrations", "models", "apis"]);
+const SETTINGS_TABS = new Set(["general", "models", "apis"]);
 const WORKSPACE_VIEW_PARAM = "view";
 const WORKSPACE_TAB_BY_QUERY: Record<string, WorkspaceTab> = {
   chat: "Chat",

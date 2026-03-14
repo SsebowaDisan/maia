@@ -50,6 +50,26 @@ class IssueReport(_base_issue_report, table=True):  # type: ignore
     """Record of issues"""
 
 
+class ComputerUseSessionRecord(SQLModel, table=True):
+    """Persistent metadata for a Computer Use browser session.
+
+    The actual Playwright browser process is in-memory and lost on server
+    restart.  This table keeps a lightweight record so the frontend can
+    list sessions and the backend can detect stale (unclean-shutdown) ones.
+    """
+
+    __table_args__ = {"extend_existing": True}
+
+    session_id: str = Field(primary_key=True)
+    user_id: str = Field(default="", index=True)
+    start_url: str = Field(default="")
+    status: str = Field(default="active")  # active | closed | stale
+    date_created: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    date_closed: datetime.datetime | None = Field(default=None)
+
+
 class MindmapShare(SQLModel, table=True):
     """Shared mind-map payload for cross-user links."""
 

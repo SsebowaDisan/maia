@@ -1,8 +1,16 @@
-import type { AgentSummary, ConnectorSummary } from "../../pages/agentOsData";
+type ToolPermissionMatrixAgent = {
+  id: string;
+  name: string;
+};
+
+type ToolPermissionMatrixConnector = {
+  id: string;
+  name: string;
+};
 
 export type ToolPermissionMatrixProps = {
-  agents: AgentSummary[];
-  connectors: ConnectorSummary[];
+  agents: ToolPermissionMatrixAgent[];
+  connectors: ToolPermissionMatrixConnector[];
   value: Record<string, string[]>;
   onChange: (next: Record<string, string[]>) => void;
 };
@@ -84,4 +92,3 @@ export function ToolPermissionMatrix({
     </div>
   );
 }
-

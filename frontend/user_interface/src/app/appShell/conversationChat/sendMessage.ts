@@ -1,7 +1,13 @@
 import { sendChat, sendChatStream } from "../../../api/client";
 import { fallbackAssistantBlocks, normalizeCanvasDocuments, normalizeMessageBlocks } from "../../messageBlocks";
 import { DEFAULT_PROJECT_ID } from "../constants";
-import type { AgentActivityEvent, ChatTurn, CitationFocus, ChatAttachment } from "../../types";
+import type {
+  AgentActivityEvent,
+  ChatTurn,
+  CitationFocus,
+  ChatAttachment,
+  ClarificationPrompt,
+} from "../../types";
 import { clarificationPromptFromEvent } from "./clarification";
 import {
   DEEP_SEARCH_SETTING_OVERRIDES,
@@ -61,6 +67,21 @@ function deriveModeStatus({
   return null;
 }
 
+function isAgentActivityPayload(payload: unknown): payload is AgentActivityEvent {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const candidate = payload as Record<string, unknown>;
+  return (
+    typeof candidate.event_id === "string" &&
+    candidate.event_id.trim().length > 0 &&
+    typeof candidate.event_type === "string" &&
+    candidate.event_type.trim().length > 0 &&
+    typeof candidate.run_id === "string" &&
+    candidate.run_id.trim().length > 0
+  );
+}
+
 type SendConversationMessageParams = {
   message: string;
   attachments?: ChatAttachment[];
@@ -80,7 +101,12 @@ type SendConversationMessageParams = {
   setCitationFocus: (value: CitationFocus) => void;
   setIsSending: (value: boolean) => void;
   setIsActivityStreaming: (value: boolean) => void;
-  setClarificationPrompt: (value: unknown) => void;
+  setClarificationPrompt: (
+    value:
+      | ClarificationPrompt
+      | null
+      | ((previous: ClarificationPrompt | null) => ClarificationPrompt | null),
+  ) => void;
   setInfoText: (value: string | ((previous: string) => string)) => void;
   setActivityEvents: (value: AgentActivityEvent[]) => void;
   setSelectedTurnIndex: (value: number | null) => void;
@@ -393,7 +419,10 @@ async function sendConversationMessage({
               return;
             }
             if (event.type === "activity" && event.event) {
-              const payload = event.event as AgentActivityEvent;
+              if (!isAgentActivityPayload(event.event)) {
+                return;
+              }
+              const payload = event.event;
               const payloadRunId = String(payload.run_id || "").trim();
               if (payloadRunId) {
                 if (!streamedRunId) {
@@ -409,7 +438,7 @@ async function sendConversationMessage({
                 accessMode: effectiveAccessMode,
               });
               if (detectedPrompt) {
-                setClarificationPrompt((previous: { runId?: string } | null) => {
+                setClarificationPrompt((previous: ClarificationPrompt | null) => {
                   if (previous?.runId && previous.runId === detectedPrompt.runId) {
                     return previous;
                   }

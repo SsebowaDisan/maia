@@ -96,32 +96,76 @@ type AgentEventRow = {
   event?: unknown;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
+  }
+  return "";
+}
+
+function titleFromEventType(eventType: string): string {
+  if (!eventType) {
+    return "Activity";
+  }
+  const compact = eventType.replace(/[._-]+/g, " ").trim();
+  if (!compact) {
+    return "Activity";
+  }
+  return compact.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function normalizeAgentActivityEvent(payload: unknown): AgentActivityEvent | null {
-  if (!payload || typeof payload !== "object") {
+  const candidate = asRecord(payload);
+  if (!candidate) {
     return null;
   }
-  const candidate = payload as Record<string, unknown>;
-  if (!("event_id" in candidate) || !("event_type" in candidate)) {
+  const eventId = asString(candidate.event_id);
+  const eventType = asString(candidate.event_type).toLowerCase();
+  if (!eventId || !eventType) {
     return null;
   }
 
-  const normalized = {
+  const metadataRecord = asRecord(candidate.metadata) || {};
+  const dataRecord = asRecord(candidate.data);
+  const payloadRecord = asRecord(candidate.payload);
+  const runId =
+    asString(candidate.run_id) || asString(candidate.runId) || asString(metadataRecord.run_id);
+  const title =
+    asString(candidate.title) || asString((candidate as Record<string, unknown>).message) || titleFromEventType(eventType);
+  const detail =
+    asString(candidate.detail) ||
+    asString(candidate.status) ||
+    asString((candidate as Record<string, unknown>).message);
+  const timestamp =
+    asString(candidate.timestamp) ||
+    asString(candidate.ts) ||
+    new Date().toISOString();
+
+  if (!runId || !title || !timestamp) {
+    return null;
+  }
+
+  return {
     ...(candidate as AgentActivityEvent),
-    metadata:
-      candidate.metadata && typeof candidate.metadata === "object"
-        ? (candidate.metadata as Record<string, unknown>)
-        : {},
-  } as AgentActivityEvent;
-
-  if (
-    (!normalized.data || typeof normalized.data !== "object") &&
-    candidate.payload &&
-    typeof candidate.payload === "object"
-  ) {
-    normalized.data = candidate.payload as Record<string, unknown>;
-  }
-
-  return normalized;
+    event_id: eventId,
+    event_type: eventType,
+    run_id: runId,
+    title,
+    detail,
+    timestamp,
+    metadata: metadataRecord,
+    data: dataRecord || payloadRecord || undefined,
+  };
 }
 
 export function isAgentActivityEvent(payload: unknown): payload is AgentActivityEvent {

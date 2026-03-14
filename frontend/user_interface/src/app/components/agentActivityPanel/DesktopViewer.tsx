@@ -49,6 +49,10 @@ interface DesktopViewerProps {
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl: string;
   sceneSpreadsheetUrl: string;
+  computerUseSessionId?: string;
+  computerUseTask?: string;
+  computerUseModel?: string;
+  computerUseMaxIterations?: number | null;
   onSnapshotError: () => void;
   showDoneStage: boolean;
   doneStageTitle: string;
@@ -117,6 +121,10 @@ function DesktopViewer({
   activeSceneData,
   sceneDocumentUrl,
   sceneSpreadsheetUrl,
+  computerUseSessionId = "",
+  computerUseTask = "",
+  computerUseModel = "",
+  computerUseMaxIterations = null,
   onSnapshotError,
   showDoneStage,
   doneStageTitle,
@@ -209,6 +217,10 @@ function DesktopViewer({
               activeSceneData={activeSceneData}
               sceneDocumentUrl={sceneDocumentUrl}
               sceneSpreadsheetUrl={sceneSpreadsheetUrl}
+              computerUseSessionId={computerUseSessionId}
+              computerUseTask={computerUseTask}
+              computerUseModel={computerUseModel}
+              computerUseMaxIterations={computerUseMaxIterations}
               onSnapshotError={onSnapshotError}
             />
           </div>

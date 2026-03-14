@@ -140,6 +140,9 @@ function mergeLiveSceneData(
       "provider",
       "provider_requested",
       "web_provider",
+      "computer_use_session_id",
+      "computer_use_task",
+      "computer_use_model",
       "render_quality",
       "blocked_reason",
       "routing_mode",
@@ -173,6 +176,8 @@ function mergeLiveSceneData(
       "page_total",
       "pdf_total_pages",
       "scan_pass",
+      "computer_use_max_iterations",
+      "computer_use_iteration",
     ].forEach((key) => {
       const numeric = readNumberField(payload[key]);
       if (numeric !== null) {

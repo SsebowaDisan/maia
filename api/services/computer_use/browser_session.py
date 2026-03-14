@@ -130,3 +130,13 @@ class BrowserSession:
 
     def viewport(self) -> dict[str, int]:
         return {"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}
+
+    def dom_snapshot(self) -> str | None:
+        """Return a numbered text index of visible interactive DOM elements.
+
+        Used alongside screenshots to give the vision model precise element
+        coordinates without relying purely on visual inference.
+        Returns None if the page is not ready or evaluation fails.
+        """
+        from .dom_snapshot import get_dom_snapshot
+        return get_dom_snapshot(self._page)
