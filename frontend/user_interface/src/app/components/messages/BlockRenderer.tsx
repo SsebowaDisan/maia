@@ -3,8 +3,9 @@ import katex from "katex";
 import { renderMathInMarkdown, renderRichText } from "../../utils/richText";
 import type { CanvasDocumentRecord, MessageBlock } from "../../messageBlocks";
 import { useCanvasStore } from "../../stores/canvasStore";
-import { widgetRegistry } from "../widgets/registry";
-import type { LensWidgetProps } from "../widgets/LensEquationWidget";
+import { ChatTurnPlot } from "../chatMain/ChatTurnPlot";
+import { resolveWidget, type LensWidgetProps, type WidgetComponentProps } from "../widgets/registry";
+import { WidgetRenderBoundary } from "./WidgetRenderBoundary";
 
 type BlockRendererProps = {
   block: MessageBlock;
@@ -134,16 +135,53 @@ function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
     );
   }
 
+  if (block.type === "chart") {
+    return <ChatTurnPlot plot={block.plot} />;
+  }
+
   if (block.type === "widget") {
-    if (block.widget.kind === "lens_equation") {
-      const Widget = widgetRegistry.lens_equation;
+    const widgetKind = String(block.widget.kind || "").trim().toLowerCase();
+    const widgetProps = (block.widget.props || {}) as Record<string, unknown>;
+    const UnknownWidget = resolveWidget("json");
+
+    if (widgetKind === "lens_equation") {
+      const Widget = resolveWidget(widgetKind);
+      if (!Widget) {
+        return null;
+      }
       const safeProps = buildLensWidgetProps(block.widget.props || {});
-      return <Widget {...safeProps} />;
+      return (
+        <WidgetRenderBoundary>
+          <Widget {...(safeProps as unknown as WidgetComponentProps)} />
+        </WidgetRenderBoundary>
+      );
     }
-    if (!(block.widget.kind in widgetRegistry)) {
-      return null;
+
+    const Widget = resolveWidget(widgetKind);
+    if (!Widget) {
+      if (!UnknownWidget) {
+        return (
+          <div className="rounded-2xl border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[12px] text-[#92400e]">
+            Unsupported widget: {widgetKind || "unknown"}
+          </div>
+        );
+      }
+      return (
+        <WidgetRenderBoundary>
+          <UnknownWidget
+            title={`Unsupported widget: ${widgetKind || "unknown"}`}
+            kind={widgetKind || "unknown"}
+            props={widgetProps}
+          />
+        </WidgetRenderBoundary>
+      );
     }
-    return null;
+
+    return (
+      <WidgetRenderBoundary>
+        <Widget {...(widgetProps as WidgetComponentProps)} />
+      </WidgetRenderBoundary>
+    );
   }
 
   if (block.type === "document_action") {

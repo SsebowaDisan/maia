@@ -45,3 +45,16 @@ export function downloadMindmapMarkdown(params: {
   anchor.click();
   URL.revokeObjectURL(url);
 }
+
+export function downloadMindmapMarkdownText(markdown: string, activeMapType: string) {
+  if (!String(markdown || "").trim()) {
+    return;
+  }
+  const blob = new Blob([markdown], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `mindmap-${activeMapType}.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}

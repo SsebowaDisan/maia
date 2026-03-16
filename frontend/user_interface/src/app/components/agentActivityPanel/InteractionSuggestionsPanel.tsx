@@ -1,5 +1,9 @@
 import { INTERACTION_SUGGESTION_MIN_CONFIDENCE } from "./interactionSuggestionMerge";
 import type { InteractionSuggestion } from "./interactionSuggestionMerge";
+import {
+  EVT_INTERACTION_SUGGESTION_SEND,
+  type InteractionSuggestionSendDetail,
+} from "../../constants/uiEvents";
 
 const ACTION_LABEL: Record<string, string> = {
   navigate: "Navigate",
@@ -48,6 +52,44 @@ function actionLabel(action: string): string {
   return ACTION_LABEL[normalized] || normalized || "Action";
 }
 
+function buildSuggestionPrompt(suggestion: InteractionSuggestion): string {
+  const action = String(suggestion.action || "").trim().toLowerCase();
+  const target = String(suggestion.targetLabel || "").trim() || "this target";
+  const reason = String(suggestion.reason || "").trim();
+  if (action === "scroll") {
+    return `Continue with the browser task: scroll to "${target}" and summarize what you find.`;
+  }
+  if (action === "click") {
+    return `Continue with the browser task: click "${target}" and proceed to the next step.`;
+  }
+  if (action === "type") {
+    return `Continue with the browser task: type into "${target}" and continue.`;
+  }
+  if (action === "extract") {
+    return `Continue with the browser task: extract details from "${target}".`;
+  }
+  if (action === "verify") {
+    return `Continue with the browser task: verify "${target}" and report the result.`;
+  }
+  const base = `Continue with the browser task: ${action || "check"} "${target}".`;
+  return reason ? `${base} Context: ${reason}` : base;
+}
+
+function dispatchSuggestionPrompt(prompt: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const trimmedPrompt = String(prompt || "").trim();
+  if (!trimmedPrompt) {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent<InteractionSuggestionSendDetail>(EVT_INTERACTION_SUGGESTION_SEND, {
+      detail: { prompt: trimmedPrompt },
+    }),
+  );
+}
+
 function InteractionSuggestionsPanel({ suggestions }: InteractionSuggestionsPanelProps) {
   if (!suggestions || suggestions.length === 0) {
     return null;
@@ -77,7 +119,11 @@ function InteractionSuggestionsPanel({ suggestions }: InteractionSuggestionsPane
         Follow-along hints
       </p>
 
-      <article className="rounded-xl border border-[#dde3f1] bg-[#f8fbff] p-3 shadow-[0_8px_18px_-14px_rgba(37,99,235,0.45)]">
+      <button
+        type="button"
+        onClick={() => dispatchSuggestionPrompt(buildSuggestionPrompt(primarySuggestion))}
+        className="w-full rounded-xl border border-[#dde3f1] bg-[#f8fbff] p-3 text-left shadow-[0_8px_18px_-14px_rgba(37,99,235,0.45)] transition hover:border-[#bfd1fb] hover:bg-[#f2f7ff]"
+      >
         <div className="flex items-start justify-between gap-2">
           <span
             className={`rounded border px-1.5 py-px text-[9px] font-bold uppercase tracking-wide ${primaryBadgeClass}`}
@@ -101,16 +147,18 @@ function InteractionSuggestionsPanel({ suggestions }: InteractionSuggestionsPane
             {primarySuggestion.reason}
           </p>
         ) : null}
-      </article>
+      </button>
 
       {secondarySuggestions.length > 0 ? (
         <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
           {secondarySuggestions.map((suggestion, index) => {
             const action = String(suggestion.action || "").toLowerCase();
             return (
-              <article
+              <button
+                type="button"
+                onClick={() => dispatchSuggestionPrompt(buildSuggestionPrompt(suggestion))}
                 key={`${suggestion.eventId || ""}-${index}`}
-                className="flex min-w-0 items-start gap-2 rounded-lg border border-[#f0f1f5] bg-[#fafbfc] px-2.5 py-2"
+                className="flex min-w-0 items-start gap-2 rounded-lg border border-[#f0f1f5] bg-[#fafbfc] px-2.5 py-2 text-left transition hover:border-[#dbe1ea] hover:bg-white"
               >
                 <span
                   className={`mt-px shrink-0 rounded border px-1.5 py-px text-[8.5px] font-bold leading-tight tracking-wide ${actionStyle(action)}`}
@@ -127,7 +175,7 @@ function InteractionSuggestionsPanel({ suggestions }: InteractionSuggestionsPane
                     </p>
                   ) : null}
                 </div>
-              </article>
+              </button>
             );
           })}
         </div>

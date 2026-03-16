@@ -19,6 +19,29 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _prepare_memory_context(
+    tenant_id: str,
+    agent_id: str | None,
+    task: str,
+    k: int = 5,
+) -> str:
+    """Return a memory context block to prepend, or empty string on failure."""
+    if not agent_id:
+        return ""
+    try:
+        from api.services.agents.long_term_memory import recall_memories
+        memories = recall_memories(tenant_id, agent_id, task, k=k)
+        if not memories:
+            return ""
+        lines = ["[Relevant memories from previous runs:]"]
+        for m in memories:
+            lines.append(f"- {m['content']}")
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.debug("Memory recall failed for agent %s: %s", agent_id, exc)
+        return ""
+
+
 def run_agent_task(
     task: str,
     *,
@@ -27,6 +50,8 @@ def run_agent_task(
     conversation_id: str | None = None,
     system_prompt: str | None = None,
     agent_mode: str = "company_agent",
+    allowed_tool_ids: list[str] | None = None,
+    agent_id: str | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """Run an agent task through the existing AgentOrchestrator.
 
@@ -39,6 +64,11 @@ def run_agent_task(
         system_prompt: Optional system prompt override.  Prepended to the
             task message because run_stream() has no system_override param.
         agent_mode: One of "ask", "company_agent", "deep_search".
+        allowed_tool_ids: Optional allowlist from the agent definition's ``tools``
+            field.  When provided the step planner restricts itself to only these
+            tool IDs, enforcing the marketplace agent's declared capability scope.
+        agent_id: When provided, top-k relevant long-term memories are recalled
+            and prepended to the task context automatically (P7-04).
 
     Yields:
         Event dicts from the orchestrator — same format as the chat stream.
@@ -48,9 +78,17 @@ def run_agent_task(
 
     effective_conversation_id = conversation_id or run_id or str(uuid.uuid4())
 
+    # P7-04: prepend long-term memory context when an agent_id is known
+    memory_context = _prepare_memory_context(tenant_id, agent_id, task)
+
     effective_message = task
+    parts: list[str] = []
+    if memory_context:
+        parts.append(memory_context)
     if system_prompt:
-        effective_message = f"{system_prompt}\n\n{task}"
+        parts.append(system_prompt)
+    if parts:
+        effective_message = "\n\n".join(parts) + "\n\n" + task
 
     request = ChatRequest(
         message=effective_message,
@@ -58,13 +96,17 @@ def run_agent_task(
         agent_mode=agent_mode,  # type: ignore[arg-type]
     )
 
+    settings: dict[str, Any] = {}
+    if allowed_tool_ids:
+        settings["__allowed_tool_ids"] = list(allowed_tool_ids)
+
     orchestrator = get_orchestrator()
     try:
         yield from orchestrator.run_stream(
             user_id=tenant_id,
             conversation_id=effective_conversation_id,
             request=request,
-            settings={},
+            settings=settings,
         )
     except Exception as exc:
         logger.error("run_agent_task failed (tenant=%s): %s", tenant_id, exc, exc_info=True)

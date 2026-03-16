@@ -104,4 +104,91 @@ describe("messageBlocks", () => {
       },
     ]);
   });
+
+  it("normalizes chart blocks from nested chart payload", () => {
+    const blocks = normalizeMessageBlocks([
+      {
+        type: "chart",
+        chart: {
+          title: "Revenue by quarter",
+          labels: ["Q1", "Q2"],
+          values: [12, 19],
+        },
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toEqual({
+      type: "chart",
+      plot: {
+        kind: "chart",
+        title: "Revenue by quarter",
+        labels: ["Q1", "Q2"],
+        values: [12, 19],
+      },
+    });
+  });
+
+  it("normalizes chart blocks from direct payload fields", () => {
+    const blocks = normalizeMessageBlocks([
+      {
+        type: "chart",
+        title: "Tasks complete",
+        series: [3, 5, 8],
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toEqual({
+      type: "chart",
+      plot: {
+        kind: "chart",
+        title: "Tasks complete",
+        series: [3, 5, 8],
+      },
+    });
+  });
+
+  it("drops malformed image blocks and falls back to assistant markdown", () => {
+    expect(
+      normalizeMessageBlocks(
+        [{ type: "image", src: "   " }],
+        "Fallback image description",
+      ),
+    ).toEqual([{ type: "markdown", markdown: "Fallback image description" }]);
+  });
+
+  it("defaults invalid notice levels to info", () => {
+    expect(
+      normalizeMessageBlocks([
+        {
+          type: "notice",
+          level: "urgent",
+          text: "Heads up",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "notice",
+        level: "info",
+        text: "Heads up",
+      },
+    ]);
+  });
+
+  it("normalizes table rows into string arrays", () => {
+    expect(
+      normalizeMessageBlocks([
+        {
+          type: "table",
+          columns: ["Name", "Count"],
+          rows: [["A", 1], ["B", null]],
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "table",
+        columns: ["Name", "Count"],
+        rows: [["A", "1"], ["B"]],
+      },
+    ]);
+  });
 });

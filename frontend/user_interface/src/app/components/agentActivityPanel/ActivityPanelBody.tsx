@@ -3,6 +3,7 @@ import { ApprovalGateCard } from "./ApprovalGateCard";
 import { DesktopViewer } from "./DesktopViewer";
 import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
 import { PhaseTimeline } from "./PhaseTimeline";
+import { ReplayControls } from "./ReplayControls";
 import { ReplayTimeline } from "./ReplayTimeline";
 import { ResearchTodoList } from "./ResearchTodoList";
 import type { TheatreStage } from "./deriveTheatreStage";
@@ -41,6 +42,8 @@ type ActivityPanelBodyProps = {
   theatreStage: TheatreStage;
   needsHumanReview: boolean;
   humanReviewNotes?: string | null;
+  activityRunId: string;
+  onReplayStep: (event: Record<string, unknown>, index: number, total: number) => void;
 };
 
 function ActivityPanelBody({
@@ -71,6 +74,8 @@ function ActivityPanelBody({
   theatreStage,
   needsHumanReview,
   humanReviewNotes,
+  activityRunId,
+  onReplayStep,
 }: ActivityPanelBodyProps) {
   return (
     <>
@@ -123,6 +128,13 @@ function ActivityPanelBody({
         onSelectEvent={onSelectEvent}
         listRef={listRef}
       />
+
+      {!streaming && activityRunId ? (
+        <ReplayControls
+          runId={activityRunId}
+          onStep={(event, index, total) => onReplayStep(event as Record<string, unknown>, index, total)}
+        />
+      ) : null}
 
       <FullscreenViewerOverlay
         isOpen={isFullscreenViewer}

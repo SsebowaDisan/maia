@@ -45,7 +45,7 @@ class EpisodicMemoryEntry(SQLModel, table=True):
     run_id: str
     summary: str
     outcome: str  # "success" | "failure" | "partial"
-    embedding_json: Optional[str] = None  # serialised float list
+    embedding_json: Optional[str] = Field(default=None)  # serialised float list
     created_at: float = Field(default_factory=time.time)
 
 

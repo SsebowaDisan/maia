@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from pathlib import Path
+
+# Suppress known harmless third-party deprecation/compatibility warnings that
+# appear at import time and cannot be fixed upstream.
+warnings.filterwarnings("ignore", category=UserWarning, module=r"pydantic.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"cryptography.*")
+warnings.filterwarnings("ignore", message=r"urllib3.*chardet.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=r"ARC4 has been moved", category=DeprecationWarning)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -26,6 +35,10 @@ from api.routers.computer_use import router as computer_use_router
 from api.routers.agents import router as agents_router
 from api.routers.agents import webhook_router
 from api.routers.marketplace import router as marketplace_router
+from api.routers.proactive import router as proactive_router
+from api.routers.workflows import router as workflows_router
+from api.routers.observability import router as observability_router
+from api.routers.canvas import router as canvas_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -78,10 +91,49 @@ def load_local_env_if_present() -> None:
     _ENV_FILE_LOADED = True
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
+    # ── startup ──────────────────────────────────────────────────────────────
+    load_local_env_if_present()
+    startup_notices = run_upload_startup_checks()
+    for message in startup_notices:
+        logger.info(message)
+    get_context()
+    get_ingestion_manager().start()
+    get_report_scheduler().start()
+    get_agent_scheduler().start()
+    try:
+        from api.services.agents.event_triggers import seed_subscriptions_from_definitions
+        seed_subscriptions_from_definitions()
+    except Exception:
+        pass
+    try:
+        from api.services.agent.skills.loader import seed_marketplace_agents
+        seed_marketplace_agents()
+    except Exception:
+        pass
+    try:
+        from api.services.proactive.monitor import get_proactive_monitor
+        get_proactive_monitor().start()
+    except Exception:
+        pass
+    yield
+    # ── shutdown ─────────────────────────────────────────────────────────────
+    get_ingestion_manager().stop()
+    get_report_scheduler().stop()
+    get_agent_scheduler().stop()
+    try:
+        from api.services.proactive.monitor import get_proactive_monitor
+        get_proactive_monitor().stop()
+    except Exception:
+        pass
+
+
 app = FastAPI(
     title="Maia API",
     version="0.1.0",
     description="FastAPI wrapper over Maia/KTEM backend logic.",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -108,32 +160,11 @@ app.include_router(computer_use_router)
 app.include_router(agents_router)
 app.include_router(webhook_router)
 app.include_router(marketplace_router)
+app.include_router(proactive_router)
+app.include_router(workflows_router)
+app.include_router(observability_router)
+app.include_router(canvas_router)
 
-
-@app.on_event("startup")
-def warm_backend_context() -> None:
-    load_local_env_if_present()
-    startup_notices = run_upload_startup_checks()
-    for message in startup_notices:
-        logger.info(message)
-    # Ensure indices/reasonings/settings are initialized once at server startup.
-    get_context()
-    get_ingestion_manager().start()
-    get_report_scheduler().start()
-    get_agent_scheduler().start()
-    # Seed event subscriptions for on_event triggered agents
-    try:
-        from api.services.agents.event_triggers import seed_subscriptions_from_definitions
-        seed_subscriptions_from_definitions()
-    except Exception:
-        pass
-
-
-@app.on_event("shutdown")
-def stop_background_services() -> None:
-    get_ingestion_manager().stop()
-    get_report_scheduler().stop()
-    get_agent_scheduler().stop()
 
 
 @app.get("/api/health", response_model=HealthResponse)

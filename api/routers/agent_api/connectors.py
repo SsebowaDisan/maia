@@ -52,6 +52,19 @@ def connector_plugin(
     return registry.plugin_manifest(connector_id=connector_id, settings=settings)
 
 
+def _mirror_to_vault(tenant_id: str, connector_id: str, values: dict[str, Any]) -> None:
+    """Mirror credentials to the new vault (SQLModel-backed encrypted store)."""
+    try:
+        from api.services.connectors.vault import store_credential
+        auth_strategy = "api_key" if "api_key" in values else "bearer" if "access_token" in values else "custom"
+        store_credential(tenant_id, connector_id, values, auth_strategy=auth_strategy)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug(
+            "Vault credential mirror failed for %s", connector_id, exc_info=True
+        )
+
+
 @router.post("/connectors/credentials")
 def upsert_connector_credentials(
     payload: CredentialUpsertRequest,
@@ -65,6 +78,7 @@ def upsert_connector_credentials(
         connector_id=payload.connector_id,
         values=payload.values,
     )
+    _mirror_to_vault(tenant_id, payload.connector_id, payload.values)
     return {
         "tenant_id": record.tenant_id,
         "connector_id": record.connector_id,

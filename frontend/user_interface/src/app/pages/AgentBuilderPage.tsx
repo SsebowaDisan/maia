@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import {
   createAgent,
@@ -15,9 +16,11 @@ import {
 import { GateConfig, type ToolGate } from "../components/agentBuilder/GateConfig";
 import { SystemPromptEditor } from "../components/agentBuilder/SystemPromptEditor";
 import { ToolSelector } from "../components/agentBuilder/ToolSelector";
-import type { ConnectorSummary } from "./agentOsData";
+import { AgentMemoryTab } from "../components/agentActivityPanel/AgentMemoryTab";
+import { SimulationPanel } from "../components/agentActivityPanel/SimulationPanel";
+import type { ConnectorSummary } from "../types/connectorSummary";
 
-type BuilderMode = "visual" | "yaml";
+type BuilderMode = "visual" | "yaml" | "memory" | "test_run";
 
 type TriggerDraft = {
   type: "conversational" | "schedule" | "event";
@@ -80,6 +83,18 @@ function defaultDraft(): AgentDraft {
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function prettyYaml(value: unknown): string {
+  try {
+    return stringifyYaml(value, {
+      lineWidth: 120,
+      indentSeq: false,
+      defaultStringType: "PLAIN",
+    }).trim();
+  } catch {
+    return String(value || "");
+  }
 }
 
 function slugifyAgentId(value: string): string {
@@ -273,15 +288,118 @@ function hydrateDraftFromDefinition(definition: AgentDefinitionInput): AgentDraf
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function coerceDraftFromEditor(value: unknown): AgentDraft {
+  const row = asRecord(value);
+  if (!row) {
+    throw new Error("Editor content must resolve to an object.");
+  }
+  if ("id" in row && !("agent_id" in row)) {
+    return hydrateDraftFromDefinition(row as unknown as AgentDefinitionInput);
+  }
+
+  const baseline = defaultDraft();
+  const triggerRaw = asRecord(row.trigger) || {};
+  const memoryRaw = asRecord(row.memory) || {};
+
+  const triggerType = String(triggerRaw.type || baseline.trigger.type).toLowerCase();
+  const nextTriggerType: TriggerDraft["type"] =
+    triggerType === "schedule" || triggerType === "event" || triggerType === "conversational"
+      ? triggerType
+      : baseline.trigger.type;
+
+  const nextTools = Array.isArray(row.tools)
+    ? row.tools.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : baseline.tools;
+
+  const nextOutputBlocks = Array.isArray(row.output_block_types)
+    ? row.output_block_types.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : baseline.output_block_types;
+
+  const nextAllowedSubAgents = Array.isArray(row.allowed_sub_agent_ids)
+    ? row.allowed_sub_agent_ids.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : baseline.allowed_sub_agent_ids;
+
+  const nextTags = Array.isArray(row.tags)
+    ? row.tags.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : baseline.tags;
+
+  const nextGates = Array.isArray(row.gates)
+    ? row.gates
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .map((gate) => ({
+          toolId: String(gate.toolId || "").trim(),
+          requireApproval: Boolean(gate.requireApproval ?? true),
+          timeoutMinutes: Math.max(1, Number(gate.timeoutMinutes || 60)),
+          timeoutFallback: (() => {
+            const fallback = String(gate.timeoutFallback || "skip").toLowerCase();
+            if (fallback === "cancel" || fallback === "proceed" || fallback === "skip") {
+              return fallback as ToolGate["timeoutFallback"];
+            }
+            return "skip" as ToolGate["timeoutFallback"];
+          })(),
+        }))
+        .filter((gate) => gate.toolId)
+    : baseline.gates;
+
+  return {
+    agent_id: slugifyAgentId(String(row.agent_id || row.id || baseline.agent_id)) || baseline.agent_id,
+    version: String(row.version || baseline.version),
+    name: String(row.name || baseline.name),
+    description: String(row.description || baseline.description),
+    author: String(row.author || baseline.author),
+    tags: nextTags,
+    system_prompt: String(row.system_prompt || baseline.system_prompt),
+    tools: nextTools,
+    memory: {
+      working_enabled: Boolean(
+        (asRecord(memoryRaw.working)?.enabled ?? memoryRaw.working_enabled ?? baseline.memory.working_enabled),
+      ),
+      episodic_enabled: Boolean(
+        (asRecord(memoryRaw.episodic)?.enabled ?? memoryRaw.episodic_enabled ?? baseline.memory.episodic_enabled),
+      ),
+      semantic_enabled: Boolean(
+        (asRecord(memoryRaw.semantic)?.enabled ?? memoryRaw.semantic_enabled ?? baseline.memory.semantic_enabled),
+      ),
+    },
+    trigger: {
+      type: nextTriggerType,
+      value: String(triggerRaw.value || baseline.trigger.value),
+    },
+    gates: nextGates,
+    output_block_types: nextOutputBlocks.length ? nextOutputBlocks : baseline.output_block_types,
+    max_delegation_depth: Math.max(0, Number(row.max_delegation_depth || baseline.max_delegation_depth)),
+    allowed_sub_agent_ids: nextAllowedSubAgents,
+    pricing_model:
+      row.pricing_model === "per_use" || row.pricing_model === "subscription"
+        ? row.pricing_model
+        : baseline.pricing_model,
+    price_per_use_cents: Math.max(0, Number(row.price_per_use_cents || baseline.price_per_use_cents)),
+    is_public: Boolean(row.is_public ?? baseline.is_public),
+    cost_gate_usd: Math.max(0, Number(row.cost_gate_usd || baseline.cost_gate_usd)),
+  };
+}
+
 function mapConnectorStatus(ok: unknown): "Connected" | "Not connected" {
   return ok ? "Connected" : "Not connected";
 }
 
-export function AgentBuilderPage() {
+type AgentBuilderPageProps = {
+  initialAgentId?: string;
+};
+
+export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps) {
   const [mode, setMode] = useState<BuilderMode>("visual");
   const [yamlError, setYamlError] = useState("");
   const [draft, setDraft] = useState<AgentDraft>(defaultDraft);
-  const [yamlText, setYamlText] = useState(prettyJson(defaultDraft()));
+  const [yamlText, setYamlText] = useState(prettyYaml(defaultDraft()));
   const [saving, setSaving] = useState(false);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [agentRows, setAgentRows] = useState<AgentSummaryRecord[]>([]);
@@ -290,7 +408,7 @@ export function AgentBuilderPage() {
 
   const syncYamlFromDraft = (nextDraft: AgentDraft) => {
     setDraft(nextDraft);
-    setYamlText(prettyJson(nextDraft));
+    setYamlText(prettyYaml(nextDraft));
     setYamlError("");
   };
 
@@ -345,6 +463,21 @@ export function AgentBuilderPage() {
     };
     void load();
   }, []);
+
+  useEffect(() => {
+    const targetAgentId = String(initialAgentId || "").trim();
+    if (!targetAgentId || loadingCatalog) {
+      return;
+    }
+    if (selectedAgentId === targetAgentId) {
+      return;
+    }
+    const exists = agentRows.some((row) => String(row.agent_id || "").trim() === targetAgentId);
+    if (!exists) {
+      return;
+    }
+    void loadAgentIntoDraft(targetAgentId);
+  }, [agentRows, initialAgentId, loadingCatalog, selectedAgentId]);
 
   const parsedPreview = useMemo(() => prettyJson(buildDefinitionFromDraft(draft)), [draft]);
   const hasExistingAgent = Boolean(selectedAgentId);
@@ -453,16 +586,21 @@ export function AgentBuilderPage() {
             </div>
           </div>
           <div className="mt-4 flex gap-2">
-            {(["visual", "yaml"] as const).map((value) => (
+            {([
+              { key: "visual", label: "Visual" },
+              { key: "yaml", label: "YAML" },
+              { key: "memory", label: "Memory" },
+              { key: "test_run", label: "Test Run" },
+            ] as const).map((entry) => (
               <button
-                key={value}
+                key={entry.key}
                 type="button"
-                onClick={() => setMode(value)}
+                onClick={() => setMode(entry.key)}
                 className={`rounded-full px-4 py-2 text-[13px] font-semibold capitalize ${
-                  mode === value ? "bg-[#111827] text-white" : "border border-black/[0.12] bg-white text-[#344054]"
+                  mode === entry.key ? "bg-[#111827] text-white" : "border border-black/[0.12] bg-white text-[#344054]"
                 }`}
               >
-                {value}
+                {entry.label}
               </button>
             ))}
           </div>
@@ -672,23 +810,27 @@ export function AgentBuilderPage() {
               </div>
             </div>
           </section>
-        ) : (
+        ) : mode === "yaml" ? (
           <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#667085]">Schema editor (JSON)</p>
+            <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.12em] text-[#667085]">Schema editor (YAML)</p>
             <textarea
               value={yamlText}
               onChange={(event) => setYamlText(event.target.value)}
               className="h-[460px] w-full resize-none rounded-xl border border-black/[0.12] bg-[#0b1020] px-3 py-2 font-mono text-[12px] leading-[1.55] text-[#d1e0ff]"
             />
+            <p className="mt-2 text-[12px] text-[#667085]">
+              Paste either agent draft YAML or full definition YAML/JSON. Visual mode stays in sync after apply.
+            </p>
             <div className="mt-3 flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
                   try {
-                    const parsed = JSON.parse(yamlText) as AgentDraft;
-                    syncYamlFromDraft(parsed);
+                    const parsed = parseYaml(yamlText);
+                    const nextDraft = coerceDraftFromEditor(parsed);
+                    syncYamlFromDraft(nextDraft);
                   } catch (error) {
-                    setYamlError(`Invalid JSON: ${String(error)}`);
+                    setYamlError(`Invalid YAML/JSON: ${String(error)}`);
                   }
                 }}
                 className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white"
@@ -697,6 +839,30 @@ export function AgentBuilderPage() {
               </button>
               {yamlError ? <span className="text-[12px] text-[#b42318]">{yamlError}</span> : null}
             </div>
+          </section>
+        ) : mode === "memory" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            {selectedAgentId ? (
+              <div className="h-[560px] min-h-0">
+                <AgentMemoryTab agentId={selectedAgentId} />
+              </div>
+            ) : (
+              <div className="px-5 py-8 text-[13px] text-[#667085]">
+                Save this draft first to create an `agent_id`, then memory entries can be viewed and managed here.
+              </div>
+            )}
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            {selectedAgentId ? (
+              <div className="h-[640px] min-h-0">
+                <SimulationPanel agentId={selectedAgentId} />
+              </div>
+            ) : (
+              <div className="px-5 py-8 text-[13px] text-[#667085]">
+                Save this draft first to run a simulation against a persisted agent.
+              </div>
+            )}
           </section>
         )}
 

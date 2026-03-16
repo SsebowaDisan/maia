@@ -63,6 +63,13 @@ def record_usage(
         session.add(record)
         session.commit()
 
+    # P10: accumulate ROI for this run
+    try:
+        from api.services.observability.roi_tracker import record_roi_event
+        record_roi_event(tenant_id, agent_id, date_key)
+    except Exception:
+        pass  # ROI tracking must never block metering
+
 
 def get_usage_summary(
     tenant_id: str,

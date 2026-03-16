@@ -1,5 +1,6 @@
 import { sendChat, sendChatStream } from "../../../api/client";
 import { fallbackAssistantBlocks, normalizeCanvasDocuments, normalizeMessageBlocks } from "../../messageBlocks";
+import { useCanvasStore } from "../../stores/canvasStore";
 import { DEFAULT_PROJECT_ID } from "../constants";
 import type {
   AgentActivityEvent,
@@ -9,6 +10,7 @@ import type {
   ClarificationPrompt,
 } from "../../types";
 import { clarificationPromptFromEvent } from "./clarification";
+import { extractCanvasDocumentFromToolEvent } from "../eventHelpers";
 import {
   DEEP_SEARCH_SETTING_OVERRIDES,
   type AccessMode,
@@ -423,6 +425,12 @@ async function sendConversationMessage({
                 return;
               }
               const payload = event.event;
+              const createdCanvasDocument = extractCanvasDocumentFromToolEvent(payload);
+              if (createdCanvasDocument) {
+                const canvasStore = useCanvasStore.getState();
+                canvasStore.upsertDocuments([createdCanvasDocument]);
+                canvasStore.openDocument(createdCanvasDocument.id);
+              }
               const payloadRunId = String(payload.run_id || "").trim();
               if (payloadRunId) {
                 if (!streamedRunId) {

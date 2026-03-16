@@ -30,14 +30,15 @@ class MarketplaceAgent(SQLModel, table=True):
     tags_json: str = "[]"          # JSON list[str]
     required_connectors_json: str = "[]"  # JSON list[str]
     definition_json: str = "{}"
-    pricing_tier: PricingTier = "free"
-    status: PublishStatus = "pending_review"
+    pricing_tier: str = Field(default="free")
+    status: str = Field(default="pending_review")
     install_count: int = 0
     avg_rating: float = 0.0
     rating_count: int = 0
     has_computer_use: bool = False
     verified: bool = False
-    published_at: Optional[float] = None
+    changelog: str = ""  # What changed in this version (free-text markdown)
+    published_at: Optional[float] = Field(default=None)
     created_at: float = Field(default_factory=time.time)
 
 
@@ -71,6 +72,7 @@ def publish_agent(
         definition_json=json.dumps(definition),
         pricing_tier=str(metadata.get("pricing_tier") or "free"),  # type: ignore[arg-type]
         has_computer_use=has_cu,
+        changelog=str(metadata.get("changelog") or ""),
     )
     with Session(engine) as session:
         session.add(entry)

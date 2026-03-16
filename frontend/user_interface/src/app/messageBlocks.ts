@@ -38,6 +38,11 @@ type NoticeMessageBlock = {
   text: string;
 };
 
+type ChartMessageBlock = {
+  type: "chart";
+  plot: Record<string, unknown>;
+};
+
 type WidgetMessageBlock = {
   type: "widget";
   widget: {
@@ -63,6 +68,7 @@ type MessageBlock =
   | ImageMessageBlock
   | TableMessageBlock
   | NoticeMessageBlock
+  | ChartMessageBlock
   | WidgetMessageBlock
   | DocumentActionMessageBlock;
 
@@ -190,6 +196,26 @@ function normalizeMessageBlocks(raw: unknown, assistantText = ""): MessageBlock[
           text: String(record.text ?? ""),
         } satisfies NoticeMessageBlock;
       }
+      if (type === "chart") {
+        const nestedChart =
+          record.chart && typeof record.chart === "object" && !Array.isArray(record.chart)
+            ? (record.chart as Record<string, unknown>)
+            : null;
+        const plotCandidate = nestedChart || record;
+        const plot: Record<string, unknown> = {
+          ...plotCandidate,
+          kind:
+            String(plotCandidate.kind || "").trim().toLowerCase() === "chart"
+              ? "chart"
+              : "chart",
+        };
+        delete plot.type;
+        delete plot.chart;
+        return {
+          type: "chart",
+          plot,
+        } satisfies ChartMessageBlock;
+      }
       if (type === "widget") {
         const widget = readRecord(record.widget);
         const kind = readString(widget.kind);
@@ -230,6 +256,7 @@ function normalizeMessageBlocks(raw: unknown, assistantText = ""): MessageBlock[
 
 export type {
   CanvasDocumentRecord,
+  ChartMessageBlock,
   CodeMessageBlock,
   DocumentActionMessageBlock,
   ImageMessageBlock,

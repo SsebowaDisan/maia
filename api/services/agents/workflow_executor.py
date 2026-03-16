@@ -145,8 +145,14 @@ def _run_step(
         f"Execute your task with the following context:\n{_format_inputs(step_inputs)}"
     )
 
+    allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
     result_parts: list[str] = []
-    for chunk in run_agent_task(task, tenant_id=tenant_id, system_prompt=schema.system_prompt or None):
+    for chunk in run_agent_task(
+        task,
+        tenant_id=tenant_id,
+        system_prompt=schema.system_prompt or None,
+        allowed_tool_ids=allowed_tool_ids,
+    ):
         text = chunk.get("text") or chunk.get("content") or ""
         if text:
             result_parts.append(str(text))
@@ -177,13 +183,87 @@ def _resolve_inputs(
 
 
 def _eval_condition(condition: str, outputs: dict[str, Any]) -> bool:
-    """Safely evaluate a condition expression against workflow outputs."""
-    safe_locals = {"output": _OutputProxy(outputs)}
-    return bool(eval(condition, {"__builtins__": {}}, safe_locals))  # noqa: S307
+    """Safely evaluate a condition expression against workflow outputs.
+
+    Supports a whitelist of simple comparisons so that workflow edge conditions
+    like ``output.step1 == 'done'`` or ``output.count > 0`` work without using
+    ``eval()``, which is exploitable even with an empty ``__builtins__`` dict
+    via class-introspection chains.
+
+    Supported syntax (all fields accessed as ``output.<key>``):
+      output.<key> == <literal>
+      output.<key> != <literal>
+      output.<key> > <number>
+      output.<key> >= <number>
+      output.<key> < <number>
+      output.<key> <= <number>
+      output.<key>          (truthy check)
+    """
+    import re
+
+    condition = condition.strip()
+
+    # Pattern: output.<key> <op> <literal>
+    _CMP = re.compile(
+        r'^output\.([A-Za-z_]\w*)\s*(==|!=|>=|<=|>|<)\s*(.+)$'
+    )
+    m = _CMP.match(condition)
+    if m:
+        key, op, raw_val = m.group(1), m.group(2), m.group(3).strip()
+        lhs = outputs.get(key)
+
+        # Parse RHS literal: quoted string or number or bool/None keyword
+        rhs: Any
+        if (raw_val.startswith('"') and raw_val.endswith('"')) or \
+           (raw_val.startswith("'") and raw_val.endswith("'")):
+            rhs = raw_val[1:-1]
+        elif raw_val in ("True", "true"):
+            rhs = True
+        elif raw_val in ("False", "false"):
+            rhs = False
+        elif raw_val in ("None", "null"):
+            rhs = None
+        else:
+            try:
+                rhs = int(raw_val)
+            except ValueError:
+                try:
+                    rhs = float(raw_val)
+                except ValueError:
+                    rhs = raw_val  # treat as bare string
+
+        if op == "==":
+            return lhs == rhs
+        if op == "!=":
+            return lhs != rhs
+        # Numeric comparisons — coerce both sides
+        try:
+            lhs_n = float(lhs)  # type: ignore[arg-type]
+            rhs_n = float(rhs)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+        if op == ">":
+            return lhs_n > rhs_n
+        if op == ">=":
+            return lhs_n >= rhs_n
+        if op == "<":
+            return lhs_n < rhs_n
+        if op == "<=":
+            return lhs_n <= rhs_n
+
+    # Simple truthy check: output.<key>
+    _TRUTHY = re.compile(r'^output\.([A-Za-z_]\w*)$')
+    m2 = _TRUTHY.match(condition)
+    if m2:
+        return bool(outputs.get(m2.group(1)))
+
+    # Unrecognised expression — log and treat as False to skip the step safely
+    logger.warning("Unsupported workflow condition syntax (skipping step): %r", condition)
+    return False
 
 
 class _OutputProxy:
-    """Simple dot-access proxy over the outputs dict."""
+    """Simple dot-access proxy over the outputs dict (kept for backward compat)."""
 
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data

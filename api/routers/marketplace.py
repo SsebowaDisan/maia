@@ -178,7 +178,7 @@ def install(
     return {"success": True, "agent_id": result.agent_id}
 
 
-@router.delete("/agents/{agent_id}/install", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/agents/{agent_id}/install", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def uninstall(
     agent_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],

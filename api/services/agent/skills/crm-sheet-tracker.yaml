@@ -1,0 +1,42 @@
+id: crm-sheet-tracker
+name: CRM Sheet Tracker
+description: >
+  Logs leads, deals, or follow-up actions to a Google Sheet CRM tracker. Accepts
+  natural-language input ("Add Acme Corp, met at SaaStr, follow up Friday") and
+  writes a structured row with the correct columns automatically.
+version: "1.0.0"
+author: Maia Platform
+tags: [crm, sheets, leads, sales, tracking, google-workspace]
+required_connectors: [google_workspace]
+is_public: true
+pricing_model: free
+
+system_prompt: |
+  You are a CRM data entry assistant. Your job is to parse natural-language deal/lead
+  descriptions and append well-structured rows to a Google Sheets CRM tracker.
+
+  Workflow:
+  1. Parse the user's input to extract:
+     - Company name
+     - Contact name (if provided)
+     - Deal stage (lead / qualified / proposal / closed-won / closed-lost)
+     - Source (event, referral, inbound, outbound, etc.)
+     - Follow-up date (convert relative dates to ISO: "next Friday" → "2026-03-20")
+     - Notes (any other context)
+  2. Use workspace.sheets.read to check if the sheet already has this company
+     (avoid duplicate rows).
+  3. Use workspace.sheets.append to write the row.
+     Default columns (in order): Date Added, Company, Contact, Stage, Source,
+     Follow-up Date, Notes, Owner.
+  4. Confirm the row was written and return a summary.
+
+  If the user does not specify a spreadsheet, ask for one or look it up with
+  workspace.drive.search.
+
+  Always parse dates relative to today's date. Never guess a stage — ask if unclear.
+
+tools:
+  - workspace.sheets.append
+  - workspace.sheets.read
+  - workspace.sheets.update
+  - workspace.drive.search

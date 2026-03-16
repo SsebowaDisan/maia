@@ -24,8 +24,16 @@ export function GateApprovalCard({
 }: GateApprovalCardProps) {
   const [state, setState] = useState<LocalState>("pending");
   const [error, setError] = useState("");
+  const hasResolvableRun = Boolean(String(runId || "").trim()) && String(runId || "").trim() !== "active-run";
+  const hasGateId = Boolean(String(gateId || "").trim());
+  const canSubmit = hasResolvableRun && hasGateId && Boolean(onApprove) && Boolean(onReject);
 
   const approve = async () => {
+    if (!canSubmit) {
+      setState("error");
+      setError("Waiting for active run details before approval can be submitted.");
+      return;
+    }
     setError("");
     setState("approving");
     try {
@@ -38,6 +46,11 @@ export function GateApprovalCard({
   };
 
   const reject = async () => {
+    if (!canSubmit) {
+      setState("error");
+      setError("Waiting for active run details before rejection can be submitted.");
+      return;
+    }
     setError("");
     setState("rejecting");
     try {
@@ -64,9 +77,11 @@ export function GateApprovalCard({
       </div>
       <h3 className="text-[16px] font-semibold text-[#7c2d12]">{toolId}</h3>
       <p className="mt-1 text-[13px] leading-[1.5] text-[#9a3412]">{paramsPreview}</p>
-      {typeof costEstimateUsd === "number" ? (
-        <p className="mt-2 text-[12px] text-[#b45309]">Estimated cost: ${costEstimateUsd.toFixed(2)}</p>
-      ) : null}
+      <p className="mt-2 text-[12px] text-[#b45309]">
+        {typeof costEstimateUsd === "number"
+          ? `Estimated cost: $${costEstimateUsd.toFixed(2)}`
+          : "Estimated cost: unknown"}
+      </p>
 
       {terminalMessage ? (
         <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-[#fdba74] bg-white px-3 py-1 text-[12px] font-semibold text-[#9a3412]">
@@ -77,7 +92,7 @@ export function GateApprovalCard({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={state === "approving" || state === "rejecting"}
+            disabled={!canSubmit || state === "approving" || state === "rejecting"}
             onClick={() => void approve()}
             className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -85,7 +100,7 @@ export function GateApprovalCard({
           </button>
           <button
             type="button"
-            disabled={state === "approving" || state === "rejecting"}
+            disabled={!canSubmit || state === "approving" || state === "rejecting"}
             onClick={() => void reject()}
             className="rounded-full border border-[#b91c1c]/30 bg-white px-4 py-2 text-[13px] font-semibold text-[#b91c1c] hover:bg-[#fff1f2] disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -97,7 +112,11 @@ export function GateApprovalCard({
       {error ? (
         <p className="mt-3 text-[12px] text-[#b91c1c]">{error}</p>
       ) : null}
+      {!canSubmit ? (
+        <p className="mt-2 text-[12px] text-[#92400e]">
+          Waiting for live run and gate identifiers...
+        </p>
+      ) : null}
     </article>
   );
 }
-

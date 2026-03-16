@@ -16,6 +16,7 @@ import { ImprovementSuggestion } from "../components/agents/ImprovementSuggestio
 
 type AgentDetailPageProps = {
   agentId: string;
+  initialTab?: AgentDetailTab;
 };
 
 type AgentDetailTab = "overview" | "history" | "improvement";
@@ -48,8 +49,8 @@ function mapRunToUi(run: {
   };
 }
 
-export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
-  const [activeTab, setActiveTab] = useState<AgentDetailTab>("overview");
+export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetailPageProps) {
+  const [activeTab, setActiveTab] = useState<AgentDetailTab>(initialTab);
   const [agentDetail, setAgentDetail] = useState<AgentDefinitionRecord | null>(null);
   const [runs, setRuns] = useState<AgentRunHistoryRecord[]>([]);
   const [suggestion, setSuggestion] = useState<ImprovementSuggestionRecord | null>(null);
@@ -60,6 +61,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const [suggestionRefreshNonce, setSuggestionRefreshNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, agentId]);
 
   useEffect(() => {
     const load = async () => {

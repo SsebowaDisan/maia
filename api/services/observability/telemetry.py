@@ -25,17 +25,17 @@ class RunTelemetry(SQLModel, table=True):
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     agent_id: str = Field(index=True)
     tenant_id: str = Field(index=True)
-    trigger_type: TriggerType = "manual"
+    trigger_type: str = Field(default="manual")
     started_at: float = Field(default_factory=time.time)
-    ended_at: Optional[float] = None
-    status: RunStatus = "running"
+    ended_at: Optional[float] = Field(default=None)
+    status: str = Field(default="running")
     tokens_in: int = 0
     tokens_out: int = 0
     tool_calls_json: str = "[]"        # list[{tool_id, latency_ms, success}]
     gate_events_json: str = "[]"       # list[{gate_id, decision, latency_ms}]
     computer_use_steps: int = 0
-    computer_use_session_id: Optional[str] = None
-    error: Optional[str] = None
+    computer_use_session_id: Optional[str] = Field(default=None)
+    error: Optional[str] = Field(default=None)
 
 
 def _ensure_tables() -> None:

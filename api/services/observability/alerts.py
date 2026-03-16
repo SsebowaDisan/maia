@@ -71,7 +71,7 @@ class AlertRule(SQLModel, table=True):
     notification_channel: str = "log"  # "log" | "slack" | "email"
     notification_target: str = ""  # channel ID / email address
     enabled: bool = True
-    last_fired_at: Optional[float] = None
+    last_fired_at: Optional[float] = Field(default=None)
 
 
 def _ensure_tables() -> None:
@@ -169,7 +169,63 @@ def _send_notification(rule: AlertRule, alert: dict[str, Any]) -> None:
     elif channel == "slack":
         _send_slack(rule.notification_target, alert)
     elif channel == "email":
-        logger.warning("ALERT (email not implemented): %s", alert)
+        _send_email(rule.notification_target, alert)
+
+
+def _send_email(recipient: str, alert: dict[str, Any]) -> None:
+    """Send an alert notification via SMTP.
+
+    Reads connection details from env vars:
+      MAIA_SMTP_HOST      (default: localhost)
+      MAIA_SMTP_PORT      (default: 587)
+      MAIA_SMTP_USER      (optional — omit for unauthenticated relay)
+      MAIA_SMTP_PASSWORD  (optional)
+      MAIA_SMTP_FROM      (default: maia-alerts@localhost)
+      MAIA_SMTP_USE_TLS   (default: "true")
+    """
+    if not recipient:
+        logger.warning("Email alert has no recipient configured — skipping")
+        return
+    try:
+        import os
+        import smtplib
+        from email.mime.text import MIMEText
+
+        host = os.environ.get("MAIA_SMTP_HOST", "localhost")
+        port = int(os.environ.get("MAIA_SMTP_PORT", "587"))
+        user = os.environ.get("MAIA_SMTP_USER", "")
+        password = os.environ.get("MAIA_SMTP_PASSWORD", "")
+        from_addr = os.environ.get("MAIA_SMTP_FROM", "maia-alerts@localhost")
+        use_tls = os.environ.get("MAIA_SMTP_USE_TLS", "true").lower() not in ("0", "false", "no")
+
+        subject = (
+            f"Maia Alert — error rate {alert['error_rate'] * 100:.1f}% "
+            f"for class '{alert['error_class']}'"
+        )
+        body = (
+            f"Maia Alert\n\n"
+            f"Error class : {alert['error_class']}\n"
+            f"Error rate  : {alert['error_rate'] * 100:.1f}%\n"
+            f"Errors      : {alert['error_count']} / {alert['total_runs']} runs\n"
+            f"Window      : {alert['window_seconds'] // 60} minutes\n"
+            f"Tenant      : {alert.get('tenant_id', '')}\n"
+        )
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = recipient
+
+        smtp_cls = smtplib.SMTP_SSL if (use_tls and port == 465) else smtplib.SMTP
+        with smtp_cls(host, port, timeout=10) as server:
+            if use_tls and port != 465:
+                server.starttls()
+            if user:
+                server.login(user, password)
+            server.sendmail(from_addr, [recipient], msg.as_string())
+
+        logger.info("Alert email sent to %s", recipient)
+    except Exception as exc:
+        logger.warning("Email alert send failed (recipient=%s): %s", recipient, exc)
 
 
 def _send_slack(channel: str, alert: dict[str, Any]) -> None:

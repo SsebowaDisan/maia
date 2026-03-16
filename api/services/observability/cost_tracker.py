@@ -67,6 +67,7 @@ def record_token_cost(
 
     date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     _increment_daily(tenant_id, date_key, llm_cost=llm_cost, cu_cost=cu_cost)
+    _check_budget_alert(tenant_id, date_key)
     return round(total, 6)
 
 
@@ -127,6 +128,39 @@ def assert_budget_ok(tenant_id: str) -> None:
 
 
 # ── Private ────────────────────────────────────────────────────────────────────
+
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+
+def _check_budget_alert(tenant_id: str, date_key: str) -> None:
+    """Emit a structured warning when spending crosses alert_threshold_fraction."""
+    try:
+        with Session(engine) as session:
+            budget = session.get(BudgetLimit, tenant_id)
+            if not budget:
+                return
+            record = session.exec(
+                select(DailyCostRecord)
+                .where(DailyCostRecord.tenant_id == tenant_id)
+                .where(DailyCostRecord.date_key == date_key)
+            ).first()
+        if not record:
+            return
+        spent = record.total_cost_usd
+        threshold = budget.daily_limit_usd * budget.alert_threshold_fraction
+        if spent >= threshold:
+            pct = spent / budget.daily_limit_usd * 100
+            _logger.warning(
+                "BUDGET_ALERT tenant=%s spent=$%.4f (%.1f%% of $%.2f daily limit)",
+                tenant_id,
+                spent,
+                pct,
+                budget.daily_limit_usd,
+            )
+    except Exception:
+        pass  # Never block cost recording due to alert check failure
+
 
 def _increment_daily(tenant_id: str, date_key: str, *, llm_cost: float, cu_cost: float) -> None:
     with Session(engine) as session:

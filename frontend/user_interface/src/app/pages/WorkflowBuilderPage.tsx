@@ -17,6 +17,7 @@ import {
   type WorkflowSummaryRecord,
 } from "../../api/client";
 import { MultiAgentTheatre } from "../components/agentActivityPanel/MultiAgentTheatre";
+import { WorkflowBuilderTab } from "../components/agentActivityPanel/WorkflowBuilderTab";
 
 type WorkflowStep = {
   stepId: string;
@@ -85,6 +86,7 @@ function initialStepStatuses(steps: WorkflowStep[]): Record<string, StepStatus> 
 }
 
 export function WorkflowBuilderPage() {
+  const [activeTab, setActiveTab] = useState<"orchestrator" | "description">("orchestrator");
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [agents, setAgents] = useState<AgentSummaryRecord[]>([]);
@@ -281,9 +283,7 @@ export function WorkflowBuilderPage() {
           agentId: step.agentId || step.stepId,
           agentName: agent?.name || step.agentId || step.stepId,
           status: (stepStatuses[step.stepId] || "pending") as StepStatus,
-          events: logs.length
-            ? logs
-            : [`Condition: ${step.condition || "always"}`, "Input mapping ready", "Output key assigned"],
+          events: logs,
         };
       }),
     [agents, stepLogs, stepStatuses, steps],
@@ -299,6 +299,51 @@ export function WorkflowBuilderPage() {
           <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">
             Compose multi-agent workflows
           </h1>
+          <div className="mt-4 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab("orchestrator")}
+              className={`rounded-full px-4 py-2 text-[12px] font-semibold transition ${
+                activeTab === "orchestrator"
+                  ? "bg-[#111827] text-white"
+                  : "border border-black/[0.12] bg-white text-[#344054]"
+              }`}
+            >
+              Builder
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("description")}
+              className={`rounded-full px-4 py-2 text-[12px] font-semibold transition ${
+                activeTab === "description"
+                  ? "bg-[#111827] text-white"
+                  : "border border-black/[0.12] bg-white text-[#344054]"
+              }`}
+            >
+              Build from description
+            </button>
+          </div>
+          {activeTab === "description" ? (
+            <p className="mt-3 text-[13px] text-[#667085]">
+              Describe the workflow in natural language, validate the generated definition, and save it directly to the workflow catalog.
+            </p>
+          ) : null}
+        </section>
+
+        {activeTab === "description" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white">
+            <div className="h-[700px] min-h-0">
+              <WorkflowBuilderTab
+                onSave={() => {
+                  void loadWorkflowData();
+                }}
+              />
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "orchestrator" ? (
+          <>
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto_auto_auto]">
             <label className="rounded-xl border border-black/[0.08] bg-[#fcfcfd] px-3 py-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#667085]">Workflow name</span>
@@ -351,8 +396,11 @@ export function WorkflowBuilderPage() {
               {runningWorkflow ? "Running..." : "Run workflow"}
             </button>
           </div>
-        </section>
+        </>
+        ) : null}
 
+        {activeTab === "orchestrator" ? (
+          <>
         {loadError ? (
           <section className="rounded-2xl border border-[#fca5a5] bg-[#fff1f2] p-4 text-[13px] text-[#9f1239]">
             {loadError}
@@ -463,6 +511,8 @@ export function WorkflowBuilderPage() {
         </section>
 
         <MultiAgentTheatre columns={theatreColumns} />
+          </>
+        ) : null}
       </div>
     </div>
   );

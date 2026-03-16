@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useAgentRunStore } from "../../stores/agentRunStore";
 
 type LiveRunMonitorRecord = {
   runId: string;
@@ -53,6 +54,9 @@ function statusStage(status: string): string {
 
 export function LiveRunMonitor({ runs, onOpenRun }: LiveRunMonitorProps) {
   const [tick, setTick] = useState(0);
+  const activeRunId = useAgentRunStore((state) => state.runId);
+  const activeStage = useAgentRunStore((state) => state.stage);
+  const activeToolId = useAgentRunStore((state) => state.toolId);
 
   useEffect(() => {
     const timer = window.setInterval(() => setTick((value) => value + 1), 5000);
@@ -64,12 +68,17 @@ export function LiveRunMonitor({ runs, onOpenRun }: LiveRunMonitorProps) {
       const status = String(run.status || "").toLowerCase();
       return status === "running" || status === "in_progress" || status === "queued";
     });
-    const source = running.length > 0 ? running : runs.slice(0, 2);
-    return source.slice(0, 6).map((run) => ({
+    return running.slice(0, 6).map((run) => {
+      const startedAtMs = new Date(run.startedAt).getTime();
+      const elapsedSeconds = Number.isNaN(startedAtMs)
+        ? Math.max(0, Math.round(run.durationMs / 1000))
+        : Math.max(0, Math.round((Date.now() - startedAtMs) / 1000));
+      return {
       ...run,
-      elapsedSeconds: Math.max(0, Math.round(run.durationMs / 1000 + (tick % 7))),
+      elapsedSeconds,
       stage: statusStage(run.status),
-    }));
+      };
+    });
   }, [runs, tick]);
 
   return (
@@ -78,6 +87,13 @@ export function LiveRunMonitor({ runs, onOpenRun }: LiveRunMonitorProps) {
         <h3 className="text-[18px] font-semibold text-[#111827]">Live run monitor</h3>
         <span className="text-[12px] text-[#667085]">{activeRuns.length} active</span>
       </div>
+      {activeRunId ? (
+        <p className="mb-2 rounded-xl border border-black/[0.06] bg-[#f8fafc] px-3 py-2 text-[12px] text-[#475467]">
+          Tracking run <span className="font-semibold text-[#111827]">{activeRunId}</span>
+          {activeStage ? ` · ${activeStage}` : ""}
+          {activeToolId ? ` · ${activeToolId}` : ""}
+        </p>
+      ) : null}
       {activeRuns.length === 0 ? (
         <p className="rounded-xl border border-black/[0.06] bg-[#fcfcfd] px-3 py-2 text-[12px] text-[#667085]">
           No active runs right now.
@@ -89,7 +105,9 @@ export function LiveRunMonitor({ runs, onOpenRun }: LiveRunMonitorProps) {
             key={run.runId}
             type="button"
             onClick={() => onOpenRun?.(run.runId)}
-            className="w-full rounded-xl border border-black/[0.06] bg-[#fcfcfd] px-3 py-2 text-left hover:border-black/[0.14]"
+            className={`w-full rounded-xl border bg-[#fcfcfd] px-3 py-2 text-left hover:border-black/[0.14] ${
+              activeRunId && run.runId === activeRunId ? "border-[#c7d7fe] shadow-[0_0_0_1px_rgba(59,130,246,0.25)]" : "border-black/[0.06]"
+            }`}
           >
             <p className="text-[13px] font-semibold text-[#111827]">{run.runId}</p>
             <p className="text-[12px] text-[#667085]">

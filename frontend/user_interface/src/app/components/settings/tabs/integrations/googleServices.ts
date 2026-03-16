@@ -4,7 +4,7 @@ import type {
 } from "../../../../../api/integrations";
 
 type GoogleServiceDefinition = {
-  id: "gmail" | "drive" | "docs" | "sheets" | "analytics";
+  id: "gmail" | "drive" | "docs" | "sheets" | "analytics" | "calendar";
   label: string;
   description: string;
   scopes: string[];
@@ -46,6 +46,12 @@ const GOOGLE_SERVICE_DEFS: GoogleServiceDefinition[] = [
     label: "Analytics",
     description: "Read GA4 reporting.",
     scopes: ["https://www.googleapis.com/auth/analytics.readonly"],
+  },
+  {
+    id: "calendar",
+    label: "Calendar",
+    description: "Create and manage calendar events.",
+    scopes: ["https://www.googleapis.com/auth/calendar.events"],
   },
 ];
 

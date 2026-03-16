@@ -113,6 +113,40 @@ def run_orchestrator_stream_turn(
     agent_settings = dict(settings)
     if isinstance(request.setting_overrides, dict):
         agent_settings.update(request.setting_overrides)
+
+    # B-03: Resolve marketplace/installed agent from @mention or LLM intent.
+    # When an agent is resolved, its tool allowlist and system prompt are injected
+    # so that the step planner respects the agent's declared capability scope.
+    try:
+        from api.services.agents.resolver import resolve_agent
+        from api.services.agents.definition_store import get_agent, load_schema as _load_schema
+
+        _resolution = resolve_agent(user_id, message, user_id=user_id)
+        if _resolution:
+            _agent_record = get_agent(user_id, _resolution.agent_id)
+            if _agent_record:
+                _agent_schema = _load_schema(_agent_record)
+                if getattr(_agent_schema, "tools", None):
+                    agent_settings["__allowed_tool_ids"] = list(_agent_schema.tools)
+                # Prepend agent system_prompt to agent_goal so task_preparation
+                # picks it up as execution context (same approach as runner.py).
+                _sys_prompt = getattr(_agent_schema, "system_prompt", None) or ""
+                if _sys_prompt:
+                    _cur_goal = str(getattr(agent_request, "agent_goal", "") or "")
+                    _new_goal = f"{_sys_prompt}\n\n{_cur_goal}".strip()[:1200] if _cur_goal else _sys_prompt[:1200]
+                    try:
+                        agent_request = agent_request.model_copy(update={"agent_goal": _new_goal})
+                    except Exception:
+                        pass
+                logger.debug(
+                    "Resolved agent %s (by=%s) for user=%s",
+                    _resolution.agent_id,
+                    _resolution.matched_by,
+                    user_id,
+                )
+    except Exception:
+        logger.debug("Agent resolution failed — proceeding with default mode", exc_info=True)
+
     if requested_mode == _DEEP_SEARCH_MODE:
         agent_settings["__deep_search_enabled"] = True
     if context_snippets:

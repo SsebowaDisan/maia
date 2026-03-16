@@ -120,6 +120,23 @@ export function AgentActivityPanel({
     maybeOpenEventSource(event);
   };
 
+  const handleReplayStep = (event: Record<string, unknown>, index: number) => {
+    const replayEventId = String(event.event_id || "").trim();
+    if (replayEventId) {
+      const matchedIndex = orderedEvents.findIndex(
+        (candidate) => String(candidate.event_id || "").trim() === replayEventId,
+      );
+      if (matchedIndex >= 0) {
+        setCursor(matchedIndex);
+        setIsPlaying(false);
+        return;
+      }
+    }
+    const clampedIndex = Math.max(0, Math.min(orderedEvents.length - 1, Number(index) || 0));
+    setCursor(clampedIndex);
+    setIsPlaying(false);
+  };
+
   useEffect(() => {
     if (!orderedEvents.length) {
       setCursor(0);
@@ -482,6 +499,8 @@ export function AgentActivityPanel({
         theatreStage={theatreStage}
         needsHumanReview={Boolean(needsHumanReview)}
         humanReviewNotes={humanReviewNotes}
+        activityRunId={runId}
+        onReplayStep={handleReplayStep}
       />
       <CinemaOverlay
         open={isCinemaMode}

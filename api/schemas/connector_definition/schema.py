@@ -60,6 +60,14 @@ class ConnectorDefinitionSchema(BaseModel):
     # URL to the connector's logo image (shown in the marketplace).
     logo_url: str | None = None
 
+    # Suite grouping (e.g. "google", "microsoft") — used by the frontend to
+    # group related connectors under a single expandable section.
+    suite_id: str | None = None
+    suite_label: str | None = None
+
+    # Display order within a suite (lower = first).
+    service_order: int = 99
+
     # ── Authentication ────────────────────────────────────────────────────────
 
     auth: AuthConfig = Field(default_factory=NoAuthConfig)

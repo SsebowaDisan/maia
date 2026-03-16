@@ -172,7 +172,7 @@ def store_oauth_tokens(
             binding.token_expires_at = token_expires_at
             binding.auth_strategy = "oauth2"
             if extra:
-                binding.metadata = {**(binding.metadata or {}), **extra}
+                binding.extra_metadata = {**(binding.extra_metadata or {}), **extra}
             binding.date_updated = now
         else:
             binding = ConnectorBinding(

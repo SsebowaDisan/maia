@@ -50,7 +50,7 @@ class WorkGraphPayload(BaseModel):
     version: int = 1
     map_type: str = "work_graph"
     kind: str = "work_graph"
-    schema: str = "work_graph.v2"
+    schema_version: str = "work_graph.v2"
     run_id: str
     title: str
     root_id: str

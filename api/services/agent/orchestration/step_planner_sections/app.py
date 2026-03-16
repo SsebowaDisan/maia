@@ -78,6 +78,17 @@ def build_execution_steps(
     activity_event_factory: Callable[..., AgentActivityEvent],
 ) -> Generator[dict[str, Any], None, PlanPreparation]:
     available_tool_ids = _extract_available_tool_ids(registry)
+
+    # Enforce agent definition tool allowlist when present.
+    # The allowlist comes from AgentDefinitionSchema.tools and is injected by
+    # run_agent_task() via settings["__allowed_tool_ids"].  This ensures a
+    # marketplace agent (e.g. ga4-analytics-reporter) can only plan steps using
+    # the tools it declared — not the full global registry.
+    _allowed = settings.get("__allowed_tool_ids")
+    if isinstance(_allowed, list) and _allowed:
+        _allowed_set = {str(t).strip() for t in _allowed if str(t).strip()}
+        available_tool_ids = available_tool_ids & _allowed_set
+
     settings["__contact_form_capability_enabled"] = (
         "browser.contact_form.send" in available_tool_ids
     )

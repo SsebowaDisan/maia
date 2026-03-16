@@ -54,36 +54,82 @@ class GoogleDocsService:
         return text, "NORMAL_TEXT", ""
 
     @staticmethod
-    def _render_inline_markdown(text: str) -> tuple[str, list[tuple[int, int, str]]]:
+    def _render_inline_markdown(
+        text: str,
+    ) -> tuple[str, list[tuple[int, int, str]], list[tuple[int, int, str]], list[tuple[int, int, str]]]:
+        """Parse inline markdown and return (plain_text, links, bold_ranges, italic_ranges).
+
+        Handles **bold**, *italic*, `code` (rendered as bold-monospace), and [label](url).
+        Patterns are processed left-to-right; nested/overlapping spans are not supported.
+        """
         clean = str(text or "")
-        pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+        # Combined pattern: links first (longest), then bold, italic, code
+        pattern = re.compile(
+            r"\[([^\]]+)\]\((https?://[^)\s]+)\)"   # [label](url)
+            r"|\*\*([^*]+)\*\*"                       # **bold**
+            r"|__([^_]+)__"                           # __bold__
+            r"|\*([^*]+)\*"                            # *italic*
+            r"|_([^_]+)_"                              # _italic_
+            r"|`([^`]+)`"                              # `code` → rendered bold
+        )
         cursor = 0
         chunks: list[str] = []
         links: list[tuple[int, int, str]] = []
+        bold_ranges: list[tuple[int, int, str]] = []   # (start, end, "bold")
+        italic_ranges: list[tuple[int, int, str]] = []  # (start, end, "italic")
         out_len = 0
+
         for match in pattern.finditer(clean):
             start, end = match.span()
             if start > cursor:
                 before = clean[cursor:start]
                 chunks.append(before)
                 out_len += len(before)
-            label = str(match.group(1) or "").strip()
-            url = str(match.group(2) or "").strip()
-            if label and url:
-                chunks.append(label)
-                link_start = out_len
-                out_len += len(label)
-                links.append((link_start, out_len, url))
+
+            link_label, link_url = match.group(1), match.group(2)
+            bold1, bold2 = match.group(3), match.group(4)
+            italic1, italic2 = match.group(5), match.group(6)
+            code_text = match.group(7)
+
+            if link_label is not None and link_url:
+                label = link_label.strip()
+                url = link_url.strip()
+                if label and url:
+                    chunks.append(label)
+                    link_start = out_len
+                    out_len += len(label)
+                    links.append((link_start, out_len, url))
+                else:
+                    raw = clean[start:end]
+                    chunks.append(raw)
+                    out_len += len(raw)
+            elif bold1 is not None or bold2 is not None:
+                content = (bold1 or bold2 or "")
+                chunks.append(content)
+                bold_ranges.append((out_len, out_len + len(content), "bold"))
+                out_len += len(content)
+            elif italic1 is not None or italic2 is not None:
+                content = (italic1 or italic2 or "")
+                chunks.append(content)
+                italic_ranges.append((out_len, out_len + len(content), "italic"))
+                out_len += len(content)
+            elif code_text is not None:
+                chunks.append(code_text)
+                bold_ranges.append((out_len, out_len + len(code_text), "bold"))
+                out_len += len(code_text)
             else:
                 raw = clean[start:end]
                 chunks.append(raw)
                 out_len += len(raw)
+
             cursor = end
+
         if cursor < len(clean):
             tail = clean[cursor:]
             chunks.append(tail)
             out_len += len(tail)
-        return "".join(chunks), links
+
+        return "".join(chunks), links, bold_ranges, italic_ranges
 
     @classmethod
     def _build_markdown_requests(
@@ -100,11 +146,13 @@ class GoogleDocsService:
         paragraph_styles: list[tuple[int, int, str]] = []
         bullet_ranges: list[tuple[int, int, str]] = []
         link_ranges: list[tuple[int, int, str]] = []
+        bold_ranges: list[tuple[int, int]] = []
+        italic_ranges: list[tuple[int, int]] = []
         char_cursor = 0
 
         for raw_row in rows:
             line_text, style, bullet_preset = cls._strip_line_markdown(raw_row)
-            rendered_line, inline_links = cls._render_inline_markdown(line_text)
+            rendered_line, inline_links, inline_bold, inline_italic = cls._render_inline_markdown(line_text)
 
             line_start = char_cursor
             full_text_parts.append(rendered_line)
@@ -122,13 +170,11 @@ class GoogleDocsService:
             if rendered_line.strip() and bullet_preset:
                 bullet_ranges.append((absolute_start, absolute_end_with_newline, bullet_preset))
             for local_start, local_end, url in inline_links:
-                link_ranges.append(
-                    (
-                        absolute_start + local_start,
-                        absolute_start + local_end,
-                        url,
-                    )
-                )
+                link_ranges.append((absolute_start + local_start, absolute_start + local_end, url))
+            for local_start, local_end, _ in inline_bold:
+                bold_ranges.append((absolute_start + local_start, absolute_start + local_end))
+            for local_start, local_end, _ in inline_italic:
+                italic_ranges.append((absolute_start + local_start, absolute_start + local_end))
 
         full_text = "".join(full_text_parts)
         inserted_chars = len(full_text)
@@ -172,6 +218,28 @@ class GoogleDocsService:
                         "range": {"startIndex": start, "endIndex": end},
                         "textStyle": {"link": {"url": url}},
                         "fields": "link",
+                    }
+                }
+            )
+
+        for start, end in bold_ranges:
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {"startIndex": start, "endIndex": end},
+                        "textStyle": {"bold": True},
+                        "fields": "bold",
+                    }
+                }
+            )
+
+        for start, end in italic_ranges:
+            requests.append(
+                {
+                    "updateTextStyle": {
+                        "range": {"startIndex": start, "endIndex": end},
+                        "textStyle": {"italic": True},
+                        "fields": "italic",
                     }
                 }
             )

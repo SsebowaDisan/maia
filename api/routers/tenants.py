@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from api.auth import get_current_user_id
@@ -132,7 +132,11 @@ def update_tenant(
     return TenantResponse.from_model(tenant)
 
 
-@router.delete("/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{tenant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
 def deactivate_tenant(
     tenant_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],

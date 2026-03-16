@@ -8,6 +8,7 @@ from .research_notes import WorkspaceResearchNotesTool
 from .sheets_append import WorkspaceSheetsAppendTool
 from .sheets_read import WorkspaceSheetsReadTool
 from .sheets_track_step import WorkspaceSheetsTrackStepTool
+from .sheets_update import WorkspaceSheetsUpdateTool
 
 __all__ = [
     "WorkspaceDocsReadTool",
@@ -19,4 +20,5 @@ __all__ = [
     "WorkspaceSheetsAppendTool",
     "WorkspaceSheetsReadTool",
     "WorkspaceSheetsTrackStepTool",
+    "WorkspaceSheetsUpdateTool",
 ]

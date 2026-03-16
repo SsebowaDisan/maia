@@ -4,8 +4,8 @@ import { toast } from "sonner";
 
 import {
   listAgents,
+  listConnectorCredentials,
   installMarketplaceAgent,
-  listConnectorCatalog,
   listMarketplaceAgents,
   getMarketplaceAgent,
   type MarketplaceAgentDetail,
@@ -37,18 +37,26 @@ export function MarketplacePage() {
       setLoading(true);
       setError("");
       try {
-        const [rows, connectors, installedAgents] = await Promise.all([
+        const [rows, connectorCredentials, installedAgents] = await Promise.all([
           listMarketplaceAgents({
             q: query.trim() || undefined,
             pricing: pricingFilter === "all" ? undefined : pricingFilter,
             sort_by: "installs",
             limit: 60,
           }),
-          listConnectorCatalog(),
+          listConnectorCredentials(),
           listAgents(),
         ]);
         setAgents(rows || []);
-        setAvailableConnectorIds((connectors || []).map((row) => row.id).filter(Boolean));
+        setAvailableConnectorIds(
+          Array.from(
+            new Set(
+              (connectorCredentials || [])
+                .map((row) => String(row.connector_id || "").trim())
+                .filter(Boolean),
+            ),
+          ),
+        );
         setInstalledAgentIds(
           (installedAgents || [])
             .map((agent) => String(agent.agent_id || "").trim())
@@ -128,6 +136,13 @@ export function MarketplacePage() {
     } finally {
       setInstalling(false);
     }
+  };
+
+  const openConnectorSetup = (connectorId: string) => {
+    const target = `/connectors?connector=${encodeURIComponent(connectorId)}`;
+    setSelectedAgentId(null);
+    setSelectedAgentDetail(null);
+    navigateToPath(target);
   };
 
   return (
@@ -234,6 +249,7 @@ export function MarketplacePage() {
         agent={selectedAgentDetail}
         availableConnectorIds={availableConnectorIds}
         installing={installing}
+        onOpenConnectorSetup={openConnectorSetup}
         onClose={() => {
           if (installing) {
             return;

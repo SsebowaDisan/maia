@@ -1,4 +1,43 @@
+import { useEffect, useState } from "react";
+import { TrendingUp } from "lucide-react";
+
+type RoiSummaryPayload = {
+  total_time_saved_hours?: number;
+  total_cost_avoided_usd?: number;
+};
+
 function EmptyState() {
+  const [roiSummary, setRoiSummary] = useState<RoiSummaryPayload | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRoiSummary = async () => {
+      try {
+        const response = await fetch("/api/roi?days=30", { credentials: "include" });
+        if (!response.ok || cancelled) {
+          return;
+        }
+        const payload = (await response.json()) as RoiSummaryPayload;
+        const totalCost = Number(payload.total_cost_avoided_usd ?? 0);
+        if (!Number.isFinite(totalCost) || totalCost <= 0) {
+          return;
+        }
+        setRoiSummary(payload);
+      } catch {
+        // Keep empty state stable when ROI service is unavailable.
+      }
+    };
+    void loadRoiSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const navigateToRoi = () => {
+    window.history.pushState({}, "", "/operations?tab=roi");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+
   return (
     <div className="h-full flex flex-col items-center justify-center">
       <div className="max-w-2xl w-full text-center space-y-3">
@@ -18,6 +57,19 @@ function EmptyState() {
         <p className="text-[15px] text-[#86868b] leading-relaxed">
           Start by uploading files or URLs from the sidebar.
         </p>
+        {roiSummary ? (
+          <button
+            type="button"
+            onClick={navigateToRoi}
+            className="mx-auto mt-5 inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white px-4 py-2 text-[12px] font-medium text-[#3f4758] shadow-sm transition-colors hover:border-black/[0.15] hover:text-[#111827]"
+          >
+            <TrendingUp className="h-3.5 w-3.5 text-[#5f6b85]" />
+            <span>
+              This month: saved {Number(roiSummary.total_time_saved_hours ?? 0).toFixed(1)}h · $
+              {Number(roiSummary.total_cost_avoided_usd ?? 0).toFixed(2)} cost avoided
+            </span>
+          </button>
+        ) : null}
       </div>
     </div>
   );

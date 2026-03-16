@@ -23,7 +23,7 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -50,6 +50,11 @@ class RunRequest(BaseModel):
     conversation_id: str | None = None
     context: dict[str, Any] = {}
     max_delegation_depth: int = 3
+
+
+class SimulateRequest(BaseModel):
+    input: str = "Simulate agent run."
+    mocked_tools: dict[str, Any] = {}
 
 
 # ── Agent CRUD ─────────────────────────────────────────────────────────────────
@@ -103,7 +108,7 @@ def update_agent(
     return {"id": record.id, "agent_id": record.agent_id, "version": record.version}
 
 
-@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_agent(
     agent_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -178,6 +183,7 @@ def run_agent(
                 run_id=run.id,
                 conversation_id=body.conversation_id,
                 system_prompt=schema.system_prompt or None,
+                allowed_tool_ids=list(schema.tools) if schema.tools else None,
             ):
                 yield f"data: {json.dumps(chunk)}\n\n"
                 text = chunk.get("text") or chunk.get("content") or ""
@@ -285,6 +291,61 @@ def pending_gates(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict[str, Any]]:
     return list_pending_gates(run_id)
+
+
+# ── Agent simulation (P8-02) ──────────────────────────────────────────────────
+
+@router.post("/{agent_id}/simulate")
+def simulate_agent(
+    agent_id: str,
+    body: SimulateRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """Run the agent in dry-run mode against a canned scenario.
+
+    No real tool calls are executed — mocked_tools responses are substituted.
+    Returns a full step trace for display in the activity panel.
+    """
+    from api.services.agents.simulation import run_simulation
+    return run_simulation(
+        tenant_id=user_id,
+        agent_id=agent_id,
+        scenario={"input": body.input, "mocked_tools": body.mocked_tools},
+    )
+
+
+# ── Agent memory (P7-05 REST surface) ─────────────────────────────────────────
+
+@router.get("/{agent_id}/memory")
+def list_agent_memory(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict[str, Any]]:
+    """Return all stored long-term memories for this agent."""
+    from api.services.agents.long_term_memory import list_memories
+    return list_memories(user_id, agent_id)
+
+
+@router.delete("/{agent_id}/memory", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def clear_agent_memory(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Delete all long-term memories for this agent."""
+    from api.services.agents.long_term_memory import clear_memories
+    clear_memories(user_id, agent_id)
+
+
+@router.delete("/{agent_id}/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_agent_memory_entry(
+    agent_id: str,
+    memory_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Delete a single long-term memory entry."""
+    from api.services.agents.long_term_memory import delete_memory
+    if not delete_memory(user_id, agent_id, memory_id):
+        raise HTTPException(status_code=404, detail="Memory entry not found.")
 
 
 # ── Webhook receiver ───────────────────────────────────────────────────────────

@@ -451,10 +451,7 @@ export function WorkspacePage() {
           </section>
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <AgentRunHistory
-              runs={allRuns}
-              onOpenReplay={(runId) => toast.message(`Opening theatre replay for ${runId}.`)}
-            />
+            <AgentRunHistory runs={allRuns} />
             <MemoryExplorer
               episodes={episodes}
               workingMemory={workingMemory}

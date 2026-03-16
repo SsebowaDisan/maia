@@ -23,7 +23,7 @@ class AgentReview(SQLModel, table=True):
     tenant_id: str = Field(index=True)
     rating: int  # 1–5
     review_text: str = ""
-    publisher_response: Optional[str] = None
+    publisher_response: Optional[str] = Field(default=None)
     flagged: bool = False
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)

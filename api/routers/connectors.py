@@ -7,13 +7,14 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from api.auth import get_current_user_id
 from api.services.connectors import catalog, vault
 from api.services.connectors import oauth as oauth_service
 from api.services.connectors import bindings as bindings_service
+from api.services.connectors import webhooks as webhooks_service
 from api.services.connectors.oauth import OAuthError
 from api.services.connectors.tool_executor import execute_tool
 
@@ -57,6 +58,12 @@ class ToolExecuteRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
+class WebhookRegisterRequest(BaseModel):
+    event_types: list[str]
+    base_url: str = ""
+    extra_params: dict[str, Any] = {}
+
+
 # ── Catalog ────────────────────────────────────────────────────────────────
 
 @router.get("", summary="List all available connectors")
@@ -66,6 +73,40 @@ def list_connectors(
     """Return ConnectorDefinitionSchema for every registered connector."""
     definitions = catalog.list_definitions()
     return [d.model_dump(mode="json") for d in definitions]
+
+
+@router.get("/webhooks", summary="List active webhooks for this tenant")
+def list_webhooks(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict[str, Any]]:
+    registrations = webhooks_service.list_webhooks(_tenant(user_id))
+    return [
+        {
+            "id": r.id,
+            "connector_id": r.connector_id,
+            "event_types": r.event_types_json,
+            "receiver_url": r.receiver_url,
+            "external_hook_id": r.external_hook_id,
+            "active": r.active,
+            "created_at": r.created_at,
+        }
+        for r in registrations
+    ]
+
+
+@router.delete(
+    "/webhooks/{webhook_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    summary="Deregister a webhook",
+)
+def deregister_webhook(
+    webhook_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    removed = webhooks_service.deregister_webhook(_tenant(user_id), webhook_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Webhook not found.")
 
 
 @router.get("/{connector_id}", summary="Get a single connector definition")
@@ -81,6 +122,15 @@ def get_connector(
 
 # ── Credentials (API key / basic auth) ─────────────────────────────────────
 
+def _mirror_to_legacy_store(tenant_id: str, connector_id: str, values: dict[str, Any]) -> None:
+    """Mirror credentials to the legacy file-based ConnectorCredentialStore."""
+    try:
+        from api.services.agent.auth.credentials import get_credential_store
+        get_credential_store().set(tenant_id=tenant_id, connector_id=connector_id, values=values)
+    except Exception:
+        logger.debug("Legacy credential mirror failed for %s", connector_id, exc_info=True)
+
+
 @router.post("/{connector_id}/credentials/api-key", status_code=status.HTTP_201_CREATED)
 def store_api_key(
     connector_id: str,
@@ -92,12 +142,9 @@ def store_api_key(
     if not definition:
         raise HTTPException(status_code=404, detail="Connector not found.")
 
-    vault.store_credential(
-        _tenant(user_id),
-        connector_id,
-        {"api_key": body.api_key},
-        auth_strategy="api_key",
-    )
+    values = {"api_key": body.api_key}
+    vault.store_credential(_tenant(user_id), connector_id, values, auth_strategy="api_key")
+    _mirror_to_legacy_store(_tenant(user_id), connector_id, values)
     return {"status": "stored", "connector_id": connector_id}
 
 
@@ -112,16 +159,13 @@ def store_basic_credential(
     if not definition:
         raise HTTPException(status_code=404, detail="Connector not found.")
 
-    vault.store_credential(
-        _tenant(user_id),
-        connector_id,
-        {"username": body.username, "password": body.password},
-        auth_strategy="basic",
-    )
+    values = {"username": body.username, "password": body.password}
+    vault.store_credential(_tenant(user_id), connector_id, values, auth_strategy="basic")
+    _mirror_to_legacy_store(_tenant(user_id), connector_id, values)
     return {"status": "stored", "connector_id": connector_id}
 
 
-@router.delete("/{connector_id}/credentials", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{connector_id}/credentials", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def revoke_credential(
     connector_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
@@ -264,6 +308,36 @@ def update_binding_permissions(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"status": "updated", "connector_id": connector_id}
+
+
+# ── Webhooks ──────────────────────────────────────────────────────────────
+
+@router.post("/{connector_id}/webhooks", status_code=status.HTTP_201_CREATED, summary="Register a webhook")
+def register_webhook(
+    connector_id: str,
+    body: WebhookRegisterRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """Register a webhook with the external connector service."""
+    definition = catalog.get_definition(connector_id)
+    if not definition:
+        raise HTTPException(status_code=404, detail="Connector not found.")
+    try:
+        record = webhooks_service.register_webhook(
+            tenant_id=_tenant(user_id),
+            connector_id=connector_id,
+            event_types=body.event_types,
+            base_url=body.base_url,
+            extra_params=body.extra_params,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "id": record.id,
+        "connector_id": record.connector_id,
+        "receiver_url": record.receiver_url,
+        "external_hook_id": record.external_hook_id,
+    }
 
 
 # ── Tool execution ─────────────────────────────────────────────────────────

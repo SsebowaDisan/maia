@@ -206,6 +206,29 @@ class GoogleWorkspaceConnector(BaseConnector):
             "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
         }
 
+    def update_sheet_range(
+        self,
+        *,
+        spreadsheet_id: str,
+        sheet_range: str,
+        values: list[list[Any]],
+    ) -> dict[str, Any]:
+        service = GoogleSheetsService(session=self._authorized_session())
+        try:
+            result = service.update_range(
+                spreadsheet_id=spreadsheet_id,
+                a1_range=sheet_range,
+                values=values,
+            )
+        except GoogleServiceError as exc:
+            raise ConnectorError(str(exc)) from exc
+        return {
+            "spreadsheet_id": spreadsheet_id,
+            "sheet_range": sheet_range,
+            "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit",
+            "update_info": result.get("update_info") or {},
+        }
+
     def docs_read_text(self, *, document_id: str) -> dict[str, Any]:
         service = GoogleDocsService(session=self._authorized_session())
         try:

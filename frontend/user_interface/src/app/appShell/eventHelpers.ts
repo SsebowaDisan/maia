@@ -1,6 +1,10 @@
 import type { ConversationDetail } from "../../api/client";
 import { EVT_INTERACTION_SUGGESTION } from "../constants/eventTypes";
-import { normalizeCanvasDocuments, normalizeMessageBlocks } from "../messageBlocks";
+import {
+  normalizeCanvasDocuments,
+  normalizeMessageBlocks,
+  type CanvasDocumentRecord,
+} from "../messageBlocks";
 import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
@@ -210,6 +214,66 @@ export function splitAgentEventsBySuggestionType(events: AgentActivityEvent[]): 
     primaryEvents.push(event);
   }
   return { primaryEvents, suggestionEvents };
+}
+
+function asCanvasDocumentRecord(value: unknown): CanvasDocumentRecord | null {
+  const row = asRecord(value);
+  if (!row) {
+    return null;
+  }
+  const id = asString(row.id || row.document_id || row.documentId);
+  const title = asString(row.title || row.name || row.document_title || row.documentTitle);
+  if (!id || !title) {
+    return null;
+  }
+  return {
+    id,
+    title,
+    content: String(row.content ?? row.markdown ?? row.body ?? ""),
+  };
+}
+
+function readCanvasToolId(event: AgentActivityEvent): string {
+  const data = asRecord(event.data) || {};
+  const metadata = asRecord(event.metadata) || {};
+  return asString(data.tool_id || metadata.tool_id || event.event_type).toLowerCase();
+}
+
+export function extractCanvasDocumentFromToolEvent(
+  event: AgentActivityEvent,
+): CanvasDocumentRecord | null {
+  const eventType = asString(event.event_type).toLowerCase();
+  if (eventType !== "tool_completed") {
+    return null;
+  }
+  const toolId = readCanvasToolId(event);
+  if (toolId !== "canvas.create_document") {
+    return null;
+  }
+
+  const data = asRecord(event.data) || {};
+  const metadata = asRecord(event.metadata) || {};
+  const candidates: unknown[] = [
+    data.document,
+    data.result,
+    data.output,
+    data.created_document,
+    data.document_record,
+    metadata.document,
+    metadata.result,
+    metadata.output,
+    metadata.created_document,
+    metadata.document_record,
+    data,
+    metadata,
+  ];
+  for (const candidate of candidates) {
+    const normalized = asCanvasDocumentRecord(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 function mapMessageAttachments(

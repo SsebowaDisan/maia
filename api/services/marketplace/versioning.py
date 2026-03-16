@@ -110,7 +110,16 @@ def _is_newer(candidate: str, current: str) -> bool:
 
 
 def _get_changelog(agent_id: str, from_version: str, to_version: str) -> str:
-    """Return a description of changes between versions (stub — future: read from DB)."""
+    """Return the changelog for the target version, falling back to a generic message."""
+    with Session(engine) as session:
+        entry = session.exec(
+            select(MarketplaceAgent)
+            .where(MarketplaceAgent.agent_id == agent_id)
+            .where(MarketplaceAgent.version == to_version)
+            .where(MarketplaceAgent.status == "published")
+        ).first()
+    if entry and entry.changelog:
+        return entry.changelog
     return f"Update from v{from_version} to v{to_version}."
 
 

@@ -295,7 +295,8 @@ class WorkGraphBuilder:
             nodes=ordered_nodes,
             edges=ordered_edges,
             graph={
-                "schema": "work_graph.v2",
+                "schema": "work_graph.v2",  # keep key name for wire-format compatibility
+
                 "root_id": root_id,
                 "nodes": [node.model_dump(mode="json") for node in ordered_nodes],
                 "edges": [edge.model_dump(mode="json") for edge in ordered_edges],
@@ -343,7 +344,7 @@ class WorkGraphBuilder:
         payload_data["nodes"] = filtered_nodes
         payload_data["edges"] = filtered_edges
         payload_data["graph"] = {
-            "schema": payload.schema,
+            "schema": payload.schema_version,
             "root_id": payload.root_id,
             "nodes": [node.model_dump(mode="json") for node in filtered_nodes],
             "edges": [edge.model_dump(mode="json") for edge in filtered_edges],
@@ -371,7 +372,7 @@ class WorkGraphBuilder:
                 "run_id": payload.run_id,
                 "root_id": payload.root_id,
                 "title": payload.title,
-                "schema": payload.schema,
+                "schema": payload.schema_version,
                 "nodes": [node.model_dump(mode="json") for node in payload.nodes],
                 "edges": [edge.model_dump(mode="json") for edge in payload.edges],
             },

@@ -22,13 +22,13 @@ class AgentRunRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     tenant_id: str = Field(index=True)
     agent_id: str = Field(index=True)
-    conversation_id: Optional[str] = None
-    trigger_type: str = "manual"  # manual | scheduled | event
-    status: RunStatus = "running"
+    conversation_id: Optional[str] = Field(default=None)
+    trigger_type: str = Field(default="manual")
+    status: str = Field(default="running")
     started_at: float = Field(default_factory=time.time)
-    ended_at: Optional[float] = None
-    error: Optional[str] = None
-    result_summary: Optional[str] = None
+    ended_at: Optional[float] = Field(default=None)
+    error: Optional[str] = Field(default=None)
+    result_summary: Optional[str] = Field(default=None)
 
 
 def _ensure_tables() -> None:

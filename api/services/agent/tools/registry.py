@@ -58,6 +58,7 @@ from api.services.agent.tools.validation_tools import EmailValidationTool
 from api.services.agent.tools.web_adapter_tools import WebDatasetAdapterTool
 from api.services.agent.tools.web_extract_tools import WebStructuredExtractTool
 from api.services.agent.tools.workplace_tools import SlackPostMessageTool
+from api.services.agent.tools.sub_agent_tool import SubAgentDelegateTool
 from api.services.agent.tools.workspace_tools import (
     WorkspaceDocsReadTool,
     WorkspaceDocsTemplateTool,
@@ -68,6 +69,7 @@ from api.services.agent.tools.workspace_tools import (
     WorkspaceSheetsAppendTool,
     WorkspaceSheetsReadTool,
     WorkspaceSheetsTrackStepTool,
+    WorkspaceSheetsUpdateTool,
 )
 
 
@@ -100,6 +102,7 @@ class ToolRegistry:
         self.register(WorkspaceSheetsTrackStepTool())
         self.register(WorkspaceSheetsAppendTool())
         self.register(WorkspaceSheetsReadTool())
+        self.register(WorkspaceSheetsUpdateTool())
         self.register(WorkspaceDriveSearchTool())
         self.register(WorkspaceDriveDeleteTool())
         self.register(WorkspaceDriveRenameTool())
@@ -128,6 +131,7 @@ class ToolRegistry:
         self.register(EmailValidationTool())
         self.register(MapsGeocodeTool())
         self.register(MapsDistanceTool())
+        self.register(SubAgentDelegateTool())
         for google_api_tool in build_google_api_tools():
             self.register(google_api_tool)
 

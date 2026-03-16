@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, ValidationError
 
 from api.auth import get_current_user_id
@@ -169,7 +169,7 @@ def update_definition(
     return AgentDefinitionDetail.from_record(record)
 
 
-@router.delete("/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{record_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def deactivate_definition(
     record_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)] = "",

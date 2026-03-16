@@ -1,4 +1,4 @@
-import type { ConnectorSummary } from "../../pages/agentOsData";
+import type { ConnectorSummary } from "../../types/connectorSummary";
 
 type ToolSelectorProps = {
   connectors: ConnectorSummary[];
@@ -64,4 +64,3 @@ export function ToolSelector({ connectors, selectedTools, onChange }: ToolSelect
     </div>
   );
 }
-

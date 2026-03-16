@@ -174,21 +174,13 @@ function useChatMainInteractions({
     });
   };
 
-  const submit = async () => {
-    const payload = message.trim();
-    if (!payload || isSending) {
-      return;
-    }
+  const buildSendOptions = () => {
     const workspaceModeOverride = buildWorkspaceModeOverride();
     const modeSettingOverrides =
       agentMode === "deep_search" && deepSearchProfile === "web_search"
         ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
         : workspaceModeOverride;
-    const turnAttachments = attachments
-      .filter((item) => item.status !== "error")
-      .map((item) => ({ name: item.name, fileId: item.fileId }));
-    setMessage("");
-    await onSendMessage(payload, turnAttachments, {
+    return {
       citationMode,
       useMindmap: mindmapEnabled,
       mindmapSettings: {
@@ -199,8 +191,37 @@ function useChatMainInteractions({
       settingOverrides: modeSettingOverrides,
       agentMode,
       accessMode,
-    });
+    } as const;
+  };
+
+  const submit = async () => {
+    const payload = message.trim();
+    if (!payload || isSending) {
+      return;
+    }
+    const sendOptions = buildSendOptions();
+    const turnAttachments = attachments
+      .filter((item) => item.status !== "error")
+      .map((item) => ({ name: item.name, fileId: item.fileId }));
+    setMessage("");
+    await onSendMessage(payload, turnAttachments, sendOptions);
     clearAttachments();
+  };
+
+  const sendSuggestionPrompt = async (prompt: string) => {
+    const payload = String(prompt || "").trim();
+    if (!payload || isSending || isUploading) {
+      return false;
+    }
+    try {
+      await onSendMessage(payload, [], buildSendOptions());
+      setMessage("");
+      showActionStatus("Follow-along prompt sent.");
+      return true;
+    } catch {
+      showActionStatus("Unable to send follow-along prompt.");
+      return false;
+    }
   };
 
   const copyPlainText = async (text: string, label: string) => {
@@ -256,22 +277,7 @@ function useChatMainInteractions({
     setEditingTurnIndex(null);
     setEditingText("");
     showActionStatus("Message updated. Generating response...");
-    const modeSettingOverrides =
-      agentMode === "deep_search" && deepSearchProfile === "web_search"
-        ? WEB_SEARCH_SETTING_OVERRIDES
-        : undefined;
-    await onSendMessage(value, editedTurn?.attachments, {
-      citationMode,
-      useMindmap: mindmapEnabled,
-      mindmapSettings: {
-        max_depth: mindmapMaxDepth,
-        include_reasoning_map: mindmapIncludeReasoning,
-        map_type: mindmapMapType,
-      },
-      settingOverrides: modeSettingOverrides,
-      agentMode,
-      accessMode,
-    });
+    await onSendMessage(value, editedTurn?.attachments, buildSendOptions());
   };
 
   const retryTurn = (turn: ChatTurn) => {
@@ -413,6 +419,7 @@ function useChatMainInteractions({
     removeAttachment,
     retryTurn,
     saveInlineEdit,
+    sendSuggestionPrompt,
     setAttachments,
     setEditingText,
     setMessage,

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import {
   listAgentApiRuns,
@@ -7,6 +6,8 @@ import {
   type AgentApiRunRecord,
   type AgentSummaryRecord,
 } from "../../api/client";
+import { ScheduledReviewsPanel } from "../components/agentActivityPanel/ScheduledReviewsPanel";
+import { ROIDashboard } from "../components/canvas/ROIDashboard";
 import { LiveRunMonitor, type LiveRunMonitorRecord } from "../components/observability/LiveRunMonitor";
 import { RunErrorLog, type RunErrorRecord } from "../components/observability/RunErrorLog";
 import { BudgetSettings } from "../components/workspace/BudgetSettings";
@@ -15,6 +16,8 @@ type OperationsRunRecord = LiveRunMonitorRecord &
   RunErrorRecord & {
     llmCostUsd: number;
   };
+
+type OperationsTab = "overview" | "reviews" | "roi";
 
 function deriveDurationMs(startedAt: string, endedAt?: string | null, fallback?: number | null): number {
   if (typeof fallback === "number" && Number.isFinite(fallback) && fallback >= 0) {
@@ -49,6 +52,16 @@ function normalizeApiRun(row: AgentApiRunRecord): OperationsRunRecord | null {
 }
 
 export function OperationsDashboardPage() {
+  const [activeTab, setActiveTab] = useState<OperationsTab>(() => {
+    if (typeof window === "undefined") {
+      return "overview";
+    }
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab === "reviews" || tab === "roi" || tab === "overview") {
+      return tab;
+    }
+    return "overview";
+  });
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [runs, setRuns] = useState<OperationsRunRecord[]>([]);
@@ -108,20 +121,42 @@ export function OperationsDashboardPage() {
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
           <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Operations</p>
           <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Fleet reliability dashboard</h1>
+          <div className="mt-4 flex items-center gap-2">
+            {([
+              { key: "overview", label: "Overview" },
+              { key: "reviews", label: "Business Reviews" },
+              { key: "roi", label: "ROI" },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`rounded-full px-3.5 py-2 text-[12px] font-semibold transition ${
+                  activeTab === tab.key
+                    ? "bg-[#111827] text-white"
+                    : "border border-black/[0.12] bg-white text-[#344054]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </section>
 
-        {loadError ? (
+        {activeTab === "overview" && loadError ? (
           <section className="rounded-2xl border border-[#fca5a5] bg-[#fff1f2] p-4 text-[13px] text-[#9f1239]">
             {loadError}
           </section>
         ) : null}
 
-        {loading ? (
+        {activeTab === "overview" && loading ? (
           <section className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">
             Loading operations telemetry...
           </section>
         ) : null}
 
+        {activeTab === "overview" ? (
+          <>
         <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
             <p className="text-[12px] text-[#667085]">Runs tracked</p>
@@ -143,18 +178,27 @@ export function OperationsDashboardPage() {
         </section>
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <LiveRunMonitor
-            runs={runs}
-            onOpenRun={(runId) => toast.message(`Opening run ${runId}`)}
-          />
+          <LiveRunMonitor runs={runs} />
           <BudgetSettings currentCostUsd={totalCost} />
         </section>
 
-        <RunErrorLog
-          runs={runs}
-          onOpenTheatre={(runId) => toast.message(`Opening theatre for ${runId}`)}
-          onReplay={(runId) => toast.success(`Replaying ${runId}`)}
-        />
+        <RunErrorLog runs={runs} />
+          </>
+        ) : null}
+
+        {activeTab === "reviews" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            <div className="h-[720px] min-h-0">
+              <ScheduledReviewsPanel />
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "roi" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            <ROIDashboard className="h-[720px] overflow-y-auto" />
+          </section>
+        ) : null}
       </div>
     </div>
   );

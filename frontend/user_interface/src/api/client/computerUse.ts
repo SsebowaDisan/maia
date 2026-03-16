@@ -75,6 +75,13 @@ type StreamComputerUseSessionOptions = {
   onError?: (error: Error) => void;
 };
 
+function isNotFoundError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? String(error.message || "") : String(error || "");
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes("404") || normalized.includes("not found");
+}
+
 function startComputerUseSession(body: StartComputerUseSessionInput) {
   return request<StartComputerUseSessionResponse>("/api/computer-use/sessions", {
     method: "POST",
@@ -111,7 +118,27 @@ function cancelComputerUseSession(sessionId: string) {
 }
 
 function getComputerUseActiveModel() {
-  return request<ComputerUseActiveModelResponse>("/api/computer-use/active-model");
+  return request<ComputerUseActiveModelResponse>("/api/computer-use/active-model").catch(
+    async (error) => {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const settings = await request<{ values?: Record<string, unknown> }>("/api/settings");
+      const override = String(
+        settings?.values?.["agent.computer_use_model"] || "",
+      ).trim();
+      if (override) {
+        return {
+          model: override,
+          source: "agent.computer_use_model",
+        };
+      }
+      return {
+        model: "gpt-4o",
+        source: "fallback_default",
+      };
+    },
+  );
 }
 
 function streamComputerUseSession(

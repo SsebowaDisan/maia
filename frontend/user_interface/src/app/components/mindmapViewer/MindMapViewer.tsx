@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Edge, type Node, type NodeMouseHandler, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Info } from "lucide-react";
+import { exportMindmapMarkdown as exportMindmapMarkdownApi, getMindmapBySource } from "../../../api/client";
 import { MindMapFlowCanvas } from "./MindMapFlowCanvas";
 import { MindMapActionMenuButton, MindMapToolbar } from "./MindMapToolbar";
 import { MindMapViewerDetails } from "./MindMapViewerDetails";
@@ -13,11 +14,53 @@ import { collectAvailableMindmapTypes, detectMindmapMapType } from "./presentati
 import { buildBranchColorIndexMap, buildChildrenByParent, buildNodeOrder, buildParentCount, resolveRootId, toFocusPayload } from "./viewerDerive";
 import { buildFlowEdges, buildFlowNodes, buildReasoningOverlayEdges } from "./viewerElements";
 import { normalizeMindmapPayloadForViewer } from "./viewerNormalize";
-import { downloadMindmapJson, downloadMindmapMarkdown } from "./exporters";
+import { downloadMindmapJson, downloadMindmapMarkdown, downloadMindmapMarkdownText } from "./exporters";
 import { MindMapEmptyState } from "./MindMapEmptyState";
 
 const DETAILS_AUTO_COLLAPSE_MS = 12000;
 const TOOLBAR_AUTO_HIDE_MS = 7000;
+
+function readStringCandidate(value: unknown): string | null {
+  const normalized = String(value || "").trim();
+  return normalized || null;
+}
+
+function readSourceIdFromPayload(payload: MindmapPayload | null): string | null {
+  if (!payload) {
+    return null;
+  }
+  const settingsSourceId = readStringCandidate(
+    (payload.settings as Record<string, unknown> | undefined)?.sourceId ||
+      (payload.settings as Record<string, unknown> | undefined)?.source_id,
+  );
+  if (settingsSourceId) {
+    return settingsSourceId;
+  }
+  const graphSourceId = readStringCandidate(
+    (payload.graph as Record<string, unknown> | undefined)?.sourceId ||
+      (payload.graph as Record<string, unknown> | undefined)?.source_id,
+  );
+  if (graphSourceId) {
+    return graphSourceId;
+  }
+  const rootId = readStringCandidate(payload.root_id);
+  if (rootId && Array.isArray(payload.nodes)) {
+    const rootNode = payload.nodes.find((node) => String(node?.id || "").trim() === rootId) || null;
+    const rootSourceId = readStringCandidate(rootNode?.source_id);
+    if (rootSourceId) {
+      return rootSourceId;
+    }
+  }
+  if (Array.isArray(payload.nodes)) {
+    for (const node of payload.nodes) {
+      const sourceId = readStringCandidate(node?.source_id);
+      if (sourceId) {
+        return sourceId;
+      }
+    }
+  }
+  return null;
+}
 
 export function MindMapViewer({
   payload: rawPayload,
@@ -42,6 +85,7 @@ export function MindMapViewer({
   const [isDetailsCollapsed, setIsDetailsCollapsed] = useState(false);
   const [isToolbarHidden, setIsToolbarHidden] = useState(false);
   const [fitRequestSeq, setFitRequestSeq] = useState(0);
+  const [remotePayloadByType, setRemotePayloadByType] = useState<Partial<Record<MindmapMapType, MindmapPayload>>>({});
   const flowRef = useRef<ReactFlowInstance<Node<MindNodeData>, Edge> | null>(null);
   const detailsCollapseTimerRef = useRef<number | null>(null);
   const toolbarHideTimerRef = useRef<number | null>(null);
@@ -87,6 +131,10 @@ export function MindMapViewer({
     if (!basePayload) {
       return null;
     }
+    const remotePayload = remotePayloadByType[activeMapType];
+    if (remotePayload) {
+      return remotePayload;
+    }
     if (activeMapType === detectedBaseMapType) {
       return basePayload;
     }
@@ -99,7 +147,8 @@ export function MindMapViewer({
       return basePayload;
     }
     return variant as MindmapPayload;
-  }, [activeMapType, basePayload, detectedBaseMapType]);
+  }, [activeMapType, basePayload, detectedBaseMapType, remotePayloadByType]);
+  const sourceId = useMemo(() => readSourceIdFromPayload(payload || basePayload), [basePayload, payload]);
   const viewerPayload = useMemo(
     () => normalizeMindmapPayloadForViewer(payload, activeMapType),
     [activeMapType, payload],
@@ -135,8 +184,57 @@ export function MindMapViewer({
     setShowReasoningMap(false);
     setIsDetailsCollapsed(false);
     setIsToolbarHidden(false);
+    setRemotePayloadByType({});
     requestFit();
   }, [basePayload, conversationId, detectedBaseMapType, maxDepth, requestFit, viewerPayload]);
+  useEffect(() => {
+    if (!sourceId || !basePayload) {
+      return;
+    }
+    if (remotePayloadByType[activeMapType]) {
+      return;
+    }
+    const hasLocalVariant =
+      activeMapType === detectedBaseMapType ||
+      Boolean(basePayload.variants && typeof basePayload.variants === "object" && basePayload.variants[activeMapType]);
+    if (hasLocalVariant) {
+      return;
+    }
+    let cancelled = false;
+    void getMindmapBySource({
+      sourceId,
+      mapType: activeMapType === "context_mindmap" ? "structure" : activeMapType,
+      maxDepth: viewerMaxDepth,
+      includeReasoningMap: showReasoningMap,
+    })
+      .then((nextPayload) => {
+        if (cancelled) {
+          return;
+        }
+        const normalized = toMindmapPayload(nextPayload as Record<string, unknown>);
+        if (!normalized) {
+          return;
+        }
+        setRemotePayloadByType((previous) => ({
+          ...previous,
+          [activeMapType]: normalized,
+        }));
+      })
+      .catch(() => {
+        // Keep existing map when source-based fetch is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeMapType,
+    basePayload,
+    detectedBaseMapType,
+    remotePayloadByType,
+    showReasoningMap,
+    sourceId,
+    viewerMaxDepth,
+  ]);
   useEffect(() => {
     const key = storageKey(viewerPayload, conversationId);
     const state: CanvasState = {
@@ -291,11 +389,44 @@ export function MindMapViewer({
       setSelectedNodeId(null);
       setFocusNodeId(null);
       setShowReasoningMap(false);
+      const variantExists =
+        mapType === detectedBaseMapType ||
+        Boolean(basePayload?.variants && typeof basePayload.variants === "object" && basePayload.variants[mapType]);
+      if (!variantExists && sourceId && !remotePayloadByType[mapType]) {
+        void getMindmapBySource({
+          sourceId,
+          mapType: mapType === "context_mindmap" ? "structure" : mapType,
+          maxDepth: viewerMaxDepth,
+          includeReasoningMap: false,
+        })
+          .then((nextPayload) => {
+            const normalized = toMindmapPayload(nextPayload as Record<string, unknown>);
+            if (!normalized) {
+              return;
+            }
+            setRemotePayloadByType((previous) => ({
+              ...previous,
+              [mapType]: normalized,
+            }));
+          })
+          .catch(() => {
+            // Silent fallback to existing payload.
+          });
+      }
       onMapTypeChange?.(mapType);
       scheduleToolbarHideTimer();
       requestFit();
     },
-    [basePayload, detectedBaseMapType, onMapTypeChange, requestFit, scheduleToolbarHideTimer, viewerMaxDepth],
+    [
+      basePayload,
+      detectedBaseMapType,
+      onMapTypeChange,
+      remotePayloadByType,
+      requestFit,
+      scheduleToolbarHideTimer,
+      sourceId,
+      viewerMaxDepth,
+    ],
   );
   const handleExportJson = useCallback(() => {
     if (!payload) {
@@ -307,14 +438,46 @@ export function MindMapViewer({
     if (!payload) {
       return;
     }
-    downloadMindmapMarkdown({
-      payload,
-      activeMapType,
-      nodeById,
-      childrenByParent,
-      rootId,
-    });
-  }, [activeMapType, childrenByParent, nodeById, payload, rootId]);
+    const localExport = () =>
+      downloadMindmapMarkdown({
+        payload,
+        activeMapType,
+        nodeById,
+        childrenByParent,
+        rootId,
+      });
+
+    if (!sourceId) {
+      localExport();
+      return;
+    }
+
+    void exportMindmapMarkdownApi({
+      sourceId,
+      mapType: activeMapType === "context_mindmap" ? "structure" : activeMapType,
+      maxDepth: viewerMaxDepth,
+      includeReasoningMap: showReasoningMap,
+    })
+      .then((markdown) => {
+        if (!String(markdown || "").trim()) {
+          localExport();
+          return;
+        }
+        downloadMindmapMarkdownText(markdown, activeMapType);
+      })
+      .catch(() => {
+        localExport();
+      });
+  }, [
+    activeMapType,
+    childrenByParent,
+    nodeById,
+    payload,
+    rootId,
+    showReasoningMap,
+    sourceId,
+    viewerMaxDepth,
+  ]);
   const handleSave = useCallback(() => {
     if (payload && onSaveMap) {
       onSaveMap(payload);

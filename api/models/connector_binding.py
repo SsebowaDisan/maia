@@ -80,7 +80,7 @@ class ConnectorBinding(SQLModel, table=True):
     # ── Runtime metadata ──────────────────────────────────────────────────────
 
     # Arbitrary metadata stored by the connector (e.g. connected account info).
-    metadata: dict[str, Any] = Field(
+    extra_metadata: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(SAJSON),
     )

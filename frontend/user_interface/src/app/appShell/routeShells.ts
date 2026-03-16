@@ -6,6 +6,8 @@ export type AppPageRouteKey =
   | "developer_docs"
   | "agent_builder"
   | "agent_detail"
+  | "agent_run"
+  | "agent_edit"
   | "marketplace_agent_detail"
   | "connector_marketplace"
   | "operations"
@@ -114,6 +116,34 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
       kind: "page",
       key: "marketplace_agent_detail",
       path: pathname || "/marketplace/agents/:agentId",
+      params: {
+        agentId: agentId || undefined,
+      },
+    };
+  }
+  if (normalized.startsWith("/agents/") && normalized.endsWith("/run")) {
+    const rawAgentId = rawPath
+      .slice("/agents/".length, Math.max("/agents/".length, rawPath.length - "/run".length))
+      .replace(/\/+$/, "");
+    const agentId = decodeURIComponent(rawAgentId).trim();
+    return {
+      kind: "page",
+      key: "agent_run",
+      path: pathname || "/agents/:agentId/run",
+      params: {
+        agentId: agentId || undefined,
+      },
+    };
+  }
+  if (normalized.startsWith("/agents/") && normalized.endsWith("/edit")) {
+    const rawAgentId = rawPath
+      .slice("/agents/".length, Math.max("/agents/".length, rawPath.length - "/edit".length))
+      .replace(/\/+$/, "");
+    const agentId = decodeURIComponent(rawAgentId).trim();
+    return {
+      kind: "page",
+      key: "agent_edit",
+      path: pathname || "/agents/:agentId/edit",
       params: {
         agentId: agentId || undefined,
       },

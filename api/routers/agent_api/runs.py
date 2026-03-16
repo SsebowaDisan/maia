@@ -15,12 +15,18 @@ router = APIRouter(tags=["agent"])
 
 
 @router.get("/runs")
-def list_agent_runs(limit: int = 50) -> list[dict[str, Any]]:
+def list_agent_runs(
+    limit: int = 50,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     return get_memory_service().list_runs(limit=limit)
 
 
 @router.get("/runs/{run_id}")
-def get_agent_run(run_id: str) -> dict[str, Any]:
+def get_agent_run(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
     row = get_memory_service().runs.get(run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found.")
@@ -28,7 +34,10 @@ def get_agent_run(run_id: str) -> dict[str, Any]:
 
 
 @router.get("/runs/{run_id}/events")
-def get_agent_run_events(run_id: str) -> list[dict[str, Any]]:
+def get_agent_run_events(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     rows = get_activity_store().load_events(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run events not found.")
@@ -43,7 +52,10 @@ def get_agent_run_events(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/runs/{run_id}/graph-snapshots")
-def get_agent_run_graph_snapshots(run_id: str) -> list[dict[str, Any]]:
+def get_agent_run_graph_snapshots(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     rows = get_activity_store().load_graph_snapshots(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run graph snapshots not found.")
@@ -51,7 +63,10 @@ def get_agent_run_graph_snapshots(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/runs/{run_id}/evidence-snapshots")
-def get_agent_run_evidence_snapshots(run_id: str) -> list[dict[str, Any]]:
+def get_agent_run_evidence_snapshots(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     rows = get_activity_store().load_evidence_snapshots(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run evidence snapshots not found.")
@@ -59,7 +74,10 @@ def get_agent_run_evidence_snapshots(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/runs/{run_id}/artifact-snapshots")
-def get_agent_run_artifact_snapshots(run_id: str) -> list[dict[str, Any]]:
+def get_agent_run_artifact_snapshots(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     rows = get_activity_store().load_artifact_snapshots(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run artifact snapshots not found.")
@@ -67,7 +85,10 @@ def get_agent_run_artifact_snapshots(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/runs/{run_id}/work-graph-snapshots")
-def get_agent_run_work_graph_snapshots(run_id: str) -> list[dict[str, Any]]:
+def get_agent_run_work_graph_snapshots(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
     rows = get_activity_store().load_work_graph_snapshots(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run work-graph snapshots not found.")
@@ -75,7 +96,10 @@ def get_agent_run_work_graph_snapshots(run_id: str) -> list[dict[str, Any]]:
 
 
 @router.get("/runs/{run_id}/replay-state")
-def get_agent_run_replay_state(run_id: str) -> dict[str, Any]:
+def get_agent_run_replay_state(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
     rows = get_activity_store().load_events(run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Run events not found.")
@@ -133,7 +157,10 @@ def get_agent_event_snapshot(
 
 
 @router.get("/runs/{run_id}/events/export")
-def export_agent_run_events(run_id: str) -> dict[str, Any]:
+def export_agent_run_events(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
     store = get_activity_store()
     rows = store.load_events(run_id)
     if not rows:

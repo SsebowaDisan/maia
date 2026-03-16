@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Loader2, RefreshCw, X } from "lucide-react";
 
 import {
@@ -7,7 +7,7 @@ import {
   startGoogleOAuth,
   upsertConnectorCredentials,
 } from "../../../api/client";
-import type { ConnectorSummary } from "../../pages/agentOsData";
+import type { ConnectorSummary } from "../../types/connectorSummary";
 import { MANUAL_CONNECTOR_DEFINITIONS } from "../settings/connectorDefinitions";
 import { openOAuthPopup } from "../../utils/oauthPopup";
 import { WebhookManager } from "./WebhookManager";
@@ -17,13 +17,25 @@ type ConnectorDetailPanelProps = {
   open: boolean;
   onClose: () => void;
   onRefresh: () => Promise<void> | void;
+  advancedSettings?: ReactNode;
 };
+
+function subServiceDotClass(status: "Connected" | "Needs permission" | "Disabled"): string {
+  if (status === "Connected") {
+    return "bg-[#16a34a]";
+  }
+  if (status === "Needs permission") {
+    return "bg-[#d97706]";
+  }
+  return "bg-[#98a2b3]";
+}
 
 export function ConnectorDetailPanel({
   connector,
   open,
   onClose,
   onRefresh,
+  advancedSettings,
 }: ConnectorDetailPanelProps) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
@@ -161,6 +173,31 @@ export function ConnectorDetailPanel({
             Auth type: <span className="font-semibold text-[#111827]">{connector.authType}</span>
           </div>
 
+          {connector.subServices && connector.subServices.length > 0 ? (
+            <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
+                Google services
+              </p>
+              <div className="mt-2 space-y-2">
+                {connector.subServices.map((service) => (
+                  <div
+                    key={service.id}
+                    className="flex items-start justify-between gap-3 rounded-xl border border-black/[0.06] bg-[#f8fafc] px-3 py-2"
+                  >
+                    <div>
+                      <p className="text-[13px] font-semibold text-[#101828]">{service.label}</p>
+                      <p className="text-[12px] text-[#667085]">{service.description}</p>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-2 py-1 text-[11px] font-semibold text-[#475467]">
+                      <span className={`h-1.5 w-1.5 rounded-full ${subServiceDotClass(service.status)}`} />
+                      {service.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {connector.authType === "oauth2" ? (
             <button
               type="button"
@@ -230,6 +267,15 @@ export function ConnectorDetailPanel({
             <div className="rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[13px] text-[#344054]">
               {status}
             </div>
+          ) : null}
+
+          {advancedSettings ? (
+            <section className="rounded-2xl border border-black/[0.08] bg-white p-3">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
+                Advanced settings
+              </p>
+              {advancedSettings}
+            </section>
           ) : null}
 
           <WebhookManager connectorId={connector.id} />

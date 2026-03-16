@@ -192,6 +192,73 @@ type ImprovementSuggestionRecord = {
   agent_id: string;
 };
 
+function isNotFoundError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? String(error.message || "") : String(error || "");
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes("404") || normalized.includes("not found");
+}
+
+function toLegacyPlaybookPayload(definition: AgentDefinitionInput) {
+  return {
+    name: String(definition.name || definition.agent_id || definition.id || "Untitled agent").trim(),
+    prompt_template: String(definition.system_prompt || "").trim(),
+    tool_ids: Array.isArray(definition.tools) ? definition.tools.map((toolId) => String(toolId || "").trim()).filter(Boolean) : [],
+  };
+}
+
+function toAgentSummaryFromPlaybook(playbook: AgentPlaybookRecord): AgentSummaryRecord {
+  const id = String(playbook.id || "").trim();
+  return {
+    id,
+    agent_id: id || String(playbook.name || "").trim() || "legacy-agent",
+    name: String(playbook.name || "Untitled agent"),
+    version: String(playbook.version || "1"),
+  };
+}
+
+function toAgentDefinitionFromPlaybook(playbook: AgentPlaybookRecord): AgentDefinitionRecord {
+  const id = String(playbook.id || "").trim();
+  const name = String(playbook.name || "Untitled agent");
+  const tools = Array.isArray(playbook.tool_ids) ? playbook.tool_ids : [];
+  const definition: AgentDefinitionInput = {
+    id: id || name,
+    agent_id: id || name,
+    name,
+    description: "",
+    version: String(playbook.version || "1"),
+    system_prompt: String(playbook.prompt_template || ""),
+    tools,
+    memory: {},
+    output: {},
+    trigger: null,
+    gates: [],
+  };
+  return {
+    id,
+    agent_id: id || name,
+    name,
+    version: String(playbook.version || "1"),
+    definition,
+  };
+}
+
+function toAgentRunFromApiRun(row: AgentApiRunRecord): AgentRunRecord {
+  const runId = String(row.run_id || row.id || "").trim() || "unknown_run";
+  return {
+    run_id: runId,
+    agent_id: String(row.agent_id || "").trim() || "legacy-agent",
+    status: String(row.status || "").trim() || "unknown",
+    trigger_type: String(row.trigger_type || "").trim() || "manual",
+    started_at:
+      String(row.started_at || row.date_created || "").trim() ||
+      new Date().toISOString(),
+    ended_at: row.ended_at ? String(row.ended_at) : null,
+    error: row.error ? String(row.error) : null,
+    result_summary: row.result_summary ? String(row.result_summary) : null,
+  };
+}
+
 function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
   return `${API_BASE}/api/agent/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(eventId)}/snapshot`;
 }
@@ -316,11 +383,33 @@ function createAgent(definition: AgentDefinitionInput) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(definition),
+  }).catch(async (error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    const legacyPayload = toLegacyPlaybookPayload(definition);
+    const created = await request<AgentPlaybookRecord>("/api/agent/playbooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(legacyPayload),
+    });
+    const id = String(created.id || legacyPayload.name || definition.agent_id || definition.id || "").trim();
+    return {
+      id,
+      agent_id: id || String(definition.agent_id || definition.id || legacyPayload.name || "legacy-agent"),
+      version: String(created.version || definition.version || "1"),
+    };
   });
 }
 
 function listAgents() {
-  return request<AgentSummaryRecord[]>("/api/agents");
+  return request<AgentSummaryRecord[]>("/api/agents").catch(async (error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    const playbooks = await listPlaybooks({ limit: 500 });
+    return playbooks.map(toAgentSummaryFromPlaybook);
+  });
 }
 
 function getAgent(agentId: string, options?: { version?: string }) {
@@ -329,7 +418,19 @@ function getAgent(agentId: string, options?: { version?: string }) {
     query.set("version", options.version);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<AgentDefinitionRecord>(`/api/agents/${encodeURIComponent(agentId)}${suffix}`);
+  return request<AgentDefinitionRecord>(`/api/agents/${encodeURIComponent(agentId)}${suffix}`).catch(
+    async (error) => {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const playbooks = await listPlaybooks({ limit: 500 });
+      const match = playbooks.find((row) => String(row.id || "").trim() === agentId);
+      if (!match) {
+        throw new Error("Agent not found.");
+      }
+      return toAgentDefinitionFromPlaybook(match);
+    },
+  );
 }
 
 function updateAgent(agentId: string, definition: AgentDefinitionInput) {
@@ -341,6 +442,25 @@ function updateAgent(agentId: string, definition: AgentDefinitionInput) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(definition),
+  }).catch(async (error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    const legacyPayload = toLegacyPlaybookPayload(definition);
+    const updated = await request<AgentPlaybookRecord>(
+      `/api/agent/playbooks/${encodeURIComponent(agentId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(legacyPayload),
+      },
+    );
+    const id = String(updated.id || agentId).trim();
+    return {
+      id,
+      agent_id: id,
+      version: String(updated.version || definition.version || "1"),
+    };
   });
 }
 
@@ -348,10 +468,15 @@ async function deleteAgent(agentId: string) {
   const response = await fetchApi(`/api/agents/${encodeURIComponent(agentId)}`, {
     method: "DELETE",
   });
-  if (!response.ok && response.status !== 204) {
-    const detail = (await response.text()).trim();
-    throw new Error(detail || `Delete failed: ${response.status}`);
+  if (response.ok || response.status === 204) {
+    return;
   }
+  if (response.status === 404) {
+    // Legacy backend does not expose a playbook delete endpoint.
+    throw new Error("Delete is not supported by this backend API.");
+  }
+  const detail = (await response.text()).trim();
+  throw new Error(detail || `Delete failed: ${response.status}`);
 }
 
 function listAgentRuns(agentId: string, options?: { limit?: number }) {
@@ -360,7 +485,19 @@ function listAgentRuns(agentId: string, options?: { limit?: number }) {
     query.set("limit", String(options.limit));
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<AgentRunRecord[]>(`/api/agents/${encodeURIComponent(agentId)}/runs${suffix}`);
+  return request<AgentRunRecord[]>(`/api/agents/${encodeURIComponent(agentId)}/runs${suffix}`).catch(
+    async (error) => {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const legacyRows = await listAgentApiRuns({ limit: options?.limit ?? 100 });
+      const filtered = legacyRows.filter(
+        (row) => String(row.agent_id || "").trim() === agentId,
+      );
+      const selected = filtered.length ? filtered : legacyRows;
+      return selected.map(toAgentRunFromApiRun);
+    },
+  );
 }
 
 function listAgentApiRuns(options?: { limit?: number }) {
@@ -404,11 +541,28 @@ function patchConnectorBinding(
 }
 
 function getAgentRun(runId: string) {
-  return request<AgentRunRecord>(`/api/agents/runs/${encodeURIComponent(runId)}`);
+  return request<AgentRunRecord>(`/api/agents/runs/${encodeURIComponent(runId)}`).catch(
+    async (error) => {
+      if (!isNotFoundError(error)) {
+        throw error;
+      }
+      const legacyRun = await request<AgentApiRunRecord>(
+        `/api/agent/runs/${encodeURIComponent(runId)}`,
+      );
+      return toAgentRunFromApiRun(legacyRun);
+    },
+  );
 }
 
 function listPendingGates(runId: string) {
-  return request<GatePendingRecord[]>(`/api/agents/runs/${encodeURIComponent(runId)}/gates`);
+  return request<GatePendingRecord[]>(`/api/agents/runs/${encodeURIComponent(runId)}/gates`).catch(
+    (error) => {
+      if (isNotFoundError(error)) {
+        return [] as GatePendingRecord[];
+      }
+      throw error;
+    },
+  );
 }
 
 function approveAgentRunGate(runId: string, gateId: string) {

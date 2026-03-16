@@ -413,6 +413,41 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         description="Summarize cloud incidents from logs and deliver digest via email.",
         execution_policy="confirm_before_execute",
     ),
+    AgentToolCapability(
+        domain="orchestration",
+        tool_id="agent.delegate",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_MEMBER,
+        description=(
+            "Delegate a focused sub-task to another installed agent with an isolated "
+            "context window."
+        ),
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="document_ops",
+        tool_id="workspace.sheets.update",
+        action_class=ACTION_CLASS_EXECUTE,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Overwrite a specific cell range in Google Sheets (PUT semantics).",
+        execution_policy="confirm_before_execute",
+    ),
+    AgentToolCapability(
+        domain="document_ops",
+        tool_id="workspace.sheets.read",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Read cell ranges from Google Sheets.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="document_ops",
+        tool_id="workspace.docs.read",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Read content from a Google Doc.",
+        execution_policy="auto_execute",
+    ),
 )
 
 _GOOGLE_API_CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = tuple(

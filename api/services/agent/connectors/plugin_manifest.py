@@ -124,8 +124,8 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
         "gmail": {
             "label": "Gmail",
             "actions": [
-                {"action_id": "email.send", "title": "Send email", "event_family": "email", "scene_type": "email"},
-                {"action_id": "email.search", "title": "Search inbox", "event_family": "email", "scene_type": "email"},
+                {"action_id": "email.send", "title": "Send email", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail.send"]},
+                {"action_id": "email.search", "title": "Search inbox", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail.read"]},
             ],
             "evidence_emitters": [
                 {"emitter_id": "gmail.thread", "source_type": "email", "fields": ["thread_id", "subject", "snippet"]},
@@ -136,6 +136,64 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
                 {"action_id": "email.search", "node_type": "research"},
             ],
         },
+        "m365": {
+            "label": "Microsoft 365",
+            "actions": [
+                {"action_id": "m365.email.send", "title": "Send email", "event_family": "email", "scene_type": "email", "tool_ids": ["outlook.send"]},
+                {"action_id": "m365.email.read", "title": "Read inbox", "event_family": "email", "scene_type": "email", "tool_ids": ["outlook.read"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "m365.message", "source_type": "email", "fields": ["message_id", "subject", "snippet"]},
+            ],
+            "scene_mapping": [{"scene_type": "email", "action_ids": ["m365.email.send", "m365.email.read"]}],
+            "graph_mapping": [
+                {"action_id": "m365.email.send", "node_type": "email_draft"},
+                {"action_id": "m365.email.read", "node_type": "research"},
+            ],
+        },
+        "google_calendar": {
+            "label": "Google Calendar",
+            "actions": [
+                {"action_id": "gcal.create_event", "title": "Create event", "event_family": "api", "scene_type": "api", "tool_ids": ["gcalendar.create_event"]},
+                {"action_id": "gcal.list_events", "title": "List events", "event_family": "api", "scene_type": "api", "tool_ids": ["gcalendar.list_events"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "gcal.event", "source_type": "api", "fields": ["event_id", "title", "start", "end"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["gcal.create_event", "gcal.list_events"]}],
+            "graph_mapping": [
+                {"action_id": "gcal.create_event", "node_type": "api_operation"},
+                {"action_id": "gcal.list_events", "node_type": "research"},
+            ],
+        },
+        "google_workspace": {
+            "label": "Google Workspace",
+            "actions": [
+                {"action_id": "gdrive.read_file", "title": "Read file", "event_family": "doc", "scene_type": "document", "tool_ids": ["gdrive.read_file"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "gdrive.file", "source_type": "document", "fields": ["file_id", "name", "snippet"]},
+            ],
+            "scene_mapping": [{"scene_type": "document", "action_ids": ["gdrive.read_file"]}],
+            "graph_mapping": [{"action_id": "gdrive.read_file", "node_type": "document_review"}],
+        },
+        "slack": {
+            "label": "Slack",
+            "actions": [
+                {"action_id": "slack.send_message", "title": "Send message", "event_family": "api", "scene_type": "api", "tool_ids": ["slack.send_message"]},
+                {"action_id": "slack.read_channel", "title": "Read channel", "event_family": "api", "scene_type": "api", "tool_ids": ["slack.read_channel"]},
+                {"action_id": "slack.list_channels", "title": "List channels", "event_family": "api", "scene_type": "api", "tool_ids": ["slack.list_channels"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "slack.message", "source_type": "api", "fields": ["channel", "ts", "text"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["slack.send_message", "slack.read_channel", "slack.list_channels"]}],
+            "graph_mapping": [
+                {"action_id": "slack.send_message", "node_type": "api_operation"},
+                {"action_id": "slack.read_channel", "node_type": "research"},
+                {"action_id": "slack.list_channels", "node_type": "research"},
+            ],
+        },
         "google_analytics": {
             "label": "Google Analytics",
             "actions": [
@@ -144,6 +202,7 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
                     "title": "Fetch report",
                     "event_family": "api",
                     "scene_type": "api",
+                    "tool_ids": ["analytics.ga4.report", "analytics.ga4.full_report"],
                 },
             ],
             "evidence_emitters": [
@@ -156,11 +215,89 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
             "scene_mapping": [{"scene_type": "api", "action_ids": ["analytics.fetch_report"]}],
             "graph_mapping": [{"action_id": "analytics.fetch_report", "node_type": "api_operation"}],
         },
+        "google_ads": {
+            "label": "Google Ads",
+            "actions": [
+                {"action_id": "gads.get_campaigns", "title": "Get campaigns", "event_family": "api", "scene_type": "api", "tool_ids": ["google_ads.get_campaigns"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "gads.campaign", "source_type": "api", "fields": ["customer_id", "campaign_id", "metrics"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["gads.get_campaigns"]}],
+            "graph_mapping": [{"action_id": "gads.get_campaigns", "node_type": "api_operation"}],
+        },
+        "google_maps": {
+            "label": "Google Maps",
+            "actions": [
+                {"action_id": "maps.geocode", "title": "Geocode address", "event_family": "api", "scene_type": "api", "tool_ids": ["google_maps.geocode"]},
+                {"action_id": "maps.places_search", "title": "Search places", "event_family": "api", "scene_type": "api", "tool_ids": ["google_maps.places_search"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "maps.place", "source_type": "api", "fields": ["place_id", "name", "lat", "lng"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["maps.geocode", "maps.places_search"]}],
+            "graph_mapping": [
+                {"action_id": "maps.geocode", "node_type": "api_operation"},
+                {"action_id": "maps.places_search", "node_type": "research"},
+            ],
+        },
+        "google_api_hub": {
+            "label": "Google API Hub",
+            "actions": [
+                {"action_id": "google_api_hub.call", "title": "Call API", "event_family": "api", "scene_type": "api", "tool_ids": ["google_api_hub.call"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "google_api_hub.response", "source_type": "api", "fields": ["api_id", "path", "result"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["google_api_hub.call"]}],
+            "graph_mapping": [{"action_id": "google_api_hub.call", "node_type": "api_operation"}],
+        },
+        "brave_search": {
+            "label": "Brave Search",
+            "actions": [
+                {"action_id": "brave.search", "title": "Web search", "event_family": "api", "scene_type": "browser", "tool_ids": ["brave.search"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "brave.result", "source_type": "web", "fields": ["url", "title", "snippet"]},
+            ],
+            "scene_mapping": [{"scene_type": "browser", "action_ids": ["brave.search"]}],
+            "graph_mapping": [{"action_id": "brave.search", "node_type": "research"}],
+        },
+        "bing_search": {
+            "label": "Bing Search",
+            "actions": [
+                {"action_id": "bing.search", "title": "Web search", "event_family": "api", "scene_type": "browser", "tool_ids": ["bing.search"]},
+                {"action_id": "bing.news", "title": "News search", "event_family": "api", "scene_type": "browser", "tool_ids": ["bing.news"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "bing.result", "source_type": "web", "fields": ["url", "title", "snippet"]},
+            ],
+            "scene_mapping": [{"scene_type": "browser", "action_ids": ["bing.search", "bing.news"]}],
+            "graph_mapping": [
+                {"action_id": "bing.search", "node_type": "research"},
+                {"action_id": "bing.news", "node_type": "research"},
+            ],
+        },
+        "http_request": {
+            "label": "HTTP Request",
+            "actions": [
+                {"action_id": "http.get", "title": "HTTP GET", "event_family": "api", "scene_type": "api", "tool_ids": ["http.get"]},
+                {"action_id": "http.post", "title": "HTTP POST", "event_family": "api", "scene_type": "api", "tool_ids": ["http.post"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "http.response", "source_type": "api", "fields": ["url", "status_code", "body"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["http.get", "http.post"]}],
+            "graph_mapping": [
+                {"action_id": "http.get", "node_type": "api_operation"},
+                {"action_id": "http.post", "node_type": "api_operation"},
+            ],
+        },
         "playwright_browser": {
             "label": "Playwright Browser",
             "actions": [
-                {"action_id": "browser.navigate", "title": "Navigate", "event_family": "browser", "scene_type": "browser"},
-                {"action_id": "browser.extract", "title": "Extract", "event_family": "browser", "scene_type": "browser"},
+                {"action_id": "browser.navigate", "title": "Navigate", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.navigate"]},
+                {"action_id": "browser.extract", "title": "Extract", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.navigate"]},
             ],
             "evidence_emitters": [
                 {"emitter_id": "browser.capture", "source_type": "web", "fields": ["url", "snippet", "event_id"]},
@@ -169,6 +306,62 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
             "graph_mapping": [
                 {"action_id": "browser.navigate", "node_type": "browser_action"},
                 {"action_id": "browser.extract", "node_type": "research"},
+            ],
+        },
+        "gmail_playwright": {
+            "label": "Gmail (Browser)",
+            "actions": [
+                {"action_id": "gmail_pw.send", "title": "Send email", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail_playwright.send"]},
+                {"action_id": "gmail_pw.read", "title": "Read inbox", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail_playwright.read"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "gmail_pw.thread", "source_type": "email", "fields": ["subject", "snippet"]},
+            ],
+            "scene_mapping": [{"scene_type": "email", "action_ids": ["gmail_pw.send", "gmail_pw.read"]}],
+            "graph_mapping": [
+                {"action_id": "gmail_pw.send", "node_type": "email_draft"},
+                {"action_id": "gmail_pw.read", "node_type": "research"},
+            ],
+        },
+        "playwright_contact_form": {
+            "label": "Contact Form",
+            "actions": [
+                {"action_id": "contact_form.fill", "title": "Fill form", "event_family": "browser", "scene_type": "browser", "tool_ids": ["playwright_contact_form.fill"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "contact_form.submission", "source_type": "web", "fields": ["url", "status"]},
+            ],
+            "scene_mapping": [{"scene_type": "browser", "action_ids": ["contact_form.fill"]}],
+            "graph_mapping": [{"action_id": "contact_form.fill", "node_type": "browser_action"}],
+        },
+        "email_validation": {
+            "label": "Email Validation",
+            "actions": [
+                {"action_id": "email_val.validate", "title": "Validate email", "event_family": "api", "scene_type": "api", "tool_ids": ["email_validation.validate"]},
+                {"action_id": "email_val.bulk_validate", "title": "Bulk validate", "event_family": "api", "scene_type": "api", "tool_ids": ["email_validation.bulk_validate"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "email_val.result", "source_type": "api", "fields": ["email", "valid", "reason"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["email_val.validate", "email_val.bulk_validate"]}],
+            "graph_mapping": [
+                {"action_id": "email_val.validate", "node_type": "verification"},
+                {"action_id": "email_val.bulk_validate", "node_type": "verification"},
+            ],
+        },
+        "invoice": {
+            "label": "Invoice",
+            "actions": [
+                {"action_id": "invoice.extract", "title": "Extract invoice data", "event_family": "pdf", "scene_type": "document", "tool_ids": ["invoice.extract"]},
+                {"action_id": "invoice.summarize", "title": "Summarize invoice", "event_family": "pdf", "scene_type": "document", "tool_ids": ["invoice.summarize"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "invoice.data", "source_type": "pdf", "fields": ["invoice_number", "total", "vendor"]},
+            ],
+            "scene_mapping": [{"scene_type": "document", "action_ids": ["invoice.extract", "invoice.summarize"]}],
+            "graph_mapping": [
+                {"action_id": "invoice.extract", "node_type": "document_review"},
+                {"action_id": "invoice.summarize", "node_type": "document_review"},
             ],
         },
     }

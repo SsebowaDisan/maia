@@ -179,6 +179,19 @@ def _queue_agent_run(
     event_type: str,
     payload: dict[str, Any],
 ) -> str:
+    # Guard: check budget before queuing.  Blocked runs are logged and not queued.
+    try:
+        from api.services.observability.cost_tracker import assert_budget_ok
+        assert_budget_ok(tenant_id)
+    except Exception as budget_exc:
+        logger.warning(
+            "Event-triggered run blocked for agent=%s tenant=%s: %s",
+            agent_id, tenant_id, budget_exc,
+        )
+        # Return a synthetic id so the caller doesn't crash; run is not persisted.
+        import uuid
+        return f"blocked-{uuid.uuid4()}"
+
     from api.services.agents.run_store import create_run
 
     run = create_run(tenant_id, agent_id, trigger_type="event")
@@ -193,8 +206,12 @@ def _run_agent_for_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> None:
+    import time as _time
     from api.services.agents.run_store import complete_run, fail_run
 
+    _run_start = _time.time()
+    task_completed = False
+    tool_calls = 0
     try:
         from api.services.agents.definition_store import get_agent, load_schema
         from api.services.agents.runner import run_agent_task
@@ -205,6 +222,7 @@ def _run_agent_for_event(
             return
 
         schema = load_schema(record)
+        allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
         task = (
             f"Event received: {event_type}\n"
             f"Payload: {str(payload)[:500]}\n\n"
@@ -212,12 +230,36 @@ def _run_agent_for_event(
         )
 
         result_parts: list[str] = []
-        for chunk in run_agent_task(task, tenant_id=tenant_id, run_id=run_id):
+        for chunk in run_agent_task(task, tenant_id=tenant_id, run_id=run_id, allowed_tool_ids=allowed_tool_ids):
             text = chunk.get("text") or chunk.get("content") or ""
             if text:
                 result_parts.append(str(text))
+            if chunk.get("event_type") in ("tool_started", "tool_called", "step_complete"):
+                tool_calls += 1
 
         complete_run(run_id, result_summary=("".join(result_parts))[:500])
+        task_completed = True
     except Exception as exc:
         fail_run(run_id, error=str(exc)[:300])
         logger.error("Event-triggered agent %s failed: %s", agent_id, exc, exc_info=True)
+    finally:
+        duration_ms = int((_time.time() - _run_start) * 1000)
+        try:
+            from api.services.marketplace.metering import record_usage
+            record_usage(
+                tenant_id, agent_id, run_id,
+                tool_calls=tool_calls,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            logger.debug("record_usage failed for event run %s", run_id, exc_info=True)
+        try:
+            from api.services.marketplace.benchmarks import submit_signal
+            submit_signal(
+                tenant_id, agent_id,
+                task_completed=task_completed,
+                quality_score=0.5,
+                cost_usd=0.0,
+            )
+        except Exception:
+            logger.debug("submit_signal failed for event run %s", run_id, exc_info=True)

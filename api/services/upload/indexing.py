@@ -49,7 +49,7 @@ def _run_vlm_startup_checks() -> list[str]:
         review_model=UPLOAD_PDF_VLM_REVIEW_MODEL,
         extract_model=UPLOAD_PDF_VLM_EXTRACT_MODEL,
         base_url=UPLOAD_PDF_VLM_BASE_URL,
-        logger_warning=logger.warning,
+        logger_warning=logger.info,
     )
 
 def run_upload_startup_checks() -> list[str]:
@@ -65,7 +65,7 @@ def _run_paddle_startup_checks() -> list[str]:
         reader_mode=UPLOAD_INDEX_READER_MODE,
         is_paddle_runtime_expected=_is_paddle_runtime_expected(),
         get_paddle_ocr_engine_fn=_get_paddle_ocr_engine,
-        logger_warning=logger.warning,
+        logger_warning=logger.info,
     )
 
 

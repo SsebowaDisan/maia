@@ -12,6 +12,11 @@ import { approveAgentRunGate, listPendingGates, rejectAgentRunGate } from "../..
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
 import { CanvasPanel } from "../canvas/CanvasPanel";
 import { useCanvasStore } from "../../stores/canvasStore";
+import { useAgentRunStore } from "../../stores/agentRunStore";
+import {
+  EVT_INTERACTION_SUGGESTION_SEND,
+  type InteractionSuggestionSendDetail,
+} from "../../constants/uiEvents";
 import type { ChatTurn } from "../../types";
 import { ComposerPanel } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
@@ -77,6 +82,17 @@ function ChatMain({
   } | null>(null);
   const maiaActive = isActivityStreaming || isSending;
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
+  const hydrateRunSnapshot = useAgentRunStore((state) => state.hydrateFromActivityEvent);
+  const clearRunSnapshot = useAgentRunStore((state) => state.clear);
+  const activeRunId = useMemo(() => {
+    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
+      const runId = String(activityEvents[index]?.run_id || "").trim();
+      if (runId) {
+        return runId;
+      }
+    }
+    return "";
+  }, [activityEvents]);
   const pendingGateFromEvents = useMemo(() => {
     const orderedEvents = Array.isArray(activityEvents) ? [...activityEvents] : [];
     if (!orderedEvents.length) {
@@ -115,7 +131,7 @@ function ChatMain({
       ).trim();
       const numericCost = Number(data.cost_estimate ?? metadata.cost_estimate ?? Number.NaN);
       latestPending = {
-        runId: runId || "active-run",
+        runId: runId || activeRunId || "",
         gateId,
         toolId: toolId || "tool",
         paramsPreview: paramsPreview || "Review tool call parameters before continuing.",
@@ -124,7 +140,7 @@ function ChatMain({
       break;
     }
     return latestPending;
-  }, [activityEvents]);
+  }, [activeRunId, activityEvents]);
   const pendingGate = pendingGateFromEvents || pendingGateFromApi;
   useEffect(() => {
     const gateId = String(pendingGate?.gateId || "").trim();
@@ -137,16 +153,6 @@ function ChatMain({
     pendingGateToastRef.current = gateId;
     toast.info(`Approval required for ${pendingGate?.toolId || "tool action"}.`);
   }, [pendingGate?.gateId, pendingGate?.toolId]);
-  const activeRunId = useMemo(() => {
-    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
-      const runId = String(activityEvents[index]?.run_id || "").trim();
-      if (runId) {
-        return runId;
-      }
-    }
-    return "";
-  }, [activityEvents]);
-
   const interactions = useChatMainInteractions({
     accessMode,
     activityEvents,
@@ -168,6 +174,27 @@ function ChatMain({
     availableGroups,
     availableProjects,
   });
+
+  useEffect(() => {
+    const handleSuggestionSend = (event: Event) => {
+      const customEvent = event as CustomEvent<InteractionSuggestionSendDetail>;
+      const prompt = String(customEvent.detail?.prompt || "").trim();
+      if (!prompt) {
+        return;
+      }
+      void interactions.sendSuggestionPrompt(prompt);
+    };
+    window.addEventListener(
+      EVT_INTERACTION_SUGGESTION_SEND,
+      handleSuggestionSend as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        EVT_INTERACTION_SUGGESTION_SEND,
+        handleSuggestionSend as EventListener,
+      );
+    };
+  }, [interactions.sendSuggestionPrompt]);
 
   const handleTurnClick = (
     event: ReactMouseEvent<HTMLDivElement>,
@@ -236,6 +263,15 @@ function ChatMain({
       upsertDocuments(documents);
     }
   }, [chatTurns, upsertDocuments]);
+
+  useEffect(() => {
+    if (!Array.isArray(activityEvents) || activityEvents.length === 0) {
+      clearRunSnapshot();
+      return;
+    }
+    const latestEvent = activityEvents[activityEvents.length - 1];
+    hydrateRunSnapshot((latestEvent || {}) as Record<string, unknown>);
+  }, [activityEvents, clearRunSnapshot, hydrateRunSnapshot]);
 
   useEffect(
     () => () => {

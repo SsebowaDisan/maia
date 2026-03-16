@@ -9,6 +9,7 @@ type AgentInstallModalProps = {
   availableConnectorIds: string[];
   installing?: boolean;
   onClose: () => void;
+  onOpenConnectorSetup?: (connectorId: string) => void;
   onInstall: (
     agentId: string,
     payload: { version?: string | null; connector_mapping: Record<string, string> },
@@ -31,6 +32,7 @@ export function AgentInstallModal({
   availableConnectorIds,
   installing = false,
   onClose,
+  onOpenConnectorSetup,
   onInstall,
 }: AgentInstallModalProps) {
   const [step, setStep] = useState<InstallStep>(1);
@@ -122,9 +124,28 @@ export function AgentInstallModal({
                 ))}
               </div>
               {missingConnectors.length ? (
-                <p className="mt-2 text-[12px] text-[#b42318]">
-                  Missing connector support: {missingConnectors.map(normalizeLabel).join(", ")}
-                </p>
+                <div className="mt-2 rounded-xl border border-[#fecaca] bg-[#fff1f2] p-3">
+                  <p className="text-[12px] font-semibold text-[#b42318]">
+                    Missing connector support
+                  </p>
+                  <div className="mt-2 space-y-1.5">
+                    {missingConnectors.map((connectorId) => (
+                      <div
+                        key={connectorId}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-[#fecdd3] bg-white px-2.5 py-1.5"
+                      >
+                        <span className="text-[12px] text-[#7a271a]">{normalizeLabel(connectorId)}</span>
+                        <button
+                          type="button"
+                          onClick={() => onOpenConnectorSetup?.(connectorId)}
+                          className="rounded-full border border-[#fca5a5] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#9f1239] hover:bg-[#fff1f2]"
+                        >
+                          Open setup
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               ) : null}
             </section>
           ) : null}
@@ -176,7 +197,7 @@ export function AgentInstallModal({
             <button
               type="button"
               onClick={next}
-              disabled={installing}
+              disabled={installing || (step === 2 && missingConnectors.length > 0)}
               className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
             >
               Next

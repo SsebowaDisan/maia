@@ -39,7 +39,7 @@ class WebhookRegistration(SQLModel, table=True):
     tenant_id: str = Field(index=True)
     connector_id: str = Field(index=True)
     event_types_json: str = "[]"
-    external_hook_id: Optional[str] = None  # ID returned by the external service
+    external_hook_id: Optional[str] = Field(default=None)  # ID returned by the external service
     receiver_url: str = ""
     active: bool = True
     created_at: float = Field(default_factory=time.time)

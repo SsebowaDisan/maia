@@ -35,11 +35,17 @@ export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
               </span>
             </div>
             <div className="space-y-1">
-              {column.events.map((event) => (
-                <p key={event} className="rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[12px] text-[#344054]">
-                  {event}
+              {column.events.length ? (
+                column.events.map((event) => (
+                  <p key={event} className="rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[12px] text-[#344054]">
+                    {event}
+                  </p>
+                ))
+              ) : (
+                <p className="rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[12px] text-[#98a2b3]">
+                  No live events for this step yet.
                 </p>
-              ))}
+              )}
             </div>
             {index < columns.length - 1 ? (
               <div className="mt-3 text-center text-[12px] text-[#667085]">Delegates →</div>
@@ -50,4 +56,3 @@ export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
     </div>
   );
 }
-

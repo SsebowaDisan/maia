@@ -34,7 +34,7 @@ class AgentSchedule(SQLModel, table=True):
     agent_id: str = Field(index=True)
     cron_expression: str
     enabled: bool = True
-    last_run_at: Optional[float] = None
+    last_run_at: Optional[float] = Field(default=None)
     # Pre-computed: next UTC unix timestamp to fire (set on register or after run)
     next_run_at: float = 0.0
 
@@ -160,9 +160,24 @@ class AgentScheduler:
 def _fire_agent(tenant_id: str, agent_id: str) -> None:
     """Create and execute a scheduled agent run in the current thread."""
     logger.info("Firing scheduled run: agent=%s tenant=%s", agent_id, tenant_id)
+
+    # Guard: check daily budget before starting the run.
+    try:
+        from api.services.observability.cost_tracker import assert_budget_ok, BudgetExceededError
+        assert_budget_ok(tenant_id)
+    except Exception as budget_exc:
+        logger.warning(
+            "Scheduled run blocked for agent=%s tenant=%s: %s",
+            agent_id, tenant_id, budget_exc,
+        )
+        return
+
     from api.services.agents.run_store import create_run, complete_run, fail_run
 
     run = create_run(tenant_id, agent_id, trigger_type="scheduled")
+    _run_start = time.time()
+    task_completed = False
+    tool_calls = 0
     try:
         from api.services.agents.definition_store import get_agent, load_schema
         from api.services.agents.runner import run_agent_task
@@ -175,17 +190,42 @@ def _fire_agent(tenant_id: str, agent_id: str) -> None:
 
         schema = load_schema(record)
         task = schema.description or f"Scheduled run for agent {schema.name}"
+        allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
 
         result_parts: list[str] = []
-        for chunk in run_agent_task(task, tenant_id=tenant_id, run_id=run.id):
+        for chunk in run_agent_task(task, tenant_id=tenant_id, run_id=run.id, allowed_tool_ids=allowed_tool_ids):
             text = chunk.get("text") or chunk.get("content") or ""
             if text:
                 result_parts.append(str(text))
+            if chunk.get("event_type") in ("tool_started", "tool_called", "step_complete"):
+                tool_calls += 1
 
         complete_run(run.id, result_summary=("".join(result_parts))[:500])
+        task_completed = True
     except Exception as exc:
         fail_run(run.id, error=str(exc)[:300])
         raise
+    finally:
+        duration_ms = int((time.time() - _run_start) * 1000)
+        try:
+            from api.services.marketplace.metering import record_usage
+            record_usage(
+                tenant_id, agent_id, run.id,
+                tool_calls=tool_calls,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            logger.debug("record_usage failed for scheduled run %s", run.id, exc_info=True)
+        try:
+            from api.services.marketplace.benchmarks import submit_signal
+            submit_signal(
+                tenant_id, agent_id,
+                task_completed=task_completed,
+                quality_score=0.5,
+                cost_usd=0.0,
+            )
+        except Exception:
+            logger.debug("submit_signal failed for scheduled run %s", run.id, exc_info=True)
 
 
 def _seed_schedules_from_definitions() -> None:
@@ -240,9 +280,9 @@ def _next_timestamp(cron_expression: str) -> float:
 
         minute_f, hour_f, dom_f, month_f, dow_f = parts
 
-        # Scan up to 400 minutes forward
+        # Scan up to 10,080 minutes forward (one week) to cover weekly/monthly schedules
         candidate = now.replace(second=0, microsecond=0)
-        for _ in range(400):
+        for _ in range(10080):
             candidate += dt.timedelta(minutes=1)
             if (
                 _matches(month_f, candidate.month)

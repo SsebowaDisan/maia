@@ -12,6 +12,7 @@ from api.services.agent.tools.workspace import (
     WorkspaceSheetsAppendTool as _WorkspaceSheetsAppendTool,
     WorkspaceSheetsReadTool as _WorkspaceSheetsReadTool,
     WorkspaceSheetsTrackStepTool as _WorkspaceSheetsTrackStepTool,
+    WorkspaceSheetsUpdateTool as _WorkspaceSheetsUpdateTool,
 )
 from api.services.agent.tools.workspace.common import (
     chunk_text as _chunk_text,
@@ -65,6 +66,11 @@ class WorkspaceDriveRenameTool(_WorkspaceDriveRenameTool):
         return get_connector_registry()
 
 
+class WorkspaceSheetsUpdateTool(_WorkspaceSheetsUpdateTool):
+    def _connector_registry(self):
+        return get_connector_registry()
+
+
 __all__ = [
     "_now_iso",
     "_chunk_text",
@@ -78,4 +84,5 @@ __all__ = [
     "WorkspaceSheetsAppendTool",
     "WorkspaceSheetsReadTool",
     "WorkspaceSheetsTrackStepTool",
+    "WorkspaceSheetsUpdateTool",
 ]

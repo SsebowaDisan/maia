@@ -230,7 +230,17 @@ def build_agent_context_window(
     agent_goal: str | None,
     max_turns: int = 6,
 ) -> tuple[list[str], str]:
-    recent_rows = list(chat_history or [])[-max(1, int(max_turns)) :]
+    all_rows = list(chat_history or [])
+
+    # Verbatim snippet window: most recent max_turns turns shown inline.
+    recent_rows = all_rows[-max(1, int(max_turns)):]
+
+    # Wider summarisation window (deepagents-style context compression):
+    # pass up to 12 turns so the LLM summariser can compress older context
+    # into the planning summary rather than silently dropping it.
+    _SUMMARY_WINDOW = 12
+    summary_rows = all_rows[-max(1, _SUMMARY_WINDOW):]
+
     turns: list[dict[str, str]] = []
     snippets: list[str] = []
     for row in recent_rows:
@@ -243,8 +253,18 @@ def build_agent_context_window(
         if assistant_text:
             snippets.append(f"Assistant: {assistant_text[:320]}")
         turns.append({"user": user_text, "assistant": assistant_text})
+
+    # Build the wider summary turns list (includes older context beyond recent_rows).
+    summary_turns: list[dict[str, str]] = []
+    for row in summary_rows:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        u = " ".join(str(row[0] or "").split()).strip()
+        a = " ".join(str(row[1] or "").split()).strip()
+        summary_turns.append({"user": u, "assistant": a})
+
     summary = summarize_conversation_window(
         latest_user_message=f"{latest_message} {agent_goal or ''}".strip(),
-        turns=turns,
+        turns=summary_turns,
     )
     return snippets[-10:], summary

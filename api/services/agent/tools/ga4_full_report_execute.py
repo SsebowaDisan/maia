@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import Any
@@ -334,6 +335,37 @@ def execute_ga4_full_report(
     date_range_override = params.get("date_range")
     if isinstance(date_range_override, dict):
         current_range = date_range_override
+        # Derive aligned comparison and trend windows from the custom range.
+        try:
+            _ga4_relative = re.compile(r"^(\d+)daysAgo$")
+
+            def _resolve_date(value: str) -> date:
+                if value == "today":
+                    return today
+                if value == "yesterday":
+                    return today - timedelta(days=1)
+                m = _ga4_relative.match(value)
+                if m:
+                    return today - timedelta(days=int(m.group(1)))
+                return date.fromisoformat(value)
+
+            _start = _resolve_date(str(current_range.get("startDate", "30daysAgo")))
+            _end = _resolve_date(str(current_range.get("endDate", "today")))
+            _window = max(1, (_end - _start).days + 1)
+            _prev_end = _start - timedelta(days=1)
+            _prev_start = _prev_end - timedelta(days=_window - 1)
+            _trend_start = _start - timedelta(days=_window * 2)
+            prev_range = {
+                "startDate": _prev_start.isoformat(),
+                "endDate": _prev_end.isoformat(),
+            }
+            trend_range = {
+                "startDate": _trend_start.isoformat(),
+                "endDate": _end.isoformat(),
+            }
+        except Exception:
+            # Fall back to defaults if date parsing fails.
+            pass
 
     events.append(ToolTraceEvent(
         event_type="api_call_started", title="Fetch GA4 data",
