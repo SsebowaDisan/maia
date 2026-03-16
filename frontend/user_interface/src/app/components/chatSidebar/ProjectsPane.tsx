@@ -346,11 +346,13 @@ export function ProjectsPane({
                                     >
                                       <button
                                         onClick={() => onSelectConversation(conversation.id)}
-                                        className="inline-flex min-w-0 flex-1 items-start gap-2 text-left"
+                                        className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
                                       >
-                                        <ConversationIcon
-                                          className={`mt-[2px] h-3.5 w-3.5 shrink-0 ${isSelected ? "text-[#1d1d1f]" : "text-[#8d8d93]"}`}
-                                        />
+                                        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                                          <ConversationIcon
+                                            className={`h-3.5 w-3.5 ${isSelected ? "text-[#1d1d1f]" : "text-[#8d8d93]"}`}
+                                          />
+                                        </span>
                                         <div className="min-w-0">
                                           <p className="truncate text-[14px] font-medium text-[#1d1d1f]">
                                             {displayConversationName(conversation.name)}

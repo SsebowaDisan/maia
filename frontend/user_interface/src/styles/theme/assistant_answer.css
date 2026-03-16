@@ -134,6 +134,85 @@
   border-radius: 12px;
 }
 
+.assistantAnswerBody [data-math-rendered="true"] {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  color: #111827;
+}
+
+.assistantAnswerBody [data-math-rendered="true"] .katex {
+  font-size: 1.04em;
+  line-height: 1.5;
+}
+
+.assistantAnswerBody [data-math-rendered="true"][data-math-display="true"] {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0.72rem auto 0.96rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(250, 252, 255, 0.96) 100%);
+  padding: 0.56rem 0.88rem;
+  box-shadow:
+    0 8px 22px -24px rgba(15, 23, 42, 0.34),
+    0 1px 0 rgba(255, 255, 255, 0.94) inset;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  text-align: center;
+}
+
+.assistantAnswerBody [data-math-rendered="true"][data-math-display="true"] .katex-display {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #0f172a;
+  box-shadow: none;
+}
+
+.assistantAnswerBody [data-math-rendered="true"][data-math-display="true"] .katex-display > .katex {
+  display: inline-block;
+  max-width: 100%;
+  text-align: center;
+}
+
+.assistantAnswerBody [data-math-rendered="true"] a.citation {
+  display: none !important;
+}
+
+.assistantAnswerBody [data-math-fallback="true"] {
+  display: inline-block;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.04);
+  padding: 0.06rem 0.42rem;
+  font-family: "SF Mono", ui-monospace, Menlo, Monaco, "Cascadia Mono", monospace;
+  font-size: 0.93em;
+  line-height: 1.55;
+  color: #344054;
+}
+
+.assistantAnswerBody [data-math-fallback="true"][data-math-display="true"] {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0.72rem auto 0.96rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(250, 252, 255, 0.96) 100%);
+  padding: 0.56rem 0.88rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  text-align: center;
+  box-shadow:
+    0 8px 22px -24px rgba(15, 23, 42, 0.34),
+    0 1px 0 rgba(255, 255, 255, 0.94) inset;
+}
+
 .info-panel-answer-html details.evidence {
   margin: 0.55rem 0;
   border: 1px solid rgba(31, 47, 73, 0.14);
@@ -373,6 +452,32 @@
 
 .dark .assistantAnswerBody th {
   background: rgba(52, 65, 88, 0.54);
+}
+
+.dark .assistantAnswerBody [data-math-rendered="true"] {
+  color: #f3f4f6;
+}
+
+.dark .assistantAnswerBody [data-math-rendered="true"][data-math-display="true"] .katex-display {
+  border-color: transparent;
+  background: transparent;
+  box-shadow:
+    none;
+}
+
+.dark .assistantAnswerBody [data-math-fallback="true"] {
+  background: rgba(148, 163, 184, 0.14);
+  color: #dbe3ef;
+}
+
+.dark .assistantAnswerBody [data-math-rendered="true"][data-math-display="true"],
+.dark .assistantAnswerBody [data-math-fallback="true"][data-math-display="true"] {
+  border-color: rgba(148, 163, 184, 0.46);
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.78) 0%, rgba(23, 32, 46, 0.74) 100%);
+  box-shadow:
+    0 18px 40px -30px rgba(2, 6, 23, 0.92),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
 }
 
 .dark .chat-answer-html mark {

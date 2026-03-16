@@ -41,6 +41,7 @@ import { OperationsDashboardPage } from "../pages/OperationsDashboardPage";
 import { WorkflowBuilderPage } from "../pages/WorkflowBuilderPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { InsightsFeedPanel } from "../components/agentActivityPanel/InsightsFeedPanel";
+import { WorkflowHeaderFields } from "../components/workflowCanvas/WorkflowHeaderFields";
 import { useCanvasStore } from "../stores/canvasStore";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
 type MindmapNodeFollowUpDraft = {
@@ -404,6 +405,19 @@ export default function App() {
     setSidebarOverlay(null);
   };
 
+  const handleSidebarConversationSelect = (conversationId: string) => {
+    if (sidebarOverlay) {
+      setSidebarOverlay(null);
+    }
+    if (workspaceModalTab) {
+      setWorkspaceModalTab(null);
+    }
+    if (layout.activeTab !== "Chat") {
+      layout.setActiveTab("Chat");
+    }
+    void chatState.handleSelectConversation(conversationId);
+  };
+
   const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
 
   useEffect(() => {
@@ -514,7 +528,7 @@ export default function App() {
               conversations={chatState.visibleConversations}
               allConversations={chatState.conversations}
               selectedConversationId={selectedSidebarConversationId}
-              onSelectConversation={chatState.handleSelectConversation}
+              onSelectConversation={handleSidebarConversationSelect}
               onNewConversation={chatState.handleCreateConversation}
               projects={projectState.projects}
               selectedProjectId={projectState.selectedProjectId}
@@ -708,6 +722,9 @@ export default function App() {
               <AppRouteOverlayModal
                 title={sidebarOverlay.title}
                 subtitle={sidebarOverlay.subtitle}
+                headerActions={
+                  sidebarOverlay.key === "workflow_builder" ? <WorkflowHeaderFields /> : null
+                }
                 onClose={closeSidebarOverlay}
               >
                 {renderSidebarOverlayContent()}

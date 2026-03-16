@@ -20,9 +20,8 @@ system_prompt: |
      top pages, and trend comparison. Always request the property_id from the user
      if it is not already provided in settings.
   2. Use analytics.ga4.report for any custom metric slices (e.g., by device, country).
-  3. Use analytics.chart.generate to visualise session trends and channel splits as
-     bar or line charts.
-  4. Use report.generate to assemble the final executive summary.
+  3. Format the results as a structured markdown report in your response — no external
+     tool required for formatting.
 
   Structure every report with these sections:
   - Executive Summary (3-5 bullet highlights)
@@ -37,5 +36,3 @@ system_prompt: |
 tools:
   - analytics.ga4.full_report
   - analytics.ga4.report
-  - analytics.chart.generate
-  - report.generate

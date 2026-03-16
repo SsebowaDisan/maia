@@ -132,6 +132,10 @@ export function ConnectorDetailPanel({
     if (!connector) {
       return;
     }
+    if (connector.authType === "none") {
+      setStatus("No credentials to revoke for this public connector.");
+      return;
+    }
     setSaving(true);
     setStatus("");
     try {
@@ -210,7 +214,13 @@ export function ConnectorDetailPanel({
             </button>
           ) : null}
 
-          {connector.authType !== "oauth2" && connectorDefinition ? (
+          {connector.authType === "none" ? (
+            <div className="rounded-2xl border border-[#bfdbfe] bg-[#eff6ff] px-4 py-3 text-[13px] text-[#1d4ed8]">
+              No credentials required. This connector uses a public API.
+            </div>
+          ) : null}
+
+          {connector.authType !== "oauth2" && connector.authType !== "none" && connectorDefinition ? (
             <div className="space-y-3 rounded-2xl border border-black/[0.08] bg-white p-4">
               <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#667085]">Credential form</p>
               {connectorDefinition.fields.map((field) => (
@@ -237,7 +247,7 @@ export function ConnectorDetailPanel({
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className={`grid gap-3 ${connector.authType === "none" ? "grid-cols-1" : "grid-cols-2"}`}>
             <button
               type="button"
               onClick={() => void handleTestConnection()}
@@ -247,14 +257,16 @@ export function ConnectorDetailPanel({
               <RefreshCw size={13} />
               Test connection
             </button>
-            <button
-              type="button"
-              onClick={() => void handleRevoke()}
-              disabled={saving}
-              className="inline-flex items-center justify-center rounded-xl border border-[#fda4af] bg-[#fff1f2] px-3 py-2 text-[13px] font-semibold text-[#9f1239] hover:bg-[#ffe4e6] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Revoke
-            </button>
+            {connector.authType !== "none" ? (
+              <button
+                type="button"
+                onClick={() => void handleRevoke()}
+                disabled={saving}
+                className="inline-flex items-center justify-center rounded-xl border border-[#fda4af] bg-[#fff1f2] px-3 py-2 text-[13px] font-semibold text-[#9f1239] hover:bg-[#ffe4e6] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Revoke
+              </button>
+            ) : null}
           </div>
 
           {lastTestedAt ? (

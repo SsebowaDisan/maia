@@ -53,6 +53,28 @@ _PROFILES: dict[str, dict] = {
                 ],
             ),
             ToolSchema(
+                id="gmail.draft",
+                name="Create draft",
+                description="Save an email as a draft in Gmail without sending it.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="to", type=ToolParameterType.string, description="Recipient email address"),
+                    ToolParameter(name="subject", type=ToolParameterType.string, description="Email subject line"),
+                    ToolParameter(name="body", type=ToolParameterType.string, description="Plain-text email body"),
+                    ToolParameter(name="cc", type=ToolParameterType.string, description="CC recipients", required=False),
+                ],
+            ),
+            ToolSchema(
+                id="gmail.search",
+                name="Search emails",
+                description="Search Gmail messages using a query string.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="query", type=ToolParameterType.string, description="Gmail search query, e.g. 'subject:invoice from:vendor'"),
+                    ToolParameter(name="max_results", type=ToolParameterType.integer, description="Maximum messages to return", required=False, default=10),
+                ],
+            ),
+            ToolSchema(
                 id="gmail.read",
                 name="Read inbox",
                 description="Search and read Gmail messages.",
@@ -101,7 +123,7 @@ _PROFILES: dict[str, dict] = {
     },
     "google_workspace": {
         "name": "Google Workspace",
-        "description": "Access Google Drive files and documents.",
+        "description": "Access Google Drive, Docs, and Sheets.",
         "category": ConnectorCategory.storage,
         "auth": OAuth2AuthConfig(
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
@@ -109,9 +131,11 @@ _PROFILES: dict[str, dict] = {
             scopes=[
                 "https://www.googleapis.com/auth/drive.readonly",
                 "https://www.googleapis.com/auth/drive.file",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/documents",
             ],
         ),
-        "tags": ["google", "drive"],
+        "tags": ["google", "drive", "sheets", "docs"],
         "tools": [
             ToolSchema(
                 id="gdrive.read_file",
@@ -120,6 +144,79 @@ _PROFILES: dict[str, dict] = {
                 action_class=ToolActionClass.read,
                 parameters=[
                     ToolParameter(name="file_id", type=ToolParameterType.string, description="Google Drive file ID"),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.drive.search",
+                name="Search Drive",
+                description="Search Google Drive for files by name or type.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="query", type=ToolParameterType.string, description="Search query, e.g. 'CRM tracker'"),
+                    ToolParameter(name="max_results", type=ToolParameterType.integer, description="Max files to return", required=False, default=10),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.sheets.read",
+                name="Read sheet",
+                description="Read rows from a Google Sheets spreadsheet.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="spreadsheet_id", type=ToolParameterType.string, description="Spreadsheet ID or URL"),
+                    ToolParameter(name="range", type=ToolParameterType.string, description="A1 notation range, e.g. 'Sheet1!A1:Z100'", required=False),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.sheets.append",
+                name="Append row",
+                description="Append a row to a Google Sheets spreadsheet.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="spreadsheet_id", type=ToolParameterType.string, description="Spreadsheet ID or URL"),
+                    ToolParameter(name="values", type=ToolParameterType.array, description="List of cell values for the new row"),
+                    ToolParameter(name="sheet_name", type=ToolParameterType.string, description="Sheet tab name", required=False, default="Sheet1"),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.sheets.update",
+                name="Update cell",
+                description="Update a specific cell or range in a Google Sheet.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="spreadsheet_id", type=ToolParameterType.string, description="Spreadsheet ID or URL"),
+                    ToolParameter(name="range", type=ToolParameterType.string, description="A1 notation range to update"),
+                    ToolParameter(name="values", type=ToolParameterType.array, description="2D array of values to write"),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.docs.read",
+                name="Read doc",
+                description="Read the text content of a Google Doc.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="document_id", type=ToolParameterType.string, description="Google Doc document ID or URL"),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.docs.create",
+                name="Create doc",
+                description="Create a new Google Doc with the given title and content.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="title", type=ToolParameterType.string, description="Document title"),
+                    ToolParameter(name="content", type=ToolParameterType.string, description="Markdown or plain-text body content"),
+                    ToolParameter(name="folder_id", type=ToolParameterType.string, description="Drive folder ID to save into", required=False),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.docs.fill_template",
+                name="Fill doc template",
+                description="Copy a Google Doc template and replace placeholder variables with provided values.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="template_id", type=ToolParameterType.string, description="Template Google Doc ID"),
+                    ToolParameter(name="variables", type=ToolParameterType.object, description="Key/value pairs to replace in the template"),
+                    ToolParameter(name="output_title", type=ToolParameterType.string, description="Title for the new document"),
                 ],
             ),
         ],
@@ -537,6 +634,115 @@ _PROFILES: dict[str, dict] = {
                 action_class=ToolActionClass.read,
                 parameters=[
                     ToolParameter(name="file_url", type=ToolParameterType.string, description="URL or path to the invoice PDF"),
+                ],
+            ),
+        ],
+        "emitted_event_types": [],
+    },
+    # ── Community & research sources ──────────────────────────────────────────
+    "reddit": {
+        "name": "Reddit",
+        "description": "Search Reddit posts and comments for community sentiment, product feedback, and market signals.",
+        "category": ConnectorCategory.data,
+        "auth": ApiKeyAuthConfig(param_name="Authorization", credential_label="Reddit API Key (Bearer token)"),
+        "tags": ["reddit", "community", "social", "research"],
+        "tools": [
+            ToolSchema(
+                id="reddit.search",
+                name="Search Reddit",
+                description="Search Reddit posts across all subreddits or a specific subreddit.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="query", type=ToolParameterType.string, description="Search query"),
+                    ToolParameter(name="subreddit", type=ToolParameterType.string, description="Limit to a specific subreddit (without r/)", required=False),
+                    ToolParameter(name="sort", type=ToolParameterType.string, description="Sort by: relevance, new, top, hot", required=False, default="relevance"),
+                    ToolParameter(name="limit", type=ToolParameterType.integer, description="Number of posts to return", required=False, default=10),
+                    ToolParameter(name="time_filter", type=ToolParameterType.string, description="Time filter: hour, day, week, month, year, all", required=False, default="month"),
+                ],
+            ),
+            ToolSchema(
+                id="reddit.get_comments",
+                name="Get post comments",
+                description="Retrieve comments from a specific Reddit post.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="post_url", type=ToolParameterType.string, description="Full URL of the Reddit post"),
+                    ToolParameter(name="limit", type=ToolParameterType.integer, description="Number of top-level comments to return", required=False, default=20),
+                ],
+            ),
+        ],
+        "emitted_event_types": [],
+    },
+    "newsapi": {
+        "name": "NewsAPI",
+        "description": "Search and retrieve news articles from thousands of global sources via the NewsAPI service.",
+        "category": ConnectorCategory.data,
+        "auth": ApiKeyAuthConfig(param_name="X-Api-Key", credential_label="NewsAPI Key"),
+        "tags": ["news", "media", "articles", "research"],
+        "tools": [
+            ToolSchema(
+                id="newsapi.search",
+                name="Search articles",
+                description="Search for news articles matching a query across all sources.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="query", type=ToolParameterType.string, description="Search query"),
+                    ToolParameter(name="from_date", type=ToolParameterType.string, description="Start date YYYY-MM-DD", required=False),
+                    ToolParameter(name="to_date", type=ToolParameterType.string, description="End date YYYY-MM-DD", required=False),
+                    ToolParameter(name="language", type=ToolParameterType.string, description="Language code e.g. 'en'", required=False, default="en"),
+                    ToolParameter(name="page_size", type=ToolParameterType.integer, description="Number of articles to return", required=False, default=10),
+                ],
+            ),
+            ToolSchema(
+                id="newsapi.top_headlines",
+                name="Top headlines",
+                description="Fetch top headlines for a topic, country, or category.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="query", type=ToolParameterType.string, description="Topic to search headlines for", required=False),
+                    ToolParameter(name="category", type=ToolParameterType.string, description="Category: business, technology, science, health, sports, entertainment", required=False),
+                    ToolParameter(name="country", type=ToolParameterType.string, description="2-letter country code e.g. 'gb', 'us'", required=False, default="gb"),
+                    ToolParameter(name="page_size", type=ToolParameterType.integer, description="Number of headlines to return", required=False, default=10),
+                ],
+            ),
+        ],
+        "emitted_event_types": [],
+    },
+    "sec_edgar": {
+        "name": "SEC EDGAR",
+        "description": "Access US public company filings from the SEC EDGAR database — 10-K, 10-Q, 8-K, S-1, and more.",
+        "category": ConnectorCategory.finance,
+        "auth": NoAuthConfig(),
+        "tags": ["sec", "edgar", "filings", "finance", "compliance", "research"],
+        "tools": [
+            ToolSchema(
+                id="sec_edgar.search_company",
+                name="Search company",
+                description="Search for a company in the SEC EDGAR database and return its CIK number.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="company_name", type=ToolParameterType.string, description="Company name to search for"),
+                ],
+            ),
+            ToolSchema(
+                id="sec_edgar.get_filings",
+                name="Get filings",
+                description="Retrieve recent filings for a company by CIK or ticker symbol.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="cik_or_ticker", type=ToolParameterType.string, description="CIK number or stock ticker"),
+                    ToolParameter(name="form_type", type=ToolParameterType.string, description="Filing type: 10-K, 10-Q, 8-K, S-1, DEF 14A", required=False),
+                    ToolParameter(name="limit", type=ToolParameterType.integer, description="Number of filings to return", required=False, default=5),
+                ],
+            ),
+            ToolSchema(
+                id="sec_edgar.get_filing_text",
+                name="Get filing text",
+                description="Retrieve the text content of a specific SEC filing document.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="filing_url", type=ToolParameterType.string, description="URL of the specific filing document"),
+                    ToolParameter(name="section", type=ToolParameterType.string, description="Section to extract: risk_factors, business, mda, financials", required=False),
                 ],
             ),
         ],

@@ -8,8 +8,11 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlparse
 
+import urllib.error
+import urllib.request
+
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from api.routers.web_preview_fetch_helpers import (
     build_reader_page as _build_reader_page_impl,
@@ -433,6 +436,46 @@ def _sanitize_and_inject_preview_html(
         normalize_preview_viewport_fn=_normalize_preview_viewport,
         default_highlight_scope=_DEFAULT_HIGHLIGHT_SCOPE,
         default_preview_viewport=_DEFAULT_PREVIEW_VIEWPORT,
+    )
+
+
+_PDF_PROXY_MAX_BYTES = 20_000_000  # 20 MB ceiling
+_PDF_PROXY_TIMEOUT_SECONDS = 15
+
+
+@router.get("/pdf-proxy")
+def proxy_pdf(url: str = Query(..., description="External PDF URL to proxy")) -> Response:
+    """Fetch and stream an external PDF through the backend.
+
+    Exists so the browser-side CitationPdfPreview (react-pdf / PDF.js) can load
+    PDFs from third-party servers without hitting CORS or X-Frame-Options blocks.
+    Only .pdf paths are accepted to limit the proxy surface area.
+    """
+    normalized = _normalize_target_url(url)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Invalid or blocked URL.")
+    parsed_path = urlparse(normalized).path.lower()
+    if not parsed_path.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only .pdf URLs are supported by this proxy.")
+    try:
+        req = urllib.request.Request(
+            normalized,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Maia/1.0; +https://maia.ai)"},
+        )
+        with urllib.request.urlopen(req, timeout=_PDF_PROXY_TIMEOUT_SECONDS) as resp:
+            content = resp.read(_PDF_PROXY_MAX_BYTES)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Remote server returned {exc.code}.") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not fetch PDF: {exc}") from exc
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

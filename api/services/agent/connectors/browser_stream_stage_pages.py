@@ -38,11 +38,17 @@ def run_browser_pages_stage(
     page_metrics: Callable[..., dict[str, float]],
     runtime: Any,
 ):
-        def _goto_with_download_fallback(target_url: str) -> bool:
+        def _goto_with_download_fallback(target_url: str) -> str | None:
+            """Navigate to target_url; fall back to gview for PDF downloads.
+
+            Returns the canonical source URL (original URL, not the gview wrapper)
+            on success, or None on failure.  Callers should store this value as
+            ``source_url`` in their payload so citations record the real source.
+            """
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(max(200, wait_ms))
-                return True
+                return target_url
             except Exception as exc:
                 message = str(exc or "").lower()
                 looks_like_pdf_download = (
@@ -52,7 +58,7 @@ def run_browser_pages_stage(
                     or str(target_url or "").lower().endswith(".pdf")
                 )
                 if not looks_like_pdf_download:
-                    return False
+                    return None
                 viewer_url = (
                     "https://docs.google.com/gview?embedded=1&url="
                     f"{quote(str(target_url or ''), safe=':/?&=%#')}"
@@ -60,9 +66,11 @@ def run_browser_pages_stage(
                 try:
                     page.goto(viewer_url, wait_until="domcontentloaded", timeout=timeout_ms)
                     page.wait_for_timeout(max(200, wait_ms))
-                    return True
+                    # Return the ORIGINAL PDF URL so citation source_url is not
+                    # polluted with the Google Docs viewer wrapper URL.
+                    return target_url
                 except Exception:
-                    return False
+                    return None
 
         # Always include the initial page as page 1. Additional same-origin
         # targets are appended when follow-up navigation is enabled.
@@ -202,7 +210,8 @@ def run_browser_pages_stage(
                         ),
                         "snapshot_ref": fallback_capture["screenshot_path"],
                     }
-                if not _goto_with_download_fallback(target_url):
+                canonical_nav_url = _goto_with_download_fallback(target_url)
+                if canonical_nav_url is None:
                     continue
                 nav_x, nav_y = _jitter_target(138, 106, spread=16.0)
                 last_cursor = move_cursor(page=page, x=nav_x, y=nav_y)
@@ -221,6 +230,9 @@ def run_browser_pages_stage(
                     "data": _website_payload(
                         {
                             "url": nav_capture["url"],
+                            # source_url takes priority in stream_bridge citation extraction;
+                            # use the original URL (not the gview wrapper) as the citable source.
+                            "source_url": canonical_nav_url,
                             "title": nav_capture["title"],
                             "page_index": page_index,
                             "extract_stage": "same_domain_followup",

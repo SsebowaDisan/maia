@@ -12,7 +12,7 @@ type AgentInstallModalProps = {
   onOpenConnectorSetup?: (connectorId: string) => void;
   onInstall: (
     agentId: string,
-    payload: { version?: string | null; connector_mapping: Record<string, string> },
+    payload: { version?: string | null; connector_mapping: Record<string, string>; gate_policies: Record<string, boolean> },
   ) => Promise<void> | void;
 };
 
@@ -24,6 +24,65 @@ function normalizeLabel(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatHourMinute(hour: number, minute: number): string {
+  const safeHour = Math.max(0, Math.min(23, hour));
+  const safeMinute = Math.max(0, Math.min(59, minute));
+  return `${String(safeHour).padStart(2, "0")}:${String(safeMinute).padStart(2, "0")}`;
+}
+
+function describeCronExpression(cronExpression: string): string {
+  const parts = String(cronExpression || "").trim().split(/\s+/);
+  if (parts.length < 5) {
+    return "Custom schedule";
+  }
+  const [minuteRaw, hourRaw, dayOfMonth, month, dayOfWeek] = parts;
+  const minute = Number(minuteRaw);
+  const hour = Number(hourRaw);
+  const hasFixedTime = Number.isFinite(minute) && Number.isFinite(hour);
+  const timeText = hasFixedTime ? formatHourMinute(hour, minute) : "scheduled time";
+
+  const weekdayMap: Record<string, string> = {
+    "0": "Sunday",
+    "1": "Monday",
+    "2": "Tuesday",
+    "3": "Wednesday",
+    "4": "Thursday",
+    "5": "Friday",
+    "6": "Saturday",
+    "7": "Sunday",
+  };
+
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return `Every day at ${timeText}`;
+  }
+  if (dayOfMonth === "*" && month === "*" && weekdayMap[dayOfWeek]) {
+    return `Every ${weekdayMap[dayOfWeek]} at ${timeText}`;
+  }
+  if (month === "*" && dayOfWeek === "*" && dayOfMonth === "1") {
+    return `On the first day of each month at ${timeText}`;
+  }
+  return `Cron schedule: ${cronExpression}`;
+}
+
+function readScheduledTrigger(definition: Record<string, unknown>): {
+  cronExpression: string;
+  timezone: string;
+  humanText: string;
+} | null {
+  const trigger = (definition.trigger || {}) as Record<string, unknown>;
+  const family = String(trigger.family || "").trim().toLowerCase();
+  if (family !== "scheduled") {
+    return null;
+  }
+  const cronExpression = String(trigger.cron_expression || "").trim();
+  const timezone = String(trigger.timezone || "UTC").trim() || "UTC";
+  return {
+    cronExpression,
+    timezone,
+    humanText: describeCronExpression(cronExpression),
+  };
 }
 
 export function AgentInstallModal({
@@ -40,6 +99,10 @@ export function AgentInstallModal({
   const [gateEnabled, setGateEnabled] = useState<Record<string, boolean>>({});
 
   const requiredConnectors = agent?.required_connectors || [];
+  const scheduledTrigger = useMemo(
+    () => readScheduledTrigger((agent?.definition || {}) as Record<string, unknown>),
+    [agent?.definition],
+  );
   const missingConnectors = useMemo(
     () => requiredConnectors.filter((required) => !availableConnectorIds.includes(required)),
     [availableConnectorIds, requiredConnectors],
@@ -91,6 +154,27 @@ export function AgentInstallModal({
                   <li key={connector}>{normalizeLabel(connector)}</li>
                 ))}
               </ul>
+              {scheduledTrigger ? (
+                <div className="mt-3 rounded-xl border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2.5">
+                  <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#1d4ed8]">
+                    Runs automatically
+                  </p>
+                  <p className="mt-1 text-[13px] font-medium text-[#1e3a8a]">
+                    {scheduledTrigger.humanText}
+                  </p>
+                  <p className="mt-1 text-[12px] text-[#1e40af]">
+                    Timezone: {scheduledTrigger.timezone}
+                  </p>
+                  <p className="mt-1 text-[12px] text-[#1e40af]">
+                    The schedule starts immediately after installation.
+                  </p>
+                  {scheduledTrigger.cronExpression ? (
+                    <p className="mt-1 text-[11px] text-[#1e40af]">
+                      Cron: <code>{scheduledTrigger.cronExpression}</code>
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
           ) : null}
 
@@ -210,6 +294,7 @@ export function AgentInstallModal({
                 onInstall(agent.agent_id, {
                   version: agent.version,
                   connector_mapping: connectorMap,
+                  gate_policies: gateEnabled,
                 })
               }
               className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"

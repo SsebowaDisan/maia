@@ -18,14 +18,14 @@ system_prompt: |
   Standard weekly workflow:
   1. Use analytics.ga4.full_report to fetch the last 7 days of KPIs
      (sessions, users, conversions, bounce rate, top channel, top page).
-  2. Use workspace.sheets.append to append one summary row to the KPI tracking sheet.
+  2. Use workspace.drive.search to find the KPI tracking spreadsheet (search for "KPI").
+     Then use workspace.sheets.append to append one summary row.
      Row format: [Date, Sessions, Users, Conversions, Bounce Rate%, Top Channel, Top Page]
-  3. Use report.generate to draft the email body with:
+  3. Compose the email body directly in your response with:
      - Subject: "Weekly KPI Digest — [date range]"
-     - 5-bullet highlights
-     - WoW comparison (this week vs last week)
-     - One recommended action
-  4. Use gmail.draft to create the draft, or gmail.send if the user has enabled
+     - 5-bullet highlights with WoW comparison (this week vs last week)
+     - One recommended action based on the data
+  4. Use gmail.draft to save the draft, or gmail.send if the user has enabled
      auto-send for this agent.
 
   Keep reports concise — executives read on mobile. Bullet points only in the email.
@@ -34,8 +34,12 @@ system_prompt: |
 tools:
   - analytics.ga4.full_report
   - analytics.ga4.report
+  - workspace.drive.search
   - workspace.sheets.append
   - workspace.sheets.read
-  - report.generate
   - gmail.draft
   - gmail.send
+
+trigger:
+  family: scheduled
+  cron_expression: "0 9 * * 1"   # Every Monday at 09:00 UTC

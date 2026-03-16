@@ -6,6 +6,7 @@ type AppRouteOverlayModalProps = {
   subtitle: string;
   onClose: () => void;
   children: ReactNode;
+  headerActions?: ReactNode;
 };
 
 export function AppRouteOverlayModal({
@@ -13,6 +14,7 @@ export function AppRouteOverlayModal({
   subtitle,
   onClose,
   children,
+  headerActions = null,
 }: AppRouteOverlayModalProps) {
   return (
     <div
@@ -41,14 +43,17 @@ export function AppRouteOverlayModal({
             </h2>
             <p className="mt-1 text-[14px] text-[#5f5f65]">{subtitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white/70 text-[#6e6e73] transition-colors hover:bg-white hover:text-[#1d1d1f]"
-            aria-label={`Close ${title}`}
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex shrink-0 items-start gap-2">
+            {headerActions}
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white/70 text-[#6e6e73] transition-colors hover:bg-white hover:text-[#1d1d1f]"
+              aria-label={`Close ${title}`}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden bg-white/70 p-2">{children}</div>

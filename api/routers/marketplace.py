@@ -25,7 +25,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from api.auth import get_current_user_id
+from api.auth import get_current_user_id, require_super_admin
+from api.models.user import User
 from api.services.marketplace import registry, publisher, installer, versioning, reviews as reviews_service
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class PublishRequest(BaseModel):
 class InstallRequest(BaseModel):
     version: str | None = None
     connector_mapping: dict[str, str] = {}
+    gate_policies: dict[str, bool] = {}  # {connector_id: require_approval}
 
 
 class ReviewRequest(BaseModel):
@@ -131,8 +133,9 @@ def submit_for_review(
 @router.post("/agents/{agent_id}/approve")
 def approve(
     agent_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    _admin: Annotated[User, Depends(require_super_admin)],
 ) -> dict[str, Any]:
+    """Approve a marketplace agent submission. Maia super-admins only."""
     try:
         entry = publisher.approve_agent(agent_id)
     except ValueError as exc:
@@ -144,8 +147,9 @@ def approve(
 def reject(
     agent_id: str,
     body: RejectRequest,
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    _admin: Annotated[User, Depends(require_super_admin)],
 ) -> dict[str, Any]:
+    """Reject a marketplace agent submission. Maia super-admins only."""
     try:
         entry = publisher.reject_agent(agent_id, body.reason)
     except ValueError as exc:
@@ -167,6 +171,7 @@ def install(
         agent_id,
         version=body.version,
         connector_mapping=body.connector_mapping,
+        gate_policies=body.gate_policies,
     )
     if not result.success:
         return {

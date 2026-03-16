@@ -22,7 +22,7 @@ function createConversation() {
 }
 
 function getConversation(conversationId: string) {
-  return request<ConversationDetail>(`/api/conversations/${conversationId}`);
+  return request<ConversationDetail>(`/api/conversations/${encodeURIComponent(conversationId)}`);
 }
 
 function updateConversation(
@@ -32,7 +32,7 @@ function updateConversation(
     is_public?: boolean | null;
   },
 ) {
-  return request<ConversationDetail>(`/api/conversations/${conversationId}`, {
+  return request<ConversationDetail>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -40,7 +40,7 @@ function updateConversation(
 }
 
 function deleteConversation(conversationId: string) {
-  return request<{ status: string }>(`/api/conversations/${conversationId}`, {
+  return request<{ status: string }>(`/api/conversations/${encodeURIComponent(conversationId)}`, {
     method: "DELETE",
   });
 }

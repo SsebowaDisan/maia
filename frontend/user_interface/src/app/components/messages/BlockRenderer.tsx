@@ -13,13 +13,17 @@ type BlockRendererProps = {
 };
 
 function renderMathHtml(latex: string, displayMode = false): string {
+  const source = String(latex || "");
   try {
-    return katex.renderToString(latex, {
+    return katex.renderToString(source, {
       displayMode,
-      throwOnError: false,
+      throwOnError: true,
     });
   } catch {
-    return `<code>${latex}</code>`;
+    return `<code>${source
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")}</code>`;
   }
 }
 

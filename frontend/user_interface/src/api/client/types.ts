@@ -431,6 +431,171 @@ type WorkGraphReplayStateResponse = {
   work_graph?: Record<string, unknown>;
 };
 
+type WorkflowStep = {
+  step_id: string;
+  agent_id: string;
+  input_mapping?: Record<string, string>;
+  output_key: string;
+  description?: string;
+};
+
+type WorkflowEdge = {
+  from_step: string;
+  to_step: string;
+  condition?: string;
+};
+
+type WorkflowDefinition = {
+  workflow_id: string;
+  name: string;
+  description?: string;
+  version?: string;
+  steps: WorkflowStep[];
+  edges: WorkflowEdge[];
+};
+
+type WorkflowRecord = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  description?: string;
+  definition: WorkflowDefinition;
+  created_at?: number;
+  updated_at?: number;
+};
+
+type WorkflowTemplate = {
+  template_id: string;
+  name: string;
+  description: string;
+  step_count: number;
+  tags?: string[];
+  definition: WorkflowDefinition;
+};
+
+type WorkflowValidationResponse = {
+  valid: boolean;
+  errors: string[];
+  warnings?: string[];
+};
+
+type WorkflowRunEvent =
+  | {
+      event_type: "run_started";
+      run_id: string;
+      workflow_id: string;
+    }
+  | {
+      event_type: "workflow_started";
+      run_id: string;
+      workflow_id: string;
+      step_count: number;
+      step_order: string[];
+    }
+  | {
+      event_type: "workflow_step_started";
+      run_id: string;
+      workflow_id: string;
+      step_id: string;
+      agent_id: string;
+    }
+  | {
+      event_type: "workflow_step_progress";
+      run_id: string;
+      workflow_id: string;
+      step_id: string;
+      agent_id?: string;
+      delta: string;
+    }
+  | {
+      event_type: "workflow_step_completed";
+      run_id: string;
+      workflow_id: string;
+      step_id: string;
+      agent_id?: string;
+      output_key?: string;
+      result_preview: string;
+      duration_ms?: number;
+    }
+  | {
+      event_type: "workflow_step_failed";
+      run_id: string;
+      workflow_id: string;
+      step_id: string;
+      error: string;
+      retryable?: boolean;
+    }
+  | {
+      event_type: "workflow_step_skipped";
+      run_id: string;
+      workflow_id: string;
+      step_id: string;
+      reason?: string;
+    }
+  | {
+      event_type: "workflow_completed";
+      run_id: string;
+      workflow_id: string;
+      outputs?: Record<string, string>;
+      duration_ms?: number;
+    }
+  | {
+      event_type: "workflow_failed";
+      run_id: string;
+      workflow_id: string;
+      failed_step_id?: string | null;
+      error: string;
+      duration_ms?: number;
+    }
+  | {
+      event_type: "done";
+    }
+  | {
+      event_type: string;
+      [key: string]: unknown;
+    };
+
+type WorkflowStepRunResult = {
+  step_id: string;
+  agent_id?: string;
+  status: "completed" | "failed" | "skipped" | string;
+  output_preview?: string;
+  error?: string;
+  duration_ms?: number;
+};
+
+type WorkflowRunRecord = {
+  run_id: string;
+  workflow_id: string;
+  tenant_id?: string;
+  status: "running" | "completed" | "failed" | string;
+  started_at: number;
+  finished_at?: number | null;
+  duration_ms?: number;
+  step_results?: WorkflowStepRunResult[];
+  final_outputs?: Record<string, string>;
+  error?: string;
+};
+
+type WorkflowGenerateStreamEvent =
+  | {
+      event_type: "nl_build_delta";
+      delta: string;
+      done?: boolean;
+      definition?: WorkflowDefinition | null;
+    }
+  | {
+      event_type: "nl_build_error";
+      error: string;
+    }
+  | {
+      event_type: "done";
+    }
+  | {
+      event_type: string;
+      [key: string]: unknown;
+    };
+
 export type {
   AgentActionRecord,
   AgentActivityEvent,
@@ -466,6 +631,16 @@ export type {
   SettingsResponse,
   WorkGraphPayloadResponse,
   WorkGraphReplayStateResponse,
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowRecord,
+  WorkflowGenerateStreamEvent,
+  WorkflowRunEvent,
+  WorkflowRunRecord,
+  WorkflowStep,
+  WorkflowStepRunResult,
+  WorkflowTemplate,
+  WorkflowValidationResponse,
   UploadItem,
   UrlActionResult,
   UploadResponse,

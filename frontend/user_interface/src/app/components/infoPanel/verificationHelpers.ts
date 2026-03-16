@@ -53,6 +53,35 @@ function sourceIdForCitation(citation: CitationFocus | null): string {
   return `label:${String(citation.sourceName || "").trim()}`.toLowerCase();
 }
 
+/**
+ * If `url` is a Google Docs viewer URL (gview?embedded=1&url=...), return the
+ * inner PDF URL. Otherwise return null.
+ */
+function _extractGviewPdfUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (
+      (u.hostname === "docs.google.com" || u.hostname === "drive.google.com") &&
+      u.pathname === "/gview"
+    ) {
+      const inner = u.searchParams.get("url");
+      return inner || null;
+    }
+  } catch {
+    // ignore malformed URLs
+  }
+  return null;
+}
+
+/** Return true if the URL path ends with .pdf (external, not an uploaded file). */
+function _isExternalPdfUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith(".pdf");
+  } catch {
+    return false;
+  }
+}
+
 function resolveCitationOpenUrl(params: {
   citation: CitationFocus | null;
   evidenceCards: EvidenceCard[];
@@ -78,26 +107,42 @@ function resolveCitationOpenUrl(params: {
   const matchedUrl = normalizeHttpUrl(matchedCard?.sourceUrl);
   const sourceNameUrl = normalizeHttpUrl(citation.sourceName);
   const citationWebsiteUrl = choosePreferredSourceUrl([extractUrl, matchedUrl, directUrl, sourceNameUrl]) || "";
+
+  // Resolve uploaded-file raw URL (if any).
   const citationRawUrl =
     citation.fileId
       ? buildRawFileUrl(citation.fileId, {
           indexId: typeof params.indexId === "number" ? params.indexId : undefined,
         })
       : null;
-  const citationUsesWebsite = citation.sourceType === "website" || (Boolean(citationWebsiteUrl) && !citationRawUrl);
+
+  // Detect external PDFs hidden behind a Google Docs viewer wrapper, or bare .pdf URLs.
+  // These should be rendered by CitationPdfPreview (react-pdf) rather than WebReviewViewer.
+  const gviewPdfUrl = _extractGviewPdfUrl(citationWebsiteUrl);
+  const externalPdfUrl: string | null =
+    !citationRawUrl && (gviewPdfUrl || _isExternalPdfUrl(citationWebsiteUrl))
+      ? (gviewPdfUrl ?? citationWebsiteUrl)
+      : null;
+
+  // For external PDFs, route through the backend proxy so react-pdf can load them
+  // without CORS / X-Frame-Options blocks.
+  const effectiveCitationRawUrl: string | null =
+    citationRawUrl ?? (externalPdfUrl ? `/api/web/pdf-proxy?url=${encodeURIComponent(externalPdfUrl)}` : null);
+
+  // External PDFs bypass the WebReviewViewer — they use CitationPdfPreview instead.
+  const citationUsesWebsite =
+    !externalPdfUrl && (citation.sourceType === "website" || (Boolean(citationWebsiteUrl) && !effectiveCitationRawUrl));
 
   // Build the "Open" URL.
-  // For website citations, or for file citations that also have a known web source URL,
-  // prefer the source website so users land on the original page rather than downloading the file.
-  // Text Fragments (#:~:text=) are supported in Chrome 80+, Edge 83+, Safari 16.1+.
-  let citationOpenUrl = citationUsesWebsite || citationWebsiteUrl ? citationWebsiteUrl : citationRawUrl || "";
+  // For gview citations use the real PDF URL; for website citations prefer the source page
+  // with a Text Fragment deep link (Chrome 80+, Edge 83+, Safari 16.1+).
+  const openBaseUrl = externalPdfUrl || (citationUsesWebsite || citationWebsiteUrl ? citationWebsiteUrl : effectiveCitationRawUrl || "");
+  let citationOpenUrl = openBaseUrl;
   if (citationUsesWebsite && citationOpenUrl && citation.extract) {
     const extract = String(citation.extract || "").replace(/\s+/g, " ").trim();
-    // Use up to first 120 chars of the extract, trimmed to a word boundary.
     const raw = extract.length > 120 ? extract.slice(0, 120).replace(/\s\S*$/, "") : extract;
     if (raw.length >= 16 && !citationOpenUrl.includes("#:~:text=")) {
       try {
-        // Strip any existing fragment before appending text fragment.
         const urlObj = new URL(citationOpenUrl);
         urlObj.hash = "";
         citationOpenUrl = `${urlObj.toString()}#:~:text=${encodeURIComponent(raw)}`;
@@ -106,15 +151,18 @@ function resolveCitationOpenUrl(params: {
       }
     }
   }
+
   const citationSourceLower = String(citation.sourceName || "").toLowerCase();
   const citationIsImage =
-    Boolean(citationRawUrl) && !citationUsesWebsite && (sourceLooksImage(citationSourceLower) || sourceLooksImage(citationRawUrl));
-  // Any file served from our raw endpoint that isn't an image is a PDF —
-  // buildRawFileUrl only generates paths for user-uploaded documents.
-  const citationIsPdf = Boolean(citationRawUrl) && !citationUsesWebsite && !citationIsImage;
+    Boolean(effectiveCitationRawUrl) &&
+    !citationUsesWebsite &&
+    (sourceLooksImage(citationSourceLower) || sourceLooksImage(effectiveCitationRawUrl ?? ""));
+  // Any file raw URL (uploaded or proxied external PDF) that isn't an image is treated as PDF.
+  const citationIsPdf = Boolean(effectiveCitationRawUrl) && !citationUsesWebsite && !citationIsImage;
+
   return {
     citationOpenUrl,
-    citationRawUrl,
+    citationRawUrl: effectiveCitationRawUrl,
     citationWebsiteUrl,
     citationUsesWebsite,
     citationIsPdf,

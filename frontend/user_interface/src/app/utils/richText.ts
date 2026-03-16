@@ -2,6 +2,8 @@ import { marked } from "marked";
 import katex from "katex";
 
 const MATH_SENTINEL_PREFIX = "__MAIA_MATH_SENTINEL__";
+const CITATION_HTML_ANCHOR_RE =
+  /<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>[\s\S]*?<\/a>/gi;
 
 function escapeHtml(raw: string): string {
   return String(raw || "")
@@ -16,17 +18,137 @@ function mathSentinelToken(index: number): string {
   return `${MATH_SENTINEL_PREFIX}${index}__`;
 }
 
+function looksLikeLatexExpression(source: string): boolean {
+  const text = String(source || "").trim();
+  if (!text) {
+    return false;
+  }
+  if (/\\[a-zA-Z]+/.test(text)) {
+    return true;
+  }
+  if (/[{}_^]/.test(text)) {
+    return true;
+  }
+  if (/[=<>]/.test(text) && /\d/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeEscapedDollarDelimiters(input: string): string {
+  if (!input.includes("\\$")) {
+    return input;
+  }
+  return input.replace(/\\\$\s*([\s\S]*?)\s*\\\$/g, (fullMatch, body) => {
+    const latex = String(body || "").trim();
+    if (!looksLikeLatexExpression(latex)) {
+      return fullMatch;
+    }
+    const delimiter = latex.includes("\n") ? "$$" : "$";
+    return `${delimiter}${latex}${delimiter}`;
+  });
+}
+
+function normalizeStandaloneLatexLines(input: string): string {
+  const text = String(input || "");
+  if (!text || text.indexOf("\\") < 0) {
+    return text;
+  }
+  const lines = text.split("\n");
+  let insideEscapedDisplayBlock = false;
+  const normalized = lines.map((line) => {
+    const original = String(line || "");
+    const trimmed = original.trim();
+    if (!trimmed) {
+      return original;
+    }
+    if (trimmed === "\\[") {
+      insideEscapedDisplayBlock = true;
+      return original;
+    }
+    if (trimmed === "\\]") {
+      insideEscapedDisplayBlock = false;
+      return original;
+    }
+    if (insideEscapedDisplayBlock) {
+      return original;
+    }
+    if (trimmed.startsWith("$") || trimmed.startsWith("\\(") || trimmed.startsWith("\\[")) {
+      return original;
+    }
+    if (trimmed.startsWith("#") || /^[-*+]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed)) {
+      return original;
+    }
+    const startsAsLatex = /^\\[a-zA-Z]+/.test(trimmed);
+    if (!startsAsLatex || !looksLikeLatexExpression(trimmed)) {
+      return original;
+    }
+    return `$$${trimmed}$$`;
+  });
+  return normalized.join("\n");
+}
+
 function renderKatexMath(latex: string, displayMode: boolean): string {
-  try {
-    const rendered = katex.renderToString(latex, {
-      displayMode,
-      throwOnError: false,
-    });
-    return `<span data-math-rendered="true" data-math-display="${displayMode ? "true" : "false"}">${rendered}</span>`;
-  } catch {
+  const normalizedLatex = sanitizeLatexSource(latex);
+  if (!normalizedLatex) {
     const source = displayMode ? `$$${latex}$$` : `$${latex}$`;
     return `<code>${escapeHtml(source)}</code>`;
   }
+  try {
+    const rendered = katex.renderToString(normalizedLatex, {
+      displayMode,
+      throwOnError: true,
+    });
+    return `<span data-math-rendered="true" data-math-display="${displayMode ? "true" : "false"}">${rendered}</span>`;
+  } catch {
+    return `<span data-math-fallback="true" data-math-display="${displayMode ? "true" : "false"}">${escapeHtml(normalizedLatex)}</span>`;
+  }
+}
+
+function sanitizeLatexSource(rawLatex: string): string {
+  let latex = String(rawLatex || "");
+  if (!latex) {
+    return "";
+  }
+  latex = latex.replace(
+    /<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>([\s\S]*?)<\/a>/gi,
+    (_full, inner) => {
+      const visible = String(inner || "").replace(/<\/?[^>]+>/g, "").trim();
+      if (!visible) {
+        return "";
+      }
+      const numericOnly = visible.replace(/[^\d.+\-/*=]/g, "");
+      if (numericOnly && /^[-+/*=.\d]+$/.test(numericOnly)) {
+        return numericOnly;
+      }
+      return "";
+    },
+  );
+  // LLM streams occasionally double-escape latex commands, e.g. "\\frac".
+  latex = latex.replace(/\\\\(?=[a-zA-Z])/g, "\\");
+  latex = latex.replace(/<\/?[^>]+>/g, "");
+  latex = latex.replace(
+    /(?:^|[\s(])(?:\[(\d{1,4})\]|【\d{1,4}】|\{\d{1,4}\})(?=\s|[).,;:!?]|$)/g,
+    " ",
+  );
+  latex = normalizeLatexFractions(latex);
+  latex = latex.replace(/\s+/g, " ").trim();
+  return latex.trim();
+}
+
+function normalizeLatexFractions(input: string): string {
+  let latex = String(input || "");
+  if (!latex.includes("\\frac")) {
+    return latex;
+  }
+  // \frac12 -> \frac{1}{2}
+  latex = latex.replace(/\\frac\s*([0-9a-zA-Z])\s*([0-9a-zA-Z])/g, "\\frac{$1}{$2}");
+  // \frac3 -> \frac{1}{3} (frequent shorthand from streamed model output)
+  latex = latex.replace(
+    /\\frac\s*{?([0-9a-zA-Z]+)}?(?=(?:\s*[=+\-*/,.;:)|\\]|$))/g,
+    (_full, denominator) => `\\frac{1}{${denominator}}`,
+  );
+  return latex;
 }
 
 function replaceDisplayMathSegments(
@@ -140,11 +262,97 @@ function replaceInlineMathSegments(
   return result;
 }
 
+function findUnescapedToken(input: string, token: string, fromIndex: number): number {
+  if (!token) {
+    return -1;
+  }
+  let cursor = fromIndex;
+  while (cursor < input.length) {
+    const index = input.indexOf(token, cursor);
+    if (index < 0) {
+      return -1;
+    }
+    let backslashes = 0;
+    let check = index - 1;
+    while (check >= 0 && input[check] === "\\") {
+      backslashes += 1;
+      check -= 1;
+    }
+    if (backslashes % 2 === 0) {
+      return index;
+    }
+    cursor = index + token.length;
+  }
+  return -1;
+}
+
+function replaceEscapedDelimitedMathSegments(
+  input: string,
+  openToken: string,
+  closeToken: string,
+  displayMode: boolean,
+  onSegment: (latex: string, displayMode: boolean) => string,
+): string {
+  if (!input.includes(openToken)) {
+    return input;
+  }
+  let result = "";
+  let cursor = 0;
+  while (cursor < input.length) {
+    const openIndex = findUnescapedToken(input, openToken, cursor);
+    if (openIndex < 0) {
+      result += input.slice(cursor);
+      break;
+    }
+    result += input.slice(cursor, openIndex);
+    const closeIndex = findUnescapedToken(input, closeToken, openIndex + openToken.length);
+    if (closeIndex < 0) {
+      result += input.slice(openIndex);
+      break;
+    }
+    const latex = input.slice(openIndex + openToken.length, closeIndex).trim();
+    if (!latex) {
+      result += input.slice(openIndex, closeIndex + closeToken.length);
+      cursor = closeIndex + closeToken.length;
+      continue;
+    }
+    result += onSegment(latex, displayMode);
+    cursor = closeIndex + closeToken.length;
+  }
+  return result;
+}
+
+function replaceBracketFenceMathSegments(
+  input: string,
+  onSegment: (latex: string, displayMode: boolean) => string,
+): string {
+  if (!input.includes("[") || !input.includes("]")) {
+    return input;
+  }
+  return input.replace(
+    /(^|\n)\[\s*\n([\s\S]*?)\n\](?=\n|$)/g,
+    (match, leading, body) => {
+      const latex = String(body || "").trim();
+      if (!latex) {
+        return match;
+      }
+      const likelyMath = /\\[a-zA-Z]+|[_^]|=|÷|×|∑|∫/.test(latex);
+      if (!likelyMath) {
+        return match;
+      }
+      return `${leading}${onSegment(latex, true)}`;
+    },
+  );
+}
+
 export function renderMathInMarkdown(markdown: string): string {
   const source = String(markdown ?? "");
   if (!source.trim()) {
     return source;
   }
+  const normalizedSource = normalizeStandaloneLatexLines(
+    normalizeEscapedDollarDelimiters(source),
+  );
 
   const mathSegments: string[] = [];
   const renderWithSentinel = (latex: string, displayMode: boolean): string => {
@@ -153,12 +361,30 @@ export function renderMathInMarkdown(markdown: string): string {
     return token;
   };
 
-  const withDisplayMath = replaceDisplayMathSegments(source, renderWithSentinel);
-  const withInlineMath = replaceInlineMathSegments(withDisplayMath, renderWithSentinel);
+  const withDisplayMath = replaceDisplayMathSegments(normalizedSource, renderWithSentinel);
+  const withEscapedDisplayMath = replaceEscapedDelimitedMathSegments(
+    withDisplayMath,
+    "\\[",
+    "\\]",
+    true,
+    renderWithSentinel,
+  );
+  const withBracketFenceDisplayMath = replaceBracketFenceMathSegments(
+    withEscapedDisplayMath,
+    renderWithSentinel,
+  );
+  const withInlineMath = replaceInlineMathSegments(withBracketFenceDisplayMath, renderWithSentinel);
+  const withEscapedInlineMath = replaceEscapedDelimitedMathSegments(
+    withInlineMath,
+    "\\(",
+    "\\)",
+    false,
+    renderWithSentinel,
+  );
 
   return mathSegments.reduce(
     (next, renderedMath, index) => next.replaceAll(mathSentinelToken(index), renderedMath),
-    withInlineMath,
+    withEscapedInlineMath,
   );
 }
 
@@ -315,7 +541,15 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "width",
     "xmlns",
   ]),
-  SPAN: new Set(["aria-hidden", "class", "data-math-display", "data-math-rendered", "id", "style"]),
+  SPAN: new Set([
+    "aria-hidden",
+    "class",
+    "data-math-display",
+    "data-math-fallback",
+    "data-math-rendered",
+    "id",
+    "style",
+  ]),
   STRONG: new Set(["class", "id"]),
   SUMMARY: new Set(["class", "id"]),
   TABLE: new Set(["class", "id"]),
@@ -401,9 +635,6 @@ function sanitizeHtml(html: string): string {
 
   return doc.body.innerHTML;
 }
-
-const CITATION_HTML_ANCHOR_RE =
-  /<a\b[^>]*class=['"][^'"]*\bcitation\b[^'"]*['"][^>]*>[\s\S]*?<\/a>/gi;
 
 function detachTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
   let url = String(rawUrl || "").trim();

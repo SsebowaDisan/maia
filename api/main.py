@@ -35,10 +35,13 @@ from api.routers.computer_use import router as computer_use_router
 from api.routers.agents import router as agents_router
 from api.routers.agents import webhook_router
 from api.routers.marketplace import router as marketplace_router
+from api.routers.page_monitor import router as page_monitor_router
 from api.routers.proactive import router as proactive_router
 from api.routers.workflows import router as workflows_router
 from api.routers.observability import router as observability_router
 from api.routers.canvas import router as canvas_router
+from api.routers.auth import router as auth_router
+from api.routers.users import router as users_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -117,6 +120,11 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
         get_proactive_monitor().start()
     except Exception:
         pass
+    try:
+        from api.services.marketplace.page_monitor import get_page_monitor
+        get_page_monitor().start()
+    except Exception:
+        pass
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     get_ingestion_manager().stop()
@@ -125,6 +133,11 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     try:
         from api.services.proactive.monitor import get_proactive_monitor
         get_proactive_monitor().stop()
+    except Exception:
+        pass
+    try:
+        from api.services.marketplace.page_monitor import get_page_monitor
+        get_page_monitor().stop()
     except Exception:
         pass
 
@@ -144,6 +157,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(users_router)
 app.include_router(conversations_router)
 app.include_router(settings_router)
 app.include_router(uploads_router)
@@ -164,6 +179,7 @@ app.include_router(proactive_router)
 app.include_router(workflows_router)
 app.include_router(observability_router)
 app.include_router(canvas_router)
+app.include_router(page_monitor_router)
 
 
 

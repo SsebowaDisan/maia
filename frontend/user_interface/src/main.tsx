@@ -3,11 +3,19 @@
   import "katex/dist/katex.min.css";
   import { Toaster } from "sonner";
   import App from "./app/App.tsx";
+  import { AuthGate } from "./app/components/auth/AuthGate.tsx";
   import "./styles/index.css";
+
+  // When MAIA_AUTH_DISABLED=true on the backend, set this env var to skip the
+  // login gate in the frontend too (useful for local dev without accounts).
+  const AUTH_DISABLED =
+    (import.meta as { env?: Record<string, string> }).env?.VITE_AUTH_DISABLED === "true";
 
   createRoot(document.getElementById("root")!).render(
     <>
-      <App />
+      <AuthGate authDisabled={AUTH_DISABLED}>
+        <App />
+      </AuthGate>
       <Toaster
         position="top-right"
         richColors={false}
@@ -23,4 +31,3 @@
       />
     </>,
   );
-  

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   listAgents,
   listConnectorCredentials,
+  listConnectorCatalog,
   installMarketplaceAgent,
   listMarketplaceAgents,
   getMarketplaceAgent,
@@ -37,7 +38,7 @@ export function MarketplacePage() {
       setLoading(true);
       setError("");
       try {
-        const [rows, connectorCredentials, installedAgents] = await Promise.all([
+        const [rows, connectorCredentials, installedAgents, connectorCatalog] = await Promise.all([
           listMarketplaceAgents({
             q: query.trim() || undefined,
             pricing: pricingFilter === "all" ? undefined : pricingFilter,
@@ -46,14 +47,22 @@ export function MarketplacePage() {
           }),
           listConnectorCredentials(),
           listAgents(),
+          listConnectorCatalog(),
         ]);
+        const publicConnectorIds = (connectorCatalog || [])
+          .filter((row) => String(row?.auth?.kind || "").trim().toLowerCase() === "none")
+          .map((row) => String(row.id || "").trim())
+          .filter(Boolean);
         setAgents(rows || []);
         setAvailableConnectorIds(
           Array.from(
             new Set(
-              (connectorCredentials || [])
-                .map((row) => String(row.connector_id || "").trim())
-                .filter(Boolean),
+              [
+                ...(connectorCredentials || [])
+                  .map((row) => String(row.connector_id || "").trim())
+                  .filter(Boolean),
+                ...publicConnectorIds,
+              ],
             ),
           ),
         );

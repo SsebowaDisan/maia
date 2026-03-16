@@ -45,6 +45,7 @@ type MarketplaceAgentInstallResponse = {
 type MarketplaceAgentInstallRequest = {
   version?: string | null;
   connector_mapping?: Record<string, string>;
+  gate_policies?: Record<string, boolean>;
 };
 
 type MarketplaceAgentUpdateRecord = {
@@ -163,6 +164,7 @@ function installMarketplaceAgent(agentId: string, body?: MarketplaceAgentInstall
       body: JSON.stringify({
         version: body?.version || null,
         connector_mapping: body?.connector_mapping || {},
+        gate_policies: body?.gate_policies || {},
       }),
     },
   );

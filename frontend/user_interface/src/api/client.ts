@@ -4,6 +4,8 @@ export * from "./client/computerUse";
 export * from "./client/documents";
 export * from "./client/marketplace";
 export * from "./client/oauth";
+export * from "./client/pageMonitor";
 export * from "./client/settings";
 export * from "./client/types";
 export * from "./client/uploads";
+export * from "./client/workflows";

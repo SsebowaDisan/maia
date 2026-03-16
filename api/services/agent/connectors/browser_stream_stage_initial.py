@@ -36,11 +36,16 @@ def run_initial_browser_stage(
     page_metrics: Callable[..., dict[str, float]],
     excerpt: Callable[..., str],
 ):
-        def _goto_with_download_fallback(target_url: str) -> None:
+        def _goto_with_download_fallback(target_url: str) -> str:
+            """Navigate to target_url; fall back to gview for PDF downloads.
+
+            Returns the canonical source URL (the original URL, not the gview
+            wrapper) so that downstream citation metadata records the real source.
+            """
             try:
                 page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(max(200, wait_ms))
-                return
+                return target_url
             except Exception as exc:
                 message = str(exc or "").lower()
                 looks_like_pdf_download = (
@@ -57,9 +62,12 @@ def run_initial_browser_stage(
                 )
                 page.goto(viewer_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(max(200, wait_ms))
+                # Return the ORIGINAL PDF URL so citation source_url is not
+                # polluted with the Google Docs viewer wrapper URL.
+                return target_url
 
         try:
-            _goto_with_download_fallback(url)
+            canonical_url = _goto_with_download_fallback(url)
         except Exception as exc:
             raise ConnectorError(f"Failed to open URL: {url}. {exc}") from exc
 
@@ -79,6 +87,9 @@ def run_initial_browser_stage(
             "data": _website_payload(
                 {
                     "url": open_capture["url"],
+                    # source_url takes priority in stream_bridge citation extraction;
+                    # use the original URL (not the gview wrapper) as the citable source.
+                    "source_url": canonical_url,
                     "title": open_capture["title"],
                     "page_index": 1,
                     "elapsed_ms": _elapsed_ms(),

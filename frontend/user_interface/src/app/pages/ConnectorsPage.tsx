@@ -34,6 +34,7 @@ import {
   GOOGLE_SERVICE_DEFS,
   normalizeServiceIds,
   serviceIdsFromScopes,
+  type GoogleServiceDefinition,
 } from "../components/settings/tabs/integrations/googleServices";
 import { IntegrationsSettings } from "../components/settings/tabs/IntegrationsSettings";
 import { useSettingsController } from "../components/settings/useSettingsController";
@@ -60,12 +61,31 @@ type ConnectorCardView = {
 
 type ConnectorListFilter = "needs_setup" | "connected" | "attention" | "all";
 type ConnectorSuiteKey = "google_workspace" | "microsoft_365" | "standalone";
+type ConnectorSuiteFilter = "all" | ConnectorSuiteKey;
 type ConnectorSuiteSection = {
   key: ConnectorSuiteKey;
   label: string;
   description: string;
   cards: ConnectorCardView[];
 };
+
+const SUITE_DEFINITIONS: Omit<ConnectorSuiteSection, "cards">[] = [
+  {
+    key: "google_workspace",
+    label: "Google Suite",
+    description: "Manage Google services from one connected suite.",
+  },
+  {
+    key: "microsoft_365",
+    label: "Microsoft 365",
+    description: "Manage Outlook, OneDrive, and related Microsoft services together.",
+  },
+  {
+    key: "standalone",
+    label: "Standalone Connectors",
+    description: "Independent services that are configured separately.",
+  },
+];
 
 function humanizeConnectorId(id: string): string {
   return id
@@ -119,25 +139,41 @@ function inferAuthType(
 }
 
 function resolveStatus(
+  authType: ConnectorSummary["authType"],
   health: ConnectorHealthEntry | null,
   credential: ConnectorCredentialRecord | null,
 ): { status: ConnectorCardView["status"]; statusMessage: string } {
+  if (authType === "none") {
+    return {
+      status: "Connected",
+      statusMessage: "Public connector (no credentials required).",
+    };
+  }
   const message = String(health?.message || "").trim();
+  const normalizedMessage = message.toLowerCase();
+  const cleanMessage =
+    normalizedMessage === "configured" ? "Connected and ready." : message;
   if (health?.ok) {
-    return { status: "Connected", statusMessage: message || "Connection healthy." };
+    return {
+      status: "Connected",
+      statusMessage: cleanMessage || "Connection healthy.",
+    };
   }
   if (credential) {
-    if (/(expired|refresh|unauthorized|forbidden|invalid)/i.test(message)) {
-      return { status: "Expired", statusMessage: message || "Credential needs refresh." };
+    if (/(expired|refresh|unauthorized|forbidden|invalid)/i.test(cleanMessage)) {
+      return {
+        status: "Expired",
+        statusMessage: cleanMessage || "Credential needs refresh.",
+      };
     }
     return {
       status: "Not connected",
-      statusMessage: message || "Credential stored but test failed.",
+      statusMessage: cleanMessage || "Credential stored but test failed.",
     };
   }
   return {
     status: "Not connected",
-    statusMessage: message || "No credential configured yet.",
+    statusMessage: cleanMessage || "No credential configured yet.",
   };
 }
 
@@ -190,14 +226,10 @@ function primaryActionLabel(status: ConnectorCardView["status"]): string {
 function resolveConnectorSuite(connectorId: string): ConnectorSuiteKey {
   const id = String(connectorId || "").trim().toLowerCase();
   if (
+    GOOGLE_CONNECTOR_IDS.has(id) ||
     id.startsWith("google_") ||
-    id === "googleworkspace" ||
-    id === "google_workspace" ||
-    id === "gmail" ||
-    id === "gcalendar" ||
-    id === "gdrive" ||
-    id === "gdocs" ||
-    id === "gsheets"
+    id.startsWith("gmail_") ||
+    id === "googleworkspace"
   ) {
     return "google_workspace";
   }
@@ -256,7 +288,45 @@ function isNotFoundError(error: unknown): boolean {
   return text.includes("404") || text.includes("not found");
 }
 
-const PRIMARY_GOOGLE_SERVICE_IDS = ["gmail", "calendar", "drive", "docs", "sheets"] as const;
+const GOOGLE_CONNECTOR_IDS = new Set([
+  "google_workspace",
+  "google_calendar",
+  "google_analytics",
+  "google_ads",
+  "google_maps",
+  "google_api_hub",
+  "google_docs",
+  "google_sheets",
+  "google_drive",
+  "gmail",
+  "gmail_playwright",
+  "gcalendar",
+  "gdrive",
+  "gdocs",
+  "gsheets",
+]);
+
+const PRIMARY_GOOGLE_SERVICE_IDS = [
+  "gmail",
+  "calendar",
+  "drive",
+  "docs",
+  "sheets",
+  "analytics",
+] as const;
+
+const GOOGLE_SERVICE_CONNECTOR_MAP: Record<
+  GoogleServiceDefinition["id"],
+  string[]
+> = {
+  gmail: ["gmail", "gmail_playwright", "google_workspace"],
+  calendar: ["google_calendar", "gcalendar"],
+  drive: ["google_workspace", "google_drive", "gdrive"],
+  docs: ["google_workspace", "google_docs", "gdocs"],
+  sheets: ["google_workspace", "google_sheets", "gsheets"],
+  analytics: ["google_analytics"],
+};
+
 const CONNECTOR_ICON_MAP: Record<string, LucideIcon> = {
   bing_search: Search,
   email_validation: MailCheck,
@@ -272,11 +342,17 @@ const CONNECTOR_ICON_MAP: Record<string, LucideIcon> = {
 function buildGoogleSubServices(
   enabledServiceIds: string[],
   selectedServiceIds: string[],
+  statusHints?: Partial<
+    Record<GoogleServiceDefinition["id"], ConnectorSubService["status"]>
+  >,
 ): ConnectorSubService[] {
   const enabled = new Set(normalizeServiceIds(enabledServiceIds));
   const selected = new Set(normalizeServiceIds(selectedServiceIds));
   const preferred = new Set<string>(PRIMARY_GOOGLE_SERVICE_IDS);
-  const extras = uniqueIds([...enabled, ...selected]).filter((id) => !preferred.has(id));
+  const hintedIds = Object.keys(statusHints || {});
+  const extras = uniqueIds([...enabled, ...selected, ...hintedIds]).filter(
+    (id) => !preferred.has(id),
+  );
   const orderedIds = [...PRIMARY_GOOGLE_SERVICE_IDS, ...extras];
 
   return orderedIds
@@ -286,11 +362,13 @@ function buildGoogleSubServices(
       id: definition.id,
       label: definition.label,
       description: definition.description,
-      status: enabled.has(definition.id)
-        ? "Connected"
-        : selected.has(definition.id)
-          ? "Needs permission"
-          : "Disabled",
+      status:
+        statusHints?.[definition.id] ||
+        (enabled.has(definition.id)
+          ? "Connected"
+          : selected.has(definition.id)
+            ? "Needs permission"
+            : "Disabled"),
     }));
 }
 
@@ -304,6 +382,24 @@ function renderConnectorAvatar(connectorId: string, label: string) {
       {String(label || "?").slice(0, 1).toUpperCase()}
     </span>
   );
+}
+
+function suiteAccentClass(suite: ConnectorSuiteKey): string {
+  if (suite === "google_workspace") {
+    return "bg-[#2563eb]";
+  }
+  if (suite === "microsoft_365") {
+    return "bg-[#0f766e]";
+  }
+  return "bg-[#6b7280]";
+}
+
+function suiteFilterLabel(value: ConnectorSuiteFilter): string {
+  if (value === "all") {
+    return "All suites";
+  }
+  const match = SUITE_DEFINITIONS.find((suite) => suite.key === value);
+  return match ? match.label : value;
 }
 
 export function ConnectorsPage() {
@@ -325,6 +421,7 @@ export function ConnectorsPage() {
   const [savingPermissionFor, setSavingPermissionFor] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState("");
   const [activeFilter, setActiveFilter] = useState<ConnectorListFilter>("needs_setup");
+  const [activeSuite, setActiveSuite] = useState<ConnectorSuiteFilter>("all");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
 
   const googleEnabledServiceIds = useMemo(
@@ -352,9 +449,40 @@ export function ConnectorsPage() {
     googleEnabledServiceIds,
   ]);
 
+  const googleServiceStatusHints = useMemo<
+    Partial<Record<GoogleServiceDefinition["id"], ConnectorSubService["status"]>>
+  >(() => {
+    const hints: Partial<
+      Record<GoogleServiceDefinition["id"], ConnectorSubService["status"]>
+    > = {};
+    for (const [serviceId, connectorIds] of Object.entries(
+      GOOGLE_SERVICE_CONNECTOR_MAP,
+    ) as Array<[GoogleServiceDefinition["id"], string[]]>) {
+      const hasHealthyConnector = connectorIds.some(
+        (connectorId) => Boolean(healthMap[connectorId]?.ok),
+      );
+      if (hasHealthyConnector) {
+        hints[serviceId] = "Connected";
+        continue;
+      }
+      const hasStoredCredential = connectorIds.some((connectorId) =>
+        Boolean(credentialMap[connectorId]),
+      );
+      if (hasStoredCredential) {
+        hints[serviceId] = "Needs permission";
+      }
+    }
+    return hints;
+  }, [credentialMap, healthMap]);
+
   const googleSubServices = useMemo(
-    () => buildGoogleSubServices(googleEnabledServiceIds, googleSelectedServiceIds),
-    [googleEnabledServiceIds, googleSelectedServiceIds],
+    () =>
+      buildGoogleSubServices(
+        googleEnabledServiceIds,
+        googleSelectedServiceIds,
+        googleServiceStatusHints,
+      ),
+    [googleEnabledServiceIds, googleSelectedServiceIds, googleServiceStatusHints],
   );
 
   const refresh = useCallback(async () => {
@@ -520,7 +648,6 @@ export function ConnectorsPage() {
         const plugin = pluginMap.get(connectorId) || null;
         const health = healthMap[connectorId] || null;
         const credential = credentialMap[connectorId] || null;
-        const statusState = resolveStatus(health, credential);
         const actionCount = Array.isArray(plugin?.actions)
           ? plugin.actions.length
           : 0;
@@ -529,6 +656,8 @@ export function ConnectorsPage() {
             Array.isArray(action.tool_ids) ? action.tool_ids : [],
           ),
         );
+        const authType = inferAuthType(manual, catalogAuthKinds[connectorId]);
+        const statusState = resolveStatus(authType, health, credential);
         const catalogDescription = catalogDescriptions[connectorId] || "";
         const subServices =
           connectorId === "google_workspace" ? googleSubServices : undefined;
@@ -548,7 +677,7 @@ export function ConnectorsPage() {
                 ? `${actionCount} runtime actions available.`
                 : fallbackDescription),
           ),
-          authType: inferAuthType(manual, catalogAuthKinds[connectorId]),
+          authType,
           status: statusState.status,
           statusMessage: statusState.statusMessage,
           actionsCount: actionCount,
@@ -581,6 +710,18 @@ export function ConnectorsPage() {
     [activeFilter, cards],
   );
 
+  const suiteCounts = useMemo<Record<ConnectorSuiteKey, number>>(() => {
+    const counts: Record<ConnectorSuiteKey, number> = {
+      google_workspace: 0,
+      microsoft_365: 0,
+      standalone: 0,
+    };
+    for (const card of filteredCards) {
+      counts[resolveConnectorSuite(card.id)] += 1;
+    }
+    return counts;
+  }, [filteredCards]);
+
   const filteredSections = useMemo<ConnectorSuiteSection[]>(() => {
     const grouped: Record<ConnectorSuiteKey, ConnectorCardView[]> = {
       google_workspace: [],
@@ -590,32 +731,16 @@ export function ConnectorsPage() {
     for (const card of filteredCards) {
       grouped[resolveConnectorSuite(card.id)].push(card);
     }
-    const definitions: Omit<ConnectorSuiteSection, "cards">[] = [
-      {
-        key: "google_workspace",
-        label: "Google Workspace",
-        description: "Connect once, then enable Google services inside this suite.",
-      },
-      {
-        key: "microsoft_365",
-        label: "Microsoft 365",
-        description: "Manage Outlook, OneDrive, and related Microsoft services together.",
-      },
-      {
-        key: "standalone",
-        label: "Standalone Connectors",
-        description: "Independent services that are configured separately.",
-      },
-    ];
-    return definitions
+    return SUITE_DEFINITIONS
       .map((definition) => ({
         ...definition,
         cards: grouped[definition.key].sort((left, right) =>
           left.label.localeCompare(right.label),
         ),
       }))
+      .filter((section) => activeSuite === "all" || section.key === activeSuite)
       .filter((section) => section.cards.length > 0);
-  }, [filteredCards]);
+  }, [activeSuite, filteredCards]);
 
   const matrixAgents = useMemo(
     () =>
@@ -726,20 +851,30 @@ export function ConnectorsPage() {
   return (
     <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4">
-        <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5 shadow-[0_20px_60px_rgba(15,23,42,0.10)]">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-[#667085]">
+        <section className="rounded-[22px] border border-black/[0.08] bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">
                 Connectors
-              </p>
-              <h1 className="mt-1 text-[30px] font-semibold tracking-[-0.02em] text-[#101828]">
-                Connector Control Center
               </h1>
-              <p className="mt-2 text-[14px] leading-[1.55] text-[#475467]">
-                Focus on what needs action first, then open details only when needed.
-              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#1f2937]">
+                  {stats.connected} connected
+                </span>
+                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#475467]">
+                  {stats.needsSetup} needs setup
+                </span>
+                {stats.attention > 0 ? (
+                  <span className="rounded-full border border-[#fbd38d] bg-[#fff7ed] px-2.5 py-1 text-[11px] font-semibold text-[#9a3412]">
+                    {stats.attention} attention
+                  </span>
+                ) : null}
+                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#667085]">
+                  {stats.total} total
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setPermissionsOpen(true)}
@@ -767,35 +902,11 @@ export function ConnectorsPage() {
           </div>
         ) : null}
 
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <article className="rounded-2xl border border-black/[0.08] bg-white px-4 py-3">
-            <p className="text-[12px] text-[#667085]">Connected</p>
-            <p className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#101828]">
-              {stats.connected}
-            </p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white px-4 py-3">
-            <p className="text-[12px] text-[#667085]">Needs setup</p>
-            <p className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#101828]">
-              {stats.needsSetup}
-            </p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white px-4 py-3">
-            <p className="text-[12px] text-[#667085]">Attention</p>
-            <p className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#101828]">
-              {stats.attention}
-            </p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white px-4 py-3">
-            <p className="text-[12px] text-[#667085]">Total</p>
-            <p className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#101828]">
-              {stats.total}
-            </p>
-          </article>
-        </section>
-
         <section className="rounded-[22px] border border-black/[0.08] bg-white p-3">
           <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#98a2b3] pr-1">
+              Status
+            </span>
             {(
               [
                 ["needs_setup", "Needs setup"],
@@ -818,6 +929,46 @@ export function ConnectorsPage() {
               </button>
             ))}
           </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-black/[0.06] pt-3">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#98a2b3] pr-1">
+              Suite
+            </span>
+            {(["all", ...SUITE_DEFINITIONS.map((suite) => suite.key)] as const).map(
+              (value) => {
+                const count =
+                  value === "all"
+                    ? filteredCards.length
+                    : suiteCounts[value as ConnectorSuiteKey];
+                const isActive = activeSuite === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setActiveSuite(value)}
+                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition ${
+                      isActive
+                        ? "border-[#111827] bg-[#111827] text-white"
+                        : "border-black/[0.12] bg-white text-[#344054]"
+                    }`}
+                  >
+                    {value !== "all" ? (
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${suiteAccentClass(value as ConnectorSuiteKey)} ${isActive ? "opacity-90" : "opacity-75"}`}
+                      />
+                    ) : null}
+                    <span>{suiteFilterLabel(value)}</span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                        isActive ? "bg-white/20 text-white" : "bg-[#f2f4f7] text-[#475467]"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              },
+            )}
+          </div>
         </section>
 
         <section className="space-y-4">
@@ -826,17 +977,30 @@ export function ConnectorsPage() {
               key={section.key}
               className="rounded-[22px] border border-black/[0.08] bg-white p-4"
             >
-              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-[#111827]">
-                    {section.label}
-                  </h2>
-                  <p className="mt-1 text-[12px] text-[#667085]">{section.description}</p>
+              {activeSuite === "all" ? (
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-2 rounded-full border border-black/[0.08] bg-[#f8fafc] px-3 py-2">
+                    <div className="inline-flex min-w-0 items-center gap-2">
+                      <span
+                        className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${suiteAccentClass(section.key)}`}
+                      />
+                      <h2 className="truncate text-[14px] font-semibold tracking-[-0.01em] text-[#111827]">
+                        {section.label}
+                      </h2>
+                    </div>
+                    <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#475467]">
+                      {section.cards.length} connector{section.cards.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="mb-3 px-1">
+                    <p className="text-[12px] text-[#667085]">{section.description}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="mb-3 px-1">
+                  <p className="text-[12px] text-[#667085]">{section.description}</p>
                 </div>
-                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#475467]">
-                  {section.cards.length} connector{section.cards.length === 1 ? "" : "s"}
-                </span>
-              </div>
+              )}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {section.cards.map((connector) => (
                   <article

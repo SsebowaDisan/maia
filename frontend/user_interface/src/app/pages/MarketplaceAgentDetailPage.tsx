@@ -65,6 +65,13 @@ export function MarketplaceAgentDetailPage({ agentId }: MarketplaceAgentDetailPa
   }, [agentId]);
 
   const requiredConnectors = useMemo(() => agent?.required_connectors || [], [agent]);
+  const tags = useMemo(
+    () =>
+      Array.isArray(agent?.tags)
+        ? agent.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+        : [],
+    [agent?.tags],
+  );
 
   if (loading) {
     return (
@@ -114,6 +121,18 @@ export function MarketplaceAgentDetailPage({ agentId }: MarketplaceAgentDetailPa
               {agent.pricing_tier}
             </span>
           </div>
+          {tags.length ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded-full border border-black/[0.08] bg-[#f9fafb] px-2 py-0.5 text-[11px] font-semibold text-[#475467]"
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -134,11 +153,45 @@ export function MarketplaceAgentDetailPage({ agentId }: MarketplaceAgentDetailPa
             </div>
           </div>
 
-          <div className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <h2 className="text-[18px] font-semibold text-[#111827]">Changelog</h2>
-            <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
-              <li>Version {agent.version}</li>
-            </ul>
+          <div className="space-y-4">
+            {agent.definition?.trigger && (agent.definition.trigger as Record<string, unknown>)?.family === "scheduled" ? (
+              <div className="rounded-2xl border border-black/[0.08] bg-white p-4">
+                <h2 className="text-[18px] font-semibold text-[#111827]">Schedule</h2>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="rounded-full bg-[#f0fdf4] px-2.5 py-1 text-[11px] font-semibold text-[#166534] border border-[#bbf7d0]">
+                    Automated
+                  </span>
+                  <span className="text-[12px] text-[#667085]">
+                    Runs on cron: <code className="rounded bg-[#f1f5f9] px-1 text-[#344054]">{String((agent.definition.trigger as Record<string, unknown>)?.cron_expression ?? "")}</code>
+                  </span>
+                </div>
+                <p className="mt-2 text-[12px] text-[#667085]">
+                  This agent runs automatically on a schedule. No manual trigger required after installation.
+                </p>
+              </div>
+            ) : null}
+
+            <div className="rounded-2xl border border-black/[0.08] bg-white p-4">
+              <h2 className="text-[18px] font-semibold text-[#111827]">Tools</h2>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {Array.isArray(agent.definition?.tools) && (agent.definition.tools as string[]).length ? (
+                  (agent.definition.tools as string[]).map((tool) => (
+                    <span key={tool} className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-2 py-0.5 text-[11px] font-mono text-[#475467]">
+                      {tool}
+                    </span>
+                  ))
+                ) : (
+                  <p className="text-[12px] text-[#667085]">No tools listed.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-black/[0.08] bg-white p-4">
+              <h2 className="text-[18px] font-semibold text-[#111827]">Changelog</h2>
+              <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
+                <li>Version {agent.version}</li>
+              </ul>
+            </div>
           </div>
         </section>
 

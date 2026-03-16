@@ -42,4 +42,4 @@ tools:
   - gmail.search
   - workspace.docs.read
   - workspace.drive.search
-  - email.validate
+  - email_validation.validate

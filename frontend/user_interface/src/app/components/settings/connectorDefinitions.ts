@@ -14,6 +14,46 @@ export type ConnectorDefinition = {
 
 export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
   {
+    id: "reddit",
+    label: "Reddit",
+    description:
+      "Search Reddit posts and comments for community sentiment and real-world discussions.",
+    fields: [
+      {
+        key: "REDDIT_CLIENT_ID",
+        label: "Client ID",
+        placeholder: "Reddit app client ID",
+      },
+      {
+        key: "REDDIT_CLIENT_SECRET",
+        label: "Client Secret",
+        placeholder: "Reddit app client secret",
+        sensitive: true,
+      },
+    ],
+  },
+  {
+    id: "newsapi",
+    label: "NewsAPI",
+    description:
+      "Search and fetch current news articles from thousands of sources worldwide.",
+    fields: [
+      {
+        key: "NEWSAPI_API_KEY",
+        label: "API key",
+        placeholder: "NewsAPI key",
+        sensitive: true,
+      },
+    ],
+  },
+  {
+    id: "sec_edgar",
+    label: "SEC EDGAR",
+    description:
+      "Access public SEC filings (10-K, 10-Q, 8-K). No credentials are required.",
+    fields: [],
+  },
+  {
     id: "slack",
     label: "Slack",
     description: "Post company updates and report digests to channels.",

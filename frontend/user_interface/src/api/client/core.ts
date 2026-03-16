@@ -31,6 +31,22 @@ function sanitizeUserId(raw: string | null | undefined): string | null {
   return normalized || null;
 }
 
+function readUserIdFromPersistedAuth(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem("maia.auth");
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as { state?: { user?: { id?: string } } };
+    return sanitizeUserId(parsed?.state?.user?.id || null);
+  } catch {
+    return null;
+  }
+}
+
 function inferUserId() {
   const envUserId = sanitizeUserId((import.meta as { env?: Record<string, string> }).env?.VITE_USER_ID);
   if (envUserId) {
@@ -39,15 +55,35 @@ function inferUserId() {
   if (typeof window === "undefined") {
     return null;
   }
+
+  // Prefer authenticated identity when available so chat data does not appear
+  // to "disappear" due to URL/query-scoped dev user switches.
+  const fromAuth = readUserIdFromPersistedAuth();
+  if (fromAuth) {
+    window.localStorage.setItem("maia.user_id", fromAuth);
+    return fromAuth;
+  }
+
+  const fromStorage = sanitizeUserId(window.localStorage.getItem("maia.user_id"));
+  if (fromStorage) {
+    // Only allow query override when explicitly forced. This prevents
+    // accidental user scope switches from shared URLs and QA links.
+    const query = new URLSearchParams(window.location.search);
+    const fromQuery = sanitizeUserId(query.get("user_id"));
+    const forceSwitch = String(query.get("force_user_id") || "").trim() === "1";
+    if (fromQuery && forceSwitch) {
+      window.localStorage.setItem("maia.user_id", fromQuery);
+      return fromQuery;
+    }
+    return fromStorage;
+  }
+
   const fromQuery = sanitizeUserId(new URLSearchParams(window.location.search).get("user_id"));
   if (fromQuery) {
     window.localStorage.setItem("maia.user_id", fromQuery);
     return fromQuery;
   }
-  const fromStorage = sanitizeUserId(window.localStorage.getItem("maia.user_id"));
-  if (fromStorage) {
-    return fromStorage;
-  }
+
   // Keep user-scoped conversation state stable across reloads even when no
   // explicit user id is supplied in URL/env.
   const fallbackUserId = "default";
@@ -57,7 +93,23 @@ function inferUserId() {
 
 function withUserIdHeaders(initHeaders?: HeadersInit) {
   const headers = new Headers(initHeaders || {});
-  if (ACTIVE_USER_ID && !headers.has("X-User-Id")) {
+
+  // Prefer JWT Bearer token when available (production auth)
+  try {
+    const raw = window.localStorage.getItem("maia.auth");
+    if (raw) {
+      const parsed = JSON.parse(raw) as { state?: { accessToken?: string } };
+      const token = parsed?.state?.accessToken;
+      if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+    }
+  } catch {
+    // ignore — fall through to legacy header
+  }
+
+  // Legacy fallback: X-User-Id header (dev mode / MAIA_AUTH_DISABLED=true)
+  if (ACTIVE_USER_ID && !headers.has("X-User-Id") && !headers.has("Authorization")) {
     headers.set("X-User-Id", ACTIVE_USER_ID);
   }
   return headers;

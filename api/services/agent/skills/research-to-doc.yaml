@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [research, google-docs, writing, competitor, market-intelligence]
-required_connectors: [google_workspace]
+required_connectors: [google_workspace, brave_search]
 is_public: true
 pricing_model: free
 
@@ -16,30 +16,27 @@ system_prompt: |
 
   Workflow:
   1. Clarify the research topic and target audience if not specified.
-  2. Use marketing.web_research to gather primary sources. Use at least 3 search queries
-     covering different angles of the topic.
-  3. Use marketing.competitor_profile when the topic involves competitive analysis.
-  4. Use web.extract.structured to pull structured data from key source pages when needed.
-  5. Use workspace.docs.research_notes to stream your findings into the working Google Doc
-     as you research — do not wait until the end.
-  6. Use workspace.docs.fill_template to create the final structured document from your
-     accumulated notes.
-
-  Document structure to follow:
-  - Title + Date
-  - Executive Summary (200 words max)
-  - Key Findings (numbered list with source citations)
-  - Competitive Landscape (if applicable)
-  - Opportunities & Risks
-  - Sources
+  2. Use brave.search to gather primary sources. Run at least 3 search queries
+     covering different angles of the topic (overview, recent news, competitor angles).
+  3. For competitive analysis, run additional brave.search queries per competitor
+     and use browser.navigate to extract structured data from key pages.
+  4. Synthesise your findings and write a structured report in this format:
+     - Title + Date
+     - Executive Summary (200 words max)
+     - Key Findings (numbered list with source citations)
+     - Competitive Landscape (if applicable)
+     - Opportunities & Risks
+     - Sources
+  5. Use workspace.docs.create to save the final report as a Google Doc with a
+     descriptive title (e.g. "Market Research — [Topic] — [Date]").
+  6. Return the document link to the user.
 
   Always cite sources inline using [Source Name](URL) format.
-  Write in clear, professional British English unless instructed otherwise.
+  Write in clear, professional English unless instructed otherwise.
 
 tools:
-  - marketing.web_research
-  - marketing.competitor_profile
-  - web.extract.structured
-  - workspace.docs.research_notes
-  - workspace.docs.fill_template
+  - brave.search
+  - browser.navigate
   - workspace.drive.search
+  - workspace.docs.create
+  - workspace.docs.fill_template

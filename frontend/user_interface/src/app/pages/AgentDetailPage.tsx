@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
+  getConnectorBinding,
   getAgent,
   getImprovementSuggestion,
   listAgentRuns,
+  patchConnectorBinding,
   recordFeedback,
   updateAgent,
   type AgentDefinitionInput,
@@ -13,13 +15,61 @@ import {
 } from "../../api/client";
 import { AgentRunHistory, type AgentRunHistoryRecord } from "../components/agents/AgentRunHistory";
 import { ImprovementSuggestion } from "../components/agents/ImprovementSuggestion";
+import { PageMonitorPanel } from "../components/agents/PageMonitorPanel";
 
 type AgentDetailPageProps = {
   agentId: string;
   initialTab?: AgentDetailTab;
 };
 
-type AgentDetailTab = "overview" | "history" | "improvement";
+type AgentDetailTab = "overview" | "history" | "improvement" | "monitor";
+
+function hasPageMonitorCapability(agent: AgentDefinitionRecord | null): boolean {
+  if (!agent) {
+    return false;
+  }
+  const agentId = String(agent.agent_id || "").trim().toLowerCase();
+  if (agentId === "competitor-change-radar") {
+    return true;
+  }
+  const definition = (agent.definition || {}) as Record<string, unknown>;
+  const tools = Array.isArray(definition.tools) ? definition.tools : [];
+  if (
+    tools.some((entry) =>
+      /page[_-]?monitor|monitor[_-]?page|competitor[_-]?page/i.test(String(entry || "")),
+    )
+  ) {
+    return true;
+  }
+  const tags = Array.isArray(definition.tags) ? definition.tags : [];
+  return tags.some((entry) => /page[_-]?monitor|competitor/i.test(String(entry || "")));
+}
+
+function normalizeConnectorId(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function inferRequiredConnectors(definition: Record<string, unknown>): string[] {
+  const explicit = Array.isArray(definition.required_connectors)
+    ? definition.required_connectors.map((entry) => normalizeConnectorId(entry)).filter(Boolean)
+    : [];
+  if (explicit.length > 0) {
+    return Array.from(new Set(explicit));
+  }
+  const tools = Array.isArray(definition.tools) ? definition.tools : [];
+  const derived = tools
+    .map((entry) => String(entry || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((toolId) => toolId.split(".")[0])
+    .map((prefix) => {
+      if (prefix === "gmail" || prefix === "gcalendar" || prefix === "gdrive" || prefix === "ga4") {
+        return "google_workspace";
+      }
+      return prefix;
+    })
+    .filter((prefix) => prefix && prefix !== "http" && prefix !== "browser" && prefix !== "canvas");
+  return Array.from(new Set(derived));
+}
 
 function mapRunToUi(run: {
   run_id: string;
@@ -61,6 +111,10 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
   const [suggestionRefreshNonce, setSuggestionRefreshNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [connectorAccessMap, setConnectorAccessMap] = useState<Record<string, boolean>>({});
+  const [connectorAllowedAgentMap, setConnectorAllowedAgentMap] = useState<Record<string, string[]>>({});
+  const [connectorAccessError, setConnectorAccessError] = useState("");
+  const [savingConnectorId, setSavingConnectorId] = useState("");
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -119,6 +173,69 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
     () => JSON.stringify(agentDetail?.definition || {}, null, 2),
     [agentDetail?.definition],
   );
+  const requiredConnectors = useMemo(
+    () => inferRequiredConnectors((agentDetail?.definition || {}) as Record<string, unknown>),
+    [agentDetail?.definition],
+  );
+  const monitorEnabled = useMemo(() => hasPageMonitorCapability(agentDetail), [agentDetail]);
+  const tabs = useMemo(
+    () =>
+      (["overview", "history", "improvement", ...(monitorEnabled ? (["monitor"] as const) : [])] as const),
+    [monitorEnabled],
+  );
+
+  useEffect(() => {
+    if (activeTab === "monitor" && !monitorEnabled) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, monitorEnabled]);
+
+  useEffect(() => {
+    if (!agentDetail || requiredConnectors.length === 0) {
+      setConnectorAccessMap({});
+      setConnectorAllowedAgentMap({});
+      setConnectorAccessError("");
+      return;
+    }
+    let cancelled = false;
+    const loadConnectorAccess = async () => {
+      setConnectorAccessError("");
+      try {
+        const bindingRows = await Promise.all(
+          requiredConnectors.map(async (connectorId) => {
+            try {
+              const binding = await getConnectorBinding(connectorId);
+              const allowed = Array.isArray(binding.allowed_agent_ids)
+                ? binding.allowed_agent_ids.map((entry) => String(entry || "").trim()).filter(Boolean)
+                : [];
+              return [connectorId, allowed] as const;
+            } catch {
+              return [connectorId, []] as const;
+            }
+          }),
+        );
+        if (cancelled) {
+          return;
+        }
+        const nextAllowedMap: Record<string, string[]> = {};
+        const nextAccessMap: Record<string, boolean> = {};
+        for (const [connectorId, allowedAgentIds] of bindingRows) {
+          nextAllowedMap[connectorId] = allowedAgentIds;
+          nextAccessMap[connectorId] = allowedAgentIds.includes(agentDetail.agent_id);
+        }
+        setConnectorAllowedAgentMap(nextAllowedMap);
+        setConnectorAccessMap(nextAccessMap);
+      } catch (nextError) {
+        if (!cancelled) {
+          setConnectorAccessError(String(nextError || "Failed to load connector permissions."));
+        }
+      }
+    };
+    void loadConnectorAccess();
+    return () => {
+      cancelled = true;
+    };
+  }, [agentDetail, requiredConnectors]);
 
   if (loading) {
     return (
@@ -152,7 +269,7 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
             <span className="font-semibold text-[#111827]">{agentDetail.version}</span>
           </p>
           <div className="mt-4 flex gap-2">
-            {(["overview", "history", "improvement"] as const).map((tab) => (
+            {tabs.map((tab) => (
               <button
                 key={tab}
                 type="button"
@@ -174,12 +291,82 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
         </section>
 
         {activeTab === "overview" ? (
-          <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <h2 className="text-[18px] font-semibold text-[#111827]">Definition</h2>
-            <pre className="mt-3 overflow-x-auto rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3 text-[12px] text-[#344054]">
-              <code>{definitionPreview}</code>
-            </pre>
-          </section>
+          <div className="space-y-4">
+            <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+              <h2 className="text-[18px] font-semibold text-[#111827]">Definition</h2>
+              <pre className="mt-3 overflow-x-auto rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3 text-[12px] text-[#344054]">
+                <code>{definitionPreview}</code>
+              </pre>
+            </section>
+
+            {requiredConnectors.length > 0 ? (
+              <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+                <h2 className="text-[18px] font-semibold text-[#111827]">Connector permissions</h2>
+                <p className="mt-1 text-[13px] text-[#667085]">
+                  Control whether this agent is allowed to execute actions on each required connector.
+                </p>
+                {connectorAccessError ? (
+                  <p className="mt-3 rounded-xl border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#9f1239]">
+                    {connectorAccessError}
+                  </p>
+                ) : null}
+                <div className="mt-3 space-y-2">
+                  {requiredConnectors.map((connectorId) => {
+                    const checked = Boolean(connectorAccessMap[connectorId]);
+                    const saving = savingConnectorId === connectorId;
+                    return (
+                      <label
+                        key={connectorId}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2"
+                      >
+                        <div>
+                          <p className="text-[13px] font-semibold text-[#111827]">{connectorId}</p>
+                          <p className="text-[12px] text-[#667085]">
+                            {checked ? "Allowed for this agent" : "Blocked for this agent"}
+                          </p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={saving}
+                          onChange={async (event) => {
+                            const allow = event.target.checked;
+                            const existingAllowed = Array.isArray(connectorAllowedAgentMap[connectorId])
+                              ? connectorAllowedAgentMap[connectorId]
+                              : [];
+                            const nextAllowed = allow
+                              ? Array.from(new Set([...existingAllowed, agentDetail.agent_id]))
+                              : existingAllowed.filter((entry) => entry !== agentDetail.agent_id);
+                            setSavingConnectorId(connectorId);
+                            setConnectorAccessError("");
+                            try {
+                              await patchConnectorBinding(connectorId, { allowed_agent_ids: nextAllowed });
+                              setConnectorAllowedAgentMap((previous) => ({
+                                ...previous,
+                                [connectorId]: nextAllowed,
+                              }));
+                              setConnectorAccessMap((previous) => ({
+                                ...previous,
+                                [connectorId]: allow,
+                              }));
+                              toast.success(`${connectorId} permission updated.`);
+                            } catch (nextError) {
+                              setConnectorAccessError(
+                                `Failed to update ${connectorId}: ${String(nextError || "Unknown error")}`,
+                              );
+                            } finally {
+                              setSavingConnectorId("");
+                            }
+                          }}
+                          className="h-4 w-4 rounded border border-black/[0.2]"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+          </div>
         ) : null}
 
         {activeTab === "history" ? (
@@ -240,6 +427,10 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
               setSuggestionError("");
             }}
           />
+        ) : null}
+
+        {activeTab === "monitor" && monitorEnabled ? (
+          <PageMonitorPanel agentId={agentDetail.agent_id} />
         ) : null}
       </div>
     </div>

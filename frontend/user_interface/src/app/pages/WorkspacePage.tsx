@@ -26,6 +26,8 @@ type WorkspaceAgentCard = {
   lastRun: string;
   totalRuns: number;
   runs: AgentRunHistoryRecord[];
+  requiredConnectors: string[];
+  unhealthyConnectors: string[];
 };
 
 type WorkspaceConnectorCard = {
@@ -99,9 +101,13 @@ function normalizeRun(run: AgentRunRecord): AgentRunHistoryRecord {
 }
 
 function resolveConnectorStatus(
+  authKind: string,
   health: ConnectorHealthEntry | null,
   hasCredential: boolean,
 ): "Connected" | "Not connected" | "Expired" {
+  if (String(authKind || "").trim().toLowerCase() === "none") {
+    return "Connected";
+  }
   const message = String(health?.message || "").toLowerCase();
   if (health?.ok) {
     return "Connected";
@@ -118,6 +124,38 @@ function safeAuthKind(raw: unknown): string {
     return "none";
   }
   return kind;
+}
+
+function normalizeConnectorId(value: unknown): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function inferRequiredConnectors(definition: Record<string, unknown>): string[] {
+  const explicit = Array.isArray(definition.required_connectors)
+    ? definition.required_connectors.map((entry) => normalizeConnectorId(entry)).filter(Boolean)
+    : [];
+  if (explicit.length > 0) {
+    return Array.from(new Set(explicit));
+  }
+
+  const tools = Array.isArray(definition.tools) ? definition.tools : [];
+  const derived = tools
+    .map((entry) => String(entry || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((toolId) => toolId.split(".")[0])
+    .map((prefix) => {
+      if (prefix === "gmail" || prefix === "gcalendar" || prefix === "gdrive" || prefix === "ga4") {
+        return "google_workspace";
+      }
+      return prefix;
+    })
+    .filter((prefix) => prefix && prefix !== "http" && prefix !== "browser" && prefix !== "canvas");
+  return Array.from(new Set(derived));
+}
+
+function navigateToPath(path: string) {
+  window.history.pushState({}, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 export function WorkspacePage() {
@@ -185,11 +223,22 @@ export function WorkspacePage() {
             name: String(connector.name || connectorId),
             description: String(connector.description || ""),
             authType: safeAuthKind(connector.auth?.kind),
-            status: resolveConnectorStatus(healthMap[connectorId] || null, credentialSet.has(connectorId)),
+            status: resolveConnectorStatus(
+              safeAuthKind(connector.auth?.kind),
+              healthMap[connectorId] || null,
+              credentialSet.has(connectorId),
+            ),
           };
         })
         .filter((connector) => connector.id)
         .sort((left, right) => left.name.localeCompare(right.name));
+      const connectorReadyMap = new Map<string, boolean>();
+      for (const connector of connectors) {
+        connectorReadyMap.set(
+          normalizeConnectorId(connector.id),
+          connector.status === "Connected",
+        );
+      }
 
       const agentCardRows = await Promise.all(
         (agentRows || []).map(async (agent) => {
@@ -203,14 +252,21 @@ export function WorkspacePage() {
               (left, right) =>
                 new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime(),
             );
+          const rawDefinition = ((definition?.definition || {}) as Record<string, unknown>);
+          const requiredConnectors = inferRequiredConnectors(rawDefinition);
+          const unhealthyConnectors = requiredConnectors.filter(
+            (connectorId) => !connectorReadyMap.get(normalizeConnectorId(connectorId)),
+          );
           return {
             id: agent.agent_id,
             name: agent.name,
-            description: String(definition?.definition?.description || "Agent definition ready."),
+            description: String(rawDefinition.description || "Agent definition ready."),
             status: inferAgentStatus(runs),
             lastRun: runs[0]?.startedAt || "",
             totalRuns: runs.length,
             runs,
+            requiredConnectors,
+            unhealthyConnectors,
           } satisfies WorkspaceAgentCard;
         }),
       );
@@ -437,7 +493,23 @@ export function WorkspacePage() {
                   >
                     Open agent
                   </a>
+                  {agent.unhealthyConnectors.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => navigateToPath("/connectors")}
+                      className="rounded-full border border-[#f59e0b] bg-[#fffbeb] px-3 py-1.5 text-[12px] font-semibold text-[#92400e]"
+                    >
+                      Configure connectors
+                    </button>
+                  ) : null}
                 </div>
+                {agent.unhealthyConnectors.length > 0 ? (
+                  <div className="mt-2 rounded-xl border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
+                    This agent needs connector setup before it can run reliably:
+                    {" "}
+                    {agent.unhealthyConnectors.join(", ")}
+                  </div>
+                ) : null}
                 <div className="mt-3 space-y-1 text-[12px] text-[#667085]">
                   {runs.slice(0, 2).map((run) => (
                     <p key={run.runId}>

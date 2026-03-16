@@ -17,6 +17,18 @@ from typing import Any
 import sys
 
 from .workflow_definition import WorkflowDefinitionSchema, WorkflowEdge, WorkflowStep
+from .workflow_events import (
+    WorkflowRunRecord,
+    WorkflowStartedEvent,
+    StepStartedEvent,
+    StepProgressEvent,
+    StepCompletedEvent,
+    StepSkippedEvent,
+    StepFailedEvent,
+    WorkflowCompletedEvent,
+    WorkflowFailedEvent,
+    StepRunResult,
+)
 
 
 def _load_legacy_schema_module() -> ModuleType | None:
@@ -67,6 +79,12 @@ if _legacy_module is not None:
 __all__ = sorted(
     set(
         list(_legacy_exports.keys())
-        + ["WorkflowDefinitionSchema", "WorkflowEdge", "WorkflowStep"]
+        + [
+            "WorkflowDefinitionSchema", "WorkflowEdge", "WorkflowStep",
+            "WorkflowRunRecord", "WorkflowStartedEvent", "StepStartedEvent",
+            "StepProgressEvent", "StepCompletedEvent", "StepSkippedEvent",
+            "StepFailedEvent", "WorkflowCompletedEvent", "WorkflowFailedEvent",
+            "StepRunResult",
+        ]
     )
 )

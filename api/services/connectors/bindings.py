@@ -123,6 +123,43 @@ def set_enabled_tools(
         return binding
 
 
+def set_gate_policy(
+    tenant_id: str,
+    connector_id: str,
+    agent_id: str,
+    require_approval: bool,
+) -> None:
+    """Store whether actions from agent_id via this connector require human approval.
+
+    Gate policies are persisted in extra_metadata under the key 'gate_policies'.
+    """
+    with Session(engine) as session:
+        binding = session.exec(
+            select(ConnectorBinding)
+            .where(ConnectorBinding.tenant_id == tenant_id)
+            .where(ConnectorBinding.connector_id == connector_id)
+        ).first()
+        if not binding:
+            return
+        meta = dict(binding.extra_metadata or {})
+        gates = dict(meta.get("gate_policies", {}))
+        gates[agent_id] = require_approval
+        meta["gate_policies"] = gates
+        binding.extra_metadata = meta
+        binding.date_updated = datetime.utcnow()
+        session.add(binding)
+        session.commit()
+
+
+def get_gate_policy(tenant_id: str, connector_id: str, agent_id: str) -> bool:
+    """Return True if this agent's actions via this connector require human approval."""
+    binding = get_binding(tenant_id, connector_id)
+    if not binding:
+        return False
+    gates = (binding.extra_metadata or {}).get("gate_policies", {})
+    return bool(gates.get(agent_id, False))
+
+
 def mark_last_used(tenant_id: str, connector_id: str) -> None:
     """Update last_used_at timestamp for a binding (best-effort, no error raised)."""
     try:

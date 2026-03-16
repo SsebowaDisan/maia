@@ -7,6 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type UIEvent as ReactUIEvent,
 } from "react";
+import { ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { approveAgentRunGate, listPendingGates, rejectAgentRunGate } from "../../../api/client";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
@@ -36,6 +37,8 @@ const COMPOSER_HIDE_DISTANCE_PX = 320;
 const COMPOSER_ACTIVITY_REVEAL_DISTANCE_PX = 360;
 const COMPOSER_ACTIVITY_HIDE_DISTANCE_PX = 430;
 const COMPOSER_SCROLL_SETTLE_MS = 420;
+const SCROLL_ICON_SETTLE_MS = 1600;
+const SCROLL_TO_LATEST_THRESHOLD_PX = 140;
 
 function ChatMain({
   chatTurns,
@@ -69,10 +72,14 @@ function ChatMain({
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollHideTimeoutRef = useRef<number | null>(null);
+  const scrollIconHideTimeoutRef = useRef<number | null>(null);
   const pendingGateToastRef = useRef<string>("");
   const [showComposerDuringActivity, setShowComposerDuringActivity] = useState(true);
   const [composerDockedByScroll, setComposerDockedByScroll] = useState(false);
   const [scrollSettling, setScrollSettling] = useState(false);
+  const [scrollIconSettling, setScrollIconSettling] = useState(false);
+  const [scrollIconHovering, setScrollIconHovering] = useState(false);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [pendingGateFromApi, setPendingGateFromApi] = useState<{
     runId: string;
     gateId: string;
@@ -278,6 +285,9 @@ function ChatMain({
       if (scrollHideTimeoutRef.current !== null) {
         window.clearTimeout(scrollHideTimeoutRef.current);
       }
+      if (scrollIconHideTimeoutRef.current !== null) {
+        window.clearTimeout(scrollIconHideTimeoutRef.current);
+      }
     },
     [],
   );
@@ -346,6 +356,35 @@ function ChatMain({
     element.scrollTo({ top: element.scrollHeight, behavior });
   }, [chatTurns.length]);
 
+  const refreshScrollToLatestVisibility = useCallback(
+    (element?: HTMLDivElement | null) => {
+      const container = element || contentScrollRef.current;
+      if (!container || chatTurns.length === 0) {
+        setShowScrollToLatest(false);
+        return;
+      }
+      const distanceToBottom =
+        container.scrollHeight - (container.scrollTop + container.clientHeight);
+      setShowScrollToLatest(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
+    },
+    [chatTurns.length],
+  );
+
+  const scrollToLatestMessage = useCallback(() => {
+    const element = contentScrollRef.current;
+    if (!element) {
+      return;
+    }
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
+    element.scrollTo({
+      top: element.scrollHeight,
+      behavior: prefersReducedMotion ? "auto" : "smooth",
+    });
+    setShowScrollToLatest(false);
+  }, []);
+
   const handleMainMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!maiaActive && !composerDockedByScroll) {
       return;
@@ -371,17 +410,26 @@ function ChatMain({
   };
 
   const handleContentScroll = (event: ReactUIEvent<HTMLDivElement>) => {
-    void event.currentTarget;
+    const container = event.currentTarget;
     setComposerDockedByScroll(true);
     setScrollSettling(true);
+    setScrollIconSettling(true);
     setShowComposerDuringActivity(false);
+    refreshScrollToLatestVisibility(container);
     if (scrollHideTimeoutRef.current !== null) {
       window.clearTimeout(scrollHideTimeoutRef.current);
+    }
+    if (scrollIconHideTimeoutRef.current !== null) {
+      window.clearTimeout(scrollIconHideTimeoutRef.current);
     }
     scrollHideTimeoutRef.current = window.setTimeout(() => {
       setScrollSettling(false);
       scrollHideTimeoutRef.current = null;
     }, COMPOSER_SCROLL_SETTLE_MS);
+    scrollIconHideTimeoutRef.current = window.setTimeout(() => {
+      setScrollIconSettling(false);
+      scrollIconHideTimeoutRef.current = null;
+    }, SCROLL_ICON_SETTLE_MS);
   };
 
   useEffect(() => {
@@ -393,6 +441,19 @@ function ChatMain({
     });
     return () => window.cancelAnimationFrame(rafId);
   }, [isSending, isActivityStreaming, scrollLatestTurnToTop]);
+
+  useEffect(() => {
+    const rafId = window.requestAnimationFrame(() => {
+      refreshScrollToLatestVisibility();
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    chatTurns.length,
+    isSending,
+    isActivityStreaming,
+    selectedTurnIndex,
+    refreshScrollToLatestVisibility,
+  ]);
 
   const composerVisible = maiaActive || composerDockedByScroll
     ? showComposerDuringActivity && !scrollSettling
@@ -458,6 +519,19 @@ function ChatMain({
           )}
         </div>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
+        {showScrollToLatest && (scrollIconSettling || scrollIconHovering) ? (
+          <button
+            type="button"
+            onClick={scrollToLatestMessage}
+            onMouseEnter={() => setScrollIconHovering(true)}
+            onMouseLeave={() => setScrollIconHovering(false)}
+            className="absolute inset-y-0 right-4 z-20 my-auto inline-flex h-10 w-10 items-center justify-center rounded-full border border-black/[0.08] bg-white/96 text-[#1d1d1f] shadow-[0_10px_24px_-18px_rgba(0,0,0,0.55)] transition hover:bg-white"
+            aria-label="Scroll to latest message"
+            title="Scroll to latest message"
+          >
+            <ArrowDown className="h-4 w-4 stroke-[2.4]" />
+          </button>
+        ) : null}
       </div>
 
       <div

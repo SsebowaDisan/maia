@@ -28,6 +28,7 @@ def install_agent(
     marketplace_agent_id: str,
     version: str | None = None,
     connector_mapping: dict[str, str] | None = None,
+    gate_policies: dict[str, bool] | None = None,
 ) -> InstallResult:
     """Copy a marketplace agent definition into the tenant's store.
 
@@ -37,6 +38,7 @@ def install_agent(
         marketplace_agent_id: Agent ID in the marketplace.
         version: Specific version to install (defaults to latest published).
         connector_mapping: {required_connector_id: tenant_connector_id} overrides.
+        gate_policies: {connector_id: require_approval} — gate preferences per connector.
 
     Returns:
         InstallResult with success flag and any missing connectors.
@@ -89,6 +91,10 @@ def install_agent(
 
         # Bind connector permissions
         _bind_connectors(tenant_id, record.agent_id, required, connector_mapping or {})
+
+        # Persist gate policies (approval preferences per connector)
+        if gate_policies:
+            _store_gate_policies(tenant_id, record.agent_id, gate_policies)
 
         # Track install count
         from api.services.marketplace.registry import increment_install_count
@@ -176,3 +182,20 @@ def _bind_connectors(
                     set_allowed_agents(tenant_id, mapped, current + [agent_id])
     except Exception:
         logger.debug("Connector binding failed during install", exc_info=True)
+
+
+def _store_gate_policies(
+    tenant_id: str,
+    agent_id: str,
+    gate_policies: dict[str, bool],
+) -> None:
+    """Persist gate approval preferences for each connector binding."""
+    try:
+        from api.services.connectors.bindings import get_binding, set_gate_policy
+
+        for connector_id, require_approval in gate_policies.items():
+            binding = get_binding(tenant_id, connector_id)
+            if binding:
+                set_gate_policy(tenant_id, connector_id, agent_id, require_approval)
+    except Exception:
+        logger.debug("Gate policy storage failed during install", exc_info=True)

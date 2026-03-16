@@ -1,17 +1,18 @@
-"""P6-01 — Natural language → workflow YAML generator.
+"""Natural language → workflow JSON generator.
 
 Responsibility: accept a free-text description of a multi-step automation and
 return a validated WorkflowDefinitionSchema by calling the LLM with a
 structured output prompt.
 
 The generated workflow steps follow the same schema that workflow_executor.py
-already understands, so generated YAMLs are immediately runnable.
+already understands, so generated JSONs are immediately runnable.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
+from collections.abc import Generator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -24,13 +25,18 @@ Given a plain-English description of a multi-step process, output a JSON object
 that strictly conforms to the WorkflowDefinitionSchema.
 
 Schema rules:
-  - Top-level keys: "name" (string), "description" (string), "steps" (array)
+  - Top-level keys: "workflow_id" (slug), "name" (string), "description" (string),
+    "version" ("1.0.0"), "steps" (array), "edges" (array)
   - Each step has:
       step_id: unique string slug, e.g. "step_1"
       agent_id: string — the tool or agent that handles this step
       input_mapping: dict mapping input keys to prior step outputs ("step_1.result")
                      or literal values ("literal:some value")
-      condition: optional string in the form "output.<key> == <value>" or similar
+      output_key: unique string for this step's result
+      description: one-sentence purpose of this step
+  - Each edge has: from_step, to_step, and optional condition string
+    in the form "output.<key> == <value>" or "output.<key> > <number>"
+  - workflow_id must be a lowercase slug (letters, digits, hyphens, underscores)
   - Keep steps minimal and focused on the user's intent.
   - Respond ONLY with a valid JSON object. No markdown fences, no prose.
 """
@@ -64,6 +70,53 @@ def generate_workflow(
 
     raw = _call_llm(tenant_id=tenant_id, system=_SYSTEM_PROMPT, user=prompt)
     return _parse_json(raw, description=description)
+
+
+def generate_workflow_stream(
+    description: str,
+    *,
+    tenant_id: str,
+    max_steps: int = 8,
+) -> Generator[dict[str, Any], None, None]:
+    """Stream workflow generation token-by-token.
+
+    Yields dicts with:
+      {"delta": "<text chunk>", "done": False}           — incremental LLM text
+      {"delta": "", "done": True, "definition": {...}}   — final parsed definition
+      {"delta": "", "done": True, "definition": None, "error": "..."} — on failure
+    """
+    prompt = (
+        f"Description: {description.strip()}\n"
+        f"Constraint: use at most {max_steps} steps.\n"
+        "Output the workflow JSON:"
+    )
+
+    accumulated: list[str] = []
+    try:
+        from api.services.agents.runner import run_agent_task
+        for chunk in run_agent_task(
+            prompt,
+            tenant_id=tenant_id,
+            system_prompt=_SYSTEM_PROMPT,
+            agent_mode="ask",
+        ):
+            text = chunk.get("text") or chunk.get("content") or ""
+            if text:
+                accumulated.append(str(text))
+                yield {"delta": str(text), "done": False, "definition": None}
+    except Exception as exc:
+        logger.error("NL workflow stream LLM call failed: %s", exc, exc_info=True)
+        yield {"delta": "", "done": True, "definition": None, "error": str(exc)}
+        return
+
+    raw = "".join(accumulated).strip()
+    try:
+        definition = _parse_json(raw, description=description)
+    except ValueError as exc:
+        yield {"delta": "", "done": True, "definition": None, "error": str(exc)}
+        return
+
+    yield {"delta": "", "done": True, "definition": definition}
 
 
 def validate_workflow(definition: dict[str, Any]) -> dict[str, Any]:
@@ -132,8 +185,11 @@ def _parse_json(raw: str, *, description: str) -> dict[str, Any]:
     # Fallback: return a minimal skeleton so the UI can show something
     logger.warning("Could not parse LLM workflow JSON; returning skeleton. raw=%r", raw[:200])
     return {
+        "workflow_id": "generated-workflow",
         "name": "Generated workflow",
         "description": description,
+        "version": "1.0.0",
         "steps": [],
+        "edges": [],
         "_parse_error": "LLM output was not valid JSON — please edit manually.",
     }

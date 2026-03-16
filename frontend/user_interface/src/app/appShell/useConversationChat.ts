@@ -322,55 +322,73 @@ export function useConversationChat({
           cachedSnapshot.infoText,
         );
       }
+      try {
+        const detail = await getConversation(conversationId);
+        const { turns, runIds } = buildConversationTurns(detail);
+        const baseTurns = turns.map((turn) => ({
+          ...turn,
+          activityEvents: turn.activityEvents || [],
+        }));
+        applyConversationState(
+          conversationId,
+          baseTurns,
+          savedMode,
+          cachedSnapshot?.selectedTurnIndex,
+          cachedSnapshot?.infoText || "",
+        );
 
-      const detail = await getConversation(conversationId);
-      const { turns, runIds } = buildConversationTurns(detail);
-      const baseTurns = turns.map((turn) => ({
-        ...turn,
-        activityEvents: turn.activityEvents || [],
-      }));
-      applyConversationState(
-        conversationId,
-        baseTurns,
-        savedMode,
-        cachedSnapshot?.selectedTurnIndex,
-        cachedSnapshot?.infoText || "",
-      );
-
-      if (runIds.length > 0) {
-        void Promise.all(
-          runIds.map(async (runId) => {
-            try {
-              const rows = await getAgentRunEvents(runId);
-              return [runId, extractAgentEvents(rows)] as const;
-            } catch {
-              return [runId, [] as AgentActivityEvent[]] as const;
+        if (runIds.length > 0) {
+          void Promise.all(
+            runIds.map(async (runId) => {
+              try {
+                const rows = await getAgentRunEvents(runId);
+                return [runId, extractAgentEvents(rows)] as const;
+              } catch {
+                return [runId, [] as AgentActivityEvent[]] as const;
+              }
+            }),
+          ).then((entries) => {
+            if (selectedConversationIdRef.current !== conversationId) {
+              return;
             }
-          }),
-        ).then((entries) => {
-          if (selectedConversationIdRef.current !== conversationId) {
-            return;
-          }
-          const runEventsMap = Object.fromEntries(entries);
-          const hydratedTurns = baseTurns.map((turn) =>
-            turn.activityRunId
-              ? { ...turn, activityEvents: runEventsMap[turn.activityRunId] || [] }
-              : turn,
-          );
-          setChatTurns(hydratedTurns);
-          const activeIndex = selectedTurnIndexRef.current;
-          if (
-            Number.isFinite(activeIndex) &&
-            activeIndex !== null &&
-            activeIndex >= 0 &&
-            activeIndex < hydratedTurns.length
-          ) {
-            setActivityEvents(hydratedTurns[activeIndex]?.activityEvents || []);
-          }
-        });
+            const runEventsMap = Object.fromEntries(entries);
+            const hydratedTurns = baseTurns.map((turn) =>
+              turn.activityRunId
+                ? { ...turn, activityEvents: runEventsMap[turn.activityRunId] || [] }
+                : turn,
+            );
+            setChatTurns(hydratedTurns);
+            const activeIndex = selectedTurnIndexRef.current;
+            if (
+              Number.isFinite(activeIndex) &&
+              activeIndex !== null &&
+              activeIndex >= 0 &&
+              activeIndex < hydratedTurns.length
+            ) {
+              setActivityEvents(hydratedTurns[activeIndex]?.activityEvents || []);
+            }
+          });
+        }
+      } catch (error) {
+        const reason =
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message.trim()
+            : "This chat could not be loaded from the server.";
+        if (!cachedSnapshot) {
+          setChatTurns([]);
+          setSelectedTurnIndex(null);
+          setActivityEvents([]);
+        }
+        setInfoText(`Unable to open this chat right now. ${reason}`);
+        void refreshConversations().catch(() => undefined);
       }
     },
-    [applyConversationState, conversationDetailCacheStorageKey, conversationModes],
+    [
+      applyConversationState,
+      conversationDetailCacheStorageKey,
+      conversationModes,
+      refreshConversations,
+    ],
   );
 
   const handleCreateConversation = useCallback(
