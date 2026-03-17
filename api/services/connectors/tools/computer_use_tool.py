@@ -1,14 +1,14 @@
-"""B1-CU-06 — Computer Use as a connector tool.
+"""B1-CU-06 - Computer Use as a connector tool.
 
-Responsibility: wrap the Computer Use agent loop as a connector tool handler
-so agents can invoke browser automation via the standard tool execution bus.
+Responsibility: expose browser computer-use execution through the connector
+tool bus.
 
 Tool ID: computer_use.run_task
 Params:
   - url (str, required): starting URL for the task
-  - task (str, required): natural-language instruction for Claude
+  - task (str, required): natural-language instruction for the agent
   - max_iterations (int, default 15): loop limit
-  - model (str, default 'claude-opus-4-6'): Claude model
+  - model (str, optional): explicit model override
 """
 from __future__ import annotations
 
@@ -21,17 +21,18 @@ TOOL_ID = "computer_use.run_task"
 
 
 def _run_task(params: dict[str, Any], *, tenant_id: str, agent_id: str) -> dict[str, Any]:
-    """Execute a Computer Use task and return a summary of what happened."""
+    """Execute a Computer Use task and return a summary."""
     url: str = str(params.get("url") or "about:blank")
     task: str = str(params.get("task") or "")
     max_iterations: int = int(params.get("max_iterations") or 15)
-    model: str = str(params.get("model") or "claude-opus-4-6")
+    explicit_model_raw: str = str(params.get("model") or "").strip()
+    explicit_model: str | None = explicit_model_raw or None
 
     if not task:
         return {"status": "error", "detail": "Parameter 'task' is required."}
 
-    from api.services.computer_use.session_registry import get_session_registry
     from api.services.computer_use.agent_loop import run_agent_loop
+    from api.services.computer_use.session_registry import get_session_registry
 
     registry = get_session_registry()
     try:
@@ -46,9 +47,13 @@ def _run_task(params: dict[str, Any], *, tenant_id: str, agent_id: str) -> dict[
         if url and url != "about:blank":
             session.navigate(url)
 
-        for event in run_agent_loop(session, task, model=model, max_iterations=max_iterations):
+        for event in run_agent_loop(
+            session,
+            task,
+            model=explicit_model,
+            max_iterations=max_iterations,
+        ):
             event_type = event.get("event_type")
-            # Collect lightweight events (skip raw screenshots to keep payload small)
             if event_type != "screenshot":
                 events.append(event)
             if event_type in ("done", "max_iterations", "error"):
@@ -69,6 +74,6 @@ def _run_task(params: dict[str, Any], *, tenant_id: str, agent_id: str) -> dict[
 
 
 def register(registry: Any) -> None:
-    """Register the computer_use.run_task handler in the given tool registry."""
+    """Register the computer_use.run_task handler in the tool registry."""
     registry.register_handler(TOOL_ID, _run_task)
     logger.debug("Registered tool handler: %s", TOOL_ID)

@@ -51,6 +51,7 @@ import { WorkflowHeaderFields } from "../components/workflowCanvas/WorkflowHeade
 import { useCanvasStore } from "../stores/canvasStore";
 import { useAuthStore } from "../stores/authStore";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
+import { useWorkflowViewStore } from "../stores/workflowViewStore";
 type MindmapNodeFollowUpDraft = {
   nodeId: string;
   title: string;
@@ -148,6 +149,13 @@ function resolveOverlayReturnPath(search: string): string | null {
   }
   return candidate;
 }
+function WorkflowBuilderHeaderActions() {
+  const view = useWorkflowViewStore((s) => s.view);
+  const setView = useWorkflowViewStore((s) => s.setView);
+  if (view === "gallery") return null;
+  return <WorkflowHeaderFields onBackToGallery={() => setView("gallery")} />;
+}
+
 export default function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname || "/");
   const deepLinkHandledRef = useRef(false);
@@ -243,6 +251,44 @@ export default function App() {
       // Keep sidebar usable if admin queue is temporarily unavailable.
     }
   };
+
+  // Cmd+K / Ctrl+K to open workflow quick-switcher when on workflow builder
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        const overlay = resolveSidebarOverlayForPath(window.location.pathname);
+        if (overlay?.key === "workflow_builder") {
+          e.preventDefault();
+          useWorkflowViewStore.getState().openQuickSwitcher();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Register runInChat callback so the workflow builder can send messages to chat
+  useEffect(() => {
+    useWorkflowViewStore.getState().setRunInChat((message: string) => {
+      // Close overlay inline (avoid TDZ with closeSidebarOverlay const)
+      setSidebarOverlay(null);
+      const currentPath = window.location.pathname;
+      if (currentPath && currentPath !== "/") {
+        window.history.replaceState({}, "", "/");
+        setPathname("/");
+      }
+      layout.setActiveTab("Chat");
+      layout.setIsInfoPanelOpen(true);
+      void chatState.handleSendMessage(message, undefined, {
+        agentMode: chatState.composerMode,
+        accessMode: chatState.accessMode,
+        citationMode: chatState.citationMode,
+      });
+    });
+    return () => {
+      useWorkflowViewStore.getState().setRunInChat(null);
+    };
+  }, [chatState, layout, setSidebarOverlay]);
 
   useEffect(() => {
     const load = async () => {
@@ -871,7 +917,7 @@ export default function App() {
                 title={sidebarOverlay.title}
                 subtitle={sidebarOverlay.subtitle}
                 headerActions={
-                  sidebarOverlay.key === "workflow_builder" ? <WorkflowHeaderFields /> : null
+                  sidebarOverlay.key === "workflow_builder" ? <WorkflowBuilderHeaderActions /> : null
                 }
                 headerToolbar={
                   sidebarOverlay.key === "marketplace" ? (

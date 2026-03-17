@@ -52,67 +52,24 @@ class RunWorkflowRequest(BaseModel):
     initial_inputs: dict[str, Any] = {}
 
 
-# ── Workflow definition store (JSON file) ─────────────────────────────────────
+# ── DB-backed workflow store ───────────────────────────────────────────────────
 
-_store_lock = threading.Lock()
-
-
-def _store_path():
-    from pathlib import Path
-    root = Path(".maia_agent")
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "workflows.json"
-
-
-def _load_all() -> list[dict[str, Any]]:
-    path = _store_path()
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def _save_all(rows: list[dict[str, Any]]) -> None:
-    _store_path().write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-
-# ── Run history store (JSON file) ─────────────────────────────────────────────
-
-_runs_lock = threading.Lock()
-
-
-def _runs_path():
-    from pathlib import Path
-    root = Path(".maia_agent")
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "workflow_runs.json"
-
-
-def _load_runs() -> list[dict[str, Any]]:
-    path = _runs_path()
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-
-def _save_runs(rows: list[dict[str, Any]]) -> None:
-    _runs_path().write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-
-def _upsert_run(record: dict[str, Any]) -> None:
-    with _runs_lock:
-        runs = _load_runs()
-        idx = next((i for i, r in enumerate(runs) if r.get("run_id") == record["run_id"]), None)
-        if idx is not None:
-            runs[idx] = record
-        else:
-            runs.append(record)
-        _save_runs(runs)
+from api.services.workflows.store import (
+    create_workflow as _db_create,
+    get_workflow as _db_get,
+    list_workflows as _db_list,
+    update_workflow as _db_update,
+    delete_workflow as _db_delete,
+    workflow_to_dict as _db_to_dict,
+)
+from api.services.agents.workflow_run_store import (
+    create_run as _db_create_run,
+    complete_run as _db_complete_run,
+    fail_run as _db_fail_run,
+    record_step_output as _db_record_step,
+    list_runs as _db_list_runs,
+    get_run as _db_get_run,
+)
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -469,9 +426,8 @@ def list_templates() -> list[dict[str, Any]]:
 def list_workflows(
     user_id: str = Depends(get_current_user_id),
 ) -> list[dict[str, Any]]:
-    with _store_lock:
-        rows = _load_all()
-    return [r for r in rows if r.get("tenant_id") == user_id]
+    records = _db_list(user_id)
+    return [_db_to_dict(r) for r in records]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -479,21 +435,14 @@ def save_workflow(
     body: SaveWorkflowRequest,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
-    now = time.time()
-    row: dict[str, Any] = {
-        "id": str(uuid.uuid4()),
-        "tenant_id": user_id,
-        "name": body.name.strip() or "Untitled workflow",
-        "description": body.description,
-        "definition": body.definition,
-        "created_at": now,
-        "updated_at": now,
-    }
-    with _store_lock:
-        rows = _load_all()
-        rows.append(row)
-        _save_all(rows)
-    return row
+    record = _db_create(
+        tenant_id=user_id,
+        name=body.name,
+        description=body.description,
+        definition=body.definition,
+        created_by=user_id,
+    )
+    return _db_to_dict(record)
 
 
 # ── Item routes (/{workflow_id} and sub-paths) ────────────────────────────────
@@ -503,12 +452,10 @@ def get_workflow(
     workflow_id: str,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
-    with _store_lock:
-        rows = _load_all()
-    row = next((r for r in rows if r["id"] == workflow_id and r.get("tenant_id") == user_id), None)
-    if not row:
+    record = _db_get(workflow_id, user_id)
+    if not record:
         raise HTTPException(status_code=404, detail="Workflow not found.")
-    return row
+    return _db_to_dict(record)
 
 
 @router.put("/{workflow_id}")
@@ -517,20 +464,10 @@ def update_workflow(
     body: SaveWorkflowRequest,
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
-    with _store_lock:
-        rows = _load_all()
-        for i, row in enumerate(rows):
-            if row["id"] == workflow_id and row.get("tenant_id") == user_id:
-                rows[i] = {
-                    **row,
-                    "name": body.name.strip() or row["name"],
-                    "description": body.description,
-                    "definition": body.definition,
-                    "updated_at": time.time(),
-                }
-                _save_all(rows)
-                return rows[i]
-    raise HTTPException(status_code=404, detail="Workflow not found.")
+    record = _db_update(workflow_id, user_id, body.name, body.description, body.definition)
+    if not record:
+        raise HTTPException(status_code=404, detail="Workflow not found.")
+    return _db_to_dict(record)
 
 
 @router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
@@ -538,13 +475,8 @@ def delete_workflow(
     workflow_id: str,
     user_id: str = Depends(get_current_user_id),
 ) -> None:
-    with _store_lock:
-        rows = _load_all()
-        before = len(rows)
-        rows = [r for r in rows if not (r["id"] == workflow_id and r.get("tenant_id") == user_id)]
-        if len(rows) == before:
-            raise HTTPException(status_code=404, detail="Workflow not found.")
-        _save_all(rows)
+    if not _db_delete(workflow_id, user_id):
+        raise HTTPException(status_code=404, detail="Workflow not found.")
 
 
 @router.post("/{workflow_id}/run")
@@ -561,11 +493,10 @@ def run_workflow(
       workflow_completed, workflow_failed
     """
     # Load + parse the workflow definition
-    with _store_lock:
-        rows = _load_all()
-    row = next((r for r in rows if r["id"] == workflow_id and r.get("tenant_id") == user_id), None)
-    if not row:
+    wf_record = _db_get(workflow_id, user_id)
+    if not wf_record:
         raise HTTPException(status_code=404, detail="Workflow not found.")
+    row = _db_to_dict(wf_record)
 
     from api.schemas.workflow_definition import WorkflowDefinitionSchema
     from pydantic import ValidationError
@@ -575,26 +506,25 @@ def run_workflow(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid workflow definition: {exc}") from exc
 
-    run_id = str(uuid.uuid4())
     started_at = time.time()
 
-    # Initialise run record in history store
+    # Initialise run record in DB
+    db_run = _db_create_run(tenant_id=user_id, workflow_id=workflow_id, triggered_by="manual")
+    run_id = db_run.id
+
+    # In-memory dict for SSE streaming state (not persisted directly)
     run_record: dict[str, Any] = {
         "run_id": run_id,
         "workflow_id": workflow_id,
-        "tenant_id": user_id,
         "status": "running",
-        "started_at": started_at,
-        "finished_at": None,
-        "duration_ms": 0,
         "step_results": [],
         "final_outputs": {},
         "error": "",
+        "duration_ms": 0,
     }
-    _upsert_run(run_record)
 
-    # Queue-based bridge: executor thread → SSE generator
-    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    # Queue-based bridge: executor thread → SSE generator (bounded to prevent OOM)
+    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=10_000)
     step_start_times: dict[str, float] = {}
 
     from api.services.agent.live_events import get_live_event_broker
@@ -615,32 +545,24 @@ def run_workflow(
                 tenant_id=user_id,
                 initial_inputs=body.initial_inputs,
                 on_event=_on_event,
+                run_id=run_id,
             )
             finished = time.time()
             run_record.update({
                 "status": "completed",
-                "finished_at": finished,
                 "duration_ms": int((finished - started_at) * 1000),
                 "final_outputs": {k: str(v)[:500] for k, v in outputs.items()},
             })
-        except WorkflowExecutionError as exc:
+            _db_complete_run(run_id)
+        except (WorkflowExecutionError, Exception) as exc:
             finished = time.time()
             run_record.update({
                 "status": "failed",
-                "finished_at": finished,
                 "duration_ms": int((finished - started_at) * 1000),
                 "error": str(exc)[:500],
             })
-        except Exception as exc:
-            finished = time.time()
-            run_record.update({
-                "status": "failed",
-                "finished_at": finished,
-                "duration_ms": int((finished - started_at) * 1000),
-                "error": str(exc)[:500],
-            })
+            _db_fail_run(run_id, str(exc)[:500])
         finally:
-            _upsert_run(run_record)
             event_queue.put(None)  # sentinel — signals end of stream
 
     thread = threading.Thread(target=_executor_thread, daemon=True)
@@ -736,6 +658,17 @@ def run_workflow(
                     "reason": evt.get("reason", "condition_false"),
                 })
 
+            elif event_type == "workflow_step_retrying":
+                yield _sse("workflow_step_retrying", {
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "step_id": evt.get("step_id", ""),
+                    "attempt": evt.get("attempt", 1),
+                    "max_attempts": evt.get("max_attempts", 1),
+                    "delay_s": evt.get("delay_s", 0),
+                    "error": evt.get("error", ""),
+                })
+
             elif event_type == "workflow_step_failed":
                 step_id = evt.get("step_id", "")
                 duration_ms = int((time.time() - step_start_times.pop(step_id, time.time())) * 1000)
@@ -752,6 +685,14 @@ def run_workflow(
                     "step_id": step_id,
                     "error": evt.get("error", ""),
                     "retryable": False,
+                })
+
+            elif event_type == "workflow_step_output_invalid":
+                yield _sse("workflow_step_output_invalid", {
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "step_id": evt.get("step_id", ""),
+                    "validation_error": evt.get("validation_error", ""),
                 })
 
             else:
@@ -786,15 +727,25 @@ def list_runs(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return run history for a workflow, newest first. Supports limit/offset pagination."""
-    with _runs_lock:
-        runs = _load_runs()
-    filtered = [
-        r for r in runs
-        if r.get("workflow_id") == workflow_id and r.get("tenant_id") == user_id
+    """Return run history for a workflow, newest first."""
+    records = _db_list_runs(tenant_id=user_id, workflow_id=workflow_id, limit=limit, offset=offset)
+    return [
+        {
+            "run_id": r.id,
+            "workflow_id": r.workflow_id,
+            "tenant_id": r.tenant_id,
+            "status": r.status,
+            "started_at": r.started_at,
+            "finished_at": r.completed_at,
+            "duration_ms": int((r.completed_at - r.started_at) * 1000) if r.completed_at else 0,
+            "step_results": [
+                {"step_id": sid, **sdata}
+                for sid, sdata in (r.step_outputs or {}).items()
+            ],
+            "error": r.error or "",
+        }
+        for r in records
     ]
-    sorted_runs = sorted(filtered, key=lambda r: r.get("started_at", 0), reverse=True)
-    return sorted_runs[offset: offset + limit]
 
 
 @router.get("/{workflow_id}/runs/{run_id}")
@@ -804,20 +755,23 @@ def get_run(
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, Any]:
     """Return a single run record including per-step results."""
-    with _runs_lock:
-        runs = _load_runs()
-    record = next(
-        (
-            r for r in runs
-            if r.get("run_id") == run_id
-            and r.get("workflow_id") == workflow_id
-            and r.get("tenant_id") == user_id
-        ),
-        None,
-    )
-    if not record:
+    r = _db_get_run(run_id)
+    if not r or r.workflow_id != workflow_id or r.tenant_id != user_id:
         raise HTTPException(status_code=404, detail="Run not found.")
-    return record
+    return {
+        "run_id": r.id,
+        "workflow_id": r.workflow_id,
+        "tenant_id": r.tenant_id,
+        "status": r.status,
+        "started_at": r.started_at,
+        "finished_at": r.completed_at,
+        "duration_ms": int((r.completed_at - r.started_at) * 1000) if r.completed_at else 0,
+        "step_results": [
+            {"step_id": sid, **sdata}
+            for sid, sdata in (r.step_outputs or {}).items()
+        ],
+        "error": r.error or "",
+    }
 
 
 class ReplayRequest(BaseModel):
@@ -839,21 +793,15 @@ def replay_workflow_from_step(
     stored step_outputs of the original run.
     """
     # Load original run record to seed prior step outputs
-    with _runs_lock:
-        runs = _load_runs()
-    original = next(
-        (r for r in runs if r.get("run_id") == run_id and r.get("tenant_id") == user_id),
-        None,
-    )
-    if not original:
+    original_run = _db_get_run(run_id)
+    if not original_run or original_run.tenant_id != user_id:
         raise HTTPException(status_code=404, detail="Original run not found.")
 
     # Load + parse workflow definition
-    with _store_lock:
-        rows = _load_all()
-    row = next((r for r in rows if r["id"] == workflow_id and r.get("tenant_id") == user_id), None)
-    if not row:
+    wf_record = _db_get(workflow_id, user_id)
+    if not wf_record:
         raise HTTPException(status_code=404, detail="Workflow not found.")
+    row = _db_to_dict(wf_record)
 
     from api.schemas.workflow_definition import WorkflowDefinitionSchema
     from pydantic import ValidationError
@@ -865,31 +813,23 @@ def replay_workflow_from_step(
 
     # Seed outputs from the stored step_results of the original run
     ordered = wf.topological_order()
+    # Build step_id → output_key mapping so replay seeds by output_key
+    step_output_keys = {s.step_id: s.output_key for s in wf.steps}
     seeded_outputs: dict[str, Any] = dict(body.initial_inputs)
-    prior_steps = original.get("step_results") or []
-    for step_result in prior_steps:
-        sid = step_result.get("step_id", "")
-        if sid == body.from_step_id:
-            break
-        seeded_outputs[sid] = step_result.get("output_preview", "")
+    from api.services.agents.workflow_run_store import get_step_outputs_for_replay
+    prior_outputs = get_step_outputs_for_replay(run_id, body.from_step_id, ordered, step_output_keys)
+    seeded_outputs.update(prior_outputs)
 
-    new_run_id = str(uuid.uuid4())
     started_at = time.time()
+    replay_db_run = _db_create_run(tenant_id=user_id, workflow_id=workflow_id, triggered_by="replay")
+    new_run_id = replay_db_run.id
     run_record: dict[str, Any] = {
         "run_id": new_run_id,
-        "workflow_id": workflow_id,
-        "tenant_id": user_id,
         "status": "running",
-        "started_at": started_at,
-        "finished_at": None,
-        "duration_ms": 0,
-        "step_results": [],
         "final_outputs": {},
         "error": "",
-        "replayed_from_run": run_id,
-        "replayed_from_step": body.from_step_id,
+        "duration_ms": 0,
     }
-    _upsert_run(run_record)
 
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
 
@@ -916,20 +856,19 @@ def replay_workflow_from_step(
             finished = time.time()
             run_record.update({
                 "status": "completed",
-                "finished_at": finished,
                 "duration_ms": int((finished - started_at) * 1000),
                 "final_outputs": {k: str(v)[:500] for k, v in outputs.items()},
             })
+            _db_complete_run(new_run_id)
         except Exception as exc:
             finished = time.time()
             run_record.update({
                 "status": "failed",
-                "finished_at": finished,
                 "duration_ms": int((finished - started_at) * 1000),
                 "error": str(exc)[:500],
             })
+            _db_fail_run(new_run_id, str(exc)[:500])
         finally:
-            _upsert_run(run_record)
             event_queue.put(None)
 
     threading.Thread(target=_replay_thread, daemon=True).start()
@@ -956,3 +895,30 @@ def replay_workflow_from_step(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Dead-letter introspection ────────────────────────────────────────────────
+
+@router.get("/{workflow_id}/dead-letters")
+def list_dead_letters(
+    workflow_id: str,
+    user_id: str = Depends(get_current_user_id),
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List dead-letter entries for failed steps in a workflow."""
+    from api.services.workflows.dead_letter import list_dead_letters as _dl_list
+
+    entries = _dl_list(tenant_id=user_id, workflow_id=workflow_id, limit=limit)
+    return [
+        {
+            "id": e.id,
+            "run_id": e.run_id,
+            "step_id": e.step_id,
+            "step_type": e.step_type,
+            "error": e.error,
+            "inputs": e.inputs,
+            "attempt": e.attempt,
+            "date_created": e.date_created.isoformat() if e.date_created else "",
+        }
+        for e in entries
+    ]

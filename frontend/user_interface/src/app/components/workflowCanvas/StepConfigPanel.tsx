@@ -17,7 +17,9 @@ import {
   upsertConnectorCredentials,
 } from "../../../api/client";
 import { MANUAL_CONNECTOR_DEFINITIONS } from "../settings/connectorDefinitions";
-import type { WorkflowCanvasEdge, WorkflowCanvasNode, WorkflowCanvasNodeData } from "../../stores/workflowStore";
+import type { StepType, WorkflowCanvasEdge, WorkflowCanvasNode, WorkflowCanvasNodeData } from "../../stores/workflowStore";
+import { NodeTypePicker } from "./NodeTypePicker";
+import { StepTypeConfig } from "./StepTypeConfig";
 
 type StepConfigPanelProps = {
   node: WorkflowCanvasNode | null;
@@ -170,35 +172,50 @@ function StepConfigPanel({
 }: StepConfigPanelProps) {
   const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
+  const [inputDescription, setInputDescription] = useState("");
+  const [outputDescription, setOutputDescription] = useState("");
   const [conditionValues, setConditionValues] = useState<Record<string, string>>({});
   const [conditionErrors, setConditionErrors] = useState<Record<string, string>>({});
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [connectorRefreshKey, setConnectorRefreshKey] = useState(0);
 
+  // Reset form fields only when the selected node IDENTITY changes, not on data updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!node) {
       setLabel("");
       setDescription("");
-      setConditionValues({});
-      setConditionErrors({});
+      setInputDescription("");
+      setOutputDescription("");
       setAdvancedOpen(false);
       return;
     }
     setLabel(node.data.label || "");
     setDescription(node.data.description || "");
+    setInputDescription(node.data.inputDescription || "");
+    setOutputDescription(node.data.outputDescription || "");
+  }, [node?.id]);
+
+  // Sync condition values when the node or its outgoing edges change.
+  useEffect(() => {
+    if (!node) {
+      setConditionValues({});
+      setConditionErrors({});
+      return;
+    }
     const nextConditionValues: Record<string, string> = {};
     for (const edge of outgoingEdges) {
       nextConditionValues[edge.id] = String(edge.condition || "");
     }
     setConditionValues(nextConditionValues);
     setConditionErrors({});
-  }, [node, outgoingEdges]);
+  }, [node?.id, outgoingEdges]);
 
   if (!node) return null;
 
   const handleDone = () => {
-    // Flush any pending label/description changes that might not have blurred yet
-    onUpdateNodeData(node.id, { label, description });
+    // Flush any pending field changes that might not have blurred yet
+    onUpdateNodeData(node.id, { label, description, inputDescription, outputDescription });
     onClose();
   };
 
@@ -211,6 +228,8 @@ function StepConfigPanel({
     ? node.data.requiredConnectors.filter(Boolean)
     : [];
   const monogram = agentMonogram(agentName);
+  const isTrigger = node.type === "trigger";
+  const isOutput = node.type === "output";
 
   // Only show edge conditions when there are multiple outgoing edges (branching)
   const showConditions = outgoingEdges.length > 1;
@@ -242,43 +261,58 @@ function StepConfigPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-4 px-4 py-4">
 
-          {/* Agent card */}
-          <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] p-3">
-            <div className="flex items-start gap-3">
-              <div className="inline-flex aspect-square w-12 shrink-0 items-center justify-center rounded-xl border border-black/[0.08] bg-gradient-to-br from-white to-[#e8eef8] text-[17px] font-bold text-[#344054] shadow-sm">
-                {monogram}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[14px] font-semibold leading-snug text-[#101828]">
-                  {agentName || "No agent selected"}
-                </p>
-                {agentDescription ? (
-                  <p className="mt-1 line-clamp-3 text-[12px] leading-[1.55] text-[#667085]">
-                    {agentDescription}
+          {/* Step type selector */}
+          <NodeTypePicker
+            value={(node.data.stepType || "agent") as StepType}
+            onChange={(type) => onUpdateNodeData(node.id, { stepType: type })}
+          />
+
+          {/* Agent card — only shown for agent step type */}
+          {(!node.data.stepType || node.data.stepType === "agent") ? (
+            <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] p-3">
+              <div className="flex items-start gap-3">
+                <div className="inline-flex aspect-square w-12 shrink-0 items-center justify-center rounded-xl border border-black/[0.08] bg-gradient-to-br from-white to-[#e8eef8] text-[17px] font-bold text-[#344054] shadow-sm">
+                  {monogram}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14px] font-semibold leading-snug text-[#101828]">
+                    {agentName || "No agent selected"}
                   </p>
-                ) : null}
-                {agentTags.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {agentTags.slice(0, 4).map((tag) => (
-                      <span
-                        key={`${node.id}:${tag}`}
-                        className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] font-medium text-[#475467]"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
+                  {agentDescription ? (
+                    <p className="mt-1 line-clamp-3 text-[12px] leading-[1.55] text-[#667085]">
+                      {agentDescription}
+                    </p>
+                  ) : null}
+                  {agentTags.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {agentTags.slice(0, 4).map((tag) => (
+                        <span
+                          key={`${node.id}:${tag}`}
+                          className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[10px] font-medium text-[#475467]"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => onRequestChangeAgent(node.id)}
+                className="mt-3 w-full rounded-xl border border-black/[0.12] bg-white px-3 py-2 text-[12px] font-semibold text-[#344054] transition-colors hover:bg-[#f2f4f7]"
+              >
+                Change agent
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => onRequestChangeAgent(node.id)}
-              className="mt-3 w-full rounded-xl border border-black/[0.12] bg-white px-3 py-2 text-[12px] font-semibold text-[#344054] transition-colors hover:bg-[#f2f4f7]"
-            >
-              Change agent
-            </button>
-          </div>
+          ) : null}
+
+          {/* Step-type-specific config */}
+          <StepTypeConfig
+            stepType={(node.data.stepType || "agent") as StepType}
+            stepConfig={(node.data.stepConfig || {}) as Record<string, unknown>}
+            onChange={(cfg) => onUpdateNodeData(node.id, { stepConfig: cfg })}
+          />
 
           {/* Connected accounts */}
           {requiredConnectors.length > 0 ? (
@@ -298,27 +332,88 @@ function StepConfigPanel({
 
           {/* Step name */}
           <label className="block">
-            <span className="mb-1.5 block text-[12px] font-semibold text-[#344054]">Step name</span>
-            <input
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="text-[12px] font-semibold text-[#344054]">Step name</span>
+              <span className={`text-[10px] ${label.length > 72 ? "text-[#f59e0b]" : "text-[#aeaeb2]"}`}>
+                {label.length}/80
+              </span>
+            </div>
+            <textarea
               value={label}
-              onChange={(event) => setLabel(event.target.value)}
+              onChange={(event) => setLabel(event.target.value.slice(0, 80))}
               onBlur={() => onUpdateNodeData(node.id, { label })}
               placeholder="e.g. Analyze sales data"
-              className="w-full rounded-xl border border-black/[0.12] px-3 py-2.5 text-[13px] text-[#101828] outline-none focus:border-[#94a3b8]"
+              maxLength={80}
+              rows={2}
+              className="w-full resize-none rounded-xl border border-black/[0.12] px-3 py-2.5 text-[13px] text-[#101828] outline-none focus:border-[#94a3b8]"
             />
           </label>
 
-          {/* Notes */}
+          {/* Input format — trigger (first) node */}
+          {isTrigger ? (
+            <label className="block">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-[12px] font-semibold text-[#344054]">Input format</span>
+                <span className={`text-[10px] ${inputDescription.length > 180 ? "text-[#f59e0b]" : "text-[#aeaeb2]"}`}>
+                  {inputDescription.length}/200
+                </span>
+              </div>
+              <span className="mb-2 block text-[11px] text-[#86868b]">
+                What type of input will this workflow receive?
+              </span>
+              <textarea
+                value={inputDescription}
+                onChange={(event) => setInputDescription(event.target.value.slice(0, 200))}
+                onBlur={() => onUpdateNodeData(node.id, { inputDescription })}
+                placeholder="e.g. PDF documents, images (PNG/JPG), plain text, CSV files, URLs…"
+                maxLength={200}
+                rows={2}
+                className="w-full resize-none rounded-xl border border-[#c7d2fe] bg-[#f5f3ff] px-3 py-2.5 text-[13px] text-[#101828] outline-none placeholder:text-[#a5b4fc] focus:border-[#818cf8]"
+              />
+            </label>
+          ) : null}
+
+          {/* Output format — output (last) node */}
+          {isOutput ? (
+            <label className="block">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-[12px] font-semibold text-[#344054]">Output format</span>
+                <span className={`text-[10px] ${outputDescription.length > 180 ? "text-[#f59e0b]" : "text-[#aeaeb2]"}`}>
+                  {outputDescription.length}/200
+                </span>
+              </div>
+              <span className="mb-2 block text-[11px] text-[#86868b]">
+                Describe the expected output — language, length, structure, etc.
+              </span>
+              <textarea
+                value={outputDescription}
+                onChange={(event) => setOutputDescription(event.target.value.slice(0, 200))}
+                onBlur={() => onUpdateNodeData(node.id, { outputDescription })}
+                placeholder="e.g. Summary in French, max 500 words, markdown format, JSON with specific fields…"
+                maxLength={200}
+                rows={2}
+                className="w-full resize-none rounded-xl border border-[#a7f3d0] bg-[#ecfdf5] px-3 py-2.5 text-[13px] text-[#101828] outline-none placeholder:text-[#6ee7b7] focus:border-[#34d399]"
+              />
+            </label>
+          ) : null}
+
+          {/* Step instructions */}
           <label className="block">
-            <span className="mb-1.5 block text-[12px] font-semibold text-[#344054]">
-              What should this step do?{" "}
-              <span className="font-normal text-[#98a2b3]">(optional)</span>
-            </span>
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="text-[12px] font-semibold text-[#344054]">
+                Instructions{" "}
+                <span className="font-normal text-[#98a2b3]">(optional)</span>
+              </span>
+              <span className={`text-[10px] ${description.length > 450 ? "text-[#f59e0b]" : "text-[#aeaeb2]"}`}>
+                {description.length}/500
+              </span>
+            </div>
             <textarea
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(event) => setDescription(event.target.value.slice(0, 500))}
               onBlur={() => onUpdateNodeData(node.id, { description })}
               placeholder="Describe what you want this step to accomplish…"
+              maxLength={500}
               rows={3}
               className="w-full resize-none rounded-xl border border-black/[0.12] px-3 py-2.5 text-[13px] text-[#101828] outline-none focus:border-[#94a3b8]"
             />
@@ -390,6 +485,16 @@ function StepConfigPanel({
               <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[#98a2b3]">Output key</p>
                 <p className="font-mono text-[12px] text-[#475467]">{node.data.outputKey || "—"}</p>
+              </div>
+              <div className="flex gap-3">
+                <label className="block flex-1">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.09em] text-[#98a2b3]">Timeout (s)</span>
+                  <input type="number" value={node.data.timeoutS || 300} onChange={(e) => onUpdateNodeData(node.id, { timeoutS: Number(e.target.value) || 300 })} className="w-full rounded-lg border border-black/[0.08] px-2 py-1 font-mono text-[12px] text-[#475467] outline-none" />
+                </label>
+                <label className="block flex-1">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.09em] text-[#98a2b3]">Max retries</span>
+                  <input type="number" min={0} max={5} value={node.data.maxRetries || 0} onChange={(e) => onUpdateNodeData(node.id, { maxRetries: Number(e.target.value) || 0 })} className="w-full rounded-lg border border-black/[0.08] px-2 py-1 font-mono text-[12px] text-[#475467] outline-none" />
+                </label>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.09em] text-[#98a2b3]">Raw input mapping</p>

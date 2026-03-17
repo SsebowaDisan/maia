@@ -1,8 +1,9 @@
-import { Bot, ChevronDown, ChevronRight, Globe, Search, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, Globe, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   AgentCommandMenu,
   type AgentCommandSelection,
+  type WorkflowCommandSelection,
 } from "./chatMain/composer/AgentCommandMenu";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
@@ -13,6 +14,7 @@ type ComposerModeSelectorProps = {
   onChange: (mode: ComposerMode) => void;
   activeAgent?: { agent_id: string; name: string } | null;
   onAgentSelect?: (agent: AgentCommandSelection | null) => void;
+  onSelectWorkflow?: (workflow: WorkflowCommandSelection) => void;
 };
 
 type ModeOption = {
@@ -23,46 +25,31 @@ type ModeOption = {
 
 const MODE_OPTIONS: ModeOption[] = [
   { value: "ask", label: "Standard", Icon: Sparkles },
-  { value: "company_agent", label: "Agent", Icon: Bot },
+  { value: "company_agent", label: "Workflow", Icon: GitBranch },
   { value: "deep_search", label: "Deep research", Icon: Search },
   { value: "web_search", label: "Web search", Icon: Globe },
 ];
 
 const MODE_LABEL_CLASS: Record<ComposerMode, string> = {
   ask: "text-[#6e6e73]",
-  company_agent: "text-[#1d4ed8]",
+  company_agent: "text-[#7c3aed]",
   deep_search: "text-[#1d4ed8]",
   web_search: "text-[#1d4ed8]",
 };
 
-function truncateAgentName(value: string, max = 18): string {
-  const compact = String(value || "").trim();
-  if (!compact) {
-    return "";
-  }
-  return compact.length > max ? `${compact.slice(0, max - 1)}…` : compact;
-}
-
 export function ComposerModeSelector({
   value,
   onChange,
-  activeAgent = null,
   onAgentSelect,
+  onSelectWorkflow,
 }: ComposerModeSelectorProps) {
   const [open, setOpen] = useState(false);
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [workflowMenuOpen, setWorkflowMenuOpen] = useState(false);
 
   const selected = useMemo(
     () => MODE_OPTIONS.find((item) => item.value === value) || MODE_OPTIONS[0],
     [value],
   );
-  const triggerLabel = useMemo(() => {
-    if (value !== "company_agent") {
-      return selected.label;
-    }
-    const agentName = truncateAgentName(String(activeAgent?.name || ""));
-    return agentName || selected.label;
-  }, [activeAgent?.name, selected.label, value]);
 
   return (
     <div className="relative">
@@ -71,7 +58,7 @@ export function ComposerModeSelector({
         onOpenChange={(nextOpen) => {
           if (nextOpen && value === "company_agent") {
             setOpen(false);
-            setAgentMenuOpen(true);
+            setWorkflowMenuOpen(true);
             return;
           }
           setOpen(nextOpen);
@@ -85,7 +72,7 @@ export function ComposerModeSelector({
             title="Select assistant mode"
           >
             <selected.Icon className={`h-3.5 w-3.5 ${MODE_LABEL_CLASS[selected.value]}`} />
-            <span className={MODE_LABEL_CLASS[selected.value]}>{triggerLabel}</span>
+            <span className={MODE_LABEL_CLASS[selected.value]}>{selected.label}</span>
             <ChevronDown className="h-3.5 w-3.5 text-[#8d8d93]" />
           </button>
         </PopoverTrigger>
@@ -96,15 +83,15 @@ export function ComposerModeSelector({
         >
           <div className="space-y-1">
             {MODE_OPTIONS.map((option) => {
-              const opensAgentMenu = option.value === "company_agent";
+              const opensWorkflowMenu = option.value === "company_agent";
               return (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => {
-                    if (opensAgentMenu) {
+                    if (opensWorkflowMenu) {
                       setOpen(false);
-                      setAgentMenuOpen(true);
+                      setWorkflowMenuOpen(true);
                       return;
                     }
                     onChange(option.value);
@@ -120,7 +107,7 @@ export function ComposerModeSelector({
                     <option.Icon className="h-4 w-4" />
                     <span>{option.label}</span>
                   </span>
-                  {opensAgentMenu ? (
+                  {opensWorkflowMenu ? (
                     <ChevronRight className="h-3.5 w-3.5" />
                   ) : value === option.value ? (
                     <span className="text-[10px]">Active</span>
@@ -132,12 +119,20 @@ export function ComposerModeSelector({
         </PopoverContent>
       </Popover>
       <AgentCommandMenu
-        open={agentMenuOpen}
-        onClose={() => setAgentMenuOpen(false)}
+        open={workflowMenuOpen}
+        onClose={() => setWorkflowMenuOpen(false)}
         onSelect={(agent) => {
           onChange("company_agent");
           onAgentSelect?.(agent);
-          setAgentMenuOpen(false);
+          setWorkflowMenuOpen(false);
+        }}
+        onSelectWorkflow={(workflow) => {
+          onSelectWorkflow?.(workflow);
+          setWorkflowMenuOpen(false);
+        }}
+        onSelectStandard={() => {
+          onChange("ask");
+          setWorkflowMenuOpen(false);
         }}
       />
     </div>

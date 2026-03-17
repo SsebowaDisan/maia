@@ -19,7 +19,7 @@ import {
   type InteractionSuggestionSendDetail,
 } from "../../constants/uiEvents";
 import type { ChatTurn } from "../../types";
-import { ComposerPanel } from "./ComposerPanel";
+import { ComposerPanel, type WorkflowCommandSelection } from "./ComposerPanel";
 import { EmptyState } from "./EmptyState";
 import { GateApprovalCard } from "./GateApprovalCard";
 import {
@@ -431,11 +431,33 @@ function ChatMain({
 
   const composerVisible = !composerCollapsed || composerHovering || composerFocused;
 
+  const handleSelectWorkflow = useCallback(
+    (workflow: WorkflowCommandSelection) => {
+      const steps = Array.isArray(workflow.definition?.steps) ? workflow.definition.steps : [];
+      if (steps.length === 0) {
+        toast.warning("This workflow has no steps.");
+        return;
+      }
+      interactions.setActiveWorkflow({
+        workflow_id: workflow.workflow_id,
+        name: String(workflow.name || "Untitled workflow").trim(),
+        description: String(workflow.description || "").trim(),
+        steps: steps.map((s) => ({
+          step_id: String(s.step_id || ""),
+          agent_id: String(s.agent_id || ""),
+          description: String(s.description || ""),
+        })),
+      });
+      interactions.showActionStatus(`Workflow "${workflow.name}" selected. Type your input.`);
+    },
+    [interactions],
+  );
+
   return (
     <div
-      className="relative h-full flex-1 min-h-0 min-w-0 grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
+      className="relative h-full flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
     >
-      <div className="border-b border-black/[0.06] px-5 py-4">
+      <div className="shrink-0 border-b border-black/[0.06] px-5 py-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">Dialogue</p>
           <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Conversation</h3>
@@ -511,7 +533,7 @@ function ChatMain({
         onMouseLeave={() => setComposerHovering(false)}
       >
         {composerVisible ? (
-          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-0 pt-2">
+          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-3 pt-2">
             <ComposerPanel
               accessMode={accessMode}
               agentControlsVisible={interactions.agentControlsVisible}
@@ -526,6 +548,9 @@ function ChatMain({
               enableDeepResearch={interactions.enableDeepResearch}
               activeAgent={interactions.activeAgent}
               onAgentSelect={interactions.onAgentSelect}
+              onSelectWorkflow={handleSelectWorkflow}
+              activeWorkflow={interactions.activeWorkflow}
+              onClearWorkflow={() => interactions.setActiveWorkflow(null)}
               fileInputRef={interactions.fileInputRef}
               isSending={isSending}
               isUploading={interactions.isUploading}

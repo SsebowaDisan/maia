@@ -5,6 +5,18 @@ import type { WorkflowDefinition } from "../../api/client/types";
 
 type WorkflowCanvasNodeType = "agent" | "trigger" | "condition" | "output";
 
+/** Backend step types — deterministic automation nodes */
+type StepType =
+  | "agent"
+  | "http_request"
+  | "condition"
+  | "code"
+  | "transform"
+  | "delay"
+  | "foreach"
+  | "merge"
+  | "switch";
+
 type WorkflowCanvasNodeData = {
   label: string;
   agentId: string;
@@ -13,10 +25,18 @@ type WorkflowCanvasNodeData = {
   agentTags?: string[];
   requiredConnectors?: string[];
   toolIds: string[];
+  stepType: StepType;
+  stepConfig: Record<string, unknown>;
   config: Record<string, unknown>;
   inputMapping: Record<string, string>;
+  timeoutS?: number;
+  maxRetries?: number;
   outputKey: string;
   description?: string;
+  /** Plain-text description of what this step receives (shown on trigger/first node) */
+  inputDescription?: string;
+  /** Plain-text description of what this step produces (shown on output/last node) */
+  outputDescription?: string;
   validationWarning?: string;
 };
 
@@ -123,10 +143,10 @@ const defaultRunState: WorkflowRunState = {
   stepResults: {},
 };
 
-function inferNodeType(stepIndex: number): WorkflowCanvasNodeType {
-  if (stepIndex === 0) {
-    return "trigger";
-  }
+function inferNodeType(stepIndex: number, totalSteps: number): WorkflowCanvasNodeType {
+  if (stepIndex === 0 && totalSteps === 1) return "trigger";
+  if (stepIndex === 0) return "trigger";
+  if (stepIndex === totalSteps - 1) return "output";
   return "agent";
 }
 
@@ -138,7 +158,7 @@ function applyAutoLayout(
     return nodes;
   }
 
-  const horizontalGap = 340;
+  const horizontalGap = 400;
   const verticalGap = 190;
   const originX = 120;
   const originY = 120;
@@ -208,26 +228,35 @@ function applyAutoLayout(
 
 function definitionToNodes(definition: WorkflowDefinition): WorkflowCanvasNode[] {
   const steps = Array.isArray(definition.steps) ? definition.steps : [];
-  const baseNodes = steps.map((step, index) => ({
-    id: step.step_id,
-    type: inferNodeType(index),
-    position: { x: 0, y: 0 },
-    data: {
-      label: String(step.description || step.output_key || step.step_id || "Step"),
-      agentId: String(step.agent_id || "").trim(),
-      agentName: String(step.agent_id || "").trim(),
-      agentDescription: "",
-      agentTags: [],
-      toolIds: [],
-      config: {},
-      inputMapping: step.input_mapping || {},
-      outputKey: String(step.output_key || "").trim() || `${step.step_id}_output`,
-      description: step.description,
-      validationWarning: "",
-    },
-    runState: "idle",
-    runOutput: "",
-  }));
+  const baseNodes = steps.map((step, index) => {
+    const nodeType = inferNodeType(index, steps.length);
+    return {
+      id: step.step_id,
+      type: nodeType,
+      position: { x: 0, y: 0 },
+      data: {
+        label: String(step.description || step.output_key || step.step_id || "Step"),
+        agentId: String(step.agent_id || "").trim(),
+        agentName: String(step.agent_id || "").trim(),
+        agentDescription: "",
+        agentTags: [],
+        toolIds: [],
+        stepType: (step as any).step_type || "agent",
+        stepConfig: (step as any).step_config || {},
+        config: {},
+        inputMapping: step.input_mapping || {},
+        outputKey: String(step.output_key || "").trim() || `${step.step_id}_output`,
+        description: step.description,
+        inputDescription: nodeType === "trigger" ? "Specify input format…" : undefined,
+        outputDescription: nodeType === "output" ? "Specify output format…" : undefined,
+        timeoutS: (step as any).timeout_s,
+        maxRetries: (step as any).max_retries,
+        validationWarning: "",
+      },
+      runState: "idle" as const,
+      runOutput: "",
+    };
+  });
   return applyAutoLayout(baseNodes, definitionToEdges(definition));
 }
 
@@ -374,9 +403,13 @@ const useWorkflowStore = create<WorkflowStoreState>()(
         const steps = state.nodes.map((node) => ({
           step_id: node.id,
           agent_id: node.data.agentId,
+          step_type: node.data.stepType || "agent",
+          step_config: node.data.stepConfig || {},
           input_mapping: node.data.inputMapping,
           output_key: node.data.outputKey || `${node.id}_output`,
           description: node.data.description || node.data.label,
+          ...(node.data.timeoutS ? { timeout_s: node.data.timeoutS } : {}),
+          ...(node.data.maxRetries ? { max_retries: node.data.maxRetries } : {}),
         }));
         const edges = state.edges.map((edge) => ({
           from_step: edge.source,
@@ -553,6 +586,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
 
 export { useWorkflowStore, applyAutoLayout, definitionToEdges, definitionToNodes };
 export type {
+  StepType,
   WorkflowCanvasEdge,
   WorkflowCanvasNode,
   WorkflowCanvasNodeData,

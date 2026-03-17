@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { Clock, ShieldX } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  getDeveloperStatus,
   listConnectorCatalog,
   listMarketplaceAgents,
   listMarketplaceAgentVersions,
@@ -9,9 +11,11 @@ import {
   reviseMarketplaceAgent,
   submitMarketplaceAgent,
   type ConnectorCatalogRecord,
+  type DeveloperStatus,
   type MarketplaceAgentSummary,
   type MarketplaceAgentVersionRecord,
 } from "../../api/client";
+import { DeveloperApplicationForm } from "../components/developer/DeveloperApplicationForm";
 
 type TabKey = "agents" | "new" | "guide";
 type TriggerFamily = "manual" | "scheduled" | "on_event";
@@ -105,6 +109,8 @@ function buildDefinition(draft: Draft): Record<string, unknown> {
 }
 
 export function DeveloperPortalPage() {
+  const [devStatus, setDevStatus] = useState<DeveloperStatus | "loading">("loading");
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("agents");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -135,9 +141,25 @@ export function DeveloperPortalPage() {
     }
   };
 
+  const fetchDevStatus = async () => {
+    try {
+      const result = await getDeveloperStatus();
+      setDevStatus(result.status);
+      setRejectionReason(result.rejection_reason || null);
+    } catch {
+      setDevStatus("none");
+    }
+  };
+
   useEffect(() => {
-    void load();
+    void fetchDevStatus();
   }, []);
+
+  useEffect(() => {
+    if (devStatus === "verified" || devStatus === "trusted_publisher") {
+      void load();
+    }
+  }, [devStatus]);
 
   const toolsByConnector = useMemo(() => {
     const map = new Map<string, Array<{ id: string; label: string }>>();
@@ -239,6 +261,63 @@ export function DeveloperPortalPage() {
       setPublishing(false);
     }
   };
+
+  // ── Gate: show application form or pending/rejected state ──────────────────
+  if (devStatus === "loading") {
+    return (
+      <div className="flex h-full items-center justify-center bg-[#eef1f5]">
+        <p className="text-[13px] text-[#86868b]">Loading developer status…</p>
+      </div>
+    );
+  }
+
+  if (devStatus === "none" || devStatus === "rejected") {
+    return (
+      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+        <div className="mx-auto max-w-[1240px]">
+          <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
+            <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
+            <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+          </section>
+          {devStatus === "rejected" && rejectionReason ? (
+            <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4">
+              <ShieldX className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+              <div>
+                <p className="text-[13px] font-semibold text-red-800">Application rejected</p>
+                <p className="mt-1 text-[12px] text-red-700">{rejectionReason}</p>
+                <p className="mt-1 text-[12px] text-red-600">You can re-apply below with updated information.</p>
+              </div>
+            </div>
+          ) : null}
+          <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-4">
+            <DeveloperApplicationForm onSuccess={fetchDevStatus} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (devStatus === "pending") {
+    return (
+      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+        <div className="mx-auto max-w-[1240px]">
+          <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
+            <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
+            <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+          </section>
+          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-6">
+            <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div>
+              <p className="text-[15px] font-semibold text-amber-900">Application under review</p>
+              <p className="mt-1 text-[13px] text-amber-700">
+                Your developer application is being reviewed. You&apos;ll be notified once a decision is made.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">

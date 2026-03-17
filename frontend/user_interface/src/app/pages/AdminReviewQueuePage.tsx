@@ -9,6 +9,7 @@ import {
   type MarketplaceReviewQueueItem,
   type MarketplaceReviewStatus,
 } from "../../api/client";
+import { AdminDeveloperReviewTab } from "../components/developer/AdminDeveloperReviewTab";
 import { useAuthStore } from "../stores/authStore";
 
 type QueueFilter = MarketplaceReviewStatus;
@@ -43,6 +44,7 @@ function formatDate(value?: string | null) {
 export function AdminReviewQueuePage() {
   const user = useAuthStore((state) => state.user);
   const isSuperAdmin = useAuthStore((state) => state.isSuperAdmin());
+  const [adminTab, setAdminTab] = useState<"agents" | "developers">("agents");
   const [statusFilter, setStatusFilter] = useState<QueueFilter>("pending_review");
   const [rows, setRows] = useState<MarketplaceReviewQueueItem[]>([]);
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
@@ -104,24 +106,49 @@ export function AdminReviewQueuePage() {
             Review and action marketplace submissions. Signed in as{" "}
             <span className="font-semibold text-[#111827]">{user?.email || "super_admin"}</span>.
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {FILTERS.map((filter) => (
+          <div className="mt-4 flex gap-2">
+            {(["agents", "developers"] as const).map((tabKey) => (
               <button
-                key={filter}
+                key={tabKey}
                 type="button"
-                onClick={() => setStatusFilter(filter)}
+                onClick={() => setAdminTab(tabKey)}
                 className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
-                  statusFilter === filter
+                  adminTab === tabKey
                     ? "bg-[#111827] text-white"
                     : "border border-black/[0.12] bg-white text-[#344054]"
                 }`}
               >
-                {formatLabel(filter)}
+                {tabKey === "agents" ? "Agent submissions" : "Developer applications"}
               </button>
             ))}
           </div>
+          {adminTab === "agents" ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {FILTERS.map((filter) => (
+                <button
+                  key={filter}
+                  type="button"
+                  onClick={() => setStatusFilter(filter)}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                    statusFilter === filter
+                      ? "bg-[#475467] text-white"
+                      : "border border-black/[0.08] bg-white text-[#667085]"
+                  }`}
+                >
+                  {formatLabel(filter)}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </section>
 
+        {adminTab === "developers" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+            <AdminDeveloperReviewTab />
+          </section>
+        ) : null}
+
+        {adminTab === "agents" ? (
         <section className="space-y-3">
           {rows.length === 0 ? (
             <div className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">
@@ -267,6 +294,7 @@ export function AdminReviewQueuePage() {
             );
           })}
         </section>
+        ) : null}
       </div>
     </div>
   );

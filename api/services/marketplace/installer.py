@@ -148,13 +148,22 @@ def install_agent(
         )
 
     # Computer Use prerequisite
-    if entry.has_computer_use and not os.environ.get("ANTHROPIC_API_KEY"):
-        return InstallResult(
-            success=False,
-            agent_id=marketplace_agent_id,
-            missing_connectors=[],
-            error="ANTHROPIC_API_KEY is not configured. Required for Computer Use agents.",
+    if entry.has_computer_use:
+        from api.context import get_context
+        from api.services.computer_use.runtime_config import validate_runtime_requirements
+        from api.services.settings_service import load_user_settings
+
+        user_settings = load_user_settings(context=get_context(), user_id=user_id)
+        runtime_ok, runtime_error = validate_runtime_requirements(
+            user_settings=user_settings,
         )
+        if not runtime_ok:
+            return InstallResult(
+                success=False,
+                agent_id=marketplace_agent_id,
+                missing_connectors=[],
+                error=runtime_error,
+            )
 
     definition_dict = json.loads(entry.definition_json)
     try:

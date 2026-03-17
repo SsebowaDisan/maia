@@ -28,7 +28,7 @@ type AgentPickerPanelProps = {
   onSelectAgent: (agent: WorkflowSelectableAgent) => void;
 };
 
-function normalizeAgentRow(
+export function normalizeAgentRow(
   row: MarketplaceAgentSummary,
   installedIds: Set<string>,
 ): WorkflowSelectableAgent {

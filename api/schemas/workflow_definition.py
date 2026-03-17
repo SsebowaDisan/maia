@@ -10,26 +10,55 @@ from typing import Any, Literal, Optional  # noqa: F401 — Literal used in Work
 from pydantic import BaseModel, Field, field_validator
 
 
+StepType = Literal[
+    "agent", "http_request", "condition", "code", "transform",
+    "delay", "foreach", "merge", "switch",
+]
+
+
 class WorkflowStep(BaseModel):
-    """One agent invocation within the workflow."""
+    """One step within the workflow — agent or deterministic node."""
 
     step_id: str
-    agent_id: str
+    agent_id: str = ""
+    """Required when step_type is 'agent'. Ignored for deterministic nodes."""
+    step_type: StepType = "agent"
+    """Node type. 'agent' runs an LLM agent; others are deterministic."""
+    step_config: dict[str, Any] = {}
+    """Type-specific configuration (e.g. url/method for http_request)."""
     input_mapping: dict[str, str] = {}
     """Maps input keys to prior step output keys or literal values.
     e.g. {"query": "step1.result", "context": "literal:Company=Acme"}
     """
-    output_key: str
+    output_key: str = Field(pattern=r"^[a-zA-Z_]\w{0,63}$")
     """Key under which this step's result is stored for downstream steps."""
     description: str = ""
+    timeout_s: int = Field(default=300, ge=1, le=3600)
+    """Per-step timeout in seconds. Overrides the global default."""
+    max_retries: int = Field(default=0, ge=0, le=10)
+    """Number of retry attempts on failure (exponential backoff)."""
+
+    @field_validator("step_config")
+    @classmethod
+    def validate_step_config(cls, config: dict, info: Any) -> dict:
+        """Validate that step_config contains required fields for each step_type."""
+        step_type = info.data.get("step_type", "agent")
+        required: dict[str, list[str]] = {
+            "http_request": ["url"],
+            "condition": ["expression"],
+            "code": ["code"],
+            "switch": ["value_key"],
+        }
+        missing = [f for f in required.get(step_type, []) if f not in config]
+        if missing:
+            raise ValueError(
+                f"step_type '{step_type}' requires these fields in step_config: {missing}"
+            )
+        return config
 
     # ── B6: Typed data contracts ──────────────────────────────────────────────
     output_schema: Optional[dict[str, Any]] = None
-    """JSON Schema object that the step output must conform to.
-    When set, the executor validates the step output after completion.
-    Validation failure emits a workflow_step_output_invalid event.
-    Example: {"type": "object", "required": ["urls"], "properties": {"urls": {"type": "array"}}}
-    """
+    """JSON Schema object that the step output must conform to."""
     format_hint: Optional[Literal["json", "markdown", "plaintext"]] = None
     """Hint to downstream steps about how to parse this step's output."""
 

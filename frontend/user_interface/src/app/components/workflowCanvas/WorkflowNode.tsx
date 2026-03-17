@@ -1,8 +1,10 @@
 import {
   AlertTriangle,
+  ArrowRightFromLine,
   CheckCircle2,
   CircleDashed,
   Loader2,
+  LogIn,
   OctagonAlert,
   PauseCircle,
   Zap,
@@ -121,10 +123,13 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
   const snippet = String(data.runOutput || "").trim();
   const validationWarning = String(data.validationWarning || "").trim();
   const isTrigger = data.nodeType === "trigger";
+  const isOutput = data.nodeType === "output";
+  const inputDesc = String(data.inputDescription || "").trim();
+  const outputDesc = String(data.outputDescription || "").trim();
 
   return (
     <div
-      className={`w-[260px] overflow-hidden rounded-2xl border bg-white shadow-[0_4px_16px_-6px_rgba(15,23,42,0.16)] transition-all duration-150 ${
+      className={`w-[320px] overflow-hidden rounded-2xl border bg-white shadow-[0_4px_16px_-6px_rgba(15,23,42,0.16)] transition-all duration-150 ${
         runBorder(data.runState)
       } ${validationWarning ? "!border-[#f59e0b]/60" : ""} ${
         selected ? "shadow-[0_8px_28px_-8px_rgba(37,99,235,0.35)]" : ""
@@ -150,7 +155,7 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
               {monogram}
             </div>
             <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold leading-snug text-[#101828]">
+              <p className="line-clamp-3 text-[13px] font-semibold leading-snug text-[#101828]">
                 {data.label || agentName || "Untitled step"}
               </p>
               <div className="mt-0.5 flex items-center gap-1.5">
@@ -169,9 +174,25 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
 
       {/* Body */}
       <div className="px-3.5 py-3">
+        {/* Input description — shown on trigger (first) node */}
+        {isTrigger && inputDesc ? (
+          <div className="mb-2.5 flex items-start gap-1.5 rounded-lg border border-[#e0e7ff] bg-[#eef2ff] px-2.5 py-1.5">
+            <LogIn size={11} className="mt-[1px] shrink-0 text-[#6366f1]" />
+            <p className="text-[10px] leading-[1.5] text-[#4338ca]">{inputDesc}</p>
+          </div>
+        ) : null}
+
+        {/* Output description — shown on output (last) node */}
+        {isOutput && outputDesc ? (
+          <div className="mb-2.5 flex items-start gap-1.5 rounded-lg border border-[#d1fae5] bg-[#ecfdf5] px-2.5 py-1.5">
+            <ArrowRightFromLine size={11} className="mt-[1px] shrink-0 text-[#059669]" />
+            <p className="text-[10px] leading-[1.5] text-[#065f46]">{outputDesc}</p>
+          </div>
+        ) : null}
+
         {/* Description */}
         {agentDescription ? (
-          <p className="line-clamp-2 text-[11px] leading-[1.55] text-[#667085]">
+          <p className="text-[11px] leading-[1.55] text-[#667085]">
             {agentDescription}
           </p>
         ) : null}
@@ -215,12 +236,14 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
         ) : null}
       </div>
 
-      {/* Output handle */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
-      />
+      {/* Output handle — hidden on output (last) node */}
+      {!isOutput ? (
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
+        />
+      ) : null}
     </div>
   );
 }

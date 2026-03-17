@@ -42,6 +42,7 @@ from api.routers.observability import router as observability_router
 from api.routers.canvas import router as canvas_router
 from api.routers.auth import router as auth_router
 from api.routers.api_keys import router as api_keys_router
+from api.routers.developers import router as developers_router
 from api.routers.users import router as users_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
@@ -161,6 +162,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(users_router)
+app.include_router(developers_router)
 app.include_router(conversations_router)
 app.include_router(settings_router)
 app.include_router(uploads_router)

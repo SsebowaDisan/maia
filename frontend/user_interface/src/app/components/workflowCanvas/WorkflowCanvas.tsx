@@ -19,8 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-import { listAgents } from "../../../api/client";
-import type { AgentSummaryRecord } from "../../../api/client";
+import { listAgents, listMarketplaceAgents } from "../../../api/client";
 import type { WorkflowRunRecord, WorkflowTemplate } from "../../../api/client/types";
 import {
   applyAutoLayout,
@@ -31,15 +30,18 @@ import {
 } from "../../stores/workflowStore";
 import {
   AgentPickerPanel,
+  normalizeAgentRow,
   type WorkflowSelectableAgent,
 } from "./AgentPickerPanel";
 import { NLBuilderSheet } from "./NLBuilderSheet";
 import { StepConfigPanel } from "./StepConfigPanel";
 import { WorkflowEdge, type WorkflowFlowEdgeData } from "./WorkflowEdge";
 import { WorkflowNode, type WorkflowFlowNodeData } from "./WorkflowNode";
+import { RunInspector } from "./RunInspector";
 import { WorkflowRunHistory } from "./WorkflowRunHistory";
 import { WorkflowTemplates } from "./WorkflowTemplates";
 import { WorkflowToolbar } from "./WorkflowToolbar";
+import { useWorkflowViewStore } from "../../stores/workflowViewStore";
 
 type WorkflowCanvasProps = {
   isRunning: boolean;
@@ -66,13 +68,33 @@ type WorkflowCanvasProps = {
   validationWarningsByNodeId?: Record<string, string>;
 };
 
-function inferNodeType(nextIndex: number): WorkflowCanvasNodeType {
-  if (nextIndex === 0) {
-    return "trigger";
-  }
+function inferNodeType(nextIndex: number, totalAfterAdd: number): WorkflowCanvasNodeType {
+  if (nextIndex === 0 && totalAfterAdd === 1) return "trigger"; // only node is both trigger & output — keep as trigger
+  if (nextIndex === 0) return "trigger";
+  if (nextIndex === totalAfterAdd - 1) return "output"; // last node is output
   return "agent";
 }
 
+function nextStepOrdinal(nodes: WorkflowCanvasNode[]): number {
+  let maxOrdinal = 0;
+  const existingIds = new Set(nodes.map((node) => String(node.id || "").trim()).filter(Boolean));
+  for (const node of nodes) {
+    const match = String(node.id || "").trim().match(/^step_(\d+)$/i);
+    if (!match?.[1]) {
+      continue;
+    }
+    const parsed = Number.parseInt(match[1], 10);
+    if (Number.isFinite(parsed) && parsed > maxOrdinal) {
+      maxOrdinal = parsed;
+    }
+  }
+
+  let candidate = Math.max(1, maxOrdinal + 1);
+  while (existingIds.has(`step_${candidate}`)) {
+    candidate += 1;
+  }
+  return candidate;
+}
 function toFlowNode(
   node: WorkflowCanvasNode,
   selectedNodeId: string | null,
@@ -106,10 +128,16 @@ function toStoreNode(node: Node<WorkflowFlowNodeData>): WorkflowCanvasNode {
       agentTags: Array.isArray(node.data.agentTags) ? node.data.agentTags : [],
       requiredConnectors: Array.isArray(node.data.requiredConnectors) ? node.data.requiredConnectors : [],
       toolIds: Array.isArray(node.data.toolIds) ? node.data.toolIds : [],
+      stepType: node.data.stepType || "agent",
+      stepConfig: node.data.stepConfig || {},
       config: node.data.config || {},
       inputMapping: node.data.inputMapping || {},
       outputKey: node.data.outputKey,
       description: node.data.description,
+      inputDescription: node.data.inputDescription,
+      outputDescription: node.data.outputDescription,
+      timeoutS: node.data.timeoutS,
+      maxRetries: node.data.maxRetries,
       validationWarning: node.data.validationWarning,
     },
     runState: node.data.runState,
@@ -191,14 +219,30 @@ type EmptyCanvasOverlayProps = {
 };
 
 function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProps) {
-  const [agents, setAgents] = useState<AgentSummaryRecord[]>([]);
+  const [agents, setAgents] = useState<WorkflowSelectableAgent[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    listAgents()
-      .then((data) => setAgents(data.slice(0, 12)))
-      .catch(() => setAgents([]))
-      .finally(() => setLoading(false));
+    let disposed = false;
+    Promise.all([
+      listMarketplaceAgents({ sort_by: "installs", limit: 100 }),
+      listAgents().catch(() => []),
+    ])
+      .then(([catalogRows, installedRows]) => {
+        const installedIds = new Set(
+          (installedRows || [])
+            .map((row) => String(row.agent_id || "").trim())
+            .filter(Boolean),
+        );
+        const normalized = (catalogRows || [])
+          .map((row) => normalizeAgentRow(row, installedIds))
+          .filter((row) => row.agentId && row.isInstalled)
+          .slice(0, 12);
+        if (!disposed) setAgents(normalized);
+      })
+      .catch(() => { if (!disposed) setAgents([]); })
+      .finally(() => { if (!disposed) setLoading(false); });
+    return () => { disposed = true; };
   }, []);
 
   return (
@@ -226,10 +270,7 @@ function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProp
         {loading ? (
           <div className="grid grid-cols-3 gap-3">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-[88px] animate-pulse rounded-2xl bg-[#f0f4ff]"
-              />
+              <div key={i} className="h-[88px] animate-pulse rounded-2xl bg-[#f0f4ff]" />
             ))}
           </div>
         ) : agents.length === 0 ? (
@@ -253,19 +294,7 @@ function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProp
               <button
                 key={agent.id}
                 type="button"
-                onClick={() =>
-                  onAddAgent({
-                    id: agent.id,
-                    agentId: agent.agent_id,
-                    name: agent.name,
-                    description: String(agent.description || ""),
-                    tags: [],
-                    triggerFamily: String(agent.trigger_family || ""),
-                    version: String(agent.version || "1"),
-                    isInstalled: true,
-                    requiredConnectors: [],
-                  })
-                }
+                onClick={() => onAddAgent(agent)}
                 className="group flex flex-col gap-2 rounded-2xl border border-black/[0.07] bg-[#f8fafc] p-3.5 text-left transition-all hover:border-[#3b5bdb]/30 hover:bg-[#f0f4ff] hover:shadow-[0_2px_12px_-4px_rgba(59,91,219,0.2)]"
               >
                 <div className="flex items-center gap-2.5">
@@ -316,7 +345,8 @@ function WorkflowCanvasInner({
   initialAgentHintId = null,
   validationWarningsByNodeId = {},
 }: WorkflowCanvasProps) {
-  const { fitView } = useReactFlow();
+  const { fitView, setViewport: setRFViewport } = useReactFlow();
+  const storeWorkflowId = useWorkflowStore((state) => state.workflowId);
   const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
   const selectedNodeId = useWorkflowStore((state) => state.selectedNodeId);
@@ -329,8 +359,19 @@ function WorkflowCanvasInner({
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const updateEdgeCondition = useWorkflowStore((state) => state.updateEdgeCondition);
 
+  // Local panel-node state guarantees the config panel closes immediately via
+  // React setState, without depending on a Zustand round-trip through selectors.
+  const [panelNodeId, setPanelNodeId] = useState<string | null>(selectedNodeId);
+
+  // Keep local panelNodeId in sync when Zustand selectedNodeId changes externally
+  // (e.g. onNodeClick, addNodeWithAgent).
+  useEffect(() => {
+    setPanelNodeId(selectedNodeId);
+  }, [selectedNodeId]);
+
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [runHistoryOpen, setRunHistoryOpen] = useState(false);
+  const [runInspectorOpen, setRunInspectorOpen] = useState(false);
   const [nlBuilderOpen, setNlBuilderOpen] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [agentPickerNodeId, setAgentPickerNodeId] = useState<string | null>(null);
@@ -371,8 +412,8 @@ function WorkflowCanvasInner({
   );
 
   const selectedNode = useMemo(
-    () => nodes.find((node) => node.id === selectedNodeId) || null,
-    [nodes, selectedNodeId],
+    () => nodes.find((node) => node.id === panelNodeId) || null,
+    [nodes, panelNodeId],
   );
   const selectedNodeOutgoingEdges = useMemo(
     () => (selectedNode ? edges.filter((edge) => edge.source === selectedNode.id) : []),
@@ -419,22 +460,30 @@ function WorkflowCanvasInner({
     [],
   );
 
+  // Only process user-initiated position changes (drag).  ReactFlow manages
+  // dimensions & selection internally — if we round-trip dimension changes through
+  // toStoreNode (which drops width/height) it creates an infinite measure loop.
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<WorkflowFlowNodeData>>[]) => {
-      const changed = applyNodeChanges(changes, flowNodes);
+      const positionChanges = changes.filter((c) => c.type === "position");
+      if (positionChanges.length === 0) return;
+      const latest = useWorkflowStore.getState();
+      const currentFlowNodes = latest.nodes.map((n) =>
+        toFlowNode(n, latest.selectedNodeId, validationWarningsByNodeId),
+      );
+      const changed = applyNodeChanges(positionChanges, currentFlowNodes);
       setNodes(changed.map(toStoreNode));
-      // Selection is managed exclusively by onNodeClick / onPaneClick to prevent
-      // ReactFlow reconciliation from overwriting programmatic deselection (e.g. Done button).
     },
-    [flowNodes, setNodes],
+    [setNodes, validationWarningsByNodeId],
   );
 
   const onEdgesChange = useCallback(
     (changes: EdgeChange<Edge<WorkflowFlowEdgeData>>[]) => {
-      const changed = applyEdgeChanges(changes, flowEdges);
+      const currentFlowEdges = useWorkflowStore.getState().edges.map(toFlowEdge);
+      const changed = applyEdgeChanges(changes, currentFlowEdges);
       setEdges(changed.map(toStoreEdge));
     },
-    [flowEdges, setEdges],
+    [setEdges],
   );
 
   const onConnect = useCallback(
@@ -485,6 +534,33 @@ function WorkflowCanvasInner({
     [edges, flowEdges, setEdges],
   );
 
+  // Reconnect: user drags an existing edge endpoint to a different node
+  const onReconnect = useCallback(
+    (oldEdge: Edge<WorkflowFlowEdgeData>, newConnection: Connection) => {
+      const sourceId = String(newConnection.source || "").trim();
+      const targetId = String(newConnection.target || "").trim();
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      // Check for duplicates (ignore the edge being reconnected)
+      const otherEdges = edges.filter((e) => e.id !== oldEdge.id);
+      if (otherEdges.some((e) => e.source === sourceId && e.target === targetId)) {
+        toast.warning("That connection already exists.");
+        return;
+      }
+      if (wouldCreateCycle(sourceId, targetId, otherEdges)) {
+        toast.warning("Cycle detected. Connect downstream only.");
+        return;
+      }
+      // Replace old edge with the new connection
+      const updatedEdges: WorkflowCanvasEdge[] = edges.map((e) =>
+        e.id === oldEdge.id
+          ? { ...e, source: sourceId, target: targetId }
+          : e,
+      );
+      setEdges(updatedEdges);
+    },
+    [edges, setEdges],
+  );
+
   const isValidConnection = useCallback(
     (connection: Connection | Edge<WorkflowFlowEdgeData>) => {
       const sourceId = String(connection.source || "").trim();
@@ -509,13 +585,14 @@ function WorkflowCanvasInner({
   const addNodeWithAgent = (agent: WorkflowSelectableAgent) => {
     const nextIndex = nodes.length;
     const previous = nodes.at(-1);
-    const nextNodeId = `step_${nextIndex + 1}`;
+    const nextOrdinal = nextStepOrdinal(nodes);
+    const nextNodeId = `step_${nextOrdinal}`;
     const nextNode: WorkflowCanvasNode = {
       id: nextNodeId,
-      type: inferNodeType(nextIndex),
+      type: inferNodeType(nextIndex, nextIndex + 1),
       position: { x: 0, y: 0 },
       data: {
-        label: String(agent.name || `Step ${nextIndex + 1}`),
+        label: String(agent.name || `Step ${nextOrdinal}`),
         agentId: String(agent.agentId || "").trim(),
         agentName: String(agent.name || "").trim(),
         agentDescription: String(agent.description || "").trim(),
@@ -530,7 +607,7 @@ function WorkflowCanvasInner({
         inputMapping: previous?.data.outputKey
           ? { message: previous.data.outputKey }
           : { message: "literal:Describe the first step input" },
-        outputKey: `step_${nextIndex + 1}_output`,
+        outputKey: `step_${nextOrdinal}_output`,
       },
       runState: "idle",
       runOutput: "",
@@ -547,14 +624,25 @@ function WorkflowCanvasInner({
           },
         ]
       : edges;
-    const laidOut = applyAutoLayout([...nodes, nextNode], nextEdges);
+    // Re-type previous last node from "output" to "agent" when appending
+    const updatedNodes = nodes.map((n) =>
+      n.type === "output" ? { ...n, type: "agent" as const } : n,
+    );
+    const laidOut = applyAutoLayout([...updatedNodes, nextNode], nextEdges);
     setNodes(laidOut);
     if (nextEdges !== edges) {
       setEdges(nextEdges);
     }
+    setPanelNodeId(nextNodeId);
     setSelectedNodeId(nextNodeId);
-    // Pan + zoom to show all nodes after adding
-    setTimeout(() => fitView({ padding: 0.28, duration: 450 }), 60);
+    // For the very first node, reset viewport to a safe position so the node at
+    // ~(120,120) is visible — fitView can fail when a single node hasn't been
+    // measured yet.  For subsequent nodes, fitView works because earlier nodes
+    // already have dimensions.
+    if (nextIndex === 0) {
+      setRFViewport({ x: 50, y: 30, zoom: 1 }, { duration: 250 });
+    }
+    setTimeout(() => fitView({ padding: 0.5, maxZoom: 1, duration: 350 }), 500);
   };
 
   const applyAgentToNode = (nodeId: string, agent: WorkflowSelectableAgent) => {
@@ -640,7 +728,7 @@ function WorkflowCanvasInner({
     >
       <div
         aria-hidden
-        className="absolute inset-x-0 top-0 z-[15] h-16"
+        className="absolute left-0 top-0 z-[15] h-16 w-1/2"
         onMouseEnter={() => {
           toolbarHoverLockRef.current = true;
           setToolbarVisible(true);
@@ -697,6 +785,10 @@ function WorkflowCanvasInner({
             onOpenTemplates={() => setTemplatesOpen((current) => !current)}
             onOpenNlBuilder={() => setNlBuilderOpen(true)}
             onOpenRunHistory={() => setRunHistoryOpen((current) => !current)}
+            onOpenRunInspector={() => setRunInspectorOpen((current) => !current)}
+            onAllWorkflows={() => {
+              useWorkflowViewStore.getState().setView("gallery");
+            }}
           />
         </div>
       </div>
@@ -722,9 +814,10 @@ function WorkflowCanvasInner({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onReconnect={onReconnect}
         isValidConnection={isValidConnection}
-        onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-        onPaneClick={() => setSelectedNodeId(null)}
+        onNodeClick={(_, node) => { setPanelNodeId(node.id); setSelectedNodeId(node.id); }}
+        onPaneClick={() => { setPanelNodeId(null); setSelectedNodeId(null); }}
         onMoveEnd={(_, nextViewport) => setViewport(nextViewport)}
         defaultViewport={viewport}
         fitView
@@ -764,6 +857,15 @@ function WorkflowCanvasInner({
         }}
       />
 
+      {runInspectorOpen ? (
+        <div className="pointer-events-auto absolute right-4 top-4 z-30 h-[calc(100%-32px)]">
+          <RunInspector
+            workflowId={storeWorkflowId || ""}
+            onClose={() => setRunInspectorOpen(false)}
+          />
+        </div>
+      ) : null}
+
       <NLBuilderSheet
         open={nlBuilderOpen}
         isGenerating={nlGenerating}
@@ -799,27 +901,33 @@ function WorkflowCanvasInner({
         }}
       />
 
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 flex items-start gap-3 p-4">
-        <div className="pointer-events-auto h-full">
-          <StepConfigPanel
-            node={selectedNode}
-            outgoingEdges={selectedNodeOutgoingEdges}
-            outputKeyLabels={outputKeyLabels}
-            onClose={() => setSelectedNodeId(null)}
-            onDeleteNode={removeNode}
-            onRequestChangeAgent={(nodeId) => {
-              const currentNode = nodes.find((node) => node.id === nodeId);
-              setAgentPickerNodeId(nodeId);
-              setAgentPickerPreferredAgentId(
-                String(currentNode?.data.agentId || "").trim(),
-              );
-              setAgentPickerOpen(true);
-            }}
-            onUpdateNodeData={updateNodeData}
-            onUpdateEdgeCondition={updateEdgeCondition}
-          />
+      {selectedNode ? (
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-[25] flex items-start gap-3 p-4">
+          <div className="pointer-events-auto h-full">
+            <StepConfigPanel
+              node={selectedNode}
+              outgoingEdges={selectedNodeOutgoingEdges}
+              outputKeyLabels={outputKeyLabels}
+              onClose={() => {
+                setPanelNodeId(null);
+                setSelectedNodeId(null);
+                setTimeout(() => fitView({ padding: 0.5, maxZoom: 1, duration: 300 }), 200);
+              }}
+              onDeleteNode={(nodeId) => { setPanelNodeId(null); removeNode(nodeId); }}
+              onRequestChangeAgent={(nodeId) => {
+                const currentNode = nodes.find((node) => node.id === nodeId);
+                setAgentPickerNodeId(nodeId);
+                setAgentPickerPreferredAgentId(
+                  String(currentNode?.data.agentId || "").trim(),
+                );
+                setAgentPickerOpen(true);
+              }}
+              onUpdateNodeData={updateNodeData}
+              onUpdateEdgeCondition={updateEdgeCondition}
+            />
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -834,3 +942,4 @@ function WorkflowCanvas(props: WorkflowCanvasProps) {
 
 export { WorkflowCanvas };
 export type { WorkflowCanvasProps };
+

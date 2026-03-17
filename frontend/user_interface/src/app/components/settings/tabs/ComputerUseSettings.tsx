@@ -50,14 +50,23 @@ function normalizeSource(source: string) {
   if (normalized.includes("agent.computer_use_model")) {
     return "Saved override";
   }
+  if (normalized.includes("agent.ollama.default_model")) {
+    return "Ollama default model";
+  }
+  if (normalized.includes("active_ollama_model")) {
+    return "Active Ollama runtime model";
+  }
   if (normalized.includes("computer_use_model")) {
     return "COMPUTER_USE_MODEL";
   }
   if (normalized.includes("openai_chat_model")) {
     return "OPENAI_CHAT_MODEL";
   }
+  if (normalized.includes("open_source")) {
+    return "Fallback (qwen2.5vl:7b)";
+  }
   if (normalized.includes("fallback") || normalized.includes("default")) {
-    return "Fallback (gpt-4o)";
+    return "Fallback";
   }
   return source;
 }
@@ -85,12 +94,12 @@ export function ComputerUseSettings({
     >
       <SettingsRow
         title="Active model"
-        description="Resolution order: saved override -> COMPUTER_USE_MODEL -> OPENAI_CHAT_MODEL -> gpt-4o."
+        description="Resolution order: saved override -> COMPUTER_USE_MODEL -> Ollama default -> OPENAI_CHAT_MODEL -> qwen2.5vl:7b."
         right={<StatusChip label={sourceLabel} tone="neutral" />}
       >
         <div className="rounded-xl border border-[#ececf0] bg-white px-3 py-2">
           <p className="text-[13px] font-semibold text-[#1d1d1f]">
-            {effectiveModel || "gpt-4o"}
+            {effectiveModel || "qwen2.5vl:7b"}
           </p>
         </div>
       </SettingsRow>
@@ -131,7 +140,7 @@ export function ComputerUseSettings({
             autoComplete="off"
           />
           <div className="flex flex-wrap gap-2">
-            {["qwen2-vl:7b", "gpt-4o", "claude-opus-4-6"].map((modelName) => (
+            {["qwen2.5vl:7b", "ollama::qwen2.5vl:7b", "gpt-4o"].map((modelName) => (
               <button
                 key={modelName}
                 type="button"

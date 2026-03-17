@@ -1,4 +1,4 @@
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, GitBranch } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -15,7 +15,7 @@ import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import { ComposerAttachmentChips } from "./composer/ComposerAttachmentChips";
 import { ComposerAgentPicker } from "./composer/ComposerAgentPicker";
 import { ComposerCommandMenu } from "./composer/ComposerCommandMenu";
-import type { AgentCommandSelection } from "./composer/AgentCommandMenu";
+import type { AgentCommandSelection, WorkflowCommandSelection } from "./composer/AgentCommandMenu";
 import { useComposerCommandPalette } from "./composer/commandPalette";
 import { FilePreviewModal } from "./shared/FilePreviewModal";
 import type { ComposerAttachment } from "./types";
@@ -36,6 +36,9 @@ type ComposerPanelProps = {
   enableDeepResearch: () => void;
   activeAgent?: { agent_id: string; name: string } | null;
   onAgentSelect?: (agent: AgentCommandSelection | null) => void;
+  onSelectWorkflow?: (workflow: WorkflowCommandSelection) => void;
+  activeWorkflow?: { workflow_id: string; name: string } | null;
+  onClearWorkflow?: () => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   isSending: boolean;
   isUploading: boolean;
@@ -70,6 +73,9 @@ function ComposerPanel({
   enableDeepResearch,
   activeAgent = null,
   onAgentSelect,
+  onSelectWorkflow,
+  activeWorkflow = null,
+  onClearWorkflow,
   fileInputRef,
   isSending,
   isUploading,
@@ -189,6 +195,22 @@ function ComposerPanel({
       }}
     >
       <div className="mx-auto w-full max-w-[1460px] px-3 pt-2 pb-0">
+        {activeWorkflow ? (
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="inline-flex max-w-[280px] items-center gap-1.5 rounded-full border border-[#c4b5fd] bg-[#f5f3ff] px-2.5 py-1 text-[11px] font-semibold text-[#7c3aed]">
+              <GitBranch className="h-3 w-3 shrink-0" />
+              <span className="truncate">{activeWorkflow.name}</span>
+              <button
+                type="button"
+                onClick={onClearWorkflow}
+                className="ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-[#7c3aed]/10"
+                aria-label="Remove workflow"
+              >
+                &times;
+              </button>
+            </span>
+          </div>
+        ) : null}
         <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
           <div className="assistantComposerInputShell relative rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">
@@ -253,6 +275,7 @@ function ComposerPanel({
                 value={composerMode}
                 activeAgent={activeAgent}
                 onAgentSelect={onAgentSelect}
+                onSelectWorkflow={onSelectWorkflow}
                 onChange={(value) => {
                   if (value === "ask") {
                     enableAskMode();
@@ -335,3 +358,4 @@ function ComposerPanel({
 }
 
 export { ComposerPanel };
+export type { WorkflowCommandSelection };

@@ -1,6 +1,7 @@
 export * from "./client/agent";
 export * from "./client/chat";
 export * from "./client/computerUse";
+export * from "./client/developers";
 export * from "./client/documents";
 export * from "./client/marketplace";
 export * from "./client/oauth";

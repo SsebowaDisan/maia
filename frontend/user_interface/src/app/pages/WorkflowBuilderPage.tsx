@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { listAgents, listMarketplaceAgents } from "../../api/client";
 
@@ -7,24 +7,34 @@ import {
   generateWorkflowFromDescription,
   listWorkflowRunHistory,
   listWorkflowTemplates,
-  runWorkflowWithStream,
   streamGenerateWorkflowFromDescription,
   updateWorkflowRecord,
   validateWorkflowDefinition,
   type SaveWorkflowPayload,
 } from "../../api/client/workflows";
-import type { WorkflowDefinition, WorkflowRunRecord, WorkflowTemplate } from "../../api/client/types";
-import { applyWorkflowRunEvent } from "../appShell/workflowEventHelpers";
+import type { WorkflowDefinition, WorkflowRecord, WorkflowRunRecord, WorkflowTemplate } from "../../api/client/types";
 import { WorkflowCanvas } from "../components/workflowCanvas/WorkflowCanvas";
+import { WorkflowGallery } from "../components/workflowCanvas/WorkflowGallery";
+import { WorkflowQuickSwitcher } from "../components/workflowCanvas/WorkflowQuickSwitcher";
 import { useWorkflowStore } from "../stores/workflowStore";
+import { useWorkflowViewStore } from "../stores/workflowViewStore";
+
+const MAX_WORKFLOW_NAME_LENGTH = 60;
+
+function clampWorkflowName(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  return trimmed.length > MAX_WORKFLOW_NAME_LENGTH
+    ? `${trimmed.slice(0, MAX_WORKFLOW_NAME_LENGTH - 1)}…`
+    : trimmed;
+}
 
 function normalizeWorkflowRecordName(record: { name?: string; definition?: { name?: string } }) {
   const direct = String(record.name || "").trim();
   if (direct) {
-    return direct;
+    return clampWorkflowName(direct);
   }
   const nested = String(record.definition?.name || "").trim();
-  return nested || "Untitled workflow";
+  return clampWorkflowName(nested || "Untitled workflow");
 }
 
 function toWorkflowSavePayload(
@@ -99,6 +109,7 @@ export function WorkflowBuilderPage() {
   const isDirty = useWorkflowStore((state) => state.isDirty);
   const nodes = useWorkflowStore((state) => state.nodes);
   const loadDefinition = useWorkflowStore((state) => state.loadDefinition);
+  const setMetadata = useWorkflowStore((state) => state.setMetadata);
   const toDefinition = useWorkflowStore((state) => state.toDefinition);
   const markSaved = useWorkflowStore((state) => state.markSaved);
   const clearRun = useWorkflowStore((state) => state.clearRun);
@@ -107,6 +118,43 @@ export function WorkflowBuilderPage() {
   const setNodeRunState = useWorkflowStore((state) => state.setNodeRunState);
   const hydrateRunOutputs = useWorkflowStore((state) => state.hydrateRunOutputs);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+
+  const view = useWorkflowViewStore((s) => s.view);
+  const setView = useWorkflowViewStore((s) => s.setView);
+  const quickSwitcherOpen = useWorkflowViewStore((s) => s.quickSwitcherOpen);
+  const closeQuickSwitcher = useWorkflowViewStore((s) => s.closeQuickSwitcher);
+
+  const handleSelectWorkflow = useCallback(
+    (record: WorkflowRecord) => {
+      loadDefinition(record.definition, {
+        workflowId: record.id,
+        activeTemplateId: null,
+      });
+      setMetadata({
+        workflowId: record.id,
+        workflowName: normalizeWorkflowRecordName(record),
+        workflowDescription: String(record.description || record.definition?.description || ""),
+      });
+      markSaved();
+      clearRun();
+      setView("canvas");
+    },
+    [loadDefinition, setMetadata, markSaved, clearRun, setView],
+  );
+
+  const handleNewWorkflow = useCallback(() => {
+    clearRun();
+    setMetadata({
+      workflowId: null,
+      workflowName: "Untitled workflow",
+      workflowDescription: "",
+      activeTemplateId: null,
+    });
+    useWorkflowStore.getState().setNodes([]);
+    useWorkflowStore.getState().setEdges([]);
+    markSaved();
+    setView("canvas");
+  }, [clearRun, setMetadata, markSaved, setView]);
 
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -356,50 +404,56 @@ export function WorkflowBuilderPage() {
     }
   };
 
-  const runWorkflow = async () => {
-    const definition = toDefinition();
-    const isValid = await runValidation(definition);
-    if (!isValid) {
+  const runWorkflow = () => {
+    const runInChat = useWorkflowViewStore.getState().runInChat;
+    if (!runInChat) {
+      toast.error("Chat is not available. Please try again.");
       return;
     }
-    let recordId = String(workflowId || "").trim();
-    if (!recordId) {
-      const saved = await persistWorkflow({ skipValidation: true });
-      if (!saved) {
-        return;
-      }
-      recordId = saved;
+
+    const definition = toDefinition();
+    const steps = Array.isArray(definition.steps) ? definition.steps : [];
+    if (steps.length === 0) {
+      toast.warning("Add at least one agent to run the workflow.");
+      return;
     }
 
-    setRunning(true);
-    setRunStatus("running");
-    setNlError("");
+    // Compose a natural-language prompt from the workflow definition
+    const name = String(workflowName || "Untitled workflow").trim();
+    const desc = String(workflowDescription || "").trim();
+    const storeNodes = useWorkflowStore.getState().nodes;
 
-    try {
-      await runWorkflowWithStream(recordId, {
-        onEvent: (event) => {
-          if (event.event_type === "run_started") {
-            const runId = String((event as { run_id?: string }).run_id || "").trim();
-            if (runId) {
-              startRun(runId);
-            }
-          }
-          applyWorkflowRunEvent(event);
-        },
-        onDone: () => {
-          toast.success("Workflow run completed.");
-        },
-        onError: (error) => {
-          toast.error(`Workflow stream failed: ${String(error.message || error)}`);
-        },
-      });
-      await refreshRunHistory(recordId);
-    } catch (error) {
-      setRunStatus("failed");
-      toast.error(`Workflow run failed: ${String(error)}`);
-    } finally {
-      setRunning(false);
+    const lines: string[] = [];
+    lines.push(`Run my workflow "${name}".`);
+    if (desc) {
+      lines.push(`Description: ${desc}`);
     }
+    lines.push("");
+    lines.push("Steps:");
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const node = storeNodes.find((n) => n.id === step.step_id);
+      const label = String(node?.data.label || step.description || step.agent_id || `Step ${i + 1}`).trim();
+      const agentId = String(step.agent_id || "").trim();
+      const stepDesc = String(step.description || "").trim();
+      lines.push(`${i + 1}. ${label}${agentId ? ` (agent: ${agentId})` : ""}${stepDesc && stepDesc !== label ? ` — ${stepDesc}` : ""}`);
+    }
+
+    // Include input/output descriptions if set
+    const firstNode = storeNodes[0];
+    const lastNode = storeNodes[storeNodes.length - 1];
+    const inputDesc = String(firstNode?.data.inputDescription || "").trim();
+    const outputDesc = String(lastNode?.data.outputDescription || "").trim();
+    if (inputDesc && !inputDesc.startsWith("Describe")) {
+      lines.push("");
+      lines.push(`Input: ${inputDesc}`);
+    }
+    if (outputDesc && !outputDesc.startsWith("Describe")) {
+      lines.push(`Expected output: ${outputDesc}`);
+    }
+
+    const message = lines.join("\n");
+    runInChat(message);
   };
 
   const generateFromDescription = async (description: string, maxSteps: number): Promise<boolean> => {
@@ -449,7 +503,7 @@ export function WorkflowBuilderPage() {
       setValidationWarningsByNodeId({});
       useWorkflowStore.getState().setMetadata({
         workflowId: null,
-        workflowName: String(streamedDefinition.name || "Generated workflow"),
+        workflowName: clampWorkflowName(streamedDefinition.name || "Generated workflow"),
         workflowDescription: String(streamedDefinition.description || normalizedDescription),
       });
       toast.success("Workflow generated. Review and save when ready.");
@@ -470,7 +524,7 @@ export function WorkflowBuilderPage() {
     setValidationWarningsByNodeId({});
     useWorkflowStore.getState().setMetadata({
       workflowId: null,
-      workflowName: template.name,
+      workflowName: clampWorkflowName(template.name),
       workflowDescription: template.description,
       activeTemplateId: template.template_id,
     });
@@ -506,49 +560,70 @@ export function WorkflowBuilderPage() {
 
   return (
     <div className="h-full overflow-hidden">
-      <div className="mx-auto flex h-full max-w-[1540px] min-h-0 flex-col">
-        <section className="min-h-0 flex-1">
-          <WorkflowCanvas
-            isRunning={running}
-            isDirty={isDirty}
-            templates={templates}
-            templatesLoading={templatesLoading}
-            runHistory={runHistory}
-            runHistoryLoading={runHistoryLoading}
-            runHistoryHasMore={runHistoryHasMore}
-            runHistoryLoadingMore={runHistoryLoadingMore}
-            nlGenerating={nlGenerating}
-            nlStreamLog={nlStreamLog}
-            nlError={nlError}
-            onRun={() => {
-              void runWorkflow();
-            }}
-            onStop={() => {
-              toast.info("Stop is not available yet for in-flight workflow runs.");
-            }}
-            onSave={() => {
-              void persistWorkflow();
-            }}
-            onRefreshTemplates={() => {
-              void refreshTemplates();
-            }}
-            onRefreshRunHistory={() => {
-              void refreshRunHistory();
-            }}
-            onLoadMoreRunHistory={() => {
-              if (!runHistoryHasMore || runHistoryLoadingMore) {
-                return;
-              }
-              void refreshRunHistory(undefined, { append: true });
-            }}
-            onGenerateFromDescription={generateFromDescription}
-            onSelectTemplate={applyTemplate}
-            onLoadRunOutputs={loadRunOutputs}
-            initialAgentHintId={openPickerFromRouteHint ? initialAgentHintId : null}
-            validationWarningsByNodeId={validationWarningsByNodeId}
-          />
-        </section>
-      </div>
+      {view === "gallery" ? (
+        <WorkflowGallery
+          onSelectWorkflow={handleSelectWorkflow}
+          onNewWorkflow={handleNewWorkflow}
+          templates={templates}
+          templatesLoading={templatesLoading}
+          onSelectTemplate={(template) => {
+            applyTemplate(template);
+            setView("canvas");
+          }}
+        />
+      ) : (
+        <div className="mx-auto flex h-full max-w-[1540px] min-h-0 flex-col">
+          <section className="min-h-0 flex-1">
+            <WorkflowCanvas
+              isRunning={running}
+              isDirty={isDirty}
+              templates={templates}
+              templatesLoading={templatesLoading}
+              runHistory={runHistory}
+              runHistoryLoading={runHistoryLoading}
+              runHistoryHasMore={runHistoryHasMore}
+              runHistoryLoadingMore={runHistoryLoadingMore}
+              nlGenerating={nlGenerating}
+              nlStreamLog={nlStreamLog}
+              nlError={nlError}
+              onRun={() => {
+                void runWorkflow();
+              }}
+              onStop={() => {
+                toast.info("Stop is not available yet for in-flight workflow runs.");
+              }}
+              onSave={() => {
+                void persistWorkflow();
+              }}
+              onRefreshTemplates={() => {
+                void refreshTemplates();
+              }}
+              onRefreshRunHistory={() => {
+                void refreshRunHistory();
+              }}
+              onLoadMoreRunHistory={() => {
+                if (!runHistoryHasMore || runHistoryLoadingMore) {
+                  return;
+                }
+                void refreshRunHistory(undefined, { append: true });
+              }}
+              onGenerateFromDescription={generateFromDescription}
+              onSelectTemplate={applyTemplate}
+              onLoadRunOutputs={loadRunOutputs}
+              initialAgentHintId={openPickerFromRouteHint ? initialAgentHintId : null}
+              validationWarningsByNodeId={validationWarningsByNodeId}
+            />
+          </section>
+        </div>
+      )}
+
+      {/* Cmd+K quick switcher */}
+      <WorkflowQuickSwitcher
+        open={quickSwitcherOpen}
+        onClose={closeQuickSwitcher}
+        onSelectWorkflow={handleSelectWorkflow}
+        onNewWorkflow={handleNewWorkflow}
+      />
     </div>
   );
 }

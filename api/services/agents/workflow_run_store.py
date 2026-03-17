@@ -124,23 +124,34 @@ def get_run(run_id: str) -> WorkflowRunRecord | None:
         return session.get(WorkflowRunRecord, run_id)
 
 
-def get_step_outputs_for_replay(run_id: str, from_step_id: str, ordered_step_ids: list[str]) -> dict[str, Any]:
+def get_step_outputs_for_replay(
+    run_id: str,
+    from_step_id: str,
+    ordered_step_ids: list[str],
+    step_output_keys: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Return the stored outputs for all steps BEFORE from_step_id.
 
     Used by the replay endpoint to seed the context for partial re-execution.
+    Results are keyed by output_key (not step_id) so the executor's
+    _resolve_inputs can find them correctly.
+
+    Args:
+        step_output_keys: mapping of step_id → output_key. When provided,
+            results are keyed by output_key. Falls back to step_id if missing.
     """
     rec = get_run(run_id)
     if not rec or not rec.step_outputs:
         return {}
-    # Collect outputs for steps that come before from_step_id in the order
+    key_map = step_output_keys or {}
     pre_outputs: dict[str, Any] = {}
     for sid in ordered_step_ids:
         if sid == from_step_id:
             break
         step_data = rec.step_outputs.get(sid)
         if step_data:
-            # Map by step output_key — we store step_id keyed data, return raw output
-            pre_outputs[sid] = step_data.get("output", "")
+            out_key = key_map.get(sid, sid)
+            pre_outputs[out_key] = step_data.get("output", "")
     return pre_outputs
 
 
@@ -152,6 +163,9 @@ def _update_run(run_id: str, **fields: Any) -> None:
         if rec:
             for k, v in fields.items():
                 setattr(rec, k, v)
-            rec.completed_at = time.time()
+            # Only set completed_at when the run actually finishes
+            new_status = fields.get("status")
+            if new_status in ("completed", "failed"):
+                rec.completed_at = time.time()
             session.add(rec)
             session.commit()

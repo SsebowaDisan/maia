@@ -434,9 +434,15 @@ type WorkGraphReplayStateResponse = {
 type WorkflowStep = {
   step_id: string;
   agent_id: string;
+  step_type?: string;
+  step_config?: Record<string, unknown>;
   input_mapping?: Record<string, string>;
   output_key: string;
   description?: string;
+  timeout_s?: number;
+  max_retries?: number;
+  output_schema?: Record<string, unknown>;
+  format_hint?: "json" | "markdown" | "plaintext";
 };
 
 type WorkflowEdge = {

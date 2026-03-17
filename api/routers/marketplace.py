@@ -25,8 +25,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from api.auth import get_current_user_id, require_super_admin
+from api.auth import get_current_user, get_current_user_id, require_super_admin
 from api.models.user import User
+from api.services.marketplace.developers import get_developer_status
 from api.services.agents import definition_store
 from api.services.marketplace import registry, publisher, installer, versioning, reviews as reviews_service
 from api.services.marketplace import notifications as notifications_service
@@ -124,9 +125,15 @@ def get_agent(
 @router.post("/agents", status_code=status.HTTP_201_CREATED)
 def publish(
     body: PublishRequest,
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    entry = registry.publish_agent(user_id, body.definition, body.metadata)
+    dev_status = get_developer_status(user.id)
+    if dev_status not in ("verified", "trusted_publisher") and user.role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Developer access required. Apply at the Developer Portal.",
+        )
+    entry = registry.publish_agent(user.id, body.definition, body.metadata)
     return {"id": entry.id, "agent_id": entry.agent_id, "status": entry.status}
 
 

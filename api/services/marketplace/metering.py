@@ -1,17 +1,16 @@
-"""B3-05 — Usage metering.
-
-Responsibility: record per-agent per-tenant per-day usage and provide
-summaries.  Computer Use steps are metered separately.
-"""
+"""B3-05 - Usage metering."""
 from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from sqlmodel import Field, Session, SQLModel, select
 
 from ktem.db.engine import engine
+from api.services.observability.model_pricing import calculate_token_cost_usd
+
+_COMPUTER_USE_STEP_COST_USD = 0.005  # $0.005 per Computer Use step (approx)
 
 
 class UsageRecord(SQLModel, table=True):
@@ -21,7 +20,7 @@ class UsageRecord(SQLModel, table=True):
     tenant_id: str = Field(index=True)
     agent_id: str = Field(index=True)
     run_id: str = Field(index=True)
-    date_key: str  # "YYYY-MM-DD" for daily aggregation
+    date_key: str  # YYYY-MM-DD for daily aggregation
     tokens_in: int = 0
     tokens_out: int = 0
     tool_calls: int = 0
@@ -63,12 +62,12 @@ def record_usage(
         session.add(record)
         session.commit()
 
-    # P10: accumulate ROI for this run
     try:
         from api.services.observability.roi_tracker import record_roi_event
+
         record_roi_event(tenant_id, agent_id, date_key)
     except Exception:
-        pass  # ROI tracking must never block metering
+        pass
 
 
 def get_usage_summary(
@@ -99,36 +98,31 @@ def get_usage_summary(
     }
     by_agent: dict[str, dict[str, int]] = {}
 
-    for r in records:
-        totals["tokens_in"] += r.tokens_in
-        totals["tokens_out"] += r.tokens_out
-        totals["tool_calls"] += r.tool_calls
-        totals["computer_use_steps"] += r.computer_use_steps
-        totals["duration_ms"] += r.duration_ms
+    for record in records:
+        totals["tokens_in"] += record.tokens_in
+        totals["tokens_out"] += record.tokens_out
+        totals["tool_calls"] += record.tool_calls
+        totals["computer_use_steps"] += record.computer_use_steps
+        totals["duration_ms"] += record.duration_ms
 
-        agg = by_agent.setdefault(r.agent_id, {
-            "tokens_in": 0, "tokens_out": 0, "tool_calls": 0,
-            "computer_use_steps": 0, "run_count": 0,
-        })
-        agg["tokens_in"] += r.tokens_in
-        agg["tokens_out"] += r.tokens_out
-        agg["tool_calls"] += r.tool_calls
-        agg["computer_use_steps"] += r.computer_use_steps
+        agg = by_agent.setdefault(
+            record.agent_id,
+            {
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "tool_calls": 0,
+                "computer_use_steps": 0,
+                "run_count": 0,
+            },
+        )
+        agg["tokens_in"] += record.tokens_in
+        agg["tokens_out"] += record.tokens_out
+        agg["tool_calls"] += record.tool_calls
+        agg["computer_use_steps"] += record.computer_use_steps
         agg["run_count"] += 1
 
     totals["by_agent"] = by_agent
     return totals
-
-
-# ── Pricing table (USD per 1M tokens) ─────────────────────────────────────────
-
-_PRICING: dict[str, dict[str, float]] = {
-    "claude-opus-4-6":   {"in": 15.0,  "out": 75.0},
-    "claude-sonnet-4-6": {"in": 3.0,   "out": 15.0},
-    "claude-haiku-4-5":  {"in": 0.8,   "out": 4.0},
-}
-_DEFAULT_PRICING = {"in": 3.0, "out": 15.0}
-_COMPUTER_USE_STEP_COST_USD = 0.005  # $0.005 per Computer Use step (approx)
 
 
 def calculate_charges(
@@ -143,10 +137,10 @@ def calculate_charges(
         start_date=billing_period_start,
         end_date=billing_period_end,
     )
-    pricing = _PRICING.get(model, _DEFAULT_PRICING)
-    llm_cost = (
-        summary["tokens_in"] / 1_000_000 * pricing["in"]
-        + summary["tokens_out"] / 1_000_000 * pricing["out"]
+    llm_cost = calculate_token_cost_usd(
+        model=model,
+        tokens_in=summary["tokens_in"],
+        tokens_out=summary["tokens_out"],
     )
     cu_cost = summary["computer_use_steps"] * _COMPUTER_USE_STEP_COST_USD
     return {

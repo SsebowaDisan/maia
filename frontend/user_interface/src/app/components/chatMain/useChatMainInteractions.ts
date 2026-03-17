@@ -40,6 +40,13 @@ type ActiveAgentSelection = {
   name: string;
 };
 
+type ActiveWorkflowSelection = {
+  workflow_id: string;
+  name: string;
+  description: string;
+  steps: Array<{ step_id: string; agent_id: string; description?: string }>;
+};
+
 function useChatMainInteractions({
   accessMode,
   activityEvents,
@@ -67,6 +74,7 @@ function useChatMainInteractions({
   const [agentControlsVisible, setAgentControlsVisible] = useState(false);
   const [deepSearchProfile, setDeepSearchProfile] = useState<"default" | "web_search">("default");
   const [activeAgent, setActiveAgent] = useState<ActiveAgentSelection | null>(null);
+  const [activeWorkflow, setActiveWorkflow] = useState<ActiveWorkflowSelection | null>(null);
   const [messageActionStatus, setMessageActionStatus] = useState("");
   const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -204,9 +212,32 @@ function useChatMainInteractions({
   };
 
   const submit = async () => {
-    const payload = message.trim();
-    if (!payload || isSending) {
+    const userInput = message.trim();
+    if (!userInput || isSending) {
       return;
+    }
+    // If a workflow is active, prepend the workflow context to the user's input
+    let payload = userInput;
+    if (activeWorkflow) {
+      const lines: string[] = [];
+      lines.push(`Run my workflow "${activeWorkflow.name}".`);
+      if (activeWorkflow.description) {
+        lines.push(`Description: ${activeWorkflow.description}`);
+      }
+      lines.push("");
+      lines.push("Steps:");
+      for (let i = 0; i < activeWorkflow.steps.length; i++) {
+        const step = activeWorkflow.steps[i];
+        const label = String(step.description || step.agent_id || `Step ${i + 1}`).trim();
+        const agentId = String(step.agent_id || "").trim();
+        lines.push(
+          `${i + 1}. ${label}${agentId && agentId !== label ? ` (agent: ${agentId})` : ""}`,
+        );
+      }
+      lines.push("");
+      lines.push(`User input: ${userInput}`);
+      payload = lines.join("\n");
+      setActiveWorkflow(null);
     }
     const sendOptions = buildSendOptions();
     const turnAttachments = attachments
@@ -491,6 +522,7 @@ function useChatMainInteractions({
     attachProjectById,
     attachments,
     activeAgent,
+    activeWorkflow,
     beginInlineEdit,
     cancelInlineEdit,
     clearAttachments,
@@ -516,6 +548,7 @@ function useChatMainInteractions({
     sendSuggestionPrompt,
     setAttachments,
     onAgentSelect,
+    setActiveWorkflow,
     setEditingText,
     setMessage,
     showActionStatus,

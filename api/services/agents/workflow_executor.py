@@ -13,6 +13,8 @@ Changes since original:
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FuturesTimeout
 from typing import Any, Callable, Optional
@@ -22,6 +24,7 @@ from api.schemas.workflow_definition import WorkflowDefinitionSchema, WorkflowEd
 logger = logging.getLogger(__name__)
 
 _MAX_PARALLEL_STEPS = 5   # cap concurrent step threads
+_RETRY_BASE_DELAY = 1.0   # seconds — exponential backoff base
 
 
 class WorkflowExecutionError(Exception):
@@ -54,6 +57,7 @@ def execute_workflow(
     effective_run_id = run_id or str(uuid.uuid4())
     ctx = WorkflowRunContext(effective_run_id)
     outputs: dict[str, Any] = dict(initial_inputs or {})
+    outputs_lock = threading.Lock()
     skipped_steps: set[str] = set()
 
     try:
@@ -97,10 +101,10 @@ def execute_workflow(
             continue
 
         if len(runnable) == 1:
-            _execute_step(workflow, runnable[0], outputs, ctx, tenant_id, on_event, skipped_steps, step_timeout_s)
+            _execute_step(workflow, runnable[0], outputs, outputs_lock, ctx, tenant_id, on_event, skipped_steps, step_timeout_s, effective_run_id)
         else:
             # B8: Run independent steps concurrently
-            _execute_batch(workflow, runnable, outputs, ctx, tenant_id, on_event, skipped_steps, step_timeout_s)
+            _execute_batch(workflow, runnable, outputs, outputs_lock, ctx, tenant_id, on_event, skipped_steps, step_timeout_s, effective_run_id)
 
     _emit(on_event, {
         "event_type": "workflow_completed",
@@ -146,36 +150,51 @@ def _execute_batch(
     workflow: WorkflowDefinitionSchema,
     step_ids: list[str],
     outputs: dict[str, Any],
+    outputs_lock: threading.Lock,
     ctx: Any,
     tenant_id: str,
     on_event: Optional[Callable],
     skipped_steps: set[str],
     step_timeout_s: int = 300,
+    run_id: str = "",
 ) -> None:
     cap = min(len(step_ids), _MAX_PARALLEL_STEPS)
     futures = {}
 
+    # Compute per-step timeouts; use max for as_completed batch-level timeout
+    step_timeouts: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=cap, thread_name_prefix="wf-step") as pool:
         for step_id in step_ids:
             step = workflow.get_step(step_id)
             if step is None:
                 continue
-            step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+            with outputs_lock:
+                step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
             _emit(on_event, {
                 "event_type": "workflow_step_started",
                 "workflow_id": workflow.workflow_id,
                 "step_id": step_id,
                 "agent_id": step.agent_id,
+                "step_type": step.step_type,
                 "parallel": True,
             })
-            futures[pool.submit(_run_step, step.agent_id, step_inputs, tenant_id, on_event)] = step
+            timeout = step.timeout_s or step_timeout_s
+            step_timeouts[step.step_id] = timeout
+            futures[pool.submit(
+                _run_step_with_retry, step, step_inputs, tenant_id,
+                workflow.workflow_id, run_id, on_event,
+            )] = (step, timeout)
 
-        for future in as_completed(futures, timeout=step_timeout_s):
-            step = futures[future]
+        # Batch-level timeout = max of all individual step timeouts + buffer
+        batch_timeout = max(step_timeouts.values(), default=step_timeout_s) + 10
+
+        for future in as_completed(futures, timeout=batch_timeout):
+            step, timeout = futures[future]
             try:
-                result = future.result(timeout=step_timeout_s)
+                result = future.result(timeout=timeout)
                 _validate_output(step, result, workflow.workflow_id, on_event)
-                outputs[step.output_key] = result
+                with outputs_lock:
+                    outputs[step.output_key] = result
                 _emit(on_event, {
                     "event_type": "workflow_step_completed",
                     "workflow_id": workflow.workflow_id,
@@ -190,9 +209,9 @@ def _execute_batch(
                     "event_type": "workflow_step_failed",
                     "workflow_id": workflow.workflow_id,
                     "step_id": step.step_id,
-                    "error": f"Step timed out after {step_timeout_s}s",
+                    "error": f"Step timed out after {timeout}s",
                 })
-                raise WorkflowExecutionError(f"Step '{step.step_id}' timed out after {step_timeout_s}s") from exc
+                raise WorkflowExecutionError(f"Step '{step.step_id}' timed out after {timeout}s") from exc
             except Exception as exc:
                 logger.error("Workflow step %s failed: %s", step.step_id, exc, exc_info=True)
                 _emit(on_event, {
@@ -208,32 +227,41 @@ def _execute_step(
     workflow: WorkflowDefinitionSchema,
     step_id: str,
     outputs: dict[str, Any],
+    outputs_lock: threading.Lock,
     ctx: Any,
     tenant_id: str,
     on_event: Optional[Callable],
     skipped_steps: set[str],
     step_timeout_s: int = 300,
+    run_id: str = "",
 ) -> None:
     step = workflow.get_step(step_id)
     if step is None:
         return
-    step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+    with outputs_lock:
+        step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+    timeout = step.timeout_s or step_timeout_s
     _emit(on_event, {
         "event_type": "workflow_step_started",
         "workflow_id": workflow.workflow_id,
         "step_id": step_id,
         "agent_id": step.agent_id,
+        "step_type": step.step_type,
         "parallel": False,
     })
     try:
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="wf-step-to") as _pool:
-            _fut = _pool.submit(_run_step, step.agent_id, step_inputs, tenant_id, on_event)
+            _fut = _pool.submit(
+                _run_step_with_retry, step, step_inputs, tenant_id,
+                workflow.workflow_id, run_id, on_event,
+            )
             try:
-                result = _fut.result(timeout=step_timeout_s)
+                result = _fut.result(timeout=timeout)
             except _FuturesTimeout as te:
-                raise TimeoutError(f"Step '{step_id}' timed out after {step_timeout_s}s") from te
+                raise TimeoutError(f"Step '{step_id}' timed out after {timeout}s") from te
         _validate_output(step, result, workflow.workflow_id, on_event)
-        outputs[step.output_key] = result
+        with outputs_lock:
+            outputs[step.output_key] = result
         _emit(on_event, {
             "event_type": "workflow_step_completed",
             "workflow_id": workflow.workflow_id,
@@ -313,7 +341,80 @@ def _validate_output(
 
 # ── Private helpers ────────────────────────────────────────────────────────────
 
-def _run_step(
+def _run_step_with_retry(
+    step: WorkflowStep,
+    step_inputs: dict[str, Any],
+    tenant_id: str,
+    workflow_id: str,
+    run_id: str,
+    on_event: Optional[Callable] = None,
+) -> Any:
+    """Run a step with exponential backoff retries; dead-letter on exhaustion."""
+    last_exc: Exception | None = None
+    max_attempts = 1 + step.max_retries
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _dispatch_step(step, step_inputs, tenant_id, on_event)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "Step %s attempt %d/%d failed (%s) — retrying in %.1fs",
+                    step.step_id, attempt, max_attempts, exc, delay,
+                )
+                _emit(on_event, {
+                    "event_type": "workflow_step_retrying",
+                    "workflow_id": workflow_id,
+                    "step_id": step.step_id,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "delay_s": delay,
+                    "error": str(exc)[:500],
+                })
+                time.sleep(delay)
+
+    # Exhausted retries — record in dead-letter store
+    if last_exc is None:
+        last_exc = WorkflowExecutionError(f"Step '{step.step_id}' failed with unknown error")
+
+    try:
+        from api.services.workflows.dead_letter import record_dead_letter
+        record_dead_letter(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            workflow_id=workflow_id,
+            step_id=step.step_id,
+            error=str(last_exc),
+            inputs=step_inputs,
+            attempt=max_attempts,
+            step_type=step.step_type,
+        )
+    except Exception as dl_exc:
+        logger.error("Failed to record dead-letter for step %s: %s", step.step_id, dl_exc)
+
+    raise last_exc
+
+
+def _dispatch_step(
+    step: WorkflowStep,
+    step_inputs: dict[str, Any],
+    tenant_id: str,
+    on_event: Optional[Callable] = None,
+) -> Any:
+    """Route to the correct handler based on step_type."""
+    if step.step_type == "agent" or not step.step_type:
+        return _run_agent_step(step.agent_id, step_inputs, tenant_id, on_event)
+
+    from api.services.workflows.nodes import get_handler
+    handler = get_handler(step.step_type)
+    if handler is None:
+        raise ValueError(f"No handler registered for step_type '{step.step_type}'")
+    return handler(step, step_inputs, on_event)
+
+
+def _run_agent_step(
     agent_id: str,
     step_inputs: dict[str, Any],
     tenant_id: str,
