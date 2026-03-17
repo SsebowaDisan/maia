@@ -159,6 +159,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Security & observability middleware (order matters: outermost runs first)
+from api.middleware.audit import AuditMiddleware  # noqa: E402
+from api.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+
+app.add_middleware(AuditMiddleware)
+app.add_middleware(RateLimitMiddleware)
+
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(users_router)

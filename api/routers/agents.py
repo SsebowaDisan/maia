@@ -481,6 +481,41 @@ def get_install_history(
 
 # ── Webhook receiver ───────────────────────────────────────────────────────────
 
+def _verify_webhook_signature(request: Request, body: bytes, connector_id: str) -> bool:
+    """Verify HMAC-SHA256 signature if a webhook secret is configured.
+
+    Looks for secret in env var MAIA_WEBHOOK_SECRET_{CONNECTOR_ID} or the
+    fallback MAIA_WEBHOOK_SECRET.  If no secret is configured, accepts the
+    request (opt-in security).
+    """
+    import hashlib
+    import hmac
+    import os
+
+    secret = os.getenv(
+        f"MAIA_WEBHOOK_SECRET_{connector_id.upper()}",
+        os.getenv("MAIA_WEBHOOK_SECRET", ""),
+    )
+    if not secret:
+        return True  # no secret configured — allow
+
+    # Support common header names across webhook providers
+    sig_header = (
+        request.headers.get("x-hub-signature-256")       # GitHub
+        or request.headers.get("x-signature-256")         # generic
+        or request.headers.get("x-webhook-signature")     # custom
+        or ""
+    )
+    # Strip optional "sha256=" prefix
+    if sig_header.startswith("sha256="):
+        sig_header = sig_header[7:]
+    if not sig_header:
+        return False
+
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig_header)
+
+
 @webhook_router.post("/{tenant_id}/{connector_id}")
 async def receive_webhook(
     tenant_id: str,
@@ -490,8 +525,14 @@ async def receive_webhook(
     """Receive an external webhook and fan out to subscribed agents."""
     from api.services.agents.event_triggers import handle_webhook_event
 
+    body = await request.body()
+
+    if not _verify_webhook_signature(request, body, connector_id):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
     try:
-        payload = await request.json()
+        import json as _json
+        payload = _json.loads(body)
     except Exception:
         payload = {}
 
