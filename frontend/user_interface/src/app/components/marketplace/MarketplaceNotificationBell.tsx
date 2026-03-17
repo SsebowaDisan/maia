@@ -114,7 +114,7 @@ function MarketplaceNotificationBell({ onNavigate }: MarketplaceNotificationBell
       >
         <Bell className="h-3.5 w-3.5" />
         {unreadLabel ? (
-          <span className="absolute -right-1 -top-1 inline-flex min-w-[16px] items-center justify-center rounded-full bg-[#111827] px-1 text-[10px] font-semibold text-white">
+          <span className="absolute -right-1 -top-1 inline-flex min-w-[16px] items-center justify-center rounded-full bg-[#7c3aed] px-1 text-[10px] font-semibold text-white">
             {unreadLabel}
           </span>
         ) : null}
@@ -200,7 +200,7 @@ function MarketplaceNotificationBell({ onNavigate }: MarketplaceNotificationBell
                     className={`mb-1 w-full rounded-xl border px-3 py-2 text-left transition ${
                       row.is_read
                         ? "border-black/[0.06] bg-white hover:bg-[#f9fafb]"
-                        : "border-[#bfdbfe] bg-[#eff6ff] hover:bg-[#e0ecff]"
+                        : "border-[#c4b5fd] bg-[#f5f3ff] hover:bg-[#ede9fe]"
                     }`}
                   >
                     <p className="text-[12px] font-semibold text-[#111827]">{row.message}</p>

@@ -57,7 +57,7 @@ const NODE_TYPE_OPTIONS: NodeTypeOption[] = [
     label: "Transform",
     description: "Reshape data with field mapping",
     icon: <Layers size={14} />,
-    color: "text-[#2563eb]",
+    color: "text-[#7c3aed]",
   },
   {
     type: "code",
@@ -109,7 +109,7 @@ function NodeTypePicker({ value, onChange }: NodeTypePickerProps) {
             title={opt.description}
             className={`flex flex-col items-center gap-1 rounded-xl border px-2 py-2 text-center transition-colors ${
               value === opt.type
-                ? "border-[#6366f1] bg-[#eef2ff] shadow-sm"
+                ? "border-[#7c3aed] bg-[#f5f3ff] shadow-sm"
                 : "border-black/[0.08] bg-white hover:bg-[#f8fafc]"
             }`}
           >

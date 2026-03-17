@@ -35,7 +35,7 @@ export function MemoryExplorer({ episodes, workingMemory = [], onDeleteEpisode }
             type="button"
             onClick={() => setActiveTab(tab)}
             className={`rounded-full px-3 py-1.5 text-[12px] font-semibold capitalize ${
-              activeTab === tab ? "bg-[#111827] text-white" : "bg-[#f2f4f7] text-[#475467]"
+              activeTab === tab ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]" : "bg-[#f2f4f7] text-[#475467] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
             }`}
           >
             {tab}

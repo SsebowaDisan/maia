@@ -141,7 +141,7 @@ function renderTextWithLinks(value: string): Array<string | JSX.Element> {
           href={normalized}
           target="_blank"
           rel="noreferrer"
-          className="text-[#1d4ed8] underline decoration-[#1d4ed8]/35 underline-offset-2 transition-colors hover:text-[#1e40af]"
+          className="text-[#7c3aed] underline decoration-[#7c3aed]/35 underline-offset-2 transition-colors hover:text-[#5b21b6]"
         >
           {linkLabel(normalized)}
         </a>,
@@ -292,7 +292,7 @@ export function MindMapViewerDetails({
                     href={url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-[#1d4ed8] underline decoration-[#1d4ed8]/35 underline-offset-2 transition-colors hover:text-[#1e40af]"
+                    className="text-[#7c3aed] underline decoration-[#7c3aed]/35 underline-offset-2 transition-colors hover:text-[#5b21b6]"
                   >
                     {linkLabel(url)}
                   </a>
@@ -329,7 +329,7 @@ export function MindMapViewerDetails({
                 onClick={() => onFocusBranch(isFocusActive ? null : selectedNode.id)}
                 className={`inline-flex h-11 items-center justify-center rounded-full border px-4 text-[13px] font-semibold transition-colors ${
                   isFocusActive
-                    ? "border-[#3b82f6]/30 bg-[#eff6ff] text-[#1d4ed8] hover:bg-[#dbeafe]"
+                    ? "border-[#8b5cf6]/30 bg-[#f5f3ff] text-[#7c3aed] hover:bg-[#ede9fe]"
                     : "border-black/[0.08] bg-[#fafaf7] text-[#17171b] hover:bg-[#f3f3f0]"
                 }`}
               >

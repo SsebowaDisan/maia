@@ -91,7 +91,7 @@ export function InstallHistoryTab({ agentId }: InstallHistoryTabProps) {
                     {connectorEntries.map(([requiredId, mappedId]) => (
                       <span
                         key={`${row.id}:${requiredId}:${mappedId}`}
-                        className="rounded-full border border-[#bfdbfe] bg-[#eff6ff] px-2 py-0.5 text-[11px] font-semibold text-[#1d4ed8]"
+                        className="rounded-full border border-[#c4b5fd] bg-[#f5f3ff] px-2 py-0.5 text-[11px] font-semibold text-[#7c3aed]"
                       >
                         {requiredId} {"->"} {mappedId}
                       </span>

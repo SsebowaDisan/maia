@@ -59,7 +59,7 @@ function StepRow({ step }: { step: SimStep }) {
         ) : isComplete ? (
           <CheckCircle2 size={11} className="text-green-400 shrink-0" />
         ) : (
-          <MessageSquare size={11} className="text-blue-400 shrink-0" />
+          <MessageSquare size={11} className="text-violet-400 shrink-0" />
         )}
         <span className="flex-1 text-xs text-foreground truncate">
           {step.tool_id

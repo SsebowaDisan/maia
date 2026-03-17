@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
+  Code2,
   HelpCircle,
   Plus,
   Settings,
   FileText,
   Library,
+  Plug,
 } from "lucide-react";
 import { type ConversationSummary } from "../../api/client";
 import {
@@ -20,6 +22,7 @@ import { ProjectEvidenceModal } from "./chatSidebar/ProjectEvidenceModal";
 import { useDeletePromptController } from "./chatSidebar/useDeletePromptController";
 import { useProjectEvidenceDeletion } from "./chatSidebar/useProjectEvidenceDeletion";
 import { useProjectEvidenceState } from "./chatSidebar/useProjectEvidenceState";
+import { DeveloperPortalModal } from "./developer/DeveloperPortalModal";
 import { MarketplaceNotificationBell } from "./marketplace/MarketplaceNotificationBell";
 
 interface SidebarProject {
@@ -91,6 +94,7 @@ export function ChatSidebar({
   const [renamingConversationDraft, setRenamingConversationDraft] = useState("");
   const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [developerModalOpen, setDeveloperModalOpen] = useState(false);
   const {
     deletePromptOpen,
     deletePromptTitle,
@@ -394,37 +398,111 @@ export function ChatSidebar({
         isSuperAdmin={isSuperAdmin}
       />
 
-      <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7] space-y-2.5">
+      <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7]">
         <div className="relative">
           <button
             onClick={() => setWorkspaceMenuOpen((open) => !open)}
-            className="w-full h-9 px-3 rounded-xl border border-black/[0.08] bg-white text-[12px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors inline-flex items-center justify-center gap-2"
+            className="w-full h-9 px-3 rounded-xl border border-black/[0.06] bg-white/80 backdrop-blur text-[12px] font-medium text-[#1d1d1f] hover:bg-white transition-all inline-flex items-center justify-center gap-2 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
           >
-            <Library className="w-4 h-4" />
+            <Library className="w-3.5 h-3.5 text-[#86868b]" />
             <span>Workspace</span>
           </button>
 
           {workspaceMenuOpen ? (
-            <div className="absolute bottom-11 left-0 right-0 rounded-xl border border-black/[0.08] bg-white shadow-lg overflow-hidden z-20">
-              {[
-                { id: "Files", icon: FileText, label: "Files" },
-                { id: "Resources", icon: Library, label: "Resources" },
-                { id: "Settings", icon: Settings, label: "Settings" },
-                { id: "Help", icon: HelpCircle, label: "Help" },
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    onOpenWorkspaceTab(item.id as "Files" | "Resources" | "Settings" | "Help");
-                    setWorkspaceMenuOpen(false);
-                  }}
-                  className="w-full px-3 py-2.5 text-left text-[13px] text-[#1d1d1f] hover:bg-[#f5f5f7] transition-colors inline-flex items-center gap-2"
-                >
-                  <item.icon className="w-4 h-4 text-[#6e6e73]" />
-                  <span>{item.label}</span>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setWorkspaceMenuOpen(false)} />
+              <div className="absolute bottom-11 left-0 right-0 z-20 rounded-2xl border border-black/[0.06] bg-white/95 backdrop-blur-xl shadow-[0_12px_40px_-8px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)] overflow-hidden">
+                <div className="p-1.5">
+                  {[
+                    { id: "Files", icon: FileText, label: "Files", hint: "Documents & uploads" },
+                    { id: "Resources", icon: Library, label: "Resources", hint: "Knowledge sources" },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        onOpenWorkspaceTab(item.id as "Files" | "Resources" | "Settings" | "Help");
+                        setWorkspaceMenuOpen(false);
+                      }}
+                      className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                    >
+                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f5f3ff] transition-colors group-hover:bg-[#ede9fe]">
+                        <item.icon className="w-3.5 h-3.5 text-[#7c3aed]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">{item.label}</p>
+                        <p className="text-[11px] text-[#86868b] leading-tight">{item.hint}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="mx-3 h-px bg-black/[0.06]" />
+                <div className="p-1.5">
+                  <button
+                    onClick={() => {
+                      onNavigateAppRoute("/connectors");
+                      setWorkspaceMenuOpen(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f0fdf4] transition-colors group-hover:bg-[#dcfce7]">
+                      <Plug className="w-3.5 h-3.5 text-[#16a34a]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Connectors</p>
+                      <p className="text-[11px] text-[#86868b] leading-tight">Integrations & APIs</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onOpenWorkspaceTab("Settings");
+                      setWorkspaceMenuOpen(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f8fafc] transition-colors group-hover:bg-[#f1f5f9]">
+                      <Settings className="w-3.5 h-3.5 text-[#64748b]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Settings</p>
+                      <p className="text-[11px] text-[#86868b] leading-tight">Preferences & config</p>
+                    </div>
+                  </button>
+                </div>
+                <div className="mx-3 h-px bg-black/[0.06]" />
+                <div className="p-1.5">
+                  <button
+                    onClick={() => {
+                      setWorkspaceMenuOpen(false);
+                      setDeveloperModalOpen(true);
+                    }}
+                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#fff7ed] transition-colors group-hover:bg-[#ffedd5]">
+                      <Code2 className="w-3.5 h-3.5 text-[#ea580c]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Developer</p>
+                      <p className="text-[11px] text-[#86868b] leading-tight">Publish agents</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onOpenWorkspaceTab("Help");
+                      setWorkspaceMenuOpen(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f8fafc] transition-colors group-hover:bg-[#f1f5f9]">
+                      <HelpCircle className="w-3.5 h-3.5 text-[#64748b]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Help</p>
+                      <p className="text-[11px] text-[#86868b] leading-tight">Guides & support</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </>
           ) : null}
         </div>
       </div>
@@ -476,6 +554,11 @@ export function ChatSidebar({
           }))
         }
         onSubmitProjectUrls={() => void submitProjectUrls(evidenceProjectId)}
+      />
+
+      <DeveloperPortalModal
+        open={developerModalOpen}
+        onClose={() => setDeveloperModalOpen(false)}
       />
     </div>
   );

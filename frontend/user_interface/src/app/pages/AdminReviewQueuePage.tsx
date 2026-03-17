@@ -85,7 +85,7 @@ export function AdminReviewQueuePage() {
 
   if (!isSuperAdmin) {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[980px] rounded-2xl border border-black/[0.08] bg-white p-5">
           <h1 className="text-[24px] font-semibold text-[#101828]">Admin review queue</h1>
           <p className="mt-2 text-[14px] text-[#667085]">
@@ -97,7 +97,7 @@ export function AdminReviewQueuePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1240px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
           <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Admin</p>
@@ -114,8 +114,8 @@ export function AdminReviewQueuePage() {
                 onClick={() => setAdminTab(tabKey)}
                 className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
                   adminTab === tabKey
-                    ? "bg-[#111827] text-white"
-                    : "border border-black/[0.12] bg-white text-[#344054]"
+                    ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
+                    : "border border-black/[0.08] bg-white text-[#344054] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                 }`}
               >
                 {tabKey === "agents" ? "Agent submissions" : "Developer applications"}
@@ -232,7 +232,7 @@ export function AdminReviewQueuePage() {
                           setBusyAgentId("");
                         }
                       }}
-                      className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60"
+                      className="rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60"
                     >
                       Approve
                     </button>

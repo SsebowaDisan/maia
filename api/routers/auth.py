@@ -15,9 +15,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
 from api.auth import get_current_user
+from api.routers.auth_logout_patch import logout_with_revocation
 from api.models.user import User
 from api.services.auth.passwords import hash_password, verify_password
 from api.services.auth.store import (
@@ -234,12 +236,10 @@ def refresh_token(body: RefreshRequest) -> TokenResponse:
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def logout(
     _current_user: Annotated[User, Depends(get_current_user)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())],
 ) -> None:
-    """Logout hint — tokens are stateless; the client must discard them.
-
-    In the future this endpoint can add the token JTI to a blocklist.
-    """
-    return None
+    """Revoke the caller's access token so it cannot be reused."""
+    return logout_with_revocation(_current_user, credentials)
 
 
 @router.get("/me", response_model=UserResponse)

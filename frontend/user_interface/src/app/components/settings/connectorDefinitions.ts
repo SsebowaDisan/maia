@@ -80,10 +80,52 @@ export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
     ],
   },
   {
+    id: "google_workspace",
+    label: "Google Workspace",
+    description:
+      "Unified Google OAuth connector for Gmail, Calendar, Drive, Docs, and Sheets.",
+    fields: [],
+  },
+  {
+    id: "gmail",
+    label: "Gmail",
+    description:
+      "Email access is granted through the Google Workspace OAuth connector.",
+    fields: [],
+  },
+  {
+    id: "gmail_playwright",
+    label: "Gmail (Playwright)",
+    description:
+      "Browser-assisted Gmail workflows use the same Google Workspace account connection.",
+    fields: [],
+  },
+  {
+    id: "google_api_hub",
+    label: "Google API Hub",
+    description:
+      "Google API Hub access is managed through your Google Workspace OAuth setup.",
+    fields: [],
+  },
+  {
     id: "playwright_browser",
     label: "Web Browser (Playwright)",
     description:
       "System browser automation for navigation, extraction, and web interaction.",
+    fields: [],
+  },
+  {
+    id: "playwright_contact_form",
+    label: "Web Contact Form (Playwright)",
+    description:
+      "Automates website contact form submissions through browser automation.",
+    fields: [],
+  },
+  {
+    id: "arxiv",
+    label: "arXiv",
+    description:
+      "Search and read open research papers from arXiv. No credentials are required.",
     fields: [],
   },
   {

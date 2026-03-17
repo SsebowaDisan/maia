@@ -3,7 +3,7 @@ import { BaseEdge, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 function edgeColor(edgeFamily: string): string {
   const normalized = String(edgeFamily || "").trim().toLowerCase();
   if (normalized === "evidence") {
-    return "#0ea5e9";
+    return "#8b5cf6";
   }
   if (normalized === "verification") {
     return "#16a34a";

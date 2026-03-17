@@ -51,7 +51,7 @@ function statusColor(status: string): string {
     return "#16a34a";
   }
   if (normalized === "running") {
-    return "#2563eb";
+    return "#7c3aed";
   }
   if (normalized === "failed") {
     return "#dc2626";
@@ -95,7 +95,7 @@ function isLowConfidence(value: number | null): boolean {
   return typeof value === "number" && value >= 0 && value < 0.6;
 }
 
-function WorkGraphNodeCard({ id, data }: NodeProps<WorkGraphNodeRenderData>) {
+function WorkGraphNodeCard({ id, data }: NodeProps & { data: WorkGraphNodeRenderData }) {
   const borderColor = statusColor(data.status);
   const lowConfidence = isLowConfidence(data.confidence);
   const progressValue = typeof data.progress === "number" ? Math.max(0, Math.min(100, data.progress)) : null;
@@ -105,7 +105,7 @@ function WorkGraphNodeCard({ id, data }: NodeProps<WorkGraphNodeRenderData>) {
   return (
     <div
       className={`min-w-[230px] max-w-[290px] rounded-2xl border bg-white/95 px-3 py-2 shadow-sm ${
-        data.isActive ? "ring-2 ring-[#2563eb]/40" : ""
+        data.isActive ? "ring-2 ring-[#7c3aed]/40" : ""
       }`}
       style={{ borderColor }}
     >
@@ -122,7 +122,7 @@ function WorkGraphNodeCard({ id, data }: NodeProps<WorkGraphNodeRenderData>) {
       {progressValue !== null ? (
         <div className="mt-2">
           <div className="h-1.5 overflow-hidden rounded-full bg-[#e5e7eb]">
-            <div className="h-full rounded-full bg-[#2563eb]" style={{ width: `${progressValue}%` }} />
+            <div className="h-full rounded-full bg-[#7c3aed]" style={{ width: `${progressValue}%` }} />
           </div>
         </div>
       ) : null}

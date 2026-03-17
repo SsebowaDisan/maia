@@ -18,7 +18,7 @@ export function UpdateBanner({ totalUpdates, onOpenUpdates, onDismiss }: UpdateB
           <button
             type="button"
             onClick={onOpenUpdates}
-            className="rounded-full bg-[#1d4ed8] px-3 py-1.5 text-[12px] font-semibold text-white"
+            className="rounded-full bg-[#7c3aed] px-3 py-1.5 text-[12px] font-semibold text-white"
           >
             Review updates
           </button>

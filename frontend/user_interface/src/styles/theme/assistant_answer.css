@@ -250,9 +250,9 @@
   line-height: 1;
   padding: 0.18em 0.5em;
   border-radius: 100px;
-  background: rgba(10, 102, 217, 0.07);
-  color: #0a66d9;
-  border: 1px solid rgba(10, 102, 217, 0.20);
+  background: rgba(124, 58, 237, 0.07);
+  color: #7c3aed;
+  border: 1px solid rgba(124, 58, 237, 0.20);
   text-decoration: none !important;
   vertical-align: super;
   cursor: pointer;
@@ -264,9 +264,9 @@
 }
 
 .chat-answer-html a.citation:hover {
-  background: rgba(10, 102, 217, 0.14);
-  color: #0550b8;
-  border-color: rgba(10, 102, 217, 0.34);
+  background: rgba(124, 58, 237, 0.14);
+  color: #6d28d9;
+  border-color: rgba(124, 58, 237, 0.34);
 }
 
 /* ── Section headings with divider ──────────────────────────── */
@@ -336,9 +336,9 @@
 /* ── Inline callout for key findings (blockquote) ────────────── */
 .chat-answer-html blockquote {
   margin: 0.8rem 0;
-  border-left: 3px solid #0a66d9;
+  border-left: 3px solid #7c3aed;
   border-radius: 0 10px 10px 0;
-  background: linear-gradient(135deg, rgba(10, 102, 217, 0.04) 0%, rgba(10, 102, 217, 0.01) 100%);
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.04) 0%, rgba(124, 58, 237, 0.01) 100%);
   padding: 0.6rem 0.85rem;
   color: #1d1d1f;
   font-style: normal;
@@ -346,14 +346,14 @@
 
 /* ── Dark mode overrides ─────────────────────────────────────── */
 .dark .chat-answer-html a.citation {
-  background: rgba(96, 165, 250, 0.12);
-  color: #93c5fd;
-  border-color: rgba(96, 165, 250, 0.25);
+  background: rgba(167, 139, 250, 0.12);
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.25);
 }
 
 .dark .chat-answer-html a.citation:hover {
-  background: rgba(96, 165, 250, 0.20);
-  color: #bfdbfe;
+  background: rgba(167, 139, 250, 0.20);
+  color: #ddd6fe;
 }
 
 .dark .assistantAnswerBody h2 {
@@ -371,31 +371,31 @@
 }
 
 .dark .chat-answer-html blockquote {
-  border-left-color: #3b82f6;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.02) 100%);
+  border-left-color: #8b5cf6;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(139, 92, 246, 0.02) 100%);
 }
 
 /* ────────────────────────────────────────────────────────────── */
 
 .chat-answer-html a:not(.citation) {
-  color: #0a66d9;
+  color: #7c3aed;
   font-weight: 500;
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
-  text-decoration-color: rgba(10, 102, 217, 0.35);
+  text-decoration-color: rgba(124, 58, 237, 0.35);
   overflow-wrap: break-word;
   word-break: normal;
   transition: color 120ms ease, text-decoration-color 120ms ease;
 }
 
 .chat-answer-html a:not(.citation):hover {
-  color: #0750ab;
-  text-decoration-color: rgba(7, 80, 171, 0.55);
+  color: #6d28d9;
+  text-decoration-color: rgba(109, 40, 217, 0.55);
 }
 
 .chat-answer-html a:not(.citation):focus-visible {
-  outline: 2px solid rgba(10, 102, 217, 0.38);
+  outline: 2px solid rgba(124, 58, 237, 0.38);
   outline-offset: 2px;
   border-radius: 3px;
 }

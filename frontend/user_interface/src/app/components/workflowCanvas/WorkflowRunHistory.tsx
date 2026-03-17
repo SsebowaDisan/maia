@@ -48,7 +48,7 @@ function statusBadgeClasses(status: "completed" | "failed" | "skipped" | "runnin
   if (status === "completed") return "border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]";
   if (status === "failed") return "border-[#fecaca] bg-[#fff1f2] text-[#b42318]";
   if (status === "skipped") return "border-[#fde68a] bg-[#fffbeb] text-[#92400e]";
-  if (status === "running") return "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]";
+  if (status === "running") return "border-[#c4b5fd] bg-[#f5f3ff] text-[#7c3aed]";
   return "border-[#d0d5dd] bg-[#f8fafc] text-[#344054]";
 }
 
@@ -56,7 +56,7 @@ function statusIcon(status: "completed" | "failed" | "skipped" | "running" | "un
   if (status === "completed") return <CheckCircle2 size={14} className="text-[#15803d]" />;
   if (status === "failed") return <XCircle size={14} className="text-[#b42318]" />;
   if (status === "skipped") return <AlertTriangle size={14} className="text-[#b45309]" />;
-  if (status === "running") return <Clock3 size={14} className="text-[#1d4ed8]" />;
+  if (status === "running") return <Clock3 size={14} className="text-[#7c3aed]" />;
   return <Clock3 size={14} className="text-[#667085]" />;
 }
 

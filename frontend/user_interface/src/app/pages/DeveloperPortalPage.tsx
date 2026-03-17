@@ -67,7 +67,7 @@ function titleCase(value: string): string {
 function statusClass(status: string): string {
   const normalized = String(status || "").toLowerCase();
   if (normalized === "published") return "border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]";
-  if (normalized === "approved") return "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]";
+  if (normalized === "approved") return "border-[#c4b5fd] bg-[#f5f3ff] text-[#7c3aed]";
   if (normalized === "pending_review") return "border-[#fde68a] bg-[#fffbeb] text-[#92400e]";
   if (normalized === "rejected") return "border-[#fecaca] bg-[#fff1f2] text-[#b42318]";
   return "border-[#d0d5dd] bg-[#f8fafc] text-[#475467]";
@@ -265,7 +265,7 @@ export function DeveloperPortalPage() {
   // ── Gate: show application form or pending/rejected state ──────────────────
   if (devStatus === "loading") {
     return (
-      <div className="flex h-full items-center justify-center bg-[#eef1f5]">
+      <div className="flex h-full items-center justify-center bg-[#f6f6f7]">
         <p className="text-[13px] text-[#86868b]">Loading developer status…</p>
       </div>
     );
@@ -273,11 +273,11 @@ export function DeveloperPortalPage() {
 
   if (devStatus === "none" || devStatus === "rejected") {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[1240px]">
           <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
-            <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Developer portal</p>
+            <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">Publish agents</h1>
           </section>
           {devStatus === "rejected" && rejectionReason ? (
             <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4">
@@ -299,11 +299,11 @@ export function DeveloperPortalPage() {
 
   if (devStatus === "pending") {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[1240px]">
           <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
-            <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Developer portal</p>
+            <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">Publish agents</h1>
           </section>
           <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-6">
             <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
@@ -320,11 +320,11 @@ export function DeveloperPortalPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1240px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-          <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
-          <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Developer portal</p>
+          <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">Publish agents</h1>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
               { key: "agents", label: "My agents" },
@@ -335,8 +335,8 @@ export function DeveloperPortalPage() {
                 key={entry.key}
                 type="button"
                 onClick={() => setTab(entry.key as TabKey)}
-                className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
-                  tab === entry.key ? "bg-[#111827] text-white" : "border border-black/[0.12] bg-white text-[#344054]"
+                className={`rounded-full px-3 py-1.5 text-[12px] font-semibold transition-all ${
+                  tab === entry.key ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]" : "border border-black/[0.08] bg-white text-[#344054] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                 }`}
               >
                 {entry.label}
@@ -379,7 +379,7 @@ export function DeveloperPortalPage() {
                       {expandedAgentId === agent.agent_id ? "Hide versions" : "Version history"}
                     </button>
                     {agent.status === "rejected" ? (
-                      <button type="button" onClick={() => editRejected(agent)} className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white">
+                      <button type="button" onClick={() => editRejected(agent)} className="rounded-full bg-[#7c3aed] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#6d28d9] transition-colors">
                         Edit & resubmit
                       </button>
                     ) : null}
@@ -440,7 +440,7 @@ export function DeveloperPortalPage() {
                             : [...prev.requiredConnectors, connectorId],
                         }))
                       }
-                      className={`rounded-full border px-2.5 py-1 text-[12px] font-semibold ${selected ? "border-[#111827] bg-[#111827] text-white" : "border-black/[0.12] bg-white text-[#344054]"}`}
+                      className={`rounded-full border px-2.5 py-1 text-[12px] font-semibold ${selected ? "border-[#7c3aed] bg-[#7c3aed] text-white" : "border-black/[0.12] bg-white text-[#344054]"}`}
                     >
                       {titleCase(connectorId)}
                     </button>
@@ -464,7 +464,7 @@ export function DeveloperPortalPage() {
                           tools: selected ? prev.tools.filter((entry) => entry !== tool.id) : [...prev.tools, tool.id],
                         }))
                       }
-                      className={`rounded-full border px-2 py-0.5 text-[11px] ${selected ? "border-[#111827] bg-[#111827] text-white" : "border-black/[0.12] bg-white text-[#475467]"}`}
+                      className={`rounded-full border px-2 py-0.5 text-[11px] ${selected ? "border-[#7c3aed] bg-[#7c3aed] text-white" : "border-black/[0.12] bg-white text-[#475467]"}`}
                     >
                       {tool.label || tool.id}
                     </button>
@@ -501,7 +501,7 @@ export function DeveloperPortalPage() {
             ) : null}
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" disabled={publishing || draftInvalid} onClick={() => void createOrRevise()} className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60">
+              <button type="button" disabled={publishing || draftInvalid} onClick={() => void createOrRevise()} className="rounded-full bg-[#7c3aed] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#6d28d9] transition-colors disabled:opacity-60">
                 {publishing ? "Saving..." : editingRejectedAgentId ? "Revise draft" : "Create draft"}
               </button>
               <button type="button" disabled={publishing || !selectedAgentId} onClick={() => void submitForReview()} className="rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[12px] font-semibold text-[#344054] disabled:opacity-60">

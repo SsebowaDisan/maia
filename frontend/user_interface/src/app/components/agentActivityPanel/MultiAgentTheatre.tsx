@@ -23,7 +23,7 @@ function badgeClass(status: MultiAgentColumn["status"]): string {
     return "bg-[#ecfdf3] text-[#166534]";
   }
   if (status === "running") {
-    return "bg-[#eff6ff] text-[#1d4ed8]";
+    return "bg-[#f5f3ff] text-[#7c3aed]";
   }
   if (status === "blocked") {
     return "bg-[#fff7ed] text-[#9a3412]";

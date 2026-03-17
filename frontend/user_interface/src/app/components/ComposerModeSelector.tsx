@@ -33,8 +33,8 @@ const MODE_OPTIONS: ModeOption[] = [
 const MODE_LABEL_CLASS: Record<ComposerMode, string> = {
   ask: "text-[#6e6e73]",
   company_agent: "text-[#7c3aed]",
-  deep_search: "text-[#1d4ed8]",
-  web_search: "text-[#1d4ed8]",
+  deep_search: "text-[#7c3aed]",
+  web_search: "text-[#7c3aed]",
 };
 
 export function ComposerModeSelector({
@@ -99,7 +99,7 @@ export function ComposerModeSelector({
                   }}
                   className={`inline-flex h-9 w-full items-center justify-between rounded-xl px-2.5 text-left text-[12px] transition-colors ${
                     value === option.value
-                      ? "bg-[#f1f5ff] text-[#1d4ed8]"
+                      ? "bg-[#f5f3ff] text-[#7c3aed]"
                       : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
                   }`}
                 >

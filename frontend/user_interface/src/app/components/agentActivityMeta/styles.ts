@@ -47,7 +47,7 @@ function styleForEvent(event: AgentActivityEvent | null): EventStyle {
       return {
         label: "Check Info",
         icon: Activity,
-        accent: "text-[#1d4ed8]",
+        accent: "text-[#7c3aed]",
       };
     }
   }

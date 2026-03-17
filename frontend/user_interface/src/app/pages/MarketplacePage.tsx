@@ -14,6 +14,7 @@ import {
 import { AgentInstallModal } from "../components/marketplace/AgentInstallModal";
 import { ConnectorStatusPill } from "../components/marketplace/ConnectorStatusPill";
 import { AppRouteOverlayModal } from "../components/AppRouteOverlayModal";
+import { openConnectorOverlay } from "../utils/connectorOverlay";
 import {
   MarketplaceHeaderControls,
   type MarketplacePricingFilter,
@@ -394,20 +395,7 @@ export function MarketplacePage({
   };
 
   const openConnectorSetup = (connectorId: string) => {
-    const normalized = String(connectorId || "").trim().toLowerCase();
-    const mappedConnectorId =
-      normalized === "google_calendar" || normalized === "google_analytics"
-        ? "google_workspace"
-        : connectorId;
-    const target = `/connectors?connector=${encodeURIComponent(mappedConnectorId)}`;
-    const popup = window.open(
-      target,
-      `connector-setup-${mappedConnectorId}`,
-      "width=1120,height=820,noopener,noreferrer",
-    );
-    if (!popup) {
-      navigateToPath(target);
-    }
+    openConnectorOverlay(connectorId, { fromPath: window.location.pathname });
   };
 
   const handleQuickInstall = async (agent: MarketplaceAgentSummary) => {
@@ -425,7 +413,7 @@ export function MarketplacePage({
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1320px] space-y-4">
         {!hideTopControls ? (
           <section className="rounded-[22px] border border-black/[0.08] bg-white/92 px-4 py-3 shadow-[0_14px_36px_rgba(15,23,42,0.1)] backdrop-blur-md">
@@ -512,7 +500,7 @@ export function MarketplacePage({
                       </span>
                     ) : null}
                     {hasUpdate ? (
-                      <span className="rounded-full border border-[#bfdbfe] bg-[#eff6ff] px-2.5 py-1 text-[11px] font-semibold text-[#1d4ed8]">
+                      <span className="rounded-full border border-[#c4b5fd] bg-[#f5f3ff] px-2.5 py-1 text-[11px] font-semibold text-[#7c3aed]">
                         Update available
                       </span>
                     ) : null}
@@ -533,7 +521,7 @@ export function MarketplacePage({
                       className={`rounded-full px-4 py-2 text-[12px] font-semibold ${
                         installed
                           ? "border border-[#bbf7d0] bg-[#ecfdf3] text-[#166534]"
-                          : "bg-[#111827] text-white"
+                          : "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
                       }`}
                     >
                       {installed ? "Installed" : "Install"}

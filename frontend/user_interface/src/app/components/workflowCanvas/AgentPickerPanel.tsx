@@ -166,7 +166,7 @@ function AgentRow({
             type="button"
             disabled={busy}
             onClick={() => onAddInstalled(agent)}
-            className="w-full rounded-full bg-[#111827] px-3 py-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#1d2939] disabled:opacity-55"
+            className="w-full rounded-full bg-[#7c3aed] px-3 py-2.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#6d28d9] disabled:opacity-55"
           >
             Add to workflow
           </button>

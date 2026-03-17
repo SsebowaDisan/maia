@@ -101,7 +101,7 @@ export function RunErrorLog({ runs, onReplay, onOpenTheatre }: RunErrorLogProps)
               <button
                 type="button"
                 onClick={() => onReplay?.(run.runId)}
-                className="rounded-full bg-[#111827] px-3 py-1 text-[12px] font-semibold text-white"
+                className="rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-3 py-1 text-[12px] font-semibold text-white"
               >
                 Replay run
               </button>

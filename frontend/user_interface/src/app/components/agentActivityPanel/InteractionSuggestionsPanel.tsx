@@ -18,7 +18,7 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 const ACTION_COLOR: Record<string, string> = {
-  navigate: "text-blue-700 bg-blue-50 border-blue-200",
+  navigate: "text-violet-700 bg-violet-50 border-violet-200",
   click: "text-indigo-700 bg-indigo-50 border-indigo-200",
   hover: "text-purple-700 bg-purple-50 border-purple-200",
   type: "text-emerald-700 bg-emerald-50 border-emerald-200",

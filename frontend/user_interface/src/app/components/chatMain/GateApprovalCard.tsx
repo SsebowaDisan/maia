@@ -94,7 +94,7 @@ export function GateApprovalCard({
             type="button"
             disabled={!canSubmit || state === "approving" || state === "rejecting"}
             onClick={() => void approve()}
-            className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {state === "approving" ? "Approving..." : "Approve"}
           </button>

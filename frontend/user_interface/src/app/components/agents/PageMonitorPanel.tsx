@@ -173,7 +173,7 @@ export function PageMonitorPanel({ agentId }: PageMonitorPanelProps) {
             type="button"
             onClick={() => void handleAdd()}
             disabled={adding}
-            className="inline-flex items-center gap-2 rounded-full bg-[#111827] px-3.5 py-2 text-[12px] font-semibold text-white disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-3.5 py-2 text-[12px] font-semibold text-white disabled:opacity-50"
           >
             {adding ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
             Add URL
@@ -235,7 +235,7 @@ export function PageMonitorPanel({ agentId }: PageMonitorPanelProps) {
                         href={row.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="line-clamp-1 text-[#1d4ed8] hover:underline"
+                        className="line-clamp-1 text-[#7c3aed] hover:underline"
                       >
                         {row.url}
                       </a>

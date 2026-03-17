@@ -259,7 +259,7 @@ function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProp
           <button
             type="button"
             onClick={onOpenPicker}
-            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#1d2939]"
+            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#6d28d9]"
           >
             <Plus size={14} />
             Browse all
@@ -275,7 +275,7 @@ function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProp
           </div>
         ) : agents.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <Sparkles size={28} className="text-[#93c5fd]" />
+            <Sparkles size={28} className="text-[#a78bfa]" />
             <p className="text-[13px] text-[#667085]">
               No agents installed yet.{" "}
               <button
@@ -298,10 +298,10 @@ function EmptyCanvasOverlay({ onAddAgent, onOpenPicker }: EmptyCanvasOverlayProp
                 className="group flex flex-col gap-2 rounded-2xl border border-black/[0.07] bg-[#f8fafc] p-3.5 text-left transition-all hover:border-[#3b5bdb]/30 hover:bg-[#f0f4ff] hover:shadow-[0_2px_12px_-4px_rgba(59,91,219,0.2)]"
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#eff6ff] to-[#dbeafe] text-[14px] font-bold text-[#1d4ed8]">
+                  <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f5f3ff] to-[#ede9fe] text-[14px] font-bold text-[#7c3aed]">
                     {agentMonogramLetter(agent.name)}
                   </div>
-                  <p className="truncate text-[12px] font-semibold text-[#101828] group-hover:text-[#1d4ed8]">
+                  <p className="truncate text-[12px] font-semibold text-[#101828] group-hover:text-[#7c3aed]">
                     {agent.name}
                   </p>
                 </div>
@@ -447,18 +447,8 @@ function WorkflowCanvasInner({
     [edges],
   );
 
-  const nodeTypes = useMemo(
-    () => ({
-      workflowNode: WorkflowNode,
-    }),
-    [],
-  );
-  const edgeTypes = useMemo(
-    () => ({
-      workflowEdge: WorkflowEdge,
-    }),
-    [],
-  );
+  const nodeTypes = useMemo(() => ({ workflowNode: WorkflowNode }), []);
+  const edgeTypes = useMemo(() => ({ workflowEdge: WorkflowEdge }), []);
 
   // Only process user-initiated position changes (drag).  ReactFlow manages
   // dimensions & selection internally — if we round-trip dimension changes through

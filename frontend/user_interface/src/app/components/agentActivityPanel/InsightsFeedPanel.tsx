@@ -15,13 +15,13 @@ type Insight = {
 };
 
 const SEVERITY_ICON: Record<InsightSeverity, React.ReactNode> = {
-  info: <Info size={14} className="text-blue-400 shrink-0" />,
+  info: <Info size={14} className="text-violet-400 shrink-0" />,
   warning: <AlertTriangle size={14} className="text-yellow-400 shrink-0" />,
   critical: <AlertCircle size={14} className="text-red-400 shrink-0" />,
 };
 
 const SEVERITY_BORDER: Record<InsightSeverity, string> = {
-  info: "border-blue-500/30",
+  info: "border-violet-500/30",
   warning: "border-yellow-500/40",
   critical: "border-red-500/50",
 };

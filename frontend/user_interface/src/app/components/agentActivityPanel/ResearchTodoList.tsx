@@ -168,7 +168,7 @@ export function ResearchTodoList({
           <div key={item.id} className="flex items-start gap-2.5">
             {item.status === "active" ? (
               <Loader2
-                className={`mt-[1px] h-3.5 w-3.5 shrink-0 text-[#2563eb] ${streaming ? "animate-spin" : ""}`}
+                className={`mt-[1px] h-3.5 w-3.5 shrink-0 text-[#7c3aed] ${streaming ? "animate-spin" : ""}`}
               />
             ) : (
               <Circle className="mt-[1px] h-3.5 w-3.5 shrink-0 text-[#d1d1d6]" />

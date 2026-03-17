@@ -76,7 +76,7 @@ export function ManualConnectorCard({
       ) : null}
 
       {connector.fields.length === 0 ? (
-        <div className="mt-4 rounded-xl border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2 text-[12px] text-[#1d4ed8]">
+        <div className="mt-4 rounded-xl border border-[#c4b5fd] bg-[#f5f3ff] px-3 py-2 text-[12px] text-[#7c3aed]">
           No credentials required for this connector.
         </div>
       ) : (

@@ -144,10 +144,11 @@ function resolveOverlayReturnPath(search: string): string | null {
     return null;
   }
   const candidate = raw.startsWith("/") ? raw : `/${raw}`;
-  if (!resolveSidebarOverlayForPath(candidate)) {
+  const route = resolveAppRouteShell(candidate);
+  if (route.kind !== "page") {
     return null;
   }
-  return candidate;
+  return route.path;
 }
 function WorkflowBuilderHeaderActions() {
   const view = useWorkflowViewStore((s) => s.view);
@@ -535,9 +536,7 @@ export default function App() {
     const activeOverlayPath = sidebarOverlay?.path || null;
     if (returnPath) {
       const returnOverlay = resolveSidebarOverlayForPath(returnPath);
-      if (returnOverlay) {
-        setSidebarOverlay(returnOverlay);
-      }
+      setSidebarOverlay(returnOverlay || null);
       window.history.replaceState({}, "", returnPath);
       setPathname(returnPath);
       return;
@@ -573,6 +572,7 @@ export default function App() {
   useEffect(() => {
     const overlayFromPath = resolveSidebarOverlayForPath(pathname);
     if (!overlayFromPath) {
+      setSidebarOverlay(null);
       return;
     }
     setSidebarOverlay((current) => {
@@ -639,7 +639,7 @@ export default function App() {
     }
     if (routeShell.key === "marketplace_agent_detail") {
       return (
-        <div className="size-full bg-[#eef1f5]">
+        <div className="size-full bg-[#f6f6f7]">
           <MarketplacePage />
           <AppRouteOverlayModal
             title="Agent Details"
@@ -705,7 +705,7 @@ export default function App() {
   }
 
   return (
-    <div className="size-full bg-[#eef1f5] overflow-hidden">
+    <div className="size-full bg-[#f6f6f7] overflow-hidden">
       <div
         ref={layout.layoutRef}
         className={`flex h-full min-h-0 gap-1 overflow-hidden px-1 ${density === "compact" ? "py-1.5" : "py-2"}`}

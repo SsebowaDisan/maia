@@ -34,7 +34,7 @@ function statusBadge(status: string): string {
     return "border-[#fecaca] bg-[#fff1f2] text-[#b91c1c]";
   }
   if (normalized === "running" || normalized === "queued") {
-    return "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]";
+    return "border-[#c4b5fd] bg-[#f5f3ff] text-[#7c3aed]";
   }
   return "border-[#e4e7ec] bg-[#f8fafc] text-[#475467]";
 }

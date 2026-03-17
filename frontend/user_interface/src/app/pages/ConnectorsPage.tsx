@@ -1,17 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  BarChart3,
-  Building2,
-  CalendarDays,
-  ChartSpline,
-  MailCheck,
-  MessageCircle,
-  ReceiptText,
   RefreshCw,
-  Search,
   Shield,
   X,
-  type LucideIcon,
 } from "lucide-react";
 
 import {
@@ -39,6 +30,7 @@ import {
 import { IntegrationsSettings } from "../components/settings/tabs/IntegrationsSettings";
 import { useSettingsController } from "../components/settings/useSettingsController";
 import { ConnectorDetailPanel } from "../components/connectors/ConnectorDetailPanel";
+import { ConnectorBrandIcon } from "../components/connectors/ConnectorBrandIcon";
 import { ToolPermissionMatrix } from "../components/connectors/ToolPermissionMatrix";
 import type { ConnectorSubService, ConnectorSummary } from "../types/connectorSummary";
 
@@ -327,18 +319,6 @@ const GOOGLE_SERVICE_CONNECTOR_MAP: Record<
   analytics: ["google_analytics"],
 };
 
-const CONNECTOR_ICON_MAP: Record<string, LucideIcon> = {
-  bing_search: Search,
-  email_validation: MailCheck,
-  google_ads: ChartSpline,
-  google_calendar: CalendarDays,
-  google_workspace: CalendarDays,
-  m365: Building2,
-  invoice: ReceiptText,
-  slack: MessageCircle,
-  hubspot: BarChart3,
-};
-
 function buildGoogleSubServices(
   enabledServiceIds: string[],
   selectedServiceIds: string[],
@@ -372,21 +352,9 @@ function buildGoogleSubServices(
     }));
 }
 
-function renderConnectorAvatar(connectorId: string, label: string) {
-  const Icon = CONNECTOR_ICON_MAP[String(connectorId || "").trim().toLowerCase()];
-  if (Icon) {
-    return <Icon size={16} strokeWidth={2.1} className="text-[#344054]" />;
-  }
-  return (
-    <span className="text-[13px] font-semibold text-[#344054]">
-      {String(label || "?").slice(0, 1).toUpperCase()}
-    </span>
-  );
-}
-
 function suiteAccentClass(suite: ConnectorSuiteKey): string {
   if (suite === "google_workspace") {
-    return "bg-[#2563eb]";
+    return "bg-[#7c3aed]";
   }
   if (suite === "microsoft_365") {
     return "bg-[#0f766e]";
@@ -849,36 +817,39 @@ export function ConnectorsPage() {
     ) : null;
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4">
-        <section className="rounded-[22px] border border-black/[0.08] bg-white px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* ── Header ──────────────────────────────────────────────── */}
+        <section className="rounded-[20px] border border-black/[0.06] bg-white px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Integrations</p>
+              <h1 className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">
                 Connectors
               </h1>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#1f2937]">
+              <div className="mt-3 flex items-center gap-4 text-[12px] text-[#86868b]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#22c55e]" />
                   {stats.connected} connected
                 </span>
-                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#475467]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#d4d4d8]" />
                   {stats.needsSetup} needs setup
                 </span>
                 {stats.attention > 0 ? (
-                  <span className="rounded-full border border-[#fbd38d] bg-[#fff7ed] px-2.5 py-1 text-[11px] font-semibold text-[#9a3412]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[#f59e0b]" />
                     {stats.attention} attention
                   </span>
                 ) : null}
-                <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#667085]">
-                  {stats.total} total
-                </span>
+                <span className="text-[#c7c7cc]">{stats.total} total</span>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setPermissionsOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[13px] font-semibold text-[#111827] transition hover:border-black/[0.24]"
+                className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-3.5 py-2 text-[13px] font-medium text-[#1d1d1f] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all hover:bg-[#f5f3ff] hover:text-[#7c3aed] hover:border-[#c4b5fd]"
               >
                 <Shield size={14} />
                 Permissions
@@ -887,7 +858,7 @@ export function ConnectorsPage() {
                 type="button"
                 onClick={() => void refresh()}
                 disabled={loading}
-                className="inline-flex items-center gap-2 rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[13px] font-semibold text-[#111827] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-3.5 py-2 text-[13px] font-medium text-[#1d1d1f] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                 Refresh
@@ -902,9 +873,10 @@ export function ConnectorsPage() {
           </div>
         ) : null}
 
-        <section className="rounded-[22px] border border-black/[0.08] bg-white p-3">
+        {/* ── Filters ─────────────────────────────────────────────── */}
+        <section className="rounded-[20px] border border-black/[0.06] bg-white px-4 py-3.5">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#98a2b3] pr-1">
+            <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#86868b]">
               Status
             </span>
             {(
@@ -919,18 +891,18 @@ export function ConnectorsPage() {
                 key={value}
                 type="button"
                 onClick={() => setActiveFilter(value)}
-                className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
+                className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition-all ${
                   activeFilter === value
-                    ? "bg-[#111827] text-white"
-                    : "border border-black/[0.12] bg-white text-[#344054]"
+                    ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
+                    : "border border-black/[0.06] bg-white text-[#3a3a40] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                 }`}
               >
                 {label}
               </button>
             ))}
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-black/[0.06] pt-3">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#98a2b3] pr-1">
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-black/[0.04] pt-3">
+            <span className="mr-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#86868b]">
               Suite
             </span>
             {(["all", ...SUITE_DEFINITIONS.map((suite) => suite.key)] as const).map(
@@ -945,21 +917,21 @@ export function ConnectorsPage() {
                     key={value}
                     type="button"
                     onClick={() => setActiveSuite(value)}
-                    className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition ${
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-all ${
                       isActive
-                        ? "border-[#111827] bg-[#111827] text-white"
-                        : "border-black/[0.12] bg-white text-[#344054]"
+                        ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
+                        : "border border-black/[0.06] bg-white text-[#3a3a40] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                     }`}
                   >
                     {value !== "all" ? (
                       <span
-                        className={`h-1.5 w-1.5 rounded-full ${suiteAccentClass(value as ConnectorSuiteKey)} ${isActive ? "opacity-90" : "opacity-75"}`}
+                        className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-white/60" : suiteAccentClass(value as ConnectorSuiteKey)}`}
                       />
                     ) : null}
                     <span>{suiteFilterLabel(value)}</span>
                     <span
-                      className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
-                        isActive ? "bg-white/20 text-white" : "bg-[#f2f4f7] text-[#475467]"
+                      className={`ml-0.5 text-[10px] tabular-nums ${
+                        isActive ? "text-white/70" : "text-[#86868b]"
                       }`}
                     >
                       {count}
@@ -971,37 +943,32 @@ export function ConnectorsPage() {
           </div>
         </section>
 
+        {/* ── Connector grid ──────────────────────────────────────── */}
         <section className="space-y-4">
           {filteredSections.map((section) => (
             <article
               key={section.key}
-              className="rounded-[22px] border border-black/[0.08] bg-white p-4"
+              className="rounded-[20px] border border-black/[0.06] bg-white p-4"
             >
               {activeSuite === "all" ? (
-                <>
-                  <div className="mb-2 flex items-center justify-between gap-2 rounded-full border border-black/[0.08] bg-[#f8fafc] px-3 py-2">
-                    <div className="inline-flex min-w-0 items-center gap-2">
-                      <span
-                        className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${suiteAccentClass(section.key)}`}
-                      />
-                      <h2 className="truncate text-[14px] font-semibold tracking-[-0.01em] text-[#111827]">
-                        {section.label}
-                      </h2>
-                    </div>
-                    <span className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-semibold text-[#475467]">
-                      {section.cards.length} connector{section.cards.length === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <div className="mb-3 px-1">
-                    <p className="text-[12px] text-[#667085]">{section.description}</p>
-                  </div>
-                </>
+                <div className="mb-4 flex items-center gap-2.5 px-1">
+                  <span
+                    className={`inline-block h-2 w-2 shrink-0 rounded-full ${suiteAccentClass(section.key)}`}
+                  />
+                  <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">
+                    {section.label}
+                  </h2>
+                  <span className="text-[12px] text-[#86868b]">
+                    {section.cards.length}
+                  </span>
+                  <span className="ml-2 text-[12px] text-[#c7c7cc]">{section.description}</span>
+                </div>
               ) : (
-                <div className="mb-3 px-1">
-                  <p className="text-[12px] text-[#667085]">{section.description}</p>
+                <div className="mb-4 px-1">
+                  <p className="text-[12px] text-[#86868b]">{section.description}</p>
                 </div>
               )}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {section.cards.map((connector) => (
                   <article
                     key={connector.id}
@@ -1014,35 +981,38 @@ export function ConnectorsPage() {
                         setSelectedConnectorId(connector.id);
                       }
                     }}
-                    className="rounded-[20px] border border-black/[0.08] bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.06)]"
+                    className="group rounded-2xl border border-black/[0.06] bg-white p-4 transition-all hover:border-[#c4b5fd] hover:shadow-[0_8px_24px_rgba(124,58,237,0.08)]"
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] bg-[#f8fafc] text-[13px] font-semibold text-[#344054]">
-                        {renderConnectorAvatar(connector.id, connector.label)}
+                      <div className="inline-flex h-10 w-10 items-center justify-center rounded-[12px] border border-black/[0.06] bg-[#fafafa]">
+                        <ConnectorBrandIcon
+                          connectorId={connector.id}
+                          label={connector.label}
+                          size={20}
+                        />
                       </div>
                       <span
-                        className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusPillClass(connector.status)}`}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${statusPillClass(connector.status)}`}
                       >
                         {connector.status}
                       </span>
                     </div>
-                    <h3 className="mt-3 text-[17px] font-semibold tracking-[-0.01em] text-[#101828]">
+                    <h3 className="mt-3 text-[16px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">
                       {connector.label}
                     </h3>
-                    <p className="mt-1 min-h-[40px] text-[13px] leading-[1.5] text-[#475467]">
+                    <p className="mt-1 min-h-[36px] text-[12px] leading-[1.5] text-[#86868b]">
                       {connector.description}
                     </p>
-                    <p className="mt-2 text-[12px] text-[#667085]">{connector.statusMessage}</p>
                     {connector.subServices && connector.subServices.length > 0 ? (
-                      <div className="mt-3 rounded-xl border border-black/[0.08] bg-[#f8fafc] p-2.5">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
+                      <div className="mt-3 rounded-xl border border-black/[0.04] bg-[#fafafa] p-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#86868b]">
                           Services
                         </p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {connector.subServices.map((service) => (
                             <span
                               key={service.id}
-                              className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${serviceStatusPillClass(service.status)}`}
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-medium ${serviceStatusPillClass(service.status)}`}
                               title={service.description}
                             >
                               <span className="inline-block h-1.5 w-1.5 rounded-full bg-current/70" />
@@ -1053,7 +1023,7 @@ export function ConnectorsPage() {
                       </div>
                     ) : null}
                     <div className="mt-3 flex items-center justify-between">
-                      <span className="text-[11px] uppercase tracking-[0.08em] text-[#98a2b3]">
+                      <span className="text-[11px] text-[#c7c7cc]">
                         {connector.authType}
                       </span>
                       <button
@@ -1062,7 +1032,7 @@ export function ConnectorsPage() {
                           event.stopPropagation();
                           setSelectedConnectorId(connector.id);
                         }}
-                        className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#344054]"
+                        className="rounded-full bg-[#f5f3ff] px-3 py-1.5 text-[12px] font-medium text-[#7c3aed] transition-colors hover:bg-[#ede9fe]"
                       >
                         {primaryActionLabel(connector.status)}
                       </button>
@@ -1075,28 +1045,28 @@ export function ConnectorsPage() {
         </section>
 
         {filteredCards.length === 0 ? (
-          <section className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">
-            No connectors in this view yet.
+          <section className="rounded-2xl border border-black/[0.06] bg-white p-6 text-center text-[13px] text-[#86868b]">
+            No connectors match this filter.
           </section>
         ) : null}
       </div>
 
       {permissionsOpen ? (
-        <div className="fixed inset-0 z-[130] bg-black/35 backdrop-blur-[3px]">
-          <div className="absolute left-1/2 top-1/2 max-h-[86vh] w-[min(1080px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[24px] border border-black/[0.08] bg-white shadow-[0_26px_68px_rgba(15,23,42,0.28)]">
-            <div className="flex items-start justify-between border-b border-black/[0.08] px-5 py-4">
+        <div className="fixed inset-0 z-[130] bg-black/30 backdrop-blur-md">
+          <div className="absolute left-1/2 top-1/2 max-h-[86vh] w-[min(1080px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[20px] border border-white/20 bg-white/95 backdrop-blur-2xl shadow-[0_24px_80px_-16px_rgba(0,0,0,0.22),0_8px_24px_-8px_rgba(0,0,0,0.10)]">
+            <div className="flex items-start justify-between border-b border-black/[0.06] px-5 py-4 bg-white/60 backdrop-blur-xl">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#667085]">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">
                   Access control
                 </p>
-                <h2 className="mt-1 text-[22px] font-semibold text-[#111827]">
-                  Agent permissions by connector
+                <h2 className="mt-1 text-[20px] font-semibold text-[#1d1d1f]">
+                  Agent permissions
                 </h2>
               </div>
               <button
                 type="button"
                 onClick={() => setPermissionsOpen(false)}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-black/[0.1] text-[#667085]"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#86868b] transition-colors hover:bg-black/[0.05] hover:text-[#1d1d1f]"
                 aria-label="Close permissions"
               >
                 <X size={15} />

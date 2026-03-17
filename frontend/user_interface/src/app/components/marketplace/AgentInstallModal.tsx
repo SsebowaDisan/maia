@@ -5,6 +5,7 @@ import {
   preflightMarketplaceAgentInstall,
   type MarketplaceAgentDetail,
 } from "../../../api/client";
+import { ConnectorBrandIcon } from "../connectors/ConnectorBrandIcon";
 
 type AgentInstallModalProps = {
   open: boolean;
@@ -370,7 +371,7 @@ export function AgentInstallModal({
                     );
                   }}
                   disabled={installing || preflightLoading || waitingForConnector}
-                  className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
+                  className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
                 >
                   {waitingForConnector ? "Waiting for connector..." : "Connect"}
                 </button>
@@ -400,25 +401,32 @@ export function AgentInstallModal({
             <section>
               <h4 className="text-[16px] font-semibold text-[#111827]">Review access</h4>
               <p className="mt-1 text-[13px] text-[#667085]">{agent.description}</p>
-              <ul className="mt-3 list-disc space-y-1 pl-4 text-[13px] text-[#475467]">
+              <ul className="mt-3 space-y-1.5 text-[13px] text-[#475467]">
                 {requiredConnectors.map((connector) => (
-                  <li key={connector}>{normalizeLabel(connector)}</li>
+                  <li key={connector} className="flex items-center gap-2">
+                    <ConnectorBrandIcon
+                      connectorId={connector}
+                      label={normalizeLabel(connector)}
+                      size={18}
+                    />
+                    <span>{normalizeLabel(connector)}</span>
+                  </li>
                 ))}
               </ul>
               {triggerSummary.family === "scheduled" ? (
-                <div className="mt-3 rounded-xl border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2.5">
-                  <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#1d4ed8]">
+                <div className="mt-3 rounded-xl border border-[#c4b5fd] bg-[#f5f3ff] px-3 py-2.5">
+                  <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#7c3aed]">
                     Runs automatically
                   </p>
                   <p className="mt-1 text-[13px] font-medium text-[#1e3a8a]">
                     {triggerSummary.humanText}
                   </p>
-                  <p className="mt-1 text-[12px] text-[#1e40af]">Timezone: {triggerSummary.timezone}</p>
-                  <p className="mt-1 text-[12px] text-[#1e40af]">
+                  <p className="mt-1 text-[12px] text-[#5b21b6]">Timezone: {triggerSummary.timezone}</p>
+                  <p className="mt-1 text-[12px] text-[#5b21b6]">
                     The schedule starts immediately after installation.
                   </p>
                   {triggerSummary.cronExpression ? (
-                    <p className="mt-1 text-[11px] text-[#1e40af]">
+                    <p className="mt-1 text-[11px] text-[#5b21b6]">
                       Cron: <code>{triggerSummary.cronExpression}</code>
                     </p>
                   ) : null}
@@ -486,7 +494,14 @@ export function AgentInstallModal({
                         key={connectorId}
                         className="flex items-center justify-between gap-2 rounded-lg border border-[#fecdd3] bg-white px-2.5 py-1.5"
                       >
-                        <span className="text-[12px] text-[#7a271a]">{normalizeLabel(connectorId)}</span>
+                        <span className="inline-flex items-center gap-2 text-[12px] text-[#7a271a]">
+                          <ConnectorBrandIcon
+                            connectorId={connectorId}
+                            label={normalizeLabel(connectorId)}
+                            size={18}
+                          />
+                          {normalizeLabel(connectorId)}
+                        </span>
                         <button
                           type="button"
                           onClick={() => onOpenConnectorSetup?.(connectorId)}
@@ -613,7 +628,7 @@ export function AgentInstallModal({
               type="button"
               onClick={next}
               disabled={installing || (step === 2 && missingConnectors.length > 0)}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
+              className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
             >
               Next
             </button>
@@ -624,7 +639,7 @@ export function AgentInstallModal({
               onClick={() => {
                 void runInstall();
               }}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
+              className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
             >
               {installing ? "Installing..." : "Install agent"}
             </button>
@@ -640,7 +655,7 @@ export function AgentInstallModal({
                 window.dispatchEvent(new PopStateEvent("popstate"));
                 onClose();
               }}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white"
+              className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white"
             >
               Add to workflow
             </button>

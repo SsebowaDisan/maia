@@ -25,6 +25,7 @@ import { AgentRunHistory, type AgentRunHistoryRecord } from "../components/agent
 import { InstallHistoryTab } from "../components/agents/InstallHistoryTab";
 import { ImprovementSuggestion } from "../components/agents/ImprovementSuggestion";
 import { PageMonitorPanel } from "../components/agents/PageMonitorPanel";
+import { openConnectorOverlay } from "../utils/connectorOverlay";
 
 type AgentDetailPageProps = {
   agentId: string;
@@ -299,7 +300,7 @@ function applyLiveEventToColumns(
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     active: "bg-[#d1fae5] text-[#065f46]",
-    scheduled: "bg-[#dbeafe] text-[#1e40af]",
+    scheduled: "bg-[#ede9fe] text-[#5b21b6]",
     paused: "bg-[#fef3c7] text-[#92400e]",
     error: "bg-[#fee2e2] text-[#991b1b]",
   };
@@ -324,10 +325,10 @@ function ConnectorChip({ connectorId, healthy }: { connectorId: string; healthy:
       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium ${
         healthy === false
           ? "bg-[#fee2e2] text-[#991b1b]"
-          : "bg-[#f0f9ff] text-[#0369a1]"
+          : "bg-[#f5f3ff] text-[#6d28d9]"
       }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${healthy === false ? "bg-[#dc2626]" : "bg-[#0ea5e9]"}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${healthy === false ? "bg-[#dc2626]" : "bg-[#8b5cf6]"}`} />
       {connectorId}
     </span>
   );
@@ -531,11 +532,15 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
     toast.success("Opening chat with " + (agentDetail?.name || "the agent") + ".");
   };
 
+  const openConnectorSettings = (connectorId?: string) => {
+    openConnectorOverlay(connectorId, { fromPath: window.location.pathname });
+  };
+
   // Loading / error states
 
   if (loading) {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[1080px] rounded-2xl border border-black/[0.08] bg-white p-5 text-[14px] text-[#667085]">
           Loading agent...
         </div>
@@ -545,7 +550,7 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
 
   if (error || !agentDetail) {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[1080px] rounded-2xl border border-[#fecaca] bg-[#fff1f2] p-5">
           <h1 className="text-[24px] font-semibold text-[#9f1239]">Agent not found</h1>
           <p className="mt-2 text-[13px] text-[#b42318]">{error || "No agent data returned."}</p>
@@ -557,7 +562,7 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
   // Render
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1240px] space-y-4">
 
         {/* Header card */}
@@ -600,7 +605,7 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
               <button
                 type="button"
                 onClick={openInChat}
-                className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#1f2937] active:scale-[0.97] transition-all"
+                className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#6d28d9] active:scale-[0.97] transition-all"
               >
                 Chat with this agent
               </button>
@@ -622,8 +627,8 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
                 onClick={() => setActiveTab(tab)}
                 className={`rounded-full px-3 py-1.5 text-[12px] font-semibold capitalize transition-colors ${
                   activeTab === tab
-                    ? "bg-[#111827] text-white"
-                    : "border border-black/[0.12] bg-white text-[#344054] hover:border-black/[0.2]"
+                    ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
+                    : "border border-black/[0.08] bg-white text-[#344054] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                 }`}
               >
                 {tab}
@@ -635,7 +640,13 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
           {unhealthyConnectorIds.length > 0 ? (
             <div className="mt-3 rounded-xl border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#9f1239]">
               Connector attention needed: {unhealthyConnectorIds.join(", ")}.{" "}
-              <a href="/connectors" className="font-semibold underline">Configure connectors</a>
+              <button
+                type="button"
+                onClick={() => openConnectorSettings(unhealthyConnectorIds[0])}
+                className="font-semibold underline"
+              >
+                Configure connectors
+              </button>
             </div>
           ) : null}
         </section>
@@ -732,12 +743,13 @@ export function AgentDetailPage({ agentId, initialTab = "overview" }: AgentDetai
               <section className="rounded-2xl border border-black/[0.08] bg-white p-5">
                 <div className="flex items-center justify-between">
                   <h2 className="text-[16px] font-semibold text-[#111827]">Integrations</h2>
-                  <a
-                    href="/connectors"
+                  <button
+                    type="button"
+                    onClick={() => openConnectorSettings(requiredConnectors[0])}
                     className="text-[12px] font-medium text-[#667085] hover:text-[#111827]"
                   >
                     Manage connectors
-                  </a>
+                  </button>
                 </div>
                 <p className="mt-1 text-[13px] text-[#667085]">
                   This agent uses these integrations. Toggle access on or off per connector.

@@ -17,6 +17,7 @@ import { AgentRunHistory, type AgentRunHistoryRecord } from "../components/agent
 import { MemoryExplorer } from "../components/agents/MemoryExplorer";
 import { WorkspaceSidebar } from "../components/workspace/WorkspaceSidebar";
 import { UpdateBanner } from "../components/workspace/UpdateBanner";
+import { openConnectorOverlay } from "../utils/connectorOverlay";
 
 type WorkspaceAgentCard = {
   id: string;
@@ -228,11 +229,6 @@ function getNextScheduledRun(cronExpression: string): Date | null {
   return candidate;
 }
 
-function navigateToPath(path: string) {
-  window.history.pushState({}, "", path);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
 export function WorkspacePage() {
   const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -418,7 +414,7 @@ export function WorkspacePage() {
   }, [allRuns]);
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto flex max-w-[1360px] gap-4">
         <WorkspaceSidebar
           connectors={connectorCards}
@@ -515,7 +511,7 @@ export function WorkspacePage() {
                                 }));
                               }
                             }}
-                            className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                            className="rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
                           >
                             {isApplying ? "Updating..." : "Update"}
                           </button>
@@ -555,7 +551,7 @@ export function WorkspacePage() {
                       Last run {agent.lastRun ? formatRelativeTime(agent.lastRun) : "never"} · {agent.totalRuns} total runs
                     </p>
                     {agent.scheduleLabel ? (
-                      <p className="mt-1 text-[12px] text-[#1d4ed8]">
+                      <p className="mt-1 text-[12px] text-[#7c3aed]">
                         Next run {agent.nextRunAt ? new Date(agent.nextRunAt).toLocaleString() : "scheduled"} · {agent.scheduleLabel}
                       </p>
                     ) : null}
@@ -575,14 +571,18 @@ export function WorkspacePage() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <a
                     href={`/agents/${encodeURIComponent(agent.id)}`}
-                    className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white"
+                    className="rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-3 py-1.5 text-[12px] font-semibold text-white"
                   >
                     Open agent
                   </a>
                   {agent.unhealthyConnectors.length > 0 ? (
                     <button
                       type="button"
-                      onClick={() => navigateToPath("/connectors")}
+                      onClick={() =>
+                        openConnectorOverlay(agent.unhealthyConnectors[0], {
+                          fromPath: window.location.pathname,
+                        })
+                      }
                       className="rounded-full border border-[#f59e0b] bg-[#fffbeb] px-3 py-1.5 text-[12px] font-semibold text-[#92400e]"
                     >
                       Configure connectors

@@ -80,7 +80,7 @@ function WorkGraphControlPanel({
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
           placeholder="Search nodes (/)"
-          className="h-8 rounded-lg border border-black/[0.08] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none focus:border-[#3b82f6]"
+          className="h-8 rounded-lg border border-black/[0.08] bg-white px-2 text-[12px] text-[#1d1d1f] outline-none focus:border-[#8b5cf6]"
         />
         <select
           value={statusFilter}
@@ -136,7 +136,7 @@ function WorkGraphControlPanel({
           onClick={onToggleFocusMode}
           className={`rounded-lg border px-2.5 py-1 text-[11px] transition ${
             focusMode
-              ? "border-[#2563eb]/40 bg-[#eff6ff] text-[#1d4ed8]"
+              ? "border-[#7c3aed]/40 bg-[#f5f3ff] text-[#7c3aed]"
               : "border-black/[0.08] bg-white text-[#1d1d1f] hover:bg-[#f5f5f7]"
           }`}
           title="Toggle unresolved focus mode (U)"
@@ -203,7 +203,7 @@ function WorkGraphControlPanel({
               value={commentDraft}
               onChange={(event) => onCommentDraftChange(event.target.value)}
               placeholder="Add node comment"
-              className="h-7 flex-1 rounded-md border border-black/[0.08] bg-white px-2 text-[11px] text-[#1d1d1f] outline-none focus:border-[#3b82f6]"
+              className="h-7 flex-1 rounded-md border border-black/[0.08] bg-white px-2 text-[11px] text-[#1d1d1f] outline-none focus:border-[#8b5cf6]"
             />
             <button
               type="button"

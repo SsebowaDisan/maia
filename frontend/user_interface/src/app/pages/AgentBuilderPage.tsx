@@ -529,7 +529,7 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1240px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5 shadow-[0_20px_54px_rgba(15,23,42,0.1)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -569,7 +569,7 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
                 type="button"
                 onClick={() => void saveDraft()}
                 disabled={saving}
-                className="h-10 rounded-xl bg-[#111827] px-4 text-[13px] font-semibold text-white disabled:opacity-60"
+                className="h-10 rounded-xl bg-[#7c3aed] px-4 text-[13px] font-semibold text-white disabled:opacity-60"
               >
                 {saving ? "Saving..." : hasExistingAgent ? "Update agent" : "Create agent"}
               </button>
@@ -597,7 +597,7 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
                 type="button"
                 onClick={() => setMode(entry.key)}
                 className={`rounded-full px-4 py-2 text-[13px] font-semibold capitalize ${
-                  mode === entry.key ? "bg-[#111827] text-white" : "border border-black/[0.12] bg-white text-[#344054]"
+                  mode === entry.key ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]" : "border border-black/[0.08] bg-white text-[#344054] hover:bg-[#f5f3ff] hover:text-[#7c3aed]"
                 }`}
               >
                 {entry.label}
@@ -833,7 +833,7 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
                     setYamlError(`Invalid YAML/JSON: ${String(error)}`);
                   }
                 }}
-                className="rounded-full bg-[#111827] px-4 py-2 text-[13px] font-semibold text-white"
+                className="rounded-full bg-[#7c3aed] px-4 py-2 text-[13px] font-semibold text-white"
               >
                 Apply editor changes
               </button>

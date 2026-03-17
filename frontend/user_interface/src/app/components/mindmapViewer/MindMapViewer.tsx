@@ -723,7 +723,7 @@ export function MindMapViewer({
   }
   return (
     <div
-      className="relative overflow-hidden rounded-[24px] bg-[#eef2f7]"
+      className="relative overflow-hidden rounded-[24px] bg-[#f5f3ff]"
       style={{ height: `${effectiveViewerHeight}px` }}
       onMouseMove={handleCanvasMouseMove}
     >

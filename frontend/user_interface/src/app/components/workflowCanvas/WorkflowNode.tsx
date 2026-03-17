@@ -26,7 +26,7 @@ type WorkflowFlowNodeData = WorkflowCanvasNodeData & {
 // ── Run state styling ──────────────────────────────────────────────────────────
 
 function runBorder(runState: WorkflowCanvasNodeRunState | undefined) {
-  if (runState === "running")   return "border-[#2563eb]/40 ring-2 ring-[#2563eb]/20";
+  if (runState === "running")   return "border-[#7c3aed]/40 ring-2 ring-[#7c3aed]/20";
   if (runState === "completed") return "border-[#16a34a]/40 ring-2 ring-[#16a34a]/15";
   if (runState === "failed")    return "border-[#dc2626]/40 ring-2 ring-[#dc2626]/15";
   if (runState === "blocked")   return "border-[#f59e0b]/50 ring-2 ring-[#f59e0b]/15";
@@ -35,7 +35,7 @@ function runBorder(runState: WorkflowCanvasNodeRunState | undefined) {
 }
 
 function runHeaderBg(runState: WorkflowCanvasNodeRunState | undefined) {
-  if (runState === "running")   return "from-[#eff6ff] to-[#dbeafe]";
+  if (runState === "running")   return "from-[#f5f3ff] to-[#ede9fe]";
   if (runState === "completed") return "from-[#ecfdf3] to-[#d1fae5]";
   if (runState === "failed")    return "from-[#fef2f2] to-[#fee2e2]";
   if (runState === "blocked")   return "from-[#fffbeb] to-[#fef3c7]";
@@ -43,7 +43,7 @@ function runHeaderBg(runState: WorkflowCanvasNodeRunState | undefined) {
 }
 
 function monogramColor(runState: WorkflowCanvasNodeRunState | undefined) {
-  if (runState === "running")   return "text-[#1d4ed8]";
+  if (runState === "running")   return "text-[#7c3aed]";
   if (runState === "completed") return "text-[#15803d]";
   if (runState === "failed")    return "text-[#dc2626]";
   if (runState === "blocked")   return "text-[#b45309]";
@@ -53,7 +53,7 @@ function monogramColor(runState: WorkflowCanvasNodeRunState | undefined) {
 function RunBadge({ runState }: { runState?: WorkflowCanvasNodeRunState }) {
   if (runState === "running") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-[#2563eb] px-2 py-0.5 text-[10px] font-semibold text-white">
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#7c3aed] px-2 py-0.5 text-[10px] font-semibold text-white">
         <Loader2 size={9} className="animate-spin" />
         Running
       </span>
@@ -113,7 +113,7 @@ function agentMonogram(name: string): string {
 
 // ── Node ──────────────────────────────────────────────────────────────────────
 
-function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
+function WorkflowNode({ data, selected }: NodeProps & { data: WorkflowFlowNodeData }) {
   const agentName = String(data.agentName || data.agentId || "").trim();
   const agentDescription = String(data.agentDescription || "").trim();
   const agentTags = Array.isArray(data.agentTags)
@@ -140,7 +140,7 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
         <Handle
           type="target"
           position={Position.Left}
-          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
+          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#a78bfa] shadow-sm"
         />
       ) : null}
 
@@ -241,7 +241,7 @@ function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
         <Handle
           type="source"
           position={Position.Right}
-          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
+          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#a78bfa] shadow-sm"
         />
       ) : null}
     </div>

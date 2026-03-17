@@ -66,7 +66,7 @@ function VerificationTabBar({
             type="button"
             onClick={() => onChangeEvidenceMode("exact")}
             className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
-              evidenceMode === "exact" ? "bg-[#111827] text-white" : "text-[#4c4c50]"
+              evidenceMode === "exact" ? "bg-[#7c3aed] text-white" : "text-[#4c4c50]"
             }`}
           >
             Exact
@@ -75,7 +75,7 @@ function VerificationTabBar({
             type="button"
             onClick={() => onChangeEvidenceMode("context")}
             className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
-              evidenceMode === "context" ? "bg-[#111827] text-white" : "text-[#4c4c50]"
+              evidenceMode === "context" ? "bg-[#7c3aed] text-white" : "text-[#4c4c50]"
             }`}
           >
             Context

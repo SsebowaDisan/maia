@@ -175,7 +175,7 @@ function NodeCard({
       <button
         type="button"
         onClick={() => onSelectNode(node.id)}
-        className={`rounded-[24px] border px-5 text-left shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-[1px] ${widthClass} ${isRoot ? "py-6" : "py-4"} ${node.selected ? "ring-2 ring-[#3b82f6]/30 ring-offset-2" : ""}`}
+        className={`rounded-[24px] border px-5 text-left shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-[1px] ${widthClass} ${isRoot ? "py-6" : "py-4"} ${node.selected ? "ring-2 ring-[#8b5cf6]/30 ring-offset-2" : ""}`}
         style={{ backgroundColor: background, borderColor: border }}
       >
         <p className={`leading-[1.35] ${titleClass}`}>{node.title}</p>

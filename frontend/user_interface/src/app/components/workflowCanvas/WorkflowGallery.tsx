@@ -49,7 +49,7 @@ const TEMPLATE_COLORS = [
   { bg: "from-[#f5f3ff] to-[#ede9fe]", icon: "text-[#7c3aed]", hover: "hover:border-[#7c3aed]/25" },
   { bg: "from-[#ecfdf5] to-[#d1fae5]", icon: "text-[#059669]", hover: "hover:border-[#059669]/25" },
   { bg: "from-[#fff7ed] to-[#ffedd5]", icon: "text-[#ea580c]", hover: "hover:border-[#ea580c]/25" },
-  { bg: "from-[#eff6ff] to-[#dbeafe]", icon: "text-[#2563eb]", hover: "hover:border-[#2563eb]/25" },
+  { bg: "from-[#f5f3ff] to-[#ede9fe]", icon: "text-[#7c3aed]", hover: "hover:border-[#7c3aed]/25" },
   { bg: "from-[#fdf2f8] to-[#fce7f3]", icon: "text-[#db2777]", hover: "hover:border-[#db2777]/25" },
   { bg: "from-[#f0fdfa] to-[#ccfbf1]", icon: "text-[#0d9488]", hover: "hover:border-[#0d9488]/25" },
 ];

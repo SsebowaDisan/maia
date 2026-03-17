@@ -195,7 +195,7 @@ export function WebhookManager({ connectorId }: WebhookManagerProps) {
           void registerSelected();
         }}
         disabled={!selectedEvents.length || saving}
-        className="mt-3 rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-40"
+        className="mt-3 rounded-full bg-[#7c3aed] hover:bg-[#6d28d9] transition-colors px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-40"
       >
         {saving ? "Registering..." : "Register webhook"}
       </button>

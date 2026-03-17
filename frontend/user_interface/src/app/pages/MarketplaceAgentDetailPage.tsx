@@ -1,12 +1,5 @@
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  Calendar,
-  Database,
-  FileText,
-  MessageSquare,
-  Search,
-} from "lucide-react";
 
 import {
   getMarketplaceAgent,
@@ -21,8 +14,10 @@ import {
   type MarketplaceAgentInstallPreflightResponse,
   type MarketplaceAgentReview,
 } from "../../api/client";
+import { ConnectorBrandIcon } from "../components/connectors/ConnectorBrandIcon";
 import { AgentInstallModal } from "../components/marketplace/AgentInstallModal";
 import { ConnectorStatusPill } from "../components/marketplace/ConnectorStatusPill";
+import { openConnectorOverlay } from "../utils/connectorOverlay";
 
 type MarketplaceAgentDetailPageProps = {
   agentId: string;
@@ -40,15 +35,6 @@ function normalizeLabel(value: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function resolveConnectorIcon(connectorId: string): ComponentType<{ className?: string }> {
-  const normalized = String(connectorId || "").trim().toLowerCase();
-  if (normalized.includes("google")) return Calendar;
-  if (normalized.includes("news") || normalized.includes("search")) return Search;
-  if (normalized.includes("reddit") || normalized.includes("slack")) return MessageSquare;
-  if (normalized.includes("sec") || normalized.includes("edgar")) return FileText;
-  return Database;
 }
 
 function describeCronExpression(cronExpression: string): string {
@@ -433,7 +419,7 @@ export function MarketplaceAgentDetailPage({
 
   if (loading) {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[1080px] rounded-2xl border border-black/[0.08] bg-white p-5 text-[14px] text-[#667085]">
           Loading agent details...
         </div>
@@ -443,14 +429,14 @@ export function MarketplaceAgentDetailPage({
 
   if (!agent || error) {
     return (
-      <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
         <div className="mx-auto max-w-[980px] rounded-2xl border border-black/[0.08] bg-white p-5">
           <h1 className="text-[24px] font-semibold text-[#101828]">Agent not found</h1>
           <p className="mt-2 text-[14px] text-[#667085]">{error || "No marketplace entry for this agent id."}</p>
           <button
             type="button"
             onClick={() => navigateToPath("/marketplace")}
-            className="mt-3 inline-block text-[13px] font-semibold text-[#1d4ed8] hover:underline"
+            className="mt-3 inline-block text-[13px] font-semibold text-[#7c3aed] hover:underline"
           >
             Back to marketplace
           </button>
@@ -460,7 +446,7 @@ export function MarketplaceAgentDetailPage({
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1080px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5 shadow-[0_20px_54px_rgba(15,23,42,0.1)]">
           <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
@@ -487,7 +473,7 @@ export function MarketplaceAgentDetailPage({
               <button
                 type="button"
                 onClick={() => navigateToPath(`/agents/${encodeURIComponent(agent.agent_id)}/run`)}
-                className="rounded-full border border-[#bfdbfe] bg-[#eff6ff] px-2.5 py-1 text-[11px] font-semibold text-[#1d4ed8]"
+                className="rounded-full border border-[#c4b5fd] bg-[#f5f3ff] px-2.5 py-1 text-[11px] font-semibold text-[#7c3aed]"
               >
                 View run history
               </button>
@@ -515,7 +501,7 @@ export function MarketplaceAgentDetailPage({
                   });
                 }}
                 disabled={installing}
-                className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60"
+                className="rounded-full bg-[#7c3aed] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60"
               >
                 {installing ? "Updating..." : "Update available"}
               </button>
@@ -531,7 +517,7 @@ export function MarketplaceAgentDetailPage({
                   });
                 }}
                 disabled={installing}
-                className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60"
+                className="rounded-full bg-[#7c3aed] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60"
               >
                 {installing ? "Installing..." : "Install"}
               </button>
@@ -575,14 +561,17 @@ export function MarketplaceAgentDetailPage({
             {connectorRows.length ? (
               <div className="mt-3 space-y-2">
                 {connectorRows.map(({ connectorId, status }) => {
-                  const Icon = resolveConnectorIcon(connectorId);
                   return (
                     <div
                       key={connectorId}
                       className="flex items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-[#fcfcfd] px-3 py-2"
                     >
                       <div className="flex items-center gap-2">
-                        <Icon className="h-4 w-4 text-[#667085]" />
+                        <ConnectorBrandIcon
+                          connectorId={connectorId}
+                          label={normalizeLabel(connectorId)}
+                          size={18}
+                        />
                         <span className="text-[13px] font-semibold text-[#344054]">
                           {normalizeLabel(connectorId)}
                         </span>
@@ -618,7 +607,7 @@ export function MarketplaceAgentDetailPage({
                 <p className="mt-2 text-[12px] text-[#667085]">{scheduleSummary.humanText}</p>
                 <p className="mt-1 text-[12px] text-[#667085]">Timezone: {scheduleSummary.timezone}</p>
                 {scheduleSummary.nextRun ? (
-                  <p className="mt-1 text-[12px] text-[#1d4ed8]">
+                  <p className="mt-1 text-[12px] text-[#7c3aed]">
                     Next run: {scheduleSummary.nextRun.toLocaleString()}
                   </p>
                 ) : null}
@@ -699,20 +688,7 @@ export function MarketplaceAgentDetailPage({
         availableConnectorIds={availableConnectorIds}
         installing={installing}
         onOpenConnectorSetup={(connectorId) => {
-          const normalized = String(connectorId || "").trim().toLowerCase();
-          const mappedConnectorId =
-            normalized === "google_calendar" || normalized === "google_analytics"
-              ? "google_workspace"
-              : connectorId;
-          const target = `/connectors?connector=${encodeURIComponent(mappedConnectorId)}`;
-          const popup = window.open(
-            target,
-            `connector-setup-${mappedConnectorId}`,
-            "width=1120,height=820,noopener,noreferrer",
-          );
-          if (!popup) {
-            navigateToPath(target);
-          }
+          openConnectorOverlay(connectorId, { fromPath: window.location.pathname });
         }}
         onClose={() => {
           if (installing) {
@@ -720,7 +696,7 @@ export function MarketplaceAgentDetailPage({
           }
           setInstallModalOpen(false);
         }}
-        onInstall={runInstall}
+        onInstall={(_agentId, payload) => runInstall(payload)}
       />
     </div>
   );

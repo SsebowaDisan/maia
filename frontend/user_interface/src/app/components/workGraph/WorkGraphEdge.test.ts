@@ -4,7 +4,7 @@ import { edgeColor, edgeWidth } from "./WorkGraphEdge";
 
 describe("WorkGraphEdge helpers", () => {
   it("maps edge families to stable colors", () => {
-    expect(edgeColor("evidence")).toBe("#0ea5e9");
+    expect(edgeColor("evidence")).toBe("#8b5cf6");
     expect(edgeColor("verification")).toBe("#16a34a");
     expect(edgeColor("handoff")).toBe("#7c3aed");
     expect(edgeColor("hierarchy")).toBe("#9ca3af");

@@ -28,7 +28,7 @@ export function MindMapFlowCanvas({
 }: MindMapFlowCanvasProps) {
   return (
     <div
-      className="w-full bg-[#eef2f7]"
+      className="w-full bg-[#f5f3ff]"
       style={{ height: `${height}px` }}
       onPointerDownCapture={onCanvasInteraction}
       onWheelCapture={onCanvasInteraction}
@@ -51,7 +51,7 @@ export function MindMapFlowCanvas({
         zoomOnPinch
         zoomOnScroll
         proOptions={{ hideAttribution: true }}
-        className="bg-[#eef2f7]"
+        className="bg-[#f5f3ff]"
       />
     </div>
   );

@@ -10,7 +10,7 @@ type WorkflowFlowEdgeData = {
   animated?: boolean;
 };
 
-function WorkflowEdge(props: EdgeProps<WorkflowFlowEdgeData>) {
+function WorkflowEdge(props: EdgeProps & { data?: WorkflowFlowEdgeData }) {
   const {
     id,
     sourceX,
@@ -43,7 +43,7 @@ function WorkflowEdge(props: EdgeProps<WorkflowFlowEdgeData>) {
         path={path}
         markerEnd={markerEnd}
         style={{
-          stroke: isAnimated ? "#2563eb" : "#a3b8d9",
+          stroke: isAnimated ? "#7c3aed" : "#a3b8d9",
           strokeWidth: isAnimated ? 2.2 : 1.8,
           strokeDasharray: isAnimated ? "6 5" : "0",
           opacity: isAnimated ? 0.95 : 0.9,

@@ -93,7 +93,7 @@ function NLBuilderSheet({
                 type="button"
                 onClick={() => onGenerate(description, maxSteps)}
                 disabled={isGenerating || !description.trim()}
-                className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#0f172a] disabled:opacity-60"
+                className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-[#7c3aed] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#6d28d9] disabled:opacity-60"
               >
                 {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 Generate workflow

@@ -1,12 +1,14 @@
 """P10-03 — Observability / ROI REST endpoints.
 
 Routes:
-    GET  /api/roi                     — ROI summary for the calling tenant
-    GET  /api/roi/config              — per-agent ROI configs
-    PATCH /api/agents/{id}/roi-config — set estimated_minutes_per_run for an agent
+    GET  /api/roi                          — ROI summary for the calling tenant
+    PATCH /api/agents/{id}/roi-config      — set estimated_minutes_per_run for an agent
+    GET  /api/observability/timeline       — unified run timeline across agents+workflows
+    GET  /api/observability/cost           — daily cost summary
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -51,3 +53,121 @@ def set_agent_roi_config(
         "estimated_minutes_per_run": body.estimated_minutes_per_run,
         "hourly_rate_usd": body.hourly_rate_usd,
     }
+
+
+# ── Unified run timeline ──────────────────────────────────────────────────────
+
+@router.get("/api/observability/timeline")
+def get_run_timeline(
+    user_id: str = Depends(get_current_user_id),
+    status: str | None = Query(default=None),
+    trigger_type: str | None = Query(default=None),
+    type: str | None = Query(default=None, alias="type"),
+    since: float | None = Query(default=None),
+    until: float | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict[str, Any]]:
+    """Return a unified timeline of agent runs + workflow runs."""
+    from api.services.observability.telemetry import query_runs
+    from api.services.agents.workflow_run_store import list_runs as list_workflow_runs
+
+    entries: list[dict[str, Any]] = []
+
+    # ── Agent / scheduled / event runs from telemetry ─────────────────────
+    try:
+        telemetry_runs = query_runs(
+            tenant_id=user_id,
+            status=status,
+            trigger_type=trigger_type,
+            since=since,
+            until=until,
+            limit=limit,
+        )
+        for r in telemetry_runs:
+            run_type = "agent_run"
+            if r.trigger_type == "scheduled":
+                run_type = "scheduled_run"
+            elif r.trigger_type == "event":
+                run_type = "event_run"
+
+            if type and run_type != type:
+                continue
+
+            entries.append({
+                "id": r.run_id,
+                "type": run_type,
+                "name": r.agent_id,
+                "agent_id": r.agent_id,
+                "status": r.status,
+                "trigger": r.trigger_type,
+                "started_at": r.started_at,
+                "ended_at": r.ended_at,
+                "duration_ms": int((r.ended_at - r.started_at) * 1000) if r.ended_at else None,
+                "tokens_in": r.tokens_in,
+                "tokens_out": r.tokens_out,
+                "tool_calls": len(
+                    __import__("json").loads(r.tool_calls_json)
+                ) if r.tool_calls_json and r.tool_calls_json != "[]" else 0,
+                "error": r.error,
+            })
+    except Exception:
+        pass
+
+    # ── Workflow runs ─────────────────────────────────────────────────────
+    if not type or type == "workflow_run":
+        try:
+            wf_runs = list_workflow_runs(user_id)
+            for wr in wf_runs:
+                if status and wr.get("status") != status:
+                    continue
+                started = wr.get("started_at", 0)
+                if since and started < since:
+                    continue
+                if until and started > until:
+                    continue
+
+                entries.append({
+                    "id": wr.get("run_id", ""),
+                    "type": "workflow_run",
+                    "name": wr.get("workflow_id", "workflow"),
+                    "workflow_id": wr.get("workflow_id"),
+                    "status": wr.get("status", "unknown"),
+                    "trigger": "manual",
+                    "started_at": started,
+                    "ended_at": wr.get("completed_at"),
+                    "duration_ms": wr.get("duration_ms"),
+                    "step_count": len(wr.get("step_results", [])),
+                    "steps_completed": sum(
+                        1 for s in wr.get("step_results", [])
+                        if s.get("status") == "completed"
+                    ),
+                    "error": wr.get("error"),
+                })
+        except Exception:
+            pass
+
+    # Sort by started_at descending, limit
+    entries.sort(key=lambda e: e.get("started_at", 0), reverse=True)
+    return entries[:limit]
+
+
+@router.get("/api/observability/cost")
+def get_cost_summary(
+    user_id: str = Depends(get_current_user_id),
+    days: int = Query(default=7, ge=1, le=90),
+) -> dict[str, Any]:
+    """Return daily cost breakdown for the last N days."""
+    import datetime as _dt
+    from api.services.observability.cost_tracker import get_daily_cost
+    costs = []
+    try:
+        today = _dt.date.today()
+        for i in range(days):
+            day = today - _dt.timedelta(days=i)
+            day_key = day.isoformat()
+            cost = get_daily_cost(user_id, date_key=day_key)
+            if cost:
+                costs.append(cost)
+    except Exception:
+        pass
+    return {"tenant_id": user_id, "days": days, "daily_costs": costs}

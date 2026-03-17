@@ -131,7 +131,7 @@ function LensEquationWidget({
                     y1={objectTipY}
                     x2={imageX}
                     y2={imageTipY}
-                    stroke="#93c5fd"
+                    stroke="#a78bfa"
                     strokeWidth="1.5"
                   />
                 ) : (
@@ -141,7 +141,7 @@ function LensEquationWidget({
                       y1={objectTipY}
                       x2="478"
                       y2={axisY + ((478 - lensX) * (objectTipY - axisY)) / (principalFocusRight - lensX)}
-                      stroke="#93c5fd"
+                      stroke="#a78bfa"
                       strokeWidth="1.5"
                     />
                     <line
@@ -149,7 +149,7 @@ function LensEquationWidget({
                       y1={objectTipY}
                       x2={imageX}
                       y2={imageTipY}
-                      stroke="#93c5fd"
+                      stroke="#a78bfa"
                       strokeWidth="1.5"
                       opacity="0.55"
                       strokeDasharray="4 5"

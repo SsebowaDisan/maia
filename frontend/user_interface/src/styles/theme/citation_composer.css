@@ -163,9 +163,9 @@
 }
 
 .citation-peek-pill--reference {
-  border-color: rgba(151, 170, 201, 0.62);
-  background: linear-gradient(180deg, rgba(240, 246, 255, 0.9), rgba(233, 241, 253, 0.9));
-  color: #2f4f7a;
+  border-color: rgba(167, 139, 250, 0.52);
+  background: linear-gradient(180deg, rgba(245, 243, 255, 0.9), rgba(237, 233, 254, 0.9));
+  color: #5b21b6;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -242,9 +242,9 @@
 }
 
 .dark .citation-peek-pill--reference {
-  border-color: rgba(132, 161, 204, 0.66);
-  background: linear-gradient(180deg, rgba(61, 88, 124, 0.8), rgba(52, 76, 106, 0.8));
-  color: #d7e8ff;
+  border-color: rgba(167, 139, 250, 0.56);
+  background: linear-gradient(180deg, rgba(91, 33, 182, 0.35), rgba(76, 29, 149, 0.35));
+  color: #ddd6fe;
 }
 
 .dark .citation-peek-snippet {

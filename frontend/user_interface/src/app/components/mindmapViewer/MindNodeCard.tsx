@@ -28,20 +28,20 @@ function baseHandles() {
   );
 }
 
-function MindNodeCard({ id, data }: NodeProps<MindNodeData>) {
+function MindNodeCard({ id, data }: NodeProps & { data: MindNodeData }) {
   const isRoot = Boolean(data.isRoot);
   const depth = Math.max(0, Number(data.depth || 0));
 
   const surface = isRoot
     ? {
-        bg: "#b8bef0",
-        border: "#a5aedf",
-        text: "#1a2540",
+        bg: "#c4b5fd",
+        border: "#a78bfa",
+        text: "#1a1040",
       }
     : {
-        bg: depth === 1 ? "#b7cfe9" : "#bed8ee",
-        border: depth === 1 ? "#a5bfdc" : "#adc8df",
-        text: "#20334a",
+        bg: depth === 1 ? "#ddd6fe" : "#ede9fe",
+        border: depth === 1 ? "#c4b5fd" : "#d4c8fc",
+        text: "#2e1065",
       };
 
   return (
@@ -54,7 +54,7 @@ function MindNodeCard({ id, data }: NodeProps<MindNodeData>) {
           backgroundColor: surface.bg,
           borderColor: surface.border,
           color: surface.text,
-          boxShadow: data.isSelected ? "0 0 0 3px rgba(88,132,199,0.32)" : "0 2px 8px rgba(15,23,42,0.08)",
+          boxShadow: data.isSelected ? "0 0 0 3px rgba(124,58,237,0.32)" : "0 2px 8px rgba(15,23,42,0.08)",
         }}
         className={`rounded-[16px] border px-5 py-4 transition-all ${
           data.isInteractive ? "cursor-pointer hover:brightness-[0.98]" : "cursor-default"
@@ -78,7 +78,7 @@ function MindNodeCard({ id, data }: NodeProps<MindNodeData>) {
             data.onToggle(id);
           }}
           title={data.collapsed ? "Expand" : "Collapse"}
-          className="absolute -right-7 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#a8c1df] bg-[#b9d2ed] text-[#1f3552] shadow-sm transition-transform hover:scale-105"
+          className="absolute -right-7 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#a78bfa] bg-[#c4b5fd] text-[#2e1065] shadow-sm transition-transform hover:scale-105"
         >
           <ChevronRight className={`h-5 w-5 transition-transform ${data.collapsed ? "" : "rotate-90"}`} />
         </button>

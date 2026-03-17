@@ -11,7 +11,7 @@ import { NODE_HALF_H, NODE_HALF_W, looksNoisyTitle } from "./viewerHelpers";
 import { compactNodeValue } from "./viewerGraph";
 import { isMachineLikeTitle, resolveProfessionalNodeTitle } from "./titleSanitizer";
 
-const BRANCH_EDGE_COLORS = ["#b6c1f5", "#b8cdef", "#c1c9f6", "#bcd9ef", "#c6cdf7", "#b6d2ee"];
+const BRANCH_EDGE_COLORS = ["#c4b5fd", "#d4c8fc", "#b8a4f9", "#cec3fb", "#bfaefb", "#d9d0fd"];
 const GENERIC_CARD_TITLE_RE = /^(?:page|detail|section|topic|node|leaf|item|chunk|branch)\s*$/i;
 
 function isWeakCardTitle(value: string): boolean {

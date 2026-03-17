@@ -190,7 +190,7 @@ export function MyAgentsPage() {
   );
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1320px] space-y-4">
         <section className="rounded-[24px] border border-black/[0.08] bg-white px-6 py-5 shadow-[0_16px_40px_rgba(15,23,42,0.1)]">
           <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-[#667085]">
@@ -230,7 +230,7 @@ export function MyAgentsPage() {
                       agent.status === "Error"
                         ? "bg-[#fff1f2] text-[#b42318]"
                         : agent.status === "Scheduled"
-                          ? "bg-[#eff6ff] text-[#1d4ed8]"
+                          ? "bg-[#f5f3ff] text-[#7c3aed]"
                           : "bg-[#ecfdf3] text-[#166534]"
                     }`}
                   >
@@ -258,7 +258,7 @@ export function MyAgentsPage() {
                 </div>
 
                 {agent.scheduleLabel ? (
-                  <p className="mt-3 text-[12px] font-medium text-[#1d4ed8]">
+                  <p className="mt-3 text-[12px] font-medium text-[#7c3aed]">
                     {agent.scheduleLabel}
                   </p>
                 ) : null}
@@ -276,7 +276,7 @@ export function MyAgentsPage() {
                   <button
                     type="button"
                     onClick={() => navigateToPath(`/?agent=${encodeURIComponent(agent.agentId)}`)}
-                    className="rounded-full bg-[#111827] px-3.5 py-1.5 text-[12px] font-semibold text-white"
+                    className="rounded-full bg-[#7c3aed] px-3.5 py-1.5 text-[12px] font-semibold text-white"
                   >
                     Chat
                   </button>

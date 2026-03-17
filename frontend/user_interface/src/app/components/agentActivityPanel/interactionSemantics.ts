@@ -53,19 +53,19 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const ROLE_COLORS: Record<string, string> = {
-  conductor: "#2563eb",
+  conductor: "#7c3aed",
   planner: "#7c3aed",
-  research: "#0ea5e9",
-  browser: "#0284c7",
+  research: "#8b5cf6",
+  browser: "#7c3aed",
   writer: "#7c2d12",
   verifier: "#15803d",
   safety: "#dc2626",
   document_reader: "#475569",
-  analyst: "#1d4ed8",
-  chart_builder: "#1d4ed8",
+  analyst: "#7c3aed",
+  chart_builder: "#7c3aed",
   workspace_editor: "#9333ea",
-  goal_page_discovery: "#0369a1",
-  contact_form: "#0369a1",
+  goal_page_discovery: "#6d28d9",
+  contact_form: "#6d28d9",
   system: "#6b7280",
 };
 

@@ -12,6 +12,7 @@ import {
   PlugZap,
   PencilLine,
   Route,
+  Store,
   Trash2,
   X,
 } from "lucide-react";
@@ -122,7 +123,9 @@ export function ProjectsPane({
   const baseQuickLinks = [
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
     { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
+    { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
     { id: "insights", label: "Insights", icon: Bell, path: "/insights" },
+    { id: "marketplace", label: "Marketplace", icon: Store, path: "/marketplace" },
   ] as const;
   const quickLinks = isSuperAdmin
     ? [
@@ -152,12 +155,12 @@ export function ProjectsPane({
                 <entry.icon className="h-4 w-4 text-[#1d1d1f]" />
                 <span className="truncate">{entry.label}</span>
                 {entry.id === "insights" && insightsCount > 0 ? (
-                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#111827] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#7c3aed] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {insightsCount > 99 ? "99+" : insightsCount}
                   </span>
                 ) : null}
                 {entry.id === "review_queue" && reviewQueueCount > 0 ? (
-                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#111827] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#7c3aed] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {reviewQueueCount > 99 ? "99+" : reviewQueueCount}
                   </span>
                 ) : null}

@@ -44,6 +44,12 @@ from api.routers.auth import router as auth_router
 from api.routers.api_keys import router as api_keys_router
 from api.routers.developers import router as developers_router
 from api.routers.users import router as users_router
+from api.routers.sso import router as sso_router
+from api.routers.audit import router as audit_router
+from api.routers.versions import router as versions_router
+from api.routers.secrets import router as secrets_router
+from api.routers.mfa import router as mfa_router
+from api.routers.roles import router as roles_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -162,9 +168,11 @@ app.add_middleware(
 # Security & observability middleware (order matters: outermost runs first)
 from api.middleware.audit import AuditMiddleware  # noqa: E402
 from api.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+from api.services.tenants.middleware import TenantContextMiddleware  # noqa: E402
 
 app.add_middleware(AuditMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(TenantContextMiddleware)
 
 app.include_router(auth_router)
 app.include_router(api_keys_router)
@@ -192,6 +200,13 @@ app.include_router(observability_router)
 app.include_router(canvas_router)
 app.include_router(page_monitor_router)
 
+# Enterprise routers
+app.include_router(sso_router)
+app.include_router(audit_router)
+app.include_router(versions_router)
+app.include_router(secrets_router)
+app.include_router(mfa_router)
+app.include_router(roles_router)
 
 
 @app.get("/api/health", response_model=HealthResponse)

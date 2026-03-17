@@ -50,7 +50,7 @@ export function BudgetSettings({ currentCostUsd }: BudgetSettingsProps) {
           <span>${dailyLimit.toFixed(2)} limit</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-[#e4e7ec]">
-          <div className="h-full bg-[#2563eb]" style={{ width: `${progress}%` }} />
+          <div className="h-full bg-[#7c3aed]" style={{ width: `${progress}%` }} />
         </div>
         <p className="mt-2 text-[12px] text-[#475467]">
           Alert fires at {(dailyLimit * (alertThreshold / 100)).toFixed(2)} USD.

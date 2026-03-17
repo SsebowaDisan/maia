@@ -13,11 +13,14 @@ role     User role string
 tid      Tenant ID (str or None)
 type     "access" | "refresh"
 exp      Expiry (standard JWT claim)
+iat      Issued-at timestamp (epoch float)
+jti      Unique token identifier (UUID4)
 """
 from __future__ import annotations
 
 import os
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -62,7 +65,8 @@ def create_access_token(
     tenant_id: str | None,
 ) -> str:
     """Issue a short-lived access token."""
-    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES)
+    now = datetime.now(tz=timezone.utc)
+    expire = now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES)
     payload = {
         "sub": user_id,
         "email": email,
@@ -70,14 +74,23 @@ def create_access_token(
         "tid": tenant_id,
         "type": "access",
         "exp": expire,
+        "iat": int(now.timestamp()),
+        "jti": str(uuid.uuid4()),
     }
     return jwt.encode(payload, _SECRET, algorithm=_ALGORITHM)
 
 
 def create_refresh_token(*, user_id: str) -> str:
     """Issue a long-lived refresh token (contains only sub + type)."""
-    expire = datetime.now(tz=timezone.utc) + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
-    payload = {"sub": user_id, "type": "refresh", "exp": expire}
+    now = datetime.now(tz=timezone.utc)
+    expire = now + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
+    payload = {
+        "sub": user_id,
+        "type": "refresh",
+        "exp": expire,
+        "iat": int(now.timestamp()),
+        "jti": str(uuid.uuid4()),
+    }
     return jwt.encode(payload, _SECRET, algorithm=_ALGORITHM)
 
 
@@ -85,6 +98,17 @@ def create_refresh_token(*, user_id: str) -> str:
 
 class TokenError(Exception):
     pass
+
+
+def _check_revoked(payload: dict[str, Any]) -> None:
+    """Raise TokenError if the token's JTI is on the blocklist."""
+    jti = payload.get("jti")
+    sub = payload.get("sub")
+    iat = payload.get("iat", 0)
+    if jti and sub:
+        from api.services.auth.token_blocklist import is_blocked
+        if is_blocked(jti, str(sub), float(iat)):
+            raise TokenError("Token has been revoked.")
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -95,6 +119,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
         raise TokenError(f"Invalid token: {exc}") from exc
     if payload.get("type") != "access":
         raise TokenError("Not an access token.")
+    _check_revoked(payload)
     return payload
 
 
@@ -106,4 +131,5 @@ def decode_refresh_token(token: str) -> str:
         raise TokenError(f"Invalid refresh token: {exc}") from exc
     if payload.get("type") != "refresh":
         raise TokenError("Not a refresh token.")
+    _check_revoked(payload)
     return str(payload["sub"])

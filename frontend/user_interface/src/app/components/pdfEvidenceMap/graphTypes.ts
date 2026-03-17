@@ -48,7 +48,7 @@ const BRANCH_COLORS = [
   "#22c55e",
   "#ef4444",
   "#8b5cf6",
-  "#0ea5e9",
+  "#8b5cf6",
   "#a16207",
   "#14b8a6",
 ];

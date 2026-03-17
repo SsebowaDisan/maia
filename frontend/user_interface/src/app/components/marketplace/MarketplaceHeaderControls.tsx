@@ -50,7 +50,7 @@ export function MarketplaceHeaderControls({
             compact ? "px-2.5 py-1 text-[11px]" : "px-3 py-1.5 text-[12px]"
           } ${
             pricingFilter === value
-              ? "bg-[#111827] text-white"
+              ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
               : "border border-black/[0.12] bg-white text-[#344054]"
           }`}
         >

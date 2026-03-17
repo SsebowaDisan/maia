@@ -113,7 +113,7 @@ function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
         ? "border-[#fecaca] bg-[#fef2f2] text-[#991b1b]"
         : block.level === "warning"
           ? "border-[#fde68a] bg-[#fffbeb] text-[#92400e]"
-          : "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]";
+          : "border-[#c4b5fd] bg-[#f5f3ff] text-[#7c3aed]";
     return (
       <div className={`rounded-2xl border px-4 py-3 text-[13px] leading-6 ${noticeTone}`}>
         {block.text}

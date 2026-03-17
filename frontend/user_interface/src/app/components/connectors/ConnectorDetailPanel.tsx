@@ -207,7 +207,7 @@ export function ConnectorDetailPanel({
               type="button"
               onClick={() => void handleOAuthConnect()}
               disabled={saving}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#111827] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7c3aed] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> : null}
               Connect with OAuth
@@ -215,7 +215,7 @@ export function ConnectorDetailPanel({
           ) : null}
 
           {connector.authType === "none" ? (
-            <div className="rounded-2xl border border-[#bfdbfe] bg-[#eff6ff] px-4 py-3 text-[13px] text-[#1d4ed8]">
+            <div className="rounded-2xl border border-[#c4b5fd] bg-[#f5f3ff] px-4 py-3 text-[13px] text-[#7c3aed]">
               No credentials required. This connector uses a public API.
             </div>
           ) : null}
@@ -239,7 +239,7 @@ export function ConnectorDetailPanel({
                 type="button"
                 onClick={() => void handleSaveApiKeys()}
                 disabled={saving}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#111827] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7c3aed] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving ? <Loader2 size={14} className="animate-spin" /> : null}
                 Save credential

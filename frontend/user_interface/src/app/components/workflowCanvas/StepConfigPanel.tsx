@@ -89,7 +89,7 @@ function ConnectorRow({ connectorId, onSaved }: { connectorId: string; onSaved: 
         ) : connected ? (
           <CheckCircle2 size={14} className="shrink-0 text-[#17b26a]" />
         ) : (
-          <span className="shrink-0 text-[11px] font-semibold text-[#1d4ed8]">
+          <span className="shrink-0 text-[11px] font-semibold text-[#7c3aed]">
             {expanded ? "Cancel" : "Connect"}
           </span>
         )}
@@ -127,7 +127,7 @@ function ConnectorRow({ connectorId, onSaved }: { connectorId: string; onSaved: 
             type="button"
             disabled={saving}
             onClick={handleSave}
-            className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#111827] px-3 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-[#1d2939] disabled:opacity-55"
+            className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#7c3aed] px-3 py-2 text-[12px] font-semibold text-white transition-colors hover:bg-[#6d28d9] disabled:opacity-55"
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : null}
             Save & connect
@@ -243,7 +243,7 @@ function StepConfigPanel({
           <button
             type="button"
             onClick={handleDone}
-            className="rounded-full bg-[#111827] px-3.5 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#1d2939]"
+            className="rounded-full bg-[#7c3aed] px-3.5 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#6d28d9]"
           >
             Done
           </button>

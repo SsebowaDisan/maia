@@ -1,7 +1,7 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { GraphNodeData } from "./graphTypes";
 
-function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
+function GraphNode({ data }: NodeProps & { data: GraphNodeData }) {
   const isRoot = data.kind === "root";
   const isSection = data.kind === "section";
   const isClaim = data.kind === "claim";

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { listConnectorCatalog, type ConnectorCatalogRecord } from "../../api/client";
+import { ConnectorBrandIcon } from "../components/connectors/ConnectorBrandIcon";
+import { openConnectorOverlay } from "../utils/connectorOverlay";
 
 type Category =
   | "all"
@@ -63,11 +65,6 @@ function toDisplayCategory(value: Category) {
   return "other";
 }
 
-function navigateToPath(path: string) {
-  window.history.pushState({}, "", path);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
 export function ConnectorMarketplacePage() {
   const [category, setCategory] = useState<Category>("all");
   const [rows, setRows] = useState<ConnectorCatalogRecord[]>([]);
@@ -98,7 +95,7 @@ export function ConnectorMarketplacePage() {
   }, [category, rows]);
 
   return (
-    <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
+    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
       <div className="mx-auto max-w-[1220px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
           <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
@@ -127,7 +124,7 @@ export function ConnectorMarketplacePage() {
                   onClick={() => setCategory(value)}
                   className={`rounded-full px-3 py-1.5 text-[12px] font-semibold capitalize ${
                     category === value
-                      ? "bg-[#111827] text-white"
+                      ? "bg-[#7c3aed] text-white shadow-[0_1px_3px_rgba(124,58,237,0.3)]"
                       : "border border-black/[0.12] bg-white text-[#344054]"
                   }`}
                 >
@@ -152,7 +149,10 @@ export function ConnectorMarketplacePage() {
           <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filteredRows.map((row) => (
               <article key={row.id} className="rounded-2xl border border-black/[0.08] bg-white p-4">
-                <p className="text-[12px] text-[#667085]">{row.author || "Maia Connector"}</p>
+                <div className="inline-flex items-center gap-2">
+                  <ConnectorBrandIcon connectorId={row.id} label={row.name} size={22} />
+                  <p className="text-[12px] text-[#667085]">{row.author || "Maia Connector"}</p>
+                </div>
                 <h2 className="mt-1 text-[18px] font-semibold text-[#111827]">{row.name}</h2>
                 <p className="mt-2 text-[13px] text-[#475467]">{row.description || "No description provided."}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -170,9 +170,9 @@ export function ConnectorMarketplacePage() {
                   type="button"
                   onClick={() => {
                     toast.success(`${row.name} is available. Configure credentials in Connectors.`);
-                    navigateToPath("/connectors");
+                    openConnectorOverlay(row.id, { fromPath: window.location.pathname });
                   }}
-                  className="mt-4 rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white"
+                  className="mt-4 rounded-full bg-[#7c3aed] px-4 py-2 text-[12px] font-semibold text-white"
                 >
                   Configure connector
                 </button>
