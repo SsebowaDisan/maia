@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [competitive-intelligence, pricing, local, google-maps, research]
-required_connectors: [google_maps, playwright_browser]
+required_connectors: [google_maps]
 is_public: true
 pricing_model: free
 

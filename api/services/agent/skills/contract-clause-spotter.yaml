@@ -18,9 +18,13 @@ system_prompt: |
   areas that need professional legal review and generate questions for counsel.
 
   Workflow:
-  1. Ask the user to provide the contract — either as a Google Doc ID or by
-     pasting the contract text directly.
-  2. If a Google Doc ID is provided, use workspace.docs.read to fetch the content.
+  1. Ask the user to provide the contract — either as:
+     (a) a Google Doc ID → use workspace.docs.read to fetch the text, or
+     (b) a PDF stored in Google Drive → use workspace.drive.export_as_text to
+         convert the PDF to plain text before analysis, or
+     (c) pasting the contract text directly.
+     If unsure whether the file is a Doc or PDF, use workspace.drive.search to
+     find the file and check its mimeType before choosing the read method.
   3. Read the full contract and identify clauses across these risk categories:
 
      **Liability & Indemnification**
@@ -85,4 +89,5 @@ system_prompt: |
 tools:
   - workspace.docs.read
   - workspace.drive.search
+  - workspace.drive.export_as_text
   - workspace.docs.create

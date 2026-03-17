@@ -413,11 +413,38 @@ def validate_workflow(
     warnings: list[str] = []
     try:
         from api.services.agents.definition_store import get_agent
+        from api.services.marketplace.installer import get_tenant_connector_status
+
         steps = body.definition.get("steps") or []
         for step in steps:
+            step_id = step.get("step_id", "?")
             agent_id = step.get("agent_id", "")
-            if agent_id and not get_agent(user_id, agent_id):
-                warnings.append(f"step '{step.get('step_id', '?')}': agent '{agent_id}' is not registered for this tenant.")
+            if not agent_id:
+                continue
+
+            agent_record = get_agent(user_id, agent_id)
+            if not agent_record:
+                warnings.append(
+                    f"step '{step_id}': agent '{agent_id}' is not registered for this tenant."
+                )
+                continue
+
+            # B5 — check that the agent's required connectors are bound for this tenant.
+            # Surface as warnings (not errors) so the user can design workflows before
+            # completing connector setup.
+            try:
+                definition = agent_record.definition or {}
+                required_connectors: list[str] = list(definition.get("required_connectors") or [])
+                if required_connectors:
+                    connector_status = get_tenant_connector_status(user_id, required_connectors)
+                    missing = [c for c, s in connector_status.items() if s == "missing"]
+                    if missing:
+                        warnings.append(
+                            f"step '{step_id}': agent '{agent_id}' requires connectors that are "
+                            f"not yet configured for this tenant: {', '.join(missing)}."
+                        )
+            except Exception:
+                pass  # connector check is best-effort
     except Exception:
         pass  # agent store unavailable — skip resolution check
 
@@ -570,8 +597,15 @@ def run_workflow(
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
     step_start_times: dict[str, float] = {}
 
+    from api.services.agent.live_events import get_live_event_broker
+    _broker = get_live_event_broker()
+
     def _on_event(evt: dict[str, Any]) -> None:
         event_queue.put(evt)
+        try:
+            _broker.publish(user_id=user_id, event=evt, run_id=run_id)
+        except Exception:
+            pass
 
     def _executor_thread() -> None:
         from api.services.agents.workflow_executor import execute_workflow, WorkflowExecutionError
@@ -672,7 +706,7 @@ def run_workflow(
                     "step_id": step_id,
                     "agent_id": evt.get("agent_id", ""),
                     "status": "completed",
-                    "output_preview": evt.get("result_preview", "")[:300],
+                    "output_preview": evt.get("result_preview", "")[:2000],
                     "duration_ms": duration_ms,
                 }
                 run_record.setdefault("step_results", []).append(step_result)
@@ -682,7 +716,7 @@ def run_workflow(
                     "step_id": step_id,
                     "agent_id": evt.get("agent_id", ""),
                     "output_key": evt.get("output_key", ""),
-                    "result_preview": evt.get("result_preview", "")[:300],
+                    "result_preview": evt.get("result_preview", "")[:2000],
                     "duration_ms": duration_ms,
                 })
 
@@ -699,7 +733,7 @@ def run_workflow(
                     "workflow_id": workflow_id,
                     "run_id": run_id,
                     "step_id": step_id,
-                    "reason": "condition_false",
+                    "reason": evt.get("reason", "condition_false"),
                 })
 
             elif event_type == "workflow_step_failed":
@@ -709,7 +743,7 @@ def run_workflow(
                     "step_id": step_id,
                     "agent_id": evt.get("agent_id", ""),
                     "status": "failed",
-                    "error": evt.get("error", "")[:300],
+                    "error": evt.get("error", "")[:2000],
                     "duration_ms": duration_ms,
                 })
                 yield _sse("workflow_step_failed", {
@@ -749,15 +783,18 @@ def run_workflow(
 def list_runs(
     workflow_id: str,
     user_id: str = Depends(get_current_user_id),
+    limit: int = 50,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return run history for a workflow, newest first."""
+    """Return run history for a workflow, newest first. Supports limit/offset pagination."""
     with _runs_lock:
         runs = _load_runs()
     filtered = [
         r for r in runs
         if r.get("workflow_id") == workflow_id and r.get("tenant_id") == user_id
     ]
-    return sorted(filtered, key=lambda r: r.get("started_at", 0), reverse=True)
+    sorted_runs = sorted(filtered, key=lambda r: r.get("started_at", 0), reverse=True)
+    return sorted_runs[offset: offset + limit]
 
 
 @router.get("/{workflow_id}/runs/{run_id}")
@@ -781,3 +818,141 @@ def get_run(
     if not record:
         raise HTTPException(status_code=404, detail="Run not found.")
     return record
+
+
+class ReplayRequest(BaseModel):
+    from_step_id: str
+    initial_inputs: dict[str, Any] = {}
+
+
+@router.post("/{workflow_id}/runs/{run_id}/replay")
+def replay_workflow_from_step(
+    workflow_id: str,
+    run_id: str,
+    body: ReplayRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> StreamingResponse:
+    """Re-execute a workflow from a specific step using stored prior-step outputs.
+
+    B11: Useful for debugging failed runs — re-runs from the failed step without
+    re-running all prior steps.  Steps before from_step_id are seeded from the
+    stored step_outputs of the original run.
+    """
+    # Load original run record to seed prior step outputs
+    with _runs_lock:
+        runs = _load_runs()
+    original = next(
+        (r for r in runs if r.get("run_id") == run_id and r.get("tenant_id") == user_id),
+        None,
+    )
+    if not original:
+        raise HTTPException(status_code=404, detail="Original run not found.")
+
+    # Load + parse workflow definition
+    with _store_lock:
+        rows = _load_all()
+    row = next((r for r in rows if r["id"] == workflow_id and r.get("tenant_id") == user_id), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="Workflow not found.")
+
+    from api.schemas.workflow_definition import WorkflowDefinitionSchema
+    from pydantic import ValidationError
+
+    try:
+        wf = WorkflowDefinitionSchema.model_validate(row["definition"])
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid workflow definition: {exc}") from exc
+
+    # Seed outputs from the stored step_results of the original run
+    ordered = wf.topological_order()
+    seeded_outputs: dict[str, Any] = dict(body.initial_inputs)
+    prior_steps = original.get("step_results") or []
+    for step_result in prior_steps:
+        sid = step_result.get("step_id", "")
+        if sid == body.from_step_id:
+            break
+        seeded_outputs[sid] = step_result.get("output_preview", "")
+
+    new_run_id = str(uuid.uuid4())
+    started_at = time.time()
+    run_record: dict[str, Any] = {
+        "run_id": new_run_id,
+        "workflow_id": workflow_id,
+        "tenant_id": user_id,
+        "status": "running",
+        "started_at": started_at,
+        "finished_at": None,
+        "duration_ms": 0,
+        "step_results": [],
+        "final_outputs": {},
+        "error": "",
+        "replayed_from_run": run_id,
+        "replayed_from_step": body.from_step_id,
+    }
+    _upsert_run(run_record)
+
+    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+
+    from api.services.agent.live_events import get_live_event_broker
+    _replay_broker = get_live_event_broker()
+
+    def _on_event(evt: dict[str, Any]) -> None:
+        event_queue.put(evt)
+        try:
+            _replay_broker.publish(user_id=user_id, event=evt, run_id=new_run_id)
+        except Exception:
+            pass
+
+    def _replay_thread() -> None:
+        from api.services.agents.workflow_executor import execute_workflow, WorkflowExecutionError
+        try:
+            outputs = execute_workflow(
+                wf,
+                tenant_id=user_id,
+                initial_inputs=seeded_outputs,
+                on_event=_on_event,
+                run_id=new_run_id,
+            )
+            finished = time.time()
+            run_record.update({
+                "status": "completed",
+                "finished_at": finished,
+                "duration_ms": int((finished - started_at) * 1000),
+                "final_outputs": {k: str(v)[:500] for k, v in outputs.items()},
+            })
+        except Exception as exc:
+            finished = time.time()
+            run_record.update({
+                "status": "failed",
+                "finished_at": finished,
+                "duration_ms": int((finished - started_at) * 1000),
+                "error": str(exc)[:500],
+            })
+        finally:
+            _upsert_run(run_record)
+            event_queue.put(None)
+
+    threading.Thread(target=_replay_thread, daemon=True).start()
+
+    def _generate():
+        yield _sse("run_started", {"run_id": new_run_id, "workflow_id": workflow_id, "replay": True})
+        while True:
+            try:
+                evt = event_queue.get(timeout=60)
+            except queue.Empty:
+                yield _sse("workflow_failed", {"run_id": new_run_id, "error": "Replay timed out."})
+                break
+            if evt is None:
+                if run_record["status"] == "completed":
+                    yield _sse("workflow_completed", {"run_id": new_run_id, "outputs": run_record["final_outputs"]})
+                else:
+                    yield _sse("workflow_failed", {"run_id": new_run_id, "error": run_record.get("error", "")})
+                break
+            yield _sse(evt.get("event_type", "event"), evt)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

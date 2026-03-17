@@ -1,14 +1,15 @@
 id: google-ads-waste-cutter
-name: Google Ads Waste Cutter
+name: Google Ads Waste Reporter
 description: >
   Analyses your Google Ads account to find wasted spend — underperforming
   campaigns, poor search term hygiene, budget pacing issues, and low-quality
   score patterns. Delivers a prioritised weekly action list so you stop paying
-  for clicks that don't convert.
+  for clicks that don't convert. This agent is read-only: it reports what to
+  fix but does not pause campaigns or change bids automatically.
 version: "1.0.0"
 author: Maia Platform
 tags: [google-ads, ppc, waste, optimisation, marketing, analytics, scheduled]
-required_connectors: [google_ads, google_analytics]
+required_connectors: [google_ads]
 is_public: true
 pricing_model: free
 

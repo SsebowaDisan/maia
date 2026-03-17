@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [newsletter, email, content, marketing, gmail, scheduled]
-required_connectors: [gmail, google_workspace, brave_search]
+required_connectors: [gmail]
 is_public: true
 pricing_model: free
 

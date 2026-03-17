@@ -32,11 +32,6 @@ import type { ChatMainProps } from "./types";
 import { TurnsPanel } from "./TurnsPanel";
 import { useChatMainInteractions } from "./useChatMainInteractions";
 
-const COMPOSER_REVEAL_DISTANCE_PX = 260;
-const COMPOSER_HIDE_DISTANCE_PX = 320;
-const COMPOSER_ACTIVITY_REVEAL_DISTANCE_PX = 360;
-const COMPOSER_ACTIVITY_HIDE_DISTANCE_PX = 430;
-const COMPOSER_SCROLL_SETTLE_MS = 420;
 const SCROLL_ICON_SETTLE_MS = 1600;
 const SCROLL_TO_LATEST_THRESHOLD_PX = 140;
 
@@ -69,17 +64,17 @@ function ChatMain({
   onDismissClarificationPrompt,
   onSubmitClarificationPrompt,
 }: ChatMainProps) {
-  const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
-  const scrollHideTimeoutRef = useRef<number | null>(null);
   const scrollIconHideTimeoutRef = useRef<number | null>(null);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
   const pendingGateToastRef = useRef<string>("");
-  const [showComposerDuringActivity, setShowComposerDuringActivity] = useState(true);
-  const [composerDockedByScroll, setComposerDockedByScroll] = useState(false);
-  const [scrollSettling, setScrollSettling] = useState(false);
   const [scrollIconSettling, setScrollIconSettling] = useState(false);
   const [scrollIconHovering, setScrollIconHovering] = useState(false);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [composerCollapsed, setComposerCollapsed] = useState(false);
+  const [composerHovering, setComposerHovering] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
   const [pendingGateFromApi, setPendingGateFromApi] = useState<{
     runId: string;
     gateId: string;
@@ -87,7 +82,6 @@ function ChatMain({
     paramsPreview: string;
     costEstimateUsd: number | null;
   } | null>(null);
-  const maiaActive = isActivityStreaming || isSending;
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
   const hydrateRunSnapshot = useAgentRunStore((state) => state.hydrateFromActivityEvent);
   const clearRunSnapshot = useAgentRunStore((state) => state.clear);
@@ -251,20 +245,6 @@ function ChatMain({
   };
 
   useEffect(() => {
-    if (!maiaActive) {
-      if (!composerDockedByScroll) {
-        setShowComposerDuringActivity(true);
-      }
-      return;
-    }
-    setShowComposerDuringActivity(false);
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLElement && composerContainerRef.current?.contains(activeElement)) {
-      activeElement.blur();
-    }
-  }, [composerDockedByScroll, maiaActive]);
-
-  useEffect(() => {
     const documents = chatTurns.flatMap((turn) => turn.documents || []);
     if (documents.length > 0) {
       upsertDocuments(documents);
@@ -282,9 +262,6 @@ function ChatMain({
 
   useEffect(
     () => () => {
-      if (scrollHideTimeoutRef.current !== null) {
-        window.clearTimeout(scrollHideTimeoutRef.current);
-      }
       if (scrollIconHideTimeoutRef.current !== null) {
         window.clearTimeout(scrollIconHideTimeoutRef.current);
       }
@@ -358,6 +335,7 @@ function ChatMain({
 
   const refreshScrollToLatestVisibility = useCallback(
     (element?: HTMLDivElement | null) => {
+      if (programmaticScrollRef.current) return;
       const container = element || contentScrollRef.current;
       if (!container || chatTurns.length === 0) {
         setShowScrollToLatest(false);
@@ -378,54 +356,40 @@ function ChatMain({
     const prefersReducedMotion =
       typeof window !== "undefined" &&
       (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
+
+    // Lock out scroll-driven composer/button state updates for the duration of
+    // the animation. Without this, the composer expanding mid-scroll changes
+    // clientHeight, which changes distanceToBottom, which collapses/expands the
+    // composer in a feedback loop that fights the animation.
+    programmaticScrollRef.current = true;
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollTimerRef.current = null;
+      setComposerCollapsed(false);
+      setShowScrollToLatest(false);
+    }, prefersReducedMotion ? 50 : 600);
+
     element.scrollTo({
       top: element.scrollHeight,
       behavior: prefersReducedMotion ? "auto" : "smooth",
     });
-    setShowScrollToLatest(false);
   }, []);
-
-  const handleMainMouseMove = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (!maiaActive && !composerDockedByScroll) {
-      return;
-    }
-    if (scrollSettling && !maiaActive) {
-      return;
-    }
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const distanceToBottom = bounds.bottom - event.clientY;
-    const revealDistance = maiaActive ? COMPOSER_ACTIVITY_REVEAL_DISTANCE_PX : COMPOSER_REVEAL_DISTANCE_PX;
-    const hideDistance = maiaActive ? COMPOSER_ACTIVITY_HIDE_DISTANCE_PX : COMPOSER_HIDE_DISTANCE_PX;
-    const nextVisible = showComposerDuringActivity
-      ? distanceToBottom <= hideDistance
-      : distanceToBottom <= revealDistance;
-    setShowComposerDuringActivity(nextVisible);
-  };
-
-  const handleMainMouseLeave = () => {
-    if (!maiaActive && !composerDockedByScroll) {
-      return;
-    }
-    setShowComposerDuringActivity(false);
-  };
 
   const handleContentScroll = (event: ReactUIEvent<HTMLDivElement>) => {
     const container = event.currentTarget;
-    setComposerDockedByScroll(true);
-    setScrollSettling(true);
     setScrollIconSettling(true);
-    setShowComposerDuringActivity(false);
     refreshScrollToLatestVisibility(container);
-    if (scrollHideTimeoutRef.current !== null) {
-      window.clearTimeout(scrollHideTimeoutRef.current);
+    if (!composerFocused && !programmaticScrollRef.current) {
+      const distanceToBottom =
+        container.scrollHeight - (container.scrollTop + container.clientHeight);
+      setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
     }
     if (scrollIconHideTimeoutRef.current !== null) {
       window.clearTimeout(scrollIconHideTimeoutRef.current);
     }
-    scrollHideTimeoutRef.current = window.setTimeout(() => {
-      setScrollSettling(false);
-      scrollHideTimeoutRef.current = null;
-    }, COMPOSER_SCROLL_SETTLE_MS);
     scrollIconHideTimeoutRef.current = window.setTimeout(() => {
       setScrollIconSettling(false);
       scrollIconHideTimeoutRef.current = null;
@@ -433,14 +397,14 @@ function ChatMain({
   };
 
   useEffect(() => {
-    if (!isSending) {
+    if (!isSending || showScrollToLatest) {
       return;
     }
     const rafId = window.requestAnimationFrame(() => {
       scrollLatestTurnToTop();
     });
     return () => window.cancelAnimationFrame(rafId);
-  }, [isSending, isActivityStreaming, scrollLatestTurnToTop]);
+  }, [isSending, isActivityStreaming, scrollLatestTurnToTop, showScrollToLatest]);
 
   useEffect(() => {
     const rafId = window.requestAnimationFrame(() => {
@@ -455,15 +419,21 @@ function ChatMain({
     refreshScrollToLatestVisibility,
   ]);
 
-  const composerVisible = maiaActive || composerDockedByScroll
-    ? showComposerDuringActivity && !scrollSettling
-    : true;
+  useEffect(() => {
+    const container = contentScrollRef.current;
+    if (!container || composerFocused || programmaticScrollRef.current) {
+      return;
+    }
+    const distanceToBottom =
+      container.scrollHeight - (container.scrollTop + container.clientHeight);
+    setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
+  }, [chatTurns.length, composerFocused, selectedTurnIndex]);
+
+  const composerVisible = !composerCollapsed || composerHovering || composerFocused;
 
   return (
     <div
-      className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
-      onMouseMove={handleMainMouseMove}
-      onMouseLeave={handleMainMouseLeave}
+      className="relative h-full flex-1 min-h-0 min-w-0 grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
     >
       <div className="border-b border-black/[0.06] px-5 py-4">
         <div>
@@ -474,7 +444,7 @@ function ChatMain({
       <div className="relative min-h-0 flex-1">
         <div
           ref={contentScrollRef}
-          className="h-full overflow-y-auto px-6 pb-10 pt-6"
+          className="h-full overflow-y-auto overscroll-none px-6 pb-3 pt-6"
           onScroll={handleContentScroll}
         >
           {pendingGate ? (
@@ -499,6 +469,7 @@ function ChatMain({
           ) : (
             <TurnsPanel
               activityEvents={activityEvents}
+              autoFollowLatest={!showScrollToLatest}
               beginInlineEdit={interactions.beginInlineEdit}
               cancelInlineEdit={interactions.cancelInlineEdit}
               chatTurns={chatTurns}
@@ -518,10 +489,11 @@ function ChatMain({
             />
           )}
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
         {showScrollToLatest && (scrollIconSettling || scrollIconHovering) ? (
           <button
             type="button"
+            tabIndex={-1}
+            onMouseDown={(e) => e.preventDefault()}
             onClick={scrollToLatestMessage}
             onMouseEnter={() => setScrollIconHovering(true)}
             onMouseLeave={() => setScrollIconHovering(false)}
@@ -533,45 +505,57 @@ function ChatMain({
           </button>
         ) : null}
       </div>
-
       <div
-        ref={composerContainerRef}
-        className={`overflow-hidden bg-[linear-gradient(180deg,rgba(246,246,247,0.08)_0%,rgba(246,246,247,0.86)_18%,#f6f6f7_100%)] px-3 pb-3 pt-2 transition-[max-height,opacity,transform] duration-220 ease-out ${
-          composerVisible
-            ? "max-h-[440px] translate-y-0 opacity-100"
-            : "pointer-events-none max-h-0 translate-y-3 opacity-0"
-        }`}
+        className="z-20 shrink-0"
+        onMouseEnter={() => setComposerHovering(true)}
+        onMouseLeave={() => setComposerHovering(false)}
       >
-        <ComposerPanel
-          accessMode={accessMode}
-          agentControlsVisible={interactions.agentControlsVisible}
-          agentMode={agentMode}
-          composerMode={interactions.composerMode}
-          attachments={interactions.attachments}
-          clearAttachments={interactions.clearAttachments}
-          removeAttachment={interactions.removeAttachment}
-          enableAskMode={interactions.enableAskMode}
-          enableAgentMode={interactions.enableAgentMode}
-          enableWebSearch={interactions.enableWebSearch}
-          enableDeepResearch={interactions.enableDeepResearch}
-          fileInputRef={interactions.fileInputRef}
-          isSending={isSending}
-          isUploading={interactions.isUploading}
-          latestHighlightSnippets={interactions.latestHighlightSnippets}
-          message={interactions.message}
-          messageActionStatus={interactions.messageActionStatus}
-          onAccessModeChange={onAccessModeChange}
-          onFileChange={interactions.onFileChange}
-          documentOptions={availableDocuments}
-          groupOptions={availableGroups}
-          projectOptions={availableProjects}
-          onAttachDocument={interactions.attachDocumentById}
-          onAttachGroup={interactions.attachGroupById}
-          onAttachProject={interactions.attachProjectById}
-          pasteHighlightsToComposer={interactions.pasteHighlightsToComposer}
-          setMessage={interactions.setMessage}
-          submit={interactions.submit}
-        />
+        {composerVisible ? (
+          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-0 pt-2">
+            <ComposerPanel
+              accessMode={accessMode}
+              agentControlsVisible={interactions.agentControlsVisible}
+              agentMode={agentMode}
+              composerMode={interactions.composerMode}
+              attachments={interactions.attachments}
+              clearAttachments={interactions.clearAttachments}
+              removeAttachment={interactions.removeAttachment}
+              enableAskMode={interactions.enableAskMode}
+              enableAgentMode={interactions.enableAgentMode}
+              enableWebSearch={interactions.enableWebSearch}
+              enableDeepResearch={interactions.enableDeepResearch}
+              activeAgent={interactions.activeAgent}
+              onAgentSelect={interactions.onAgentSelect}
+              fileInputRef={interactions.fileInputRef}
+              isSending={isSending}
+              isUploading={interactions.isUploading}
+              latestHighlightSnippets={interactions.latestHighlightSnippets}
+              message={interactions.message}
+              messageActionStatus={interactions.messageActionStatus}
+              onAccessModeChange={onAccessModeChange}
+              onFileChange={interactions.onFileChange}
+              documentOptions={availableDocuments}
+              groupOptions={availableGroups}
+              projectOptions={availableProjects}
+              onAttachDocument={interactions.attachDocumentById}
+              onAttachGroup={interactions.attachGroupById}
+              onAttachProject={interactions.attachProjectById}
+              pasteHighlightsToComposer={interactions.pasteHighlightsToComposer}
+              setMessage={interactions.setMessage}
+              submit={interactions.submit}
+              onFocusWithinChange={(focused) => {
+                setComposerFocused(focused);
+                if (focused) {
+                  setComposerCollapsed(false);
+                }
+              }}
+            />
+          </div>
+        ) : (
+          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pt-3 pb-[42px]">
+            <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
+          </div>
+        )}
       </div>
 
       {clarificationPrompt ? (

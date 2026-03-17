@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [competitor-intelligence, monitoring, alerts, slack, strategy]
-required_connectors: [playwright_browser, slack]
+required_connectors: [playwright_browser]
 is_public: true
 pricing_model: free
 
@@ -32,9 +32,13 @@ system_prompt: |
      - Slack channel to send change alerts to
      - Types of changes to highlight: pricing, features, copy, new content, CTAs
 
-  2. For each monitored URL:
+  2. On first run, register each URL using page_monitor.register_url so the
+     platform tracks content hashes automatically between runs.
+     Use page_monitor.list_monitored to retrieve the current list on subsequent runs.
+
+  3. For each monitored URL:
      - Use browser.navigate to load the page and extract the full text content
-     - Compare to the previously stored snapshot (Maia tracks this automatically)
+     - Compare to the previously stored snapshot (Maia tracks this via page_monitor)
      - If the content hash has changed, extract what changed:
        * New text sections added
        * Text sections removed or modified
@@ -42,9 +46,9 @@ system_prompt: |
        * New features or product names mentioned
        * CTA button text changes
 
-  3. If no changes: confirm monitoring is running, no alert needed.
+  4. If no changes: confirm monitoring is running, no alert needed.
 
-  4. If changes detected, compile the change report:
+  5. If changes detected, compile the change report:
 
      # Competitor Change Detected — [Date]
 
@@ -65,7 +69,7 @@ system_prompt: |
      ---
      [Repeat for each changed page]
 
-  5. Send the change summary to Slack using slack.send_message:
+  6. Send the change summary to Slack using slack.send_message:
      - If multiple changes: grouped digest format
      - If single change: direct, punchy alert
      - Always include: which competitor, which page, what changed, link
@@ -77,6 +81,9 @@ system_prompt: |
   Always link to the specific page that changed.
 
 tools:
+  - page_monitor.register_url
+  - page_monitor.list_monitored
+  - page_monitor.unregister_url
   - browser.navigate
   - slack.send_message
   - slack.list_channels

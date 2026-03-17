@@ -1,66 +1,83 @@
-# Maia Execution Roadmap
+# Maia Frontend Execution Roadmap
+Updated: 2026-03-17  
+Scope: Marketplace install UX and connector readiness flows
 
-Updated: 2026-03-16
+## Analysis Summary
+1. The install flow can skip modal friction when preflight confirms immediate install.
+2. Post-install state should be updated from install response payloads to remove redundant list refetches.
+3. Connector readiness needs to be visible earlier (cards/detail) and clearer at confirmation time.
+4. Installed/version state should drive `Installed` vs `Update` calls-to-action directly from preflight/install responses.
+5. Audit/debug and workflow validation UX should expose connector-related history/warnings without hard-blocking save.
 
-## Rules
-1. Frontend-only execution in this slice. No backend modifications.
-2. Strict order: hard blockers first, then high-value UX gaps, then enhancements.
-3. Each task must be wired end-to-end with visible UI behavior before moving on.
-4. Keep changes incremental and production-safe.
+## Active Tasks
 
----
+### P0 - Critical (pairs with B0/B3)
 
-## Scope
-Close remaining **Marketplace + Agent Platform frontend gaps** now that backend APIs are available.
+#### F1 - One-click install button driven by preflight
+- Description: On marketplace detail page, call `POST /api/marketplace/agents/{id}/install/preflight` on load. If `can_install_immediately: true`, show one-click `Install` (direct install call, no modal). If false, keep modal flow for connector setup.
+- Files:
+  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
+  - `src/app/components/marketplace/AgentInstallModal.tsx`
 
----
+#### F2 - Update local agent state from install response (no refetch)
+- Description: Use `installed_agent` returned from install success to merge directly into agent list store instead of calling `GET /api/agents` again.
+- Files:
+  - `src/app/api/client/marketplace.ts`
+  - `src/app/components/marketplace/AgentInstallModal.tsx`
 
-## Phase Status Summary
+#### F3 - Show auto-mapped connectors in confirmation UI
+- Description: If install response includes `auto_mapped_connectors`, render inline "Connected automatically" chips under the success message (example: `brave_search -> tenant_brave_01`).
+- Files:
+  - `src/app/components/marketplace/AgentInstallModal.tsx`
 
-| Phase | Description | Status |
-|---|---|---|
-| MP-F0 | Hard blockers (Page Monitor, connector definitions, auth-none UX, detail mount) | done |
-| MP-F1 | High-value UX (schedule at install, tags/connectors detail polish, health warnings, post-install gate editing) | in_progress |
-| MP-F2 | Enhancements (widget expansions + connector marketplace sanity check) | pending |
+### P1 - High Value (pairs with B1/B6)
 
----
+#### F4 - Connector status pills on marketplace cards and detail page
+- Description: Use `connector_status` from `GET /api/marketplace/agents` to show status pills per required connector:
+  - `Connected` (green)
+  - `Missing` (amber)
+  - `Not required` (grey)
+- List page shows compact summary; detail page shows full per-connector breakdown.
+- Files:
+  - `src/app/pages/MarketplacePage.tsx`
+  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
+  - `src/app/components/marketplace/ConnectorStatusPill.tsx` (new)
 
-## Frontend Tasks
+#### F5 - Collapse install modal to a single connector-setup sheet
+- Description: When `can_install_immediately: false` and exactly one item in `missing_connectors`, skip wizard and show inline sheet (`This agent needs <connector> -> Connect`). On OAuth success, auto-install. Keep 4-step wizard for 2+ missing connectors or explicit `Customise`.
+- Files:
+  - `src/app/components/marketplace/AgentInstallModal.tsx`
 
-| ID | Task | Status | Frontend target |
-|---|---|---|---|
-| F-MP-01 | Add Page Monitor API client (`list/add/remove/refresh`) | done | `src/api/client/pageMonitor.ts`, `src/api/client.ts` |
-| F-MP-02 | Build `PageMonitorPanel` UI with add/remove/check-now + change alerts | done | `src/app/components/agents/PageMonitorPanel.tsx` |
-| F-MP-03 | Mount Page Monitor in Agent Detail for competitor-change-radar capability | done | `src/app/pages/AgentDetailPage.tsx` |
-| F-MP-04 | Add missing connector definitions: `reddit`, `newsapi`, `sec_edgar` | done | `src/app/components/settings/connectorDefinitions.ts` |
-| F-MP-05 | Handle `authType: none` cleanly in connector UI (no credential form, public API notice) | done | `src/app/components/connectors/ConnectorDetailPanel.tsx`, `src/app/components/settings/ManualConnectorCard.tsx`, `src/app/pages/ConnectorsPage.tsx` |
-| F-MP-06 | Show scheduled trigger details in install modal Step 1 (human-readable + timezone + note) | done | `src/app/components/marketplace/AgentInstallModal.tsx` |
-| F-MP-07 | Ensure marketplace detail shows tags and required connector visibility clearly | done | `src/app/pages/MarketplaceAgentDetailPage.tsx` |
-| F-MP-08 | Add connector health warning on installed-agent surfaces | done | `src/app/pages/WorkspacePage.tsx` (+ agent card surface) |
-| F-MP-09 | Add post-install connector gate policy editing surface in agent detail | in_progress | `src/app/pages/AgentDetailPage.tsx` (+ existing connector binding APIs) |
-| F-MP-10 | Verify connector marketplace list is API-driven (no static filter blocking new connectors) | done | `src/app/pages/ConnectorMarketplacePage.tsx` |
-| F-MP-11 | Widget output enhancements (chart/table/scorecard widgets) | pending | `src/app/components/widgets/*`, `src/app/components/messages/BlockRenderer.tsx` |
+#### F6 - Already-installed badge and update flow
+- Description: If `already_installed: true` from preflight/install, replace `Install` call-to-action with an `Installed` badge. If marketplace version is newer than installed version, show `Update available` and re-use install endpoint for upgrade/upsert flow.
+- Files:
+  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
+  - `src/app/api/client/marketplace.ts`
 
----
+### P2 - Polish (pairs with B8)
 
-## Build Order (Strict)
-1. F-MP-01
-2. F-MP-02
-3. F-MP-03
-4. F-MP-04
-5. F-MP-05
-6. F-MP-06
-7. F-MP-07
-8. F-MP-08
-9. F-MP-09
-10. F-MP-10
-11. F-MP-11
+#### F7 - Install history drawer on AgentDetailPage
+- Description: Add a `History` tab on Agent detail that calls `GET /api/agents/{id}/install-history` and renders timeline entries for timestamp, installed version, user, and mapped connectors.
+- Files:
+  - `src/app/pages/AgentDetailPage.tsx`
+  - `src/app/components/agents/InstallHistoryTab.tsx` (new)
 
----
+#### F8 - Workflow canvas connector warning indicators
+- Description: When `POST /api/workflows/validate` warnings mention missing connectors, highlight affected nodes with an amber border and tooltip (`Missing connector: <name> - configure in Settings`). Warning-only behavior: saving is still allowed.
+- Files:
+  - `src/app/components/workflowCanvas/WorkflowNode.tsx`
+  - `src/app/components/workflowCanvas/WorkflowCanvas.tsx`
 
-## Acceptance Criteria
-1. Competitor Change Radar users can manage monitored URLs directly in Agent Detail and run manual refresh checks.
-2. Marketplace install flow supports all connectors used by shipped agents, including no-auth connectors.
-3. Install modal clearly communicates scheduled execution behavior before install.
-4. Agent/workspace surfaces warn users when required connectors are unconfigured or unhealthy.
-5. Connector marketplace and detail pages expose complete, non-hidden metadata for decision-making.
+## Suggested Implementation Order
+1. F1 -> F2 -> F3
+2. F4 -> F5 -> F6
+3. F7 -> F8
+
+## Completion Criteria
+1. Immediate-install agents can be installed from detail page with one click and no modal.
+2. Post-install UI state updates without `GET /api/agents` refetch.
+3. Auto-mapped connectors appear in success confirmation.
+4. Connector readiness is visible on marketplace cards and detail page.
+5. Installed vs Update controls render correctly from response data.
+6. Agent detail exposes an install history timeline.
+7. Workflow validation warnings visually mark affected nodes while preserving save behavior.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import type { AgentActivityEvent, AgentSourceRecord, ChatAttachment, CitationFocus, SourceUsageRecord } from "../types";
@@ -79,9 +79,12 @@ export function InfoPanel({
 }: InfoPanelProps) {
   const { viewerHeights, renderViewerResizeHandle } = useResizableViewers();
   const { memory, updateMemory } = useVerificationMemory(selectedConversationId);
+  const contentViewportRef = useRef<HTMLDivElement | null>(null);
+  const citationPanelRef = useRef<HTMLDivElement | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [pdfZoom, setPdfZoom] = useState(1);
   const [isMindmapDialogOpen, setIsMindmapDialogOpen] = useState(false);
+  const [citationAutoHeight, setCitationAutoHeight] = useState(0);
 
   const evidenceCards = useMemo(
     () =>
@@ -213,6 +216,78 @@ export function InfoPanel({
     () => buildMindmapArtifactSummary(typedMindmapPayload),
     [typedMindmapPayload],
   );
+  const effectiveCitationViewerHeight = useMemo(() => {
+    if (citationAutoHeight > 0) {
+      return citationAutoHeight;
+    }
+    return viewerHeights.citation;
+  }, [citationAutoHeight, viewerHeights.citation]);
+
+  const recomputeCitationAutoHeight = useCallback(() => {
+    const viewportNode = contentViewportRef.current;
+    const citationNode = citationPanelRef.current;
+    if (!viewportNode || !citationNode) {
+      return;
+    }
+    const viewportRect = viewportNode.getBoundingClientRect();
+    const citationRect = citationNode.getBoundingClientRect();
+
+    // pb-10 (40px) keeps breathing room above the bottom gradient.
+    const viewportBottomPadding = 40;
+    // CitationPreviewPanel has chrome outside the website/PDF viewer area.
+    const previewChromeOffset = 96;
+    const availableViewerHeight =
+      viewportRect.bottom - citationRect.top - viewportBottomPadding - previewChromeOffset;
+    const nextHeight = Math.max(320, Math.min(1000, Math.floor(availableViewerHeight)));
+    setCitationAutoHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
+  }, []);
+
+  useEffect(() => {
+    if (!activeCitation) {
+      setCitationAutoHeight(0);
+      return;
+    }
+
+    let frameId = 0;
+    const scheduleRecompute = () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        recomputeCitationAutoHeight();
+      });
+    };
+
+    scheduleRecompute();
+
+    const viewportNode = contentViewportRef.current;
+    if (viewportNode) {
+      viewportNode.addEventListener("scroll", scheduleRecompute, { passive: true });
+    }
+    window.addEventListener("resize", scheduleRecompute);
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(scheduleRecompute);
+      if (viewportNode) {
+        observer.observe(viewportNode);
+      }
+      if (citationPanelRef.current) {
+        observer.observe(citationPanelRef.current);
+      }
+    }
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (viewportNode) {
+        viewportNode.removeEventListener("scroll", scheduleRecompute);
+      }
+      window.removeEventListener("resize", scheduleRecompute);
+      observer?.disconnect();
+    };
+  }, [activeCitation, recomputeCitationAutoHeight]);
 
   const selectEvidence = (card: EvidenceCard, index: number) => {
     const nextCitation = toCitationFromEvidence(card, index);
@@ -303,7 +378,7 @@ export function InfoPanel({
       </div>
 
       <div className="relative min-h-0 flex-1">
-        <div className="h-full space-y-4 overflow-y-auto px-5 pb-10 pt-5">
+        <div ref={contentViewportRef} className="h-full space-y-4 overflow-y-auto overscroll-none px-5 pb-10 pt-5">
           <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -375,45 +450,47 @@ export function InfoPanel({
 
           {/* Citation page preview */}
           {activeCitation ? (
-            <CitationPreviewPanel
-              citationFocus={activeCitation}
-              citationOpenUrl={citationOpenState.citationOpenUrl}
-              citationRawUrl={citationOpenState.citationRawUrl}
-              citationUsesWebsite={citationOpenState.citationUsesWebsite}
-              citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
-              citationIsPdf={citationOpenState.citationIsPdf}
-              citationIsImage={citationOpenState.citationIsImage}
-              citationViewerHeight={viewerHeights.citation}
-              reviewQuery={userPrompt || activeCitation?.claimText || ""}
-              preferredPage={preferredCitationPage}
-              webReviewSource={activeWebReviewSource}
-              hasPreviousEvidence={activeEvidenceIndex > 0}
-              hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
-              onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
-              onNextEvidence={() => jumpToNeighborEvidence(1)}
-              pdfZoom={pdfZoom}
-              onPdfZoomChange={(next) => {
-                setPdfZoom(next);
-                updateMemory({ reviewZoom: next });
-              }}
-              onPdfPageChange={(nextPage) => {
-                if (!activeCitationSourceKey || nextPage <= 0) {
-                  return;
-                }
-                const previous = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
-                if (previous === nextPage) {
-                  return;
-                }
-                updateMemory({
-                  reviewPageBySource: {
-                    ...memory.reviewPageBySource,
-                    [activeCitationSourceKey]: nextPage,
-                  },
-                });
-              }}
-              onClear={onClearCitationFocus}
-              renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
-            />
+            <div ref={citationPanelRef}>
+              <CitationPreviewPanel
+                citationFocus={activeCitation}
+                citationOpenUrl={citationOpenState.citationOpenUrl}
+                citationRawUrl={citationOpenState.citationRawUrl}
+                citationUsesWebsite={citationOpenState.citationUsesWebsite}
+                citationWebsiteUrl={citationOpenState.citationWebsiteUrl}
+                citationIsPdf={citationOpenState.citationIsPdf}
+                citationIsImage={citationOpenState.citationIsImage}
+                citationViewerHeight={effectiveCitationViewerHeight}
+                reviewQuery={userPrompt || activeCitation?.claimText || ""}
+                preferredPage={preferredCitationPage}
+                webReviewSource={activeWebReviewSource}
+                hasPreviousEvidence={activeEvidenceIndex > 0}
+                hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
+                onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
+                onNextEvidence={() => jumpToNeighborEvidence(1)}
+                pdfZoom={pdfZoom}
+                onPdfZoomChange={(next) => {
+                  setPdfZoom(next);
+                  updateMemory({ reviewZoom: next });
+                }}
+                onPdfPageChange={(nextPage) => {
+                  if (!activeCitationSourceKey || nextPage <= 0) {
+                    return;
+                  }
+                  const previous = Number(memory.reviewPageBySource[activeCitationSourceKey] || 0);
+                  if (previous === nextPage) {
+                    return;
+                  }
+                  updateMemory({
+                    reviewPageBySource: {
+                      ...memory.reviewPageBySource,
+                      [activeCitationSourceKey]: nextPage,
+                    },
+                  });
+                }}
+                onClear={onClearCitationFocus}
+                renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
+              />
+            </div>
           ) : sources.length > 0 ? (
             <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6e6e73]">
               Click any citation in the answer to preview the source page here.
@@ -421,6 +498,17 @@ export function InfoPanel({
           ) : null}
         </div>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
+      </div>
+
+      {/* Footer — matches sidebar footer and composer pill height (60px) */}
+      <div className="shrink-0 border-t border-black/[0.06] bg-[#f6f6f7] px-3 py-3">
+        <div className="flex h-9 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] text-[#6e6e73]">
+          <span className="truncate">
+            {sources.length > 0
+              ? `${sources.length} source${sources.length !== 1 ? "s" : ""}`
+              : "No sources"}
+          </span>
+        </div>
       </div>
 
       <MindmapArtifactDialog

@@ -115,6 +115,45 @@ function withUserIdHeaders(initHeaders?: HeadersInit) {
   return headers;
 }
 
+function readPersistedAuthState(): Record<string, unknown> | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem("maia.auth");
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedBearerTokens(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const parsed = readPersistedAuthState();
+  if (!parsed) {
+    return;
+  }
+  const state = parsed.state && typeof parsed.state === "object" ? { ...(parsed.state as Record<string, unknown>) } : {};
+  state.accessToken = null;
+  state.refreshToken = null;
+  window.localStorage.setItem(
+    "maia.auth",
+    JSON.stringify({
+      ...parsed,
+      state,
+    }),
+  );
+}
+
 function withUserIdQuery(path: string) {
   if (!ACTIVE_USER_ID || path.includes("user_id=")) {
     return path;
@@ -205,50 +244,59 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   throw buildNetworkError(path, candidates, lastError);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function parseErrorMessage(response: Response, text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return `Request failed: ${response.status}`;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      detail?: {
+        code?: string;
+        message?: string;
+        details?: Record<string, unknown>;
+      } | string;
+      code?: string;
+      message?: string;
+    };
+    if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
+    if (parsed?.detail && typeof parsed.detail === "object") {
+      const code = String(parsed.detail.code || "").trim();
+      const message = String(parsed.detail.message || "").trim();
+      if (message) {
+        return code ? `${code}: ${message}` : message;
+      }
+    }
+    const code = String(parsed?.code || "").trim();
+    const message = String(parsed?.message || "").trim();
+    if (message) {
+      return code ? `${code}: ${message}` : message;
+    }
+  } catch {
+    // fall through
+  }
+  return trimmed;
+}
+
+async function request<T>(path: string, init?: RequestInit, authRetryAttempt = 0): Promise<T> {
   const response = await fetchApi(path, init);
 
   if (!response.ok) {
     const text = await response.text();
-    const trimmed = text.trim();
-    if (trimmed) {
-      let parsedMessage = "";
-      try {
-        const parsed = JSON.parse(trimmed) as {
-          detail?: {
-            code?: string;
-            message?: string;
-            details?: Record<string, unknown>;
-          } | string;
-          code?: string;
-          message?: string;
-        };
-        if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
-          parsedMessage = parsed.detail.trim();
-        }
-        if (!parsedMessage && parsed?.detail && typeof parsed.detail === "object") {
-          const code = String(parsed.detail.code || "").trim();
-          const message = String(parsed.detail.message || "").trim();
-          if (message) {
-            parsedMessage = code ? `${code}: ${message}` : message;
-          }
-        }
-        if (!parsedMessage) {
-          const code = String(parsed?.code || "").trim();
-          const message = String(parsed?.message || "").trim();
-          if (message) {
-            parsedMessage = code ? `${code}: ${message}` : message;
-          }
-        }
-      } catch {
-        parsedMessage = "";
-      }
-      if (parsedMessage) {
-        throw new Error(parsedMessage);
-      }
-      throw new Error(trimmed);
+    const parsedMessage = parseErrorMessage(response, text);
+    if (
+      response.status === 401 &&
+      authRetryAttempt < 1 &&
+      /invalid token/i.test(parsedMessage)
+    ) {
+      // Local/dev guard: stale persisted JWT should not block all app routes.
+      // Clear Bearer tokens and retry once so X-User-Id fallback can work.
+      clearPersistedBearerTokens();
+      return request<T>(path, init, authRetryAttempt + 1);
     }
-    throw new Error(`Request failed: ${response.status}`);
+    throw new Error(parsedMessage);
   }
 
   return (await response.json()) as T;

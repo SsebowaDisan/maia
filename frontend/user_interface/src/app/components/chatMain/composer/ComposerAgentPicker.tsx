@@ -4,7 +4,7 @@ import { listAgents, type AgentSummaryRecord } from "../../../../api/client";
 
 type ComposerAgentPickerProps = {
   query: string;
-  onPick: (agentName: string) => void;
+  onPick: (agent: AgentSummaryRecord) => void;
 };
 
 export function ComposerAgentPicker({ query, onPick }: ComposerAgentPickerProps) {
@@ -52,7 +52,7 @@ export function ComposerAgentPicker({ query, onPick }: ComposerAgentPickerProps)
           <button
             key={agent.agent_id}
             type="button"
-            onClick={() => onPick(agent.name)}
+            onClick={() => onPick(agent)}
             className="w-full rounded-xl px-2 py-2 text-left hover:bg-[#f8fafc]"
           >
             <p className="text-[13px] font-semibold text-[#111827]">{agent.name}</p>

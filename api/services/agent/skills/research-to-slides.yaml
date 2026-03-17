@@ -1,14 +1,15 @@
 id: research-to-slides
-name: Research to Slides Outliner
+name: Presentation Outline Builder
 description: >
-  Researches a topic thoroughly using web sources, then creates a structured
-  presentation outline in Google Docs — with slide titles, key points, speaker
-  notes, supporting data, and recommended visuals for each slide. Brief your
-  designer or build in Slides yourself from a solid foundation.
+  Researches a topic thoroughly using web sources, then writes a structured
+  slide-by-slide outline into a Google Doc — with slide titles, key points,
+  speaker notes, supporting data, and recommended visuals. The output is a
+  Google Docs text file (not a Google Slides deck); use it to brief your
+  designer or paste into Slides yourself.
 version: "1.0.0"
 author: Maia Platform
 tags: [presentations, slides, research, outlines, google-docs, content]
-required_connectors: [brave_search, google_workspace]
+required_connectors: [brave_search]
 is_public: true
 pricing_model: free
 

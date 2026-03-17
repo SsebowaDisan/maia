@@ -24,6 +24,7 @@ type TurnsPanelProps = {
   saveInlineEdit: () => Promise<void>;
   selectedTurnIndex: number | null;
   setEditingText: (value: string) => void;
+  autoFollowLatest: boolean;
   citationFocus?: CitationFocus | null;
 };
 
@@ -44,6 +45,7 @@ function TurnsPanel({
   saveInlineEdit,
   selectedTurnIndex,
   setEditingText,
+  autoFollowLatest,
   citationFocus = null,
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
@@ -123,13 +125,19 @@ function TurnsPanel({
   };
 
   useEffect(() => {
-    if (!isSending || latestTurnIndex === null) {
+    if (latestTurnIndex === null) {
+      return;
+    }
+    if (!autoFollowLatest && !isSending) {
       return;
     }
     queueTheatreCenter(latestTurnIndex);
-  }, [isSending, latestTurnIndex]);
+  }, [autoFollowLatest, isSending, latestTurnIndex]);
 
   useEffect(() => {
+    if (!autoFollowLatest) {
+      return;
+    }
     const previousCount = previousTurnCountRef.current;
     const currentCount = chatTurns.length;
     previousTurnCountRef.current = currentCount;
@@ -144,7 +152,7 @@ function TurnsPanel({
     }
 
     queueTheatreCenter(latestTurnIndex);
-  }, [chatTurns.length, isSending, isActivityStreaming, latestTurnIndex]);
+  }, [autoFollowLatest, chatTurns.length, isSending, isActivityStreaming, latestTurnIndex]);
 
   useEffect(() => {
     if (latestTurnIndex === null) {

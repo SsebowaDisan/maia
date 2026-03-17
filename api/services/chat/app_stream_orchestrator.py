@@ -114,36 +114,46 @@ def run_orchestrator_stream_turn(
     if isinstance(request.setting_overrides, dict):
         agent_settings.update(request.setting_overrides)
 
-    # B-03: Resolve marketplace/installed agent from @mention or LLM intent.
-    # When an agent is resolved, its tool allowlist and system prompt are injected
-    # so that the step planner respects the agent's declared capability scope.
+    # Resolve which installed agent handles this turn.
+    # Priority: explicit agent_id in request > @mention > LLM intent.
     try:
-        from api.services.agents.resolver import resolve_agent
         from api.services.agents.definition_store import get_agent, load_schema as _load_schema
 
-        _resolution = resolve_agent(user_id, message, user_id=user_id)
-        if _resolution:
-            _agent_record = get_agent(user_id, _resolution.agent_id)
-            if _agent_record:
-                _agent_schema = _load_schema(_agent_record)
-                if getattr(_agent_schema, "tools", None):
-                    agent_settings["__allowed_tool_ids"] = list(_agent_schema.tools)
-                # Prepend agent system_prompt to agent_goal so task_preparation
-                # picks it up as execution context (same approach as runner.py).
-                _sys_prompt = getattr(_agent_schema, "system_prompt", None) or ""
-                if _sys_prompt:
-                    _cur_goal = str(getattr(agent_request, "agent_goal", "") or "")
-                    _new_goal = f"{_sys_prompt}\n\n{_cur_goal}".strip()[:1200] if _cur_goal else _sys_prompt[:1200]
-                    try:
-                        agent_request = agent_request.model_copy(update={"agent_goal": _new_goal})
-                    except Exception:
-                        pass
-                logger.debug(
-                    "Resolved agent %s (by=%s) for user=%s",
-                    _resolution.agent_id,
-                    _resolution.matched_by,
-                    user_id,
-                )
+        def _inject_agent(record: Any) -> None:
+            nonlocal agent_request
+            _schema = _load_schema(record)
+            if getattr(_schema, "tools", None):
+                agent_settings["__allowed_tool_ids"] = list(_schema.tools)
+            _sys = getattr(_schema, "system_prompt", None) or ""
+            if _sys:
+                _cur = str(getattr(agent_request, "agent_goal", "") or "")
+                _goal = f"{_sys}\n\n{_cur}".strip()[:1200] if _cur else _sys[:1200]
+                try:
+                    agent_request = agent_request.model_copy(update={"agent_goal": _goal})
+                except Exception:
+                    pass
+
+        _explicit_id = str(getattr(request, "agent_id", None) or "").strip()
+        if _explicit_id:
+            # User selected an agent explicitly in the composer — skip intent detection.
+            _rec = get_agent(user_id, _explicit_id)
+            if _rec:
+                _inject_agent(_rec)
+                logger.debug("Using explicit agent %s for user=%s", _explicit_id, user_id)
+        else:
+            # Fall back to @mention / LLM intent resolution.
+            from api.services.agents.resolver import resolve_agent
+            _resolution = resolve_agent(user_id, message, user_id=user_id)
+            if _resolution:
+                _rec = get_agent(user_id, _resolution.agent_id)
+                if _rec:
+                    _inject_agent(_rec)
+                    logger.debug(
+                        "Resolved agent %s (by=%s) for user=%s",
+                        _resolution.agent_id,
+                        _resolution.matched_by,
+                        user_id,
+                    )
     except Exception:
         logger.debug("Agent resolution failed — proceeding with default mode", exc_info=True)
 

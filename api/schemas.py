@@ -293,6 +293,7 @@ class ChatRequest(BaseModel):
     agent_mode: Literal["ask", "company_agent", "deep_search"] = "ask"
     agent_goal: str | None = None
     access_mode: Literal["restricted", "full_access"] | None = None
+    agent_id: str | None = None  # explicit agent selection — skips intent resolution
 
 
 class AgentActionRecord(BaseModel):

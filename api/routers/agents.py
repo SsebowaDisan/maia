@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -74,12 +73,84 @@ def create_agent(
 @router.get("")
 def list_agents(
     user_id: Annotated[str, Depends(get_current_user_id)],
+    trigger_family: str | None = Query(default=None, description="Filter by trigger family: conversational, scheduled, on_event"),
 ) -> list[dict[str, Any]]:
     records = definition_store.list_agents(user_id)
-    return [
-        {"id": r.id, "agent_id": r.agent_id, "name": r.name, "version": r.version}
-        for r in records
-    ]
+    result = []
+    for r in records:
+        try:
+            schema = definition_store.load_schema(r)
+            tf = str(getattr(schema.trigger, "family", "") or "")
+            if trigger_family and tf != trigger_family:
+                continue
+            result.append({
+                "id": r.id,
+                "agent_id": r.agent_id,
+                "name": r.name,
+                "version": r.version,
+                "description": schema.description or "",
+                "tags": list(schema.tags or []),
+                "trigger_family": tf,
+            })
+        except Exception:
+            if trigger_family:
+                continue
+            result.append({
+                "id": r.id,
+                "agent_id": r.agent_id,
+                "name": r.name,
+                "version": r.version,
+                "description": "",
+                "tags": [],
+                "trigger_family": "",
+            })
+    return result
+
+
+@router.get("/recent")
+def list_recent_agents(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    limit: int = Query(default=5, ge=1, le=20),
+) -> list[dict[str, Any]]:
+    """Return the most recently run agents for the current user, newest first."""
+    runs = run_store.list_runs(user_id, agent_id=None, limit=200)
+    seen: set[str] = set()
+    recent_ids: list[str] = []
+    for r in sorted(runs, key=lambda x: str(x.started_at or ""), reverse=True):
+        if r.agent_id not in seen:
+            seen.add(r.agent_id)
+            recent_ids.append(r.agent_id)
+        if len(recent_ids) >= limit:
+            break
+
+    result = []
+    for aid in recent_ids:
+        record = definition_store.get_agent(user_id, aid)
+        if not record:
+            continue
+        try:
+            schema = definition_store.load_schema(record)
+            tf = str(getattr(schema.trigger, "family", "") or "")
+            result.append({
+                "id": record.id,
+                "agent_id": record.agent_id,
+                "name": record.name,
+                "version": record.version,
+                "description": schema.description or "",
+                "tags": list(schema.tags or []),
+                "trigger_family": tf,
+            })
+        except Exception:
+            result.append({
+                "id": record.id,
+                "agent_id": record.agent_id,
+                "name": record.name,
+                "version": record.version,
+                "description": "",
+                "tags": [],
+                "trigger_family": "",
+            })
+    return result
 
 
 @router.get("/{agent_id}")
@@ -346,6 +417,66 @@ def delete_agent_memory_entry(
     from api.services.agents.long_term_memory import delete_memory
     if not delete_memory(user_id, agent_id, memory_id):
         raise HTTPException(status_code=404, detail="Memory entry not found.")
+
+
+# ── B10/B12: Schedule health + budget controls ─────────────────────────────────
+
+class RunCapRequest(BaseModel):
+    max_runs_per_day: int | None = None  # None clears the cap
+
+
+@router.get("/{agent_id}/schedule/health")
+def get_schedule_health(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """B10: Return failure count, last success/failure for a scheduled agent."""
+    from api.services.agents.scheduler import get_schedule_health as _health
+    return _health(tenant_id=user_id, agent_id=agent_id)
+
+
+@router.get("/{agent_id}/usage")
+def get_agent_usage(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """B12: Return daily run count and current cap for a scheduled agent."""
+    from api.services.agents.scheduler import get_agent_usage as _usage
+    return _usage(tenant_id=user_id, agent_id=agent_id)
+
+
+@router.patch("/{agent_id}/schedule/cap")
+def set_run_cap(
+    agent_id: str,
+    body: RunCapRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """B12: Set or clear the daily run cap for a scheduled agent."""
+    from api.services.agents.scheduler import set_agent_run_cap
+    if body.max_runs_per_day is not None and body.max_runs_per_day < 1:
+        raise HTTPException(status_code=400, detail="max_runs_per_day must be >= 1 or null to clear.")
+    updated = set_agent_run_cap(
+        tenant_id=user_id,
+        agent_id=agent_id,
+        max_runs_per_day=body.max_runs_per_day,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="No schedule found for this agent.")
+    return {"agent_id": agent_id, "max_runs_per_day": body.max_runs_per_day}
+
+
+# ── B8: Install history ────────────────────────────────────────────────────────
+
+@router.get("/{agent_id}/install-history")
+def get_install_history(
+    agent_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    limit: int = Query(default=50, le=200),
+) -> list[dict[str, Any]]:
+    """B8 — Return install/update audit log for this agent in the calling tenant."""
+    from api.services.marketplace.installer import get_install_history
+    events = get_install_history(user_id, agent_id=agent_id)
+    return events[:limit]
 
 
 # ── Webhook receiver ───────────────────────────────────────────────────────────

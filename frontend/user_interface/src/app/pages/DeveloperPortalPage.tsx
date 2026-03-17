@@ -2,59 +2,132 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import {
-  getSettings,
-  listAgentApiRuns,
-  listAgents,
-  patchSettings,
-  type AgentApiRunRecord,
-  type AgentSummaryRecord,
+  listConnectorCatalog,
+  listMarketplaceAgents,
+  listMarketplaceAgentVersions,
+  publishMarketplaceAgent,
+  reviseMarketplaceAgent,
+  submitMarketplaceAgent,
+  type ConnectorCatalogRecord,
+  type MarketplaceAgentSummary,
+  type MarketplaceAgentVersionRecord,
 } from "../../api/client";
 
-function resolveRunStatus(run: AgentApiRunRecord): string {
-  return String(run.status || "unknown").trim().toLowerCase();
+type TabKey = "agents" | "new" | "guide";
+type TriggerFamily = "manual" | "scheduled" | "on_event";
+
+type Draft = {
+  id: string;
+  name: string;
+  description: string;
+  version: string;
+  author: string;
+  tags: string;
+  requiredConnectors: string[];
+  tools: string[];
+  systemPrompt: string;
+  triggerFamily: TriggerFamily;
+  cron: string;
+  timezone: string;
+  eventType: string;
+  sourceConnector: string;
+  pricing: "free" | "paid" | "enterprise";
+  changelog: string;
+};
+
+const EMPTY_DRAFT: Draft = {
+  id: "",
+  name: "",
+  description: "",
+  version: "1.0.0",
+  author: "",
+  tags: "",
+  requiredConnectors: [],
+  tools: [],
+  systemPrompt: "",
+  triggerFamily: "manual",
+  cron: "0 9 * * 1",
+  timezone: "UTC",
+  eventType: "",
+  sourceConnector: "",
+  pricing: "free",
+  changelog: "",
+};
+
+function titleCase(value: string): string {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function resolveRunCost(run: AgentApiRunRecord): number {
-  const value = Number(run.llm_cost_usd ?? run.cost_usd ?? Number.NaN);
-  return Number.isFinite(value) ? value : 0;
+function statusClass(status: string): string {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "published") return "border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]";
+  if (normalized === "approved") return "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]";
+  if (normalized === "pending_review") return "border-[#fde68a] bg-[#fffbeb] text-[#92400e]";
+  if (normalized === "rejected") return "border-[#fecaca] bg-[#fff1f2] text-[#b42318]";
+  return "border-[#d0d5dd] bg-[#f8fafc] text-[#475467]";
 }
 
-function maskSecret(value: string): string {
-  const normalized = String(value || "").trim();
-  if (!normalized) {
-    return "";
+function buildDefinition(draft: Draft): Record<string, unknown> {
+  const tags = draft.tags
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  const definition: Record<string, unknown> = {
+    id: draft.id.trim(),
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    version: draft.version.trim(),
+    author: draft.author.trim(),
+    tags,
+    required_connectors: draft.requiredConnectors,
+    tools: draft.tools,
+    system_prompt: draft.systemPrompt,
+    pricing_model: draft.pricing,
+  };
+
+  if (draft.triggerFamily === "scheduled") {
+    definition.trigger = {
+      family: "scheduled",
+      cron_expression: draft.cron.trim(),
+      timezone: draft.timezone.trim() || "UTC",
+    };
+  } else if (draft.triggerFamily === "on_event") {
+    definition.trigger = {
+      family: "on_event",
+      event_type: draft.eventType.trim(),
+      source_connector: draft.sourceConnector.trim(),
+    };
   }
-  if (normalized.length <= 6) {
-    return "••••••";
-  }
-  return `${normalized.slice(0, 3)}••••••${normalized.slice(-3)}`;
+  return definition;
 }
 
 export function DeveloperPortalPage() {
-  const [releaseVersion, setReleaseVersion] = useState("1.3.0");
-  const [releaseNotes, setReleaseNotes] = useState("Improved tool routing and cleaner evidence summaries.");
+  const [tab, setTab] = useState<TabKey>("agents");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [agents, setAgents] = useState<AgentSummaryRecord[]>([]);
-  const [runs, setRuns] = useState<AgentApiRunRecord[]>([]);
-  const [developerApiKeyInput, setDeveloperApiKeyInput] = useState("");
-  const [developerApiKeySaved, setDeveloperApiKeySaved] = useState("");
-  const [savingApiKey, setSavingApiKey] = useState(false);
+  const [agents, setAgents] = useState<MarketplaceAgentSummary[]>([]);
+  const [catalog, setCatalog] = useState<ConnectorCatalogRecord[]>([]);
+  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
+  const [versionsByAgent, setVersionsByAgent] = useState<Record<string, MarketplaceAgentVersionRecord[]>>({});
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [publishing, setPublishing] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("");
+  const [editingRejectedAgentId, setEditingRejectedAgentId] = useState("");
 
-  const loadPortalData = async () => {
+  const load = async () => {
     setLoading(true);
     setError("");
     try {
-      const [agentRows, runRows, settings] = await Promise.all([
-        listAgents(),
-        listAgentApiRuns({ limit: 400 }),
-        getSettings(),
+      const [agentRows, connectorRows] = await Promise.all([
+        listMarketplaceAgents({ sort_by: "newest", limit: 200 }),
+        listConnectorCatalog(),
       ]);
-      setAgents(agentRows || []);
-      setRuns(runRows || []);
-      const savedApiKey = String(settings?.values?.["developer.api_key"] || "").trim();
-      setDeveloperApiKeySaved(savedApiKey);
-      setDeveloperApiKeyInput(savedApiKey);
+      setAgents(Array.isArray(agentRows) ? agentRows : []);
+      setCatalog(Array.isArray(connectorRows) ? connectorRows : []);
     } catch (nextError) {
       setError(String(nextError || "Failed to load developer portal."));
     } finally {
@@ -63,55 +136,107 @@ export function DeveloperPortalPage() {
   };
 
   useEffect(() => {
-    void loadPortalData();
+    void load();
   }, []);
 
-  const metrics = useMemo(() => {
-    const successCount = runs.filter((run) => {
-      const status = resolveRunStatus(run);
-      return status === "completed" || status === "success";
-    }).length;
-    const successRate = runs.length ? (successCount / runs.length) * 100 : 0;
-    const totalCost = runs.reduce((total, run) => total + resolveRunCost(run), 0);
-    const avgCost = runs.length ? totalCost / runs.length : 0;
-    return {
-      publishedAgents: agents.length,
-      totalRuns: runs.length,
-      successRate,
-      totalCost,
-      avgCost,
-    };
-  }, [agents.length, runs]);
+  const toolsByConnector = useMemo(() => {
+    const map = new Map<string, Array<{ id: string; label: string }>>();
+    for (const connector of catalog) {
+      const id = String(connector.id || "").trim();
+      if (!id) continue;
+      const tools = (connector.tools || []).map((tool) => ({
+        id: String(tool.id || ""),
+        label: String(tool.title || tool.id || ""),
+      }));
+      map.set(id, tools);
+    }
+    return map;
+  }, [catalog]);
 
-  const agentRows = useMemo(
-    () =>
-      agents.map((agent) => {
-        const relatedRuns = runs.filter((run) => String(run.agent_id || "").trim() === agent.agent_id);
-        const lastRun = relatedRuns[0];
-        return {
-          agentId: agent.agent_id,
-          name: agent.name,
-          version: agent.version,
-          runCount: relatedRuns.length,
-          lastStatus: resolveRunStatus(lastRun || {}),
-        };
-      }),
-    [agents, runs],
-  );
+  const draftInvalid =
+    !draft.id.trim() ||
+    !draft.name.trim() ||
+    !draft.systemPrompt.trim() ||
+    draft.tools.length === 0 ||
+    (draft.triggerFamily === "scheduled" && !draft.cron.trim()) ||
+    (draft.triggerFamily === "on_event" && (!draft.eventType.trim() || !draft.sourceConnector.trim()));
 
-  const saveDeveloperApiKey = async (nextInput?: string) => {
-    setSavingApiKey(true);
+  const loadVersions = async (agentId: string) => {
+    if (!agentId || versionsByAgent[agentId]) return;
     try {
-      const nextValue = String((nextInput ?? developerApiKeyInput) || "").trim();
-      const updated = await patchSettings({ "developer.api_key": nextValue });
-      const saved = String(updated?.values?.["developer.api_key"] || "").trim();
-      setDeveloperApiKeySaved(saved);
-      setDeveloperApiKeyInput(saved);
-      toast.success(saved ? "Developer API key saved." : "Developer API key cleared.");
+      const rows = await listMarketplaceAgentVersions(agentId);
+      setVersionsByAgent((prev) => ({ ...prev, [agentId]: Array.isArray(rows) ? rows : [] }));
     } catch (nextError) {
-      toast.error(`Failed to save API key: ${String(nextError)}`);
+      toast.error(String(nextError || "Failed to load version history."));
+    }
+  };
+
+  const editRejected = (agent: MarketplaceAgentSummary) => {
+    setDraft((prev) => ({
+      ...prev,
+      id: agent.agent_id,
+      name: agent.name,
+      description: agent.description,
+      version: agent.version,
+      tags: (agent.tags || []).join(", "),
+      requiredConnectors: agent.required_connectors || [],
+      changelog: "",
+    }));
+    setEditingRejectedAgentId(agent.agent_id);
+    setSelectedAgentId(agent.agent_id);
+    setSelectedStatus(agent.status);
+    setTab("new");
+  };
+
+  const createOrRevise = async () => {
+    if (draftInvalid) {
+      toast.error("Fill all required fields and select at least one tool.");
+      return;
+    }
+    setPublishing(true);
+    try {
+      const definition = buildDefinition(draft);
+      if (editingRejectedAgentId) {
+        const revised = await reviseMarketplaceAgent(editingRejectedAgentId, {
+          definition,
+          changelog: draft.changelog.trim(),
+        });
+        setSelectedAgentId(revised.agent_id);
+        setSelectedStatus(revised.status);
+        toast.success(`Revised ${revised.agent_id}.`);
+      } else {
+        const created = await publishMarketplaceAgent({
+          definition,
+          metadata: { changelog: draft.changelog.trim() },
+        });
+        setSelectedAgentId(created.agent_id);
+        setSelectedStatus(created.status);
+        toast.success(`Draft created: ${created.agent_id}.`);
+      }
+      await load();
+    } catch (nextError) {
+      toast.error(String(nextError || "Failed to save draft."));
     } finally {
-      setSavingApiKey(false);
+      setPublishing(false);
+    }
+  };
+
+  const submitForReview = async () => {
+    if (!selectedAgentId) {
+      toast.error("Create or revise a draft first.");
+      return;
+    }
+    setPublishing(true);
+    try {
+      const response = await submitMarketplaceAgent(selectedAgentId);
+      setSelectedStatus(response.status);
+      toast.success(`${response.agent_id} submitted for review.`);
+      setTab("agents");
+      await load();
+    } catch (nextError) {
+      toast.error(String(nextError || "Failed to submit draft."));
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -119,149 +244,206 @@ export function DeveloperPortalPage() {
     <div className="h-full overflow-y-auto bg-[#eef1f5] p-5">
       <div className="mx-auto max-w-[1240px] space-y-4">
         <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-          <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
-            Developer portal
-          </p>
-          <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">
-            Publisher operations
-          </h1>
-          <p className="mt-2 text-[15px] text-[#475467]">
-            Track your agent portfolio, release updates, and monitor run performance.
-          </p>
+          <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">Developer portal</p>
+          <h1 className="mt-1 text-[32px] font-semibold tracking-[-0.02em] text-[#101828]">Publish agents</h1>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {[
+              { key: "agents", label: "My agents" },
+              { key: "new", label: "New agent" },
+              { key: "guide", label: "Guidelines" },
+            ].map((entry) => (
+              <button
+                key={entry.key}
+                type="button"
+                onClick={() => setTab(entry.key as TabKey)}
+                className={`rounded-full px-3 py-1.5 text-[12px] font-semibold ${
+                  tab === entry.key ? "bg-[#111827] text-white" : "border border-black/[0.12] bg-white text-[#344054]"
+                }`}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
         </section>
 
-        {error ? (
-          <section className="rounded-2xl border border-[#fca5a5] bg-[#fff1f2] p-4 text-[13px] text-[#9f1239]">
-            {error}
-          </section>
-        ) : null}
-        {loading ? (
-          <section className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">
-            Loading developer portal...
-          </section>
-        ) : null}
+        {error ? <section className="rounded-2xl border border-[#fca5a5] bg-[#fff1f2] p-4 text-[13px] text-[#9f1239]">{error}</section> : null}
 
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-          <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <p className="text-[12px] text-[#667085]">Published agents</p>
-            <p className="mt-1 text-[26px] font-semibold text-[#111827]">{metrics.publishedAgents}</p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <p className="text-[12px] text-[#667085]">Total runs</p>
-            <p className="mt-1 text-[26px] font-semibold text-[#111827]">{metrics.totalRuns.toLocaleString()}</p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <p className="text-[12px] text-[#667085]">Success rate</p>
-            <p className="mt-1 text-[26px] font-semibold text-[#111827]">{metrics.successRate.toFixed(1)}%</p>
-          </article>
-          <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
-            <p className="text-[12px] text-[#667085]">Average run cost</p>
-            <p className="mt-1 text-[26px] font-semibold text-[#111827]">${metrics.avgCost.toFixed(3)}</p>
-          </article>
-        </section>
-
-        <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-          <h2 className="text-[18px] font-semibold text-[#111827]">Agent performance</h2>
-          <div className="mt-3 space-y-2">
-            {agentRows.length === 0 ? (
-              <p className="rounded-xl border border-black/[0.06] bg-[#fcfcfd] p-3 text-[12px] text-[#667085]">
-                No published agents yet.
-              </p>
-            ) : (
-              agentRows.map((agent) => (
-                <div key={agent.agentId} className="rounded-xl border border-black/[0.06] bg-[#fcfcfd] px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[13px] font-semibold text-[#111827]">{agent.name}</p>
-                    <span className="rounded-full border border-black/[0.1] bg-white px-2 py-0.5 text-[11px] text-[#344054]">
-                      v{agent.version}
-                    </span>
+        {tab === "agents" ? (
+          <section className="space-y-3">
+            {loading ? <div className="rounded-2xl border border-black/[0.08] bg-white p-4 text-[13px] text-[#667085]">Loading agents...</div> : null}
+            {agents.map((agent) => (
+              <article key={agent.id} className="rounded-2xl border border-black/[0.08] bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[18px] font-semibold text-[#101828]">{agent.name}</p>
+                    <p className="mt-1 text-[12px] text-[#667085]">{agent.agent_id} · v{agent.version}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass(agent.status)}`}>{titleCase(agent.status)}</span>
+                      {(agent.tags || []).slice(0, 5).map((tag) => (
+                        <span key={`${agent.id}-${tag}`} className="rounded-full border border-black/[0.08] bg-white px-2 py-0.5 text-[11px] text-[#475467]">#{tag}</span>
+                      ))}
+                    </div>
+                    {agent.status === "rejected" ? (
+                      <p className="mt-2 text-[12px] text-[#b42318]">Rejected. Open edit mode and resubmit with fixes.</p>
+                    ) : null}
                   </div>
-                  <p className="mt-1 text-[12px] text-[#667085]">
-                    Runs: {agent.runCount} · Last status: {agent.lastStatus || "unknown"}
-                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = expandedAgentId === agent.agent_id ? null : agent.agent_id;
+                        setExpandedAgentId(next);
+                        if (next) void loadVersions(next);
+                      }}
+                      className="rounded-full border border-black/[0.12] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#344054]"
+                    >
+                      {expandedAgentId === agent.agent_id ? "Hide versions" : "Version history"}
+                    </button>
+                    {agent.status === "rejected" ? (
+                      <button type="button" onClick={() => editRejected(agent)} className="rounded-full bg-[#111827] px-3 py-1.5 text-[12px] font-semibold text-white">
+                        Edit & resubmit
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              ))
-            )}
-          </div>
-        </section>
+                {expandedAgentId === agent.agent_id ? (
+                  <div className="mt-3 rounded-xl border border-black/[0.08] bg-[#fcfcfd] p-3">
+                    {(versionsByAgent[agent.agent_id] || []).length === 0 ? (
+                      <p className="text-[12px] text-[#667085]">No version history found.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(versionsByAgent[agent.agent_id] || []).map((versionRow) => (
+                          <div key={versionRow.id} className="rounded-lg border border-black/[0.08] bg-white px-3 py-2">
+                            <p className="text-[12px] font-semibold text-[#111827]">v{versionRow.version} · {titleCase(versionRow.status)}</p>
+                            {versionRow.changelog ? <p className="mt-1 text-[12px] text-[#475467]">{versionRow.changelog}</p> : null}
+                            {versionRow.rejection_reason ? <p className="mt-1 text-[12px] text-[#b42318]">Reason: {versionRow.rejection_reason}</p> : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </section>
+        ) : null}
 
-        <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-          <h2 className="text-[18px] font-semibold text-[#111827]">Developer API key</h2>
-          <p className="mt-1 text-[13px] text-[#667085]">
-            Use this key for publishing automation and SDK integrations.
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto_auto]">
-            <input
-              value={developerApiKeyInput}
-              onChange={(event) => setDeveloperApiKeyInput(event.target.value)}
-              placeholder="Enter developer API key"
-              className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                void saveDeveloperApiKey();
-              }}
-              disabled={savingApiKey}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60"
-            >
-              {savingApiKey ? "Saving..." : "Save"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDeveloperApiKeyInput("");
-                void saveDeveloperApiKey("");
-              }}
-              disabled={savingApiKey && !developerApiKeySaved}
-              className="rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[12px] font-semibold text-[#344054]"
-            >
-              Clear
-            </button>
-          </div>
-          {developerApiKeySaved ? (
-            <p className="mt-2 text-[12px] text-[#667085]">
-              Saved key: <span className="font-semibold text-[#344054]">{maskSecret(developerApiKeySaved)}</span>
-            </p>
-          ) : null}
-        </section>
+        {tab === "new" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+            <h2 className="text-[18px] font-semibold text-[#111827]">New agent submission</h2>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <input value={draft.id} onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))} placeholder="Agent ID" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              <input value={draft.name} onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))} placeholder="Agent name" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              <input value={draft.version} onChange={(event) => setDraft((prev) => ({ ...prev, version: event.target.value }))} placeholder="Version" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              <input value={draft.author} onChange={(event) => setDraft((prev) => ({ ...prev, author: event.target.value }))} placeholder="Author" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              <input value={draft.description} onChange={(event) => setDraft((prev) => ({ ...prev, description: event.target.value }))} placeholder="Description" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px] md:col-span-2" />
+              <input value={draft.tags} onChange={(event) => setDraft((prev) => ({ ...prev, tags: event.target.value }))} placeholder="Tags (comma-separated)" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px] md:col-span-2" />
+            </div>
 
-        <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-          <h2 className="text-[18px] font-semibold text-[#111827]">Publish new version</h2>
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label>
-              <span className="text-[12px] font-semibold text-[#667085]">Version</span>
-              <input
-                value={releaseVersion}
-                onChange={(event) => setReleaseVersion(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]"
-              />
-            </label>
-            <label>
-              <span className="text-[12px] font-semibold text-[#667085]">Release notes</span>
-              <input
-                value={releaseNotes}
-                onChange={(event) => setReleaseNotes(event.target.value)}
-                className="mt-1 w-full rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]"
-              />
-            </label>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => toast.success(`Submitted ${releaseVersion} for review.`)}
-              className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white"
-            >
-              Submit for review
-            </button>
-            <a
-              href="/developer/docs"
-              className="rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[12px] font-semibold text-[#344054]"
-            >
-              Open SDK docs
-            </a>
-          </div>
-        </section>
+            <textarea value={draft.systemPrompt} onChange={(event) => setDraft((prev) => ({ ...prev, systemPrompt: event.target.value }))} rows={8} placeholder="System prompt" className="mt-3 w-full rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+            <p className="mt-1 text-[11px] text-[#98a2b3]">{draft.systemPrompt.length}/32000 chars</p>
+
+            <div className="mt-3 rounded-xl border border-black/[0.08] bg-[#fcfcfd] p-3">
+              <p className="text-[12px] font-semibold text-[#667085]">Required connectors</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {catalog.map((connector) => {
+                  const connectorId = String(connector.id || "");
+                  const selected = draft.requiredConnectors.includes(connectorId);
+                  return (
+                    <button
+                      key={connectorId}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          requiredConnectors: selected
+                            ? prev.requiredConnectors.filter((entry) => entry !== connectorId)
+                            : [...prev.requiredConnectors, connectorId],
+                        }))
+                      }
+                      className={`rounded-full border px-2.5 py-1 text-[12px] font-semibold ${selected ? "border-[#111827] bg-[#111827] text-white" : "border-black/[0.12] bg-white text-[#344054]"}`}
+                    >
+                      {titleCase(connectorId)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-black/[0.08] bg-[#fcfcfd] p-3">
+              <p className="text-[12px] font-semibold text-[#667085]">Tools</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {draft.requiredConnectors.flatMap((connectorId) => toolsByConnector.get(connectorId) || []).map((tool) => {
+                  const selected = draft.tools.includes(tool.id);
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          tools: selected ? prev.tools.filter((entry) => entry !== tool.id) : [...prev.tools, tool.id],
+                        }))
+                      }
+                      className={`rounded-full border px-2 py-0.5 text-[11px] ${selected ? "border-[#111827] bg-[#111827] text-white" : "border-black/[0.12] bg-white text-[#475467]"}`}
+                    >
+                      {tool.label || tool.id}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              <select value={draft.triggerFamily} onChange={(event) => setDraft((prev) => ({ ...prev, triggerFamily: event.target.value as TriggerFamily }))} className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]">
+                <option value="manual">Manual</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="on_event">On event</option>
+              </select>
+              <select value={draft.pricing} onChange={(event) => setDraft((prev) => ({ ...prev, pricing: event.target.value as Draft["pricing"] }))} className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]">
+                <option value="free">Free</option>
+                <option value="paid">Paid</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+              <input value={draft.changelog} onChange={(event) => setDraft((prev) => ({ ...prev, changelog: event.target.value }))} placeholder="Changelog" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+            </div>
+
+            {draft.triggerFamily === "scheduled" ? (
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input value={draft.cron} onChange={(event) => setDraft((prev) => ({ ...prev, cron: event.target.value }))} placeholder="Cron expression" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+                <input value={draft.timezone} onChange={(event) => setDraft((prev) => ({ ...prev, timezone: event.target.value }))} placeholder="Timezone" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              </div>
+            ) : null}
+            {draft.triggerFamily === "on_event" ? (
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <input value={draft.eventType} onChange={(event) => setDraft((prev) => ({ ...prev, eventType: event.target.value }))} placeholder="Event type" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+                <input value={draft.sourceConnector} onChange={(event) => setDraft((prev) => ({ ...prev, sourceConnector: event.target.value }))} placeholder="Source connector" className="rounded-xl border border-black/[0.12] px-3 py-2 text-[13px]" />
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" disabled={publishing || draftInvalid} onClick={() => void createOrRevise()} className="rounded-full bg-[#111827] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-60">
+                {publishing ? "Saving..." : editingRejectedAgentId ? "Revise draft" : "Create draft"}
+              </button>
+              <button type="button" disabled={publishing || !selectedAgentId} onClick={() => void submitForReview()} className="rounded-full border border-black/[0.12] bg-white px-4 py-2 text-[12px] font-semibold text-[#344054] disabled:opacity-60">
+                Submit for review
+              </button>
+            </div>
+            {selectedAgentId ? <p className="mt-2 text-[12px] text-[#667085]">Current draft: {selectedAgentId} ({selectedStatus || "draft"})</p> : null}
+          </section>
+        ) : null}
+
+        {tab === "guide" ? (
+          <section className="space-y-3 rounded-2xl border border-black/[0.08] bg-white p-4">
+            <h2 className="text-[18px] font-semibold text-[#111827]">Developer guidelines</h2>
+            <ul className="list-disc space-y-1 pl-5 text-[13px] text-[#475467]">
+              <li>Do not include credentials, secrets, or private URLs in definitions.</li>
+              <li>Declare only required connectors and tools with clear user-facing purpose.</li>
+              <li>Add changelog notes for every version update before submission.</li>
+              <li>Use safe triggers, explicit gate policies, and deterministic prompt behavior.</li>
+            </ul>
+          </section>
+        ) : null}
       </div>
     </div>
   );

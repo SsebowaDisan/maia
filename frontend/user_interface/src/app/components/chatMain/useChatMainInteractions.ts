@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { listAgents } from "../../../api/client";
 import type { ChatTurn } from "../../types";
 import { buildWorkspaceModeOverride } from "./workspaceModeOverride";
 import type { ChatMainProps, ComposerAttachment } from "./types";
@@ -34,6 +35,11 @@ type UseChatMainInteractionsParams = Pick<
   | "availableProjects"
 >;
 
+type ActiveAgentSelection = {
+  agent_id: string;
+  name: string;
+};
+
 function useChatMainInteractions({
   accessMode,
   activityEvents,
@@ -60,6 +66,7 @@ function useChatMainInteractions({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [agentControlsVisible, setAgentControlsVisible] = useState(false);
   const [deepSearchProfile, setDeepSearchProfile] = useState<"default" | "web_search">("default");
+  const [activeAgent, setActiveAgent] = useState<ActiveAgentSelection | null>(null);
   const [messageActionStatus, setMessageActionStatus] = useState("");
   const [editingTurnIndex, setEditingTurnIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -67,6 +74,7 @@ function useChatMainInteractions({
   const statusTimerRef = useRef<number | null>(null);
   const lastClipboardEventRef = useRef<string>("");
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
+  const consumedAgentPrefillRef = useRef("");
 
   const revokeAttachmentUrl = (attachment: ComposerAttachment) => {
     const url = String(attachment.localUrl || "");
@@ -190,6 +198,7 @@ function useChatMainInteractions({
       },
       settingOverrides: modeSettingOverrides,
       agentMode,
+      agentId: activeAgent?.agent_id || undefined,
       accessMode,
     } as const;
   };
@@ -296,9 +305,27 @@ function useChatMainInteractions({
     showActionStatus("Agent mode enabled.");
   };
 
+  const onAgentSelect = (agent: ActiveAgentSelection | null) => {
+    if (!agent) {
+      setActiveAgent(null);
+      return;
+    }
+    const agentId = String(agent.agent_id || "").trim();
+    const agentName = String(agent.name || agentId).trim() || "Agent";
+    if (!agentId) {
+      return;
+    }
+    setActiveAgent({ agent_id: agentId, name: agentName });
+    setAgentControlsVisible(true);
+    setDeepSearchProfile("default");
+    onAgentModeChange("company_agent");
+    showActionStatus(`Routing to ${agentName}.`);
+  };
+
   const enableAskMode = () => {
     setAgentControlsVisible(false);
     setDeepSearchProfile("default");
+    setActiveAgent(null);
     onAgentModeChange("ask");
     showActionStatus("Standard mode enabled.");
   };
@@ -306,6 +333,7 @@ function useChatMainInteractions({
   const enableDeepResearch = () => {
     setAgentControlsVisible(false);
     setDeepSearchProfile("default");
+    setActiveAgent(null);
     onAgentModeChange("deep_search");
     onAccessModeChange("restricted");
     showActionStatus("Deep search mode enabled.");
@@ -314,6 +342,7 @@ function useChatMainInteractions({
   const enableWebSearch = () => {
     setAgentControlsVisible(false);
     setDeepSearchProfile("web_search");
+    setActiveAgent(null);
     onAgentModeChange("deep_search");
     onAccessModeChange("restricted");
     showActionStatus("Web search mode enabled (target: 200 online sources).");
@@ -384,6 +413,70 @@ function useChatMainInteractions({
     attachmentsRef.current = attachments;
   }, [attachments]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const requestedAgentId = String(params.get("agent") || "").trim();
+    if (!requestedAgentId) {
+      return;
+    }
+    if (consumedAgentPrefillRef.current === requestedAgentId) {
+      return;
+    }
+    consumedAgentPrefillRef.current = requestedAgentId;
+    let disposed = false;
+    const prefill = async () => {
+      let agentName = requestedAgentId;
+      let resolvedAgentId = requestedAgentId;
+      try {
+        const rows = await listAgents();
+        const match = (rows || []).find((row) => {
+          const rowAgentId = String(row.agent_id || "").trim();
+          const rowId = String(row.id || "").trim();
+          return rowAgentId === requestedAgentId || rowId === requestedAgentId;
+        });
+        const nextName = String(match?.name || "").trim();
+        if (nextName) {
+          agentName = nextName;
+        }
+        const nextAgentId = String(match?.agent_id || match?.id || "").trim();
+        if (nextAgentId) {
+          resolvedAgentId = nextAgentId;
+        }
+      } catch {
+        // Keep prefill resilient even if the agents API is unavailable.
+      }
+      if (disposed) {
+        return;
+      }
+      setActiveAgent({
+        agent_id: resolvedAgentId,
+        name: agentName,
+      });
+      setAgentControlsVisible(true);
+      setDeepSearchProfile("default");
+      onAgentModeChange("company_agent");
+      setMessage((previous) => {
+        const current = previous.trim();
+        if (current) {
+          return current;
+        }
+        return `Run ${agentName} for me`;
+      });
+      showActionStatus(`Prepared prompt for ${agentName}.`);
+      params.delete("agent");
+      const nextQuery = params.toString();
+      const nextPath = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+      window.history.replaceState({}, "", nextPath);
+    };
+    void prefill();
+    return () => {
+      disposed = true;
+    };
+  }, [onAgentModeChange, showActionStatus]);
+
   useEffect(
     () => () => {
       attachmentsRef.current.forEach(revokeAttachmentUrl);
@@ -397,6 +490,7 @@ function useChatMainInteractions({
     attachGroupById,
     attachProjectById,
     attachments,
+    activeAgent,
     beginInlineEdit,
     cancelInlineEdit,
     clearAttachments,
@@ -421,6 +515,7 @@ function useChatMainInteractions({
     saveInlineEdit,
     sendSuggestionPrompt,
     setAttachments,
+    onAgentSelect,
     setEditingText,
     setMessage,
     showActionStatus,

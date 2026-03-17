@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [content, seo, strategy, gap-analysis, briefs, marketing]
-required_connectors: [brave_search, google_analytics, google_workspace]
+required_connectors: [google_analytics]
 is_public: true
 pricing_model: free
 

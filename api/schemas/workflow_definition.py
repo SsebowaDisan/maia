@@ -5,7 +5,7 @@ A workflow is a DAG of agent steps with conditional edges.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional  # noqa: F401 — Literal used in WorkflowStep
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,6 +22,16 @@ class WorkflowStep(BaseModel):
     output_key: str
     """Key under which this step's result is stored for downstream steps."""
     description: str = ""
+
+    # ── B6: Typed data contracts ──────────────────────────────────────────────
+    output_schema: Optional[dict[str, Any]] = None
+    """JSON Schema object that the step output must conform to.
+    When set, the executor validates the step output after completion.
+    Validation failure emits a workflow_step_output_invalid event.
+    Example: {"type": "object", "required": ["urls"], "properties": {"urls": {"type": "array"}}}
+    """
+    format_hint: Optional[Literal["json", "markdown", "plaintext"]] = None
+    """Hint to downstream steps about how to parse this step's output."""
 
 
 class WorkflowEdge(BaseModel):

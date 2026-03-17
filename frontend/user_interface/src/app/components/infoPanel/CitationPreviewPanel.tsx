@@ -134,7 +134,7 @@ function CitationPreviewPanel({
         {citationRawUrl && citationIsImage ? (
           <div
             className="flex w-full items-center justify-center overflow-hidden rounded-xl border border-black/[0.08] bg-[#f5f5f7]"
-            style={{ height: `${Math.max(220, citationViewerHeight)}px` }}
+            style={{ height: `${Math.max(320, citationViewerHeight)}px` }}
           >
             <img
               src={citationRawUrl}

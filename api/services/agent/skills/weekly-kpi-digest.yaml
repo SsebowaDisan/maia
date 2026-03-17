@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [analytics, kpi, sheets, gmail, digest, scheduled, automation]
-required_connectors: [google_analytics, google_workspace, gmail]
+required_connectors: [google_analytics]
 is_public: true
 pricing_model: free
 

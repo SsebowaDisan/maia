@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [sales, outreach, email, leads, prospecting, gmail]
-required_connectors: [gmail, brave_search]
+required_connectors: [gmail]
 is_public: true
 pricing_model: free
 

@@ -7,6 +7,8 @@ type AppRouteOverlayModalProps = {
   onClose: () => void;
   children: ReactNode;
   headerActions?: ReactNode;
+  headerToolbar?: ReactNode;
+  contentClassName?: string;
 };
 
 export function AppRouteOverlayModal({
@@ -15,6 +17,8 @@ export function AppRouteOverlayModal({
   onClose,
   children,
   headerActions = null,
+  headerToolbar = null,
+  contentClassName = "",
 }: AppRouteOverlayModalProps) {
   return (
     <div
@@ -33,30 +37,37 @@ export function AppRouteOverlayModal({
         }}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-black/[0.08] px-6 pb-4 pt-5">
-          <div className="min-w-0">
-            <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
-              Workspace
-            </p>
-            <h2 className="mt-1 truncate text-[31px] font-semibold tracking-[-0.02em] text-[#111827]">
-              {title}
-            </h2>
-            <p className="mt-1 text-[14px] text-[#5f5f65]">{subtitle}</p>
+        <div className="border-b border-black/[0.08] px-6 pb-4 pt-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold uppercase tracking-[0.16em] text-[#667085]">
+                Workspace
+              </p>
+              <h2 className="mt-1 truncate text-[31px] font-semibold tracking-[-0.02em] text-[#111827]">
+                {title}
+              </h2>
+              <p className="mt-1 text-[14px] text-[#5f5f65]">{subtitle}</p>
+            </div>
+            <div className="flex shrink-0 items-start gap-2">
+              {headerActions}
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white/70 text-[#6e6e73] transition-colors hover:bg-white hover:text-[#1d1d1f]"
+                aria-label={`Close ${title}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
-          <div className="flex shrink-0 items-start gap-2">
-            {headerActions}
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/[0.08] bg-white/70 text-[#6e6e73] transition-colors hover:bg-white hover:text-[#1d1d1f]"
-              aria-label={`Close ${title}`}
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
+          {headerToolbar ? <div className="mt-3">{headerToolbar}</div> : null}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-hidden bg-white/70 p-2">{children}</div>
+        <div
+          className={`min-h-0 flex-1 overflow-hidden bg-white/70 p-2 ${contentClassName}`.trim()}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );

@@ -1,5 +1,18 @@
 import type { WorkflowRunEvent } from "../../api/client/types";
+import { toast } from "sonner";
 import { useWorkflowStore } from "../stores/workflowStore";
+
+function resolveTargetStepId(preferredStepId: string): string | null {
+  if (preferredStepId) {
+    return preferredStepId;
+  }
+  const snapshot = useWorkflowStore.getState();
+  if (snapshot.run.activeStepId) {
+    return snapshot.run.activeStepId;
+  }
+  const runningNode = snapshot.nodes.find((node) => node.runState === "running");
+  return runningNode?.id || null;
+}
 
 function applyWorkflowRunEvent(event: WorkflowRunEvent) {
   const eventType = String(event.event_type || "").trim().toLowerCase();
@@ -20,6 +33,7 @@ function applyWorkflowRunEvent(event: WorkflowRunEvent) {
 
   if (eventType === "workflow_started") {
     store.setRunStatus("running");
+    store.setRunDetail(null);
     return;
   }
 
@@ -46,27 +60,71 @@ function applyWorkflowRunEvent(event: WorkflowRunEvent) {
 
   if (eventType === "workflow_step_failed" && stepId) {
     const errorText = String((event as { error?: string }).error || "Step failed");
-    store.setNodeRunState(stepId, "failed");
+    store.setNodeRunState(stepId, "failed", errorText);
     store.setStepResult(stepId, errorText, 0);
+    store.setRunDetail(errorText);
     store.setActiveStep(null);
     return;
   }
 
   if (eventType === "workflow_step_skipped" && stepId) {
-    store.setNodeRunState(stepId, "skipped");
+    const reason = String((event as { reason?: string }).reason || "").trim();
+    const detail = reason || "Step skipped";
+    store.setNodeRunState(stepId, "skipped", detail);
+    store.setStepResult(stepId, detail, 0);
     store.setActiveStep(null);
     return;
   }
 
   if (eventType === "workflow_completed") {
     store.setRunStatus("completed");
+    store.setRunDetail(null);
     store.setActiveStep(null);
     return;
   }
 
   if (eventType === "workflow_failed") {
+    const errorText = String((event as { error?: string }).error || "Workflow failed");
+    const failedStepId = resolveTargetStepId(
+      String((event as { failed_step_id?: string | null }).failed_step_id || "").trim(),
+    );
+    if (failedStepId) {
+      store.setNodeRunState(failedStepId, "failed", errorText);
+      store.setStepResult(failedStepId, errorText, 0);
+    }
     store.setRunStatus("failed");
+    store.setRunDetail(errorText);
     store.setActiveStep(null);
+    return;
+  }
+
+  if (eventType === "budget_exceeded") {
+    const detail = String(
+      (event as { detail?: string }).detail || "Budget exceeded. Workflow run stopped.",
+    ).trim();
+    const targetStepId = resolveTargetStepId(stepId);
+    if (targetStepId) {
+      store.setNodeRunState(targetStepId, "blocked", detail);
+      store.setStepResult(targetStepId, detail, 0);
+    }
+    store.setRunStatus("failed");
+    store.setRunDetail(detail);
+    store.setActiveStep(null);
+    toast.warning(detail);
+    return;
+  }
+
+  if (eventType === "error") {
+    const detail = String((event as { detail?: string }).detail || "Workflow run failed.").trim();
+    const targetStepId = resolveTargetStepId(stepId);
+    if (targetStepId) {
+      store.setNodeRunState(targetStepId, "blocked", detail);
+      store.setStepResult(targetStepId, detail, 0);
+    }
+    store.setRunStatus("failed");
+    store.setRunDetail(detail);
+    store.setActiveStep(null);
+    toast.error(detail);
   }
 }
 

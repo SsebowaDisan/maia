@@ -64,7 +64,7 @@ function WorkflowToolbar({
         className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#344054] transition hover:bg-[#f8fafc]"
       >
         <Plus size={13} />
-        Add step
+        Add an agent
       </button>
       <button
         type="button"

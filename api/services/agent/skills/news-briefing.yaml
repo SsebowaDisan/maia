@@ -1,13 +1,13 @@
 id: news-briefing
 name: News Briefing
 description: >
-  Searches the web for the latest industry news relevant to your business,
-  compiles the top stories into a concise briefing, and posts it to a Slack channel
-  every morning. Your team stays informed without the noise of a news feed.
+  Searches the web for the latest industry news relevant to your business and
+  compiles the top stories into a concise morning briefing. Delivered directly
+  in the chat. Your team stays informed without the noise of a news feed.
 version: "1.0.0"
 author: Maia Platform
-tags: [news, briefing, slack, research, scheduled, industry-intelligence]
-required_connectors: [bing_search, slack, brave_search]
+tags: [news, briefing, research, scheduled, industry-intelligence]
+required_connectors: [brave_search]
 is_public: true
 pricing_model: free
 
@@ -22,8 +22,8 @@ system_prompt: |
      - Competitor mentions
      - Regulatory or policy changes
      - Technology and AI developments relevant to the business
-  2. Use bing.news to search for the latest stories across 3-4 topic queries.
-     Focus on articles published in the last 24 hours.
+  2. Use brave.search to search for the latest stories across 3-4 topic queries.
+     Append "news today" or the current date to focus on articles from the last 24 hours.
   3. Filter out:
      - Duplicate stories covering the same event
      - Low-quality or clickbait sources
@@ -52,8 +52,6 @@ system_prompt: |
   Lead with the most impactful story. Keep each summary to 2 sentences max.
 
 tools:
-  - bing.news
-  - bing.search
   - brave.search
   - slack.list_channels
   - slack.send_message

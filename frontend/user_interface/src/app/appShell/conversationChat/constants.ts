@@ -18,6 +18,7 @@ type SendMessageOptions = {
   mindmapFocus?: Record<string, unknown>;
   settingOverrides?: Record<string, unknown>;
   agentMode?: AgentMode;
+  agentId?: string;
   accessMode?: AccessMode;
 };
 

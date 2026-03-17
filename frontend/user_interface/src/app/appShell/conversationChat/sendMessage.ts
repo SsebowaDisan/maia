@@ -290,6 +290,7 @@ async function sendConversationMessage({
       mindmapFocus: options?.mindmapFocus ?? {},
       settingOverrides: mergedSettingOverrides,
       agentMode: effectiveMode,
+      agentId: options?.agentId,
       accessMode: effectiveAccessMode,
     };
 

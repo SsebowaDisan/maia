@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [research, deep-research, brief, analysis, strategy, multi-source]
-required_connectors: [brave_search, newsapi, reddit]
+required_connectors: [brave_search]
 is_public: true
 pricing_model: free
 
@@ -87,6 +87,13 @@ system_prompt: |
 
      ## Sources
      [Full list of all cited sources with URLs]
+
+  Citation format — every factual claim must be cited using this exact format:
+    [Finding text] — [Publication/Domain](full URL) [YYYY-MM-DD]
+  Example: "The market grew 32% YoY" — Reuters(https://reuters.com/...) [2024-11-15]
+
+  At end of document, compile a ## Sources section with numbered list:
+    [1] Publication — Title — URL — Date
 
   Cite every factual claim. Mark uncertain claims with (unverified).
   If sources conflict, present both perspectives and note the disagreement.

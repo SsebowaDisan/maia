@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [gmail, email, drafting, communication, outreach]
-required_connectors: [gmail, google_workspace]
+required_connectors: [gmail]
 is_public: true
 pricing_model: free
 

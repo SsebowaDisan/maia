@@ -26,6 +26,7 @@ type ChatMainProps = {
       mindmapFocus?: Record<string, unknown>;
       settingOverrides?: Record<string, unknown>;
       agentMode?: "ask" | "company_agent" | "deep_search";
+      agentId?: string;
       accessMode?: "restricted" | "full_access";
     },
   ) => Promise<void>;

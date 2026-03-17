@@ -1,17 +1,27 @@
 """B6-02 — Workflow execution engine.
 
 Responsibility: execute a WorkflowDefinitionSchema — resolve DAG order,
-run each step, pass outputs through input_mapping, evaluate edge conditions
-for branching, and emit activity events throughout.
+run independent steps in parallel (B8), pass outputs through input_mapping,
+validate step outputs against output_schema (B6), maintain a shared run
+context (B7), evaluate edge conditions for branching, and emit activity events.
+
+Changes since original:
+  B6  — output_schema validation via jsonschema (optional dep, falls back to warn)
+  B7  — WorkflowRunContext integrated; context.* keys available in input_mapping
+  B8  — Independent steps grouped into parallel batches (ThreadPoolExecutor)
 """
 from __future__ import annotations
 
 import logging
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as _FuturesTimeout
 from typing import Any, Callable, Optional
 
-from api.schemas.workflow_definition import WorkflowDefinitionSchema, WorkflowEdge
+from api.schemas.workflow_definition import WorkflowDefinitionSchema, WorkflowEdge, WorkflowStep
 
 logger = logging.getLogger(__name__)
+
+_MAX_PARALLEL_STEPS = 5   # cap concurrent step threads
 
 
 class WorkflowExecutionError(Exception):
@@ -24,6 +34,8 @@ def execute_workflow(
     *,
     initial_inputs: dict[str, Any] | None = None,
     on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+    run_id: str | None = None,
+    step_timeout_s: int = 300,
 ) -> dict[str, Any]:
     """Execute a workflow and return all step outputs keyed by output_key.
 
@@ -32,10 +44,15 @@ def execute_workflow(
         tenant_id: Active tenant.
         initial_inputs: Top-level inputs available to all step input_mappings.
         on_event: Optional callback for activity events.
+        run_id: Optional run ID used to key the shared WorkflowRunContext (B7).
 
     Returns:
         Dict mapping output_key → step result for every executed step.
     """
+    from api.services.agents.workflow_context import WorkflowRunContext, cleanup_context
+
+    effective_run_id = run_id or str(uuid.uuid4())
+    ctx = WorkflowRunContext(effective_run_id)
     outputs: dict[str, Any] = dict(initial_inputs or {})
     skipped_steps: set[str] = set()
 
@@ -49,80 +66,249 @@ def execute_workflow(
         "workflow_id": workflow.workflow_id,
         "step_count": len(workflow.steps),
         "step_order": ordered_ids,
+        "run_id": effective_run_id,
     })
 
-    for step_id in ordered_ids:
-        step = workflow.get_step(step_id)
-        if step is None:
+    # B8: Group steps into parallel execution batches.
+    batches = _build_parallel_batches(workflow, ordered_ids)
+
+    for batch in batches:
+        runnable: list[str] = []
+        for step_id in batch:
+            step = workflow.get_step(step_id)
+            if step is None:
+                continue
+            incoming = [e for e in workflow.edges if e.to_step == step_id]
+            if any(e.from_step in skipped_steps for e in incoming):
+                skipped_steps.add(step_id)
+                _emit(on_event, {
+                    "event_type": "workflow_step_skipped",
+                    "workflow_id": workflow.workflow_id,
+                    "step_id": step_id,
+                    "reason": "predecessor_skipped",
+                })
+                continue
+            if _check_conditions(incoming, outputs, on_event, workflow, step_id):
+                skipped_steps.add(step_id)
+            else:
+                runnable.append(step_id)
+
+        if not runnable:
             continue
 
-        # Check if all incoming edges are satisfied (skip if predecessor was skipped)
-        incoming = [e for e in workflow.edges if e.to_step == step_id]
-        if any(e.from_step in skipped_steps for e in incoming):
-            skipped_steps.add(step_id)
-            continue
-
-        # Evaluate edge conditions from predecessors
-        should_skip = False
-        for edge in incoming:
-            if edge.condition:
-                try:
-                    ok = _eval_condition(edge.condition, outputs)
-                    if not ok:
-                        should_skip = True
-                        break
-                except Exception as exc:
-                    logger.warning("Edge condition eval failed: %s — skipping", exc)
-                    should_skip = True
-                    break
-
-        if should_skip:
-            skipped_steps.add(step_id)
-            _emit(on_event, {
-                "event_type": "workflow_step_skipped",
-                "workflow_id": workflow.workflow_id,
-                "step_id": step_id,
-            })
-            continue
-
-        # Build step inputs from output_mapping
-        step_inputs = _resolve_inputs(step.input_mapping, outputs)
-
-        _emit(on_event, {
-            "event_type": "workflow_step_started",
-            "workflow_id": workflow.workflow_id,
-            "step_id": step_id,
-            "agent_id": step.agent_id,
-        })
-
-        try:
-            result = _run_step(step.agent_id, step_inputs, tenant_id, on_event=on_event)
-            outputs[step.output_key] = result
-            _emit(on_event, {
-                "event_type": "workflow_step_completed",
-                "workflow_id": workflow.workflow_id,
-                "step_id": step_id,
-                "agent_id": step.agent_id,
-                "output_key": step.output_key,
-                "result_preview": str(result)[:200],
-            })
-
-        except Exception as exc:
-            logger.error("Workflow step %s failed: %s", step_id, exc, exc_info=True)
-            _emit(on_event, {
-                "event_type": "workflow_step_failed",
-                "workflow_id": workflow.workflow_id,
-                "step_id": step_id,
-                "error": str(exc)[:300],
-            })
-            raise WorkflowExecutionError(f"Step '{step_id}' failed: {exc}") from exc
+        if len(runnable) == 1:
+            _execute_step(workflow, runnable[0], outputs, ctx, tenant_id, on_event, skipped_steps, step_timeout_s)
+        else:
+            # B8: Run independent steps concurrently
+            _execute_batch(workflow, runnable, outputs, ctx, tenant_id, on_event, skipped_steps, step_timeout_s)
 
     _emit(on_event, {
         "event_type": "workflow_completed",
         "workflow_id": workflow.workflow_id,
+        "run_id": effective_run_id,
         "outputs": {k: str(v)[:200] for k, v in outputs.items()},
     })
+
+    cleanup_context(effective_run_id)
     return outputs
+
+
+# ── Parallel batch builder (B8) ────────────────────────────────────────────────
+
+def _build_parallel_batches(
+    workflow: WorkflowDefinitionSchema,
+    ordered_ids: list[str],
+) -> list[list[str]]:
+    """Group the topological order into parallel execution batches."""
+    deps: dict[str, set[str]] = {s.step_id: set() for s in workflow.steps}
+    for edge in workflow.edges:
+        deps[edge.to_step].add(edge.from_step)
+
+    batches: list[list[str]] = []
+    completed: set[str] = set()
+    remaining = list(ordered_ids)
+
+    while remaining:
+        batch = [sid for sid in remaining if deps[sid].issubset(completed)]
+        if not batch:
+            batch = [remaining[0]]  # Fallback — avoids infinite loop
+        batches.append(batch)
+        for sid in batch:
+            remaining.remove(sid)
+            completed.add(sid)
+
+    return batches
+
+
+# ── Step execution helpers ─────────────────────────────────────────────────────
+
+def _execute_batch(
+    workflow: WorkflowDefinitionSchema,
+    step_ids: list[str],
+    outputs: dict[str, Any],
+    ctx: Any,
+    tenant_id: str,
+    on_event: Optional[Callable],
+    skipped_steps: set[str],
+    step_timeout_s: int = 300,
+) -> None:
+    cap = min(len(step_ids), _MAX_PARALLEL_STEPS)
+    futures = {}
+
+    with ThreadPoolExecutor(max_workers=cap, thread_name_prefix="wf-step") as pool:
+        for step_id in step_ids:
+            step = workflow.get_step(step_id)
+            if step is None:
+                continue
+            step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+            _emit(on_event, {
+                "event_type": "workflow_step_started",
+                "workflow_id": workflow.workflow_id,
+                "step_id": step_id,
+                "agent_id": step.agent_id,
+                "parallel": True,
+            })
+            futures[pool.submit(_run_step, step.agent_id, step_inputs, tenant_id, on_event)] = step
+
+        for future in as_completed(futures, timeout=step_timeout_s):
+            step = futures[future]
+            try:
+                result = future.result(timeout=step_timeout_s)
+                _validate_output(step, result, workflow.workflow_id, on_event)
+                outputs[step.output_key] = result
+                _emit(on_event, {
+                    "event_type": "workflow_step_completed",
+                    "workflow_id": workflow.workflow_id,
+                    "step_id": step.step_id,
+                    "agent_id": step.agent_id,
+                    "output_key": step.output_key,
+                    "result_preview": str(result)[:2000],
+                })
+            except _FuturesTimeout as exc:
+                logger.error("Workflow step %s timed out", step.step_id)
+                _emit(on_event, {
+                    "event_type": "workflow_step_failed",
+                    "workflow_id": workflow.workflow_id,
+                    "step_id": step.step_id,
+                    "error": f"Step timed out after {step_timeout_s}s",
+                })
+                raise WorkflowExecutionError(f"Step '{step.step_id}' timed out after {step_timeout_s}s") from exc
+            except Exception as exc:
+                logger.error("Workflow step %s failed: %s", step.step_id, exc, exc_info=True)
+                _emit(on_event, {
+                    "event_type": "workflow_step_failed",
+                    "workflow_id": workflow.workflow_id,
+                    "step_id": step.step_id,
+                    "error": str(exc)[:2000],
+                })
+                raise WorkflowExecutionError(f"Step '{step.step_id}' failed: {exc}") from exc
+
+
+def _execute_step(
+    workflow: WorkflowDefinitionSchema,
+    step_id: str,
+    outputs: dict[str, Any],
+    ctx: Any,
+    tenant_id: str,
+    on_event: Optional[Callable],
+    skipped_steps: set[str],
+    step_timeout_s: int = 300,
+) -> None:
+    step = workflow.get_step(step_id)
+    if step is None:
+        return
+    step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+    _emit(on_event, {
+        "event_type": "workflow_step_started",
+        "workflow_id": workflow.workflow_id,
+        "step_id": step_id,
+        "agent_id": step.agent_id,
+        "parallel": False,
+    })
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="wf-step-to") as _pool:
+            _fut = _pool.submit(_run_step, step.agent_id, step_inputs, tenant_id, on_event)
+            try:
+                result = _fut.result(timeout=step_timeout_s)
+            except _FuturesTimeout as te:
+                raise TimeoutError(f"Step '{step_id}' timed out after {step_timeout_s}s") from te
+        _validate_output(step, result, workflow.workflow_id, on_event)
+        outputs[step.output_key] = result
+        _emit(on_event, {
+            "event_type": "workflow_step_completed",
+            "workflow_id": workflow.workflow_id,
+            "step_id": step_id,
+            "agent_id": step.agent_id,
+            "output_key": step.output_key,
+            "result_preview": str(result)[:2000],
+        })
+    except WorkflowExecutionError:
+        raise
+    except Exception as exc:
+        logger.error("Workflow step %s failed: %s", step_id, exc, exc_info=True)
+        _emit(on_event, {
+            "event_type": "workflow_step_failed",
+            "workflow_id": workflow.workflow_id,
+            "step_id": step_id,
+            "error": str(exc)[:2000],
+        })
+        raise WorkflowExecutionError(f"Step '{step_id}' failed: {exc}") from exc
+
+
+def _check_conditions(
+    incoming: list[WorkflowEdge],
+    outputs: dict[str, Any],
+    on_event: Optional[Callable],
+    workflow: WorkflowDefinitionSchema,
+    step_id: str,
+) -> bool:
+    for edge in incoming:
+        if edge.condition:
+            try:
+                if not _eval_condition(edge.condition, outputs):
+                    _emit(on_event, {
+                        "event_type": "workflow_step_skipped",
+                        "workflow_id": workflow.workflow_id,
+                        "step_id": step_id,
+                        "reason": f"condition not met: {edge.condition}",
+                    })
+                    return True
+            except Exception as exc:
+                logger.warning("Edge condition eval failed: %s — skipping %s", exc, step_id)
+                return True
+    return False
+
+
+# ── B6: Output schema validation ──────────────────────────────────────────────
+
+def _validate_output(
+    step: WorkflowStep,
+    result: Any,
+    workflow_id: str,
+    on_event: Optional[Callable],
+) -> None:
+    if not step.output_schema:
+        return
+    try:
+        import json as _json
+        import jsonschema  # type: ignore[import]
+        data = result
+        if isinstance(result, str):
+            try:
+                data = _json.loads(result)
+            except (ValueError, TypeError):
+                pass
+        jsonschema.validate(instance=data, schema=step.output_schema)
+    except ImportError:
+        logger.debug("jsonschema not installed — output_schema validation skipped for step %s", step.step_id)
+    except Exception as exc:
+        logger.warning("Step %s output failed schema validation: %s", step.step_id, exc)
+        _emit(on_event, {
+            "event_type": "workflow_step_output_invalid",
+            "workflow_id": workflow_id,
+            "step_id": step.step_id,
+            "validation_error": str(exc)[:500],
+        })
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
@@ -144,75 +330,80 @@ def _run_step(
     task = step_inputs.get("message") or step_inputs.get("task") or (
         f"Execute your task with the following context:\n{_format_inputs(step_inputs)}"
     )
-
     allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
+    max_tool_calls = getattr(schema, "max_tool_calls_per_run", None)
     result_parts: list[str] = []
     for chunk in run_agent_task(
         task,
         tenant_id=tenant_id,
         system_prompt=schema.system_prompt or None,
         allowed_tool_ids=allowed_tool_ids,
+        max_tool_calls=max_tool_calls,
     ):
         text = chunk.get("text") or chunk.get("content") or ""
         if text:
             result_parts.append(str(text))
         if on_event:
             on_event({**chunk, "step_agent_id": agent_id})
-
     return "".join(result_parts)
 
 
 def _resolve_inputs(
     input_mapping: dict[str, str],
     outputs: dict[str, Any],
+    ctx: Any | None = None,
 ) -> dict[str, Any]:
-    """Resolve input_mapping entries against available outputs.
+    """Resolve input_mapping against available outputs and run context (B7).
 
     Supports:
-      - "step_key.output_key" → look up outputs["step_key.output_key"]
-      - "literal:value" → use "value" directly
-      - bare key → look up outputs[key]
+      - "literal:value"  → use "value" directly
+      - "context:key"    → read from WorkflowRunContext (B7)
+      - bare key         → look up outputs[key]
     """
     resolved: dict[str, Any] = {}
     for param, source in input_mapping.items():
         if source.startswith("literal:"):
             resolved[param] = source[len("literal:"):]
+        elif source.startswith("context:") and ctx is not None:
+            resolved[param] = ctx.read(source[len("context:"):])
         else:
             resolved[param] = outputs.get(source, "")
     return resolved
 
 
 def _eval_condition(condition: str, outputs: dict[str, Any]) -> bool:
-    """Safely evaluate a condition expression against workflow outputs.
+    """Evaluate a workflow edge condition string against step outputs.
 
-    Supports a whitelist of simple comparisons so that workflow edge conditions
-    like ``output.step1 == 'done'`` or ``output.count > 0`` work without using
-    ``eval()``, which is exploitable even with an empty ``__builtins__`` dict
-    via class-introspection chains.
-
-    Supported syntax (all fields accessed as ``output.<key>``):
-      output.<key> == <literal>
-      output.<key> != <literal>
-      output.<key> > <number>
-      output.<key> >= <number>
-      output.<key> < <number>
-      output.<key> <= <number>
-      output.<key>          (truthy check)
+    Supports:
+      - Compound:  ``A OR B``, ``A AND B``, ``NOT A``  (OR splits first, AND within)
+      - Comparison: ``output.key == value``, ``output.key != value``, ``output.key > 5``
+      - Truthy:     ``output.key``  (True when value is truthy)
+      - Literals:   quoted strings, int/float, True/False/None/null
     """
     import re
-
     condition = condition.strip()
 
-    # Pattern: output.<key> <op> <literal>
-    _CMP = re.compile(
-        r'^output\.([A-Za-z_]\w*)\s*(==|!=|>=|<=|>|<)\s*(.+)$'
-    )
+    # OR (lowest precedence) — split first so AND binds tighter
+    if re.search(r'\bOR\b', condition, re.IGNORECASE):
+        parts = re.split(r'\bOR\b', condition, flags=re.IGNORECASE)
+        return any(_eval_condition(p.strip(), outputs) for p in parts if p.strip())
+
+    # AND
+    if re.search(r'\bAND\b', condition, re.IGNORECASE):
+        parts = re.split(r'\bAND\b', condition, flags=re.IGNORECASE)
+        return all(_eval_condition(p.strip(), outputs) for p in parts if p.strip())
+
+    # NOT
+    not_m = re.match(r'^NOT\s+(.+)$', condition, re.IGNORECASE)
+    if not_m:
+        return not _eval_condition(not_m.group(1).strip(), outputs)
+
+    # Comparison: output.key OP value
+    _CMP = re.compile(r'^output\.([A-Za-z_]\w*)\s*(==|!=|>=|<=|>|<)\s*(.+)$')
     m = _CMP.match(condition)
     if m:
         key, op, raw_val = m.group(1), m.group(2), m.group(3).strip()
         lhs = outputs.get(key)
-
-        # Parse RHS literal: quoted string or number or bool/None keyword
         rhs: Any
         if (raw_val.startswith('"') and raw_val.endswith('"')) or \
            (raw_val.startswith("'") and raw_val.endswith("'")):
@@ -230,46 +421,26 @@ def _eval_condition(condition: str, outputs: dict[str, Any]) -> bool:
                 try:
                     rhs = float(raw_val)
                 except ValueError:
-                    rhs = raw_val  # treat as bare string
-
+                    rhs = raw_val
         if op == "==":
             return lhs == rhs
         if op == "!=":
             return lhs != rhs
-        # Numeric comparisons — coerce both sides
         try:
-            lhs_n = float(lhs)  # type: ignore[arg-type]
-            rhs_n = float(rhs)  # type: ignore[arg-type]
+            lhs_n, rhs_n = float(lhs), float(rhs)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return False
-        if op == ">":
-            return lhs_n > rhs_n
-        if op == ">=":
-            return lhs_n >= rhs_n
-        if op == "<":
-            return lhs_n < rhs_n
-        if op == "<=":
-            return lhs_n <= rhs_n
+        return {">" : lhs_n > rhs_n, ">=" : lhs_n >= rhs_n,
+                "<" : lhs_n < rhs_n, "<=" : lhs_n <= rhs_n}.get(op, False)
 
-    # Simple truthy check: output.<key>
+    # Truthy: output.key
     _TRUTHY = re.compile(r'^output\.([A-Za-z_]\w*)$')
     m2 = _TRUTHY.match(condition)
     if m2:
         return bool(outputs.get(m2.group(1)))
 
-    # Unrecognised expression — log and treat as False to skip the step safely
-    logger.warning("Unsupported workflow condition syntax (skipping step): %r", condition)
+    logger.warning("Unsupported workflow condition syntax (skipping): %r", condition)
     return False
-
-
-class _OutputProxy:
-    """Simple dot-access proxy over the outputs dict (kept for backward compat)."""
-
-    def __init__(self, data: dict[str, Any]) -> None:
-        self._data = data
-
-    def __getattr__(self, key: str) -> Any:
-        return self._data.get(key)
 
 
 def _emit(on_event: Optional[Callable], event: dict[str, Any]) -> None:

@@ -5,6 +5,7 @@ import type { CanvasDocumentRecord, MessageBlock } from "../../messageBlocks";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { ChatTurnPlot } from "../chatMain/ChatTurnPlot";
 import { resolveWidget, type LensWidgetProps, type WidgetComponentProps } from "../widgets/registry";
+import { SortableTableWidget } from "../widgets/SortableTableWidget";
 import { WidgetRenderBoundary } from "./WidgetRenderBoundary";
 
 type BlockRendererProps = {
@@ -98,30 +99,11 @@ function BlockRenderer({ block, documents = [] }: BlockRendererProps) {
 
   if (block.type === "table") {
     return (
-      <div className="overflow-x-auto rounded-2xl border border-black/[0.08] bg-white shadow-[0_16px_32px_rgba(15,23,42,0.05)]">
-        <table className="min-w-full border-collapse text-left text-[13px] text-[#344054]">
-          <thead className="bg-[#f8fafc]">
-            <tr>
-              {block.columns.map((column, index) => (
-                <th key={`${column}-${index}`} className="border-b border-black/[0.06] px-4 py-3 font-semibold text-[#111827]">
-                  {column}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={`row-${rowIndex}`} className="border-b border-black/[0.04] last:border-b-0">
-                {row.map((cell, cellIndex) => (
-                  <td key={`cell-${rowIndex}-${cellIndex}`} className="px-4 py-3 align-top">
-                    {cell}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <SortableTableWidget
+        title="Table"
+        columns={block.columns}
+        rows={block.rows}
+      />
     );
   }
 

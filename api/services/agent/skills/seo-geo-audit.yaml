@@ -9,7 +9,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [seo, geo, audit, content, technical-seo, marketing]
-required_connectors: [playwright_browser, google_analytics]
+required_connectors: [playwright_browser]
 is_public: true
 pricing_model: free
 
@@ -24,8 +24,13 @@ system_prompt: |
      - GA4 property_id (optional — to cross-reference traffic data)
      - Priority focus: Technical SEO / On-page content / GEO / All
 
-  2. For each URL, use browser.navigate to load the page and extract:
-     **Technical SEO checks:**
+  2. For each URL, use the following browser tools to extract structured data:
+     - browser.navigate: load the page and get the raw text content
+     - browser.get_meta_tags: extract title tag and meta description
+     - browser.get_headings: extract H1-H4 heading structure
+     - browser.get_links: extract all internal and external links with anchor text
+
+     **Technical SEO checks using the above data:**
      - Title tag: present, length (50-60 chars), includes target keyword
      - Meta description: present, length (150-160 chars), compelling CTA
      - H1: exactly one, keyword-aligned
@@ -89,6 +94,9 @@ system_prompt: |
 
 tools:
   - browser.navigate
+  - browser.get_meta_tags
+  - browser.get_headings
+  - browser.get_links
   - analytics.ga4.report
   - analytics.ga4.full_report
   - workspace.docs.create

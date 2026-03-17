@@ -230,6 +230,34 @@ function normalizeMessageBlocks(raw: unknown, assistantText = ""): MessageBlock[
           },
         } satisfies WidgetMessageBlock;
       }
+      if (type === "scorecard") {
+        const metrics = Array.isArray(record.metrics) ? record.metrics : [];
+        return {
+          type: "widget",
+          widget: {
+            kind: "scorecard",
+            props: {
+              title: String(record.title || ""),
+              subtitle: String(record.subtitle || ""),
+              metrics,
+            },
+          },
+        } satisfies WidgetMessageBlock;
+      }
+      if (type === "sortable_table") {
+        const rows = Array.isArray(record.rows) ? record.rows : [];
+        return {
+          type: "widget",
+          widget: {
+            kind: "sortable_table",
+            props: {
+              title: String(record.title || ""),
+              columns: readStringList(record.columns),
+              rows,
+            },
+          },
+        } satisfies WidgetMessageBlock;
+      }
       if (type === "document_action") {
         const action = readRecord(record.action);
         const documentId = readString(action.documentId);

@@ -7,14 +7,14 @@ type ViewerHeights = {
   citation: number;
 };
 
-const VIEWER_HEIGHT_STORAGE_KEY = "maia.info-panel.viewer-heights.v2";
+const VIEWER_HEIGHT_STORAGE_KEY = "maia.info-panel.viewer-heights.v3";
 const DEFAULT_VIEWER_HEIGHTS: ViewerHeights = {
   mindmap: 520,
-  citation: 420,
+  citation: 560,
 };
 const VIEWER_HEIGHT_LIMITS: Record<ViewerHeightKey, { min: number; max: number }> = {
   mindmap: { min: 260, max: 1000 },
-  citation: { min: 220, max: 1000 },
+  citation: { min: 320, max: 1000 },
 };
 
 function clampViewerHeight(viewer: ViewerHeightKey, rawValue: unknown): number {

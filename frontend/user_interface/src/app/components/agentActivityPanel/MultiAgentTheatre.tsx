@@ -1,8 +1,17 @@
+import { useEffect, useRef } from "react";
+
+type MultiAgentEvent = {
+  text: string;
+  type?: "info" | "warning" | "error";
+};
+
 type MultiAgentColumn = {
   agentId: string;
   agentName: string;
+  skillId?: string;
+  skillName?: string;
   status: "pending" | "running" | "done" | "blocked";
-  events: string[];
+  events: MultiAgentEvent[];
 };
 
 type MultiAgentTheatreProps = {
@@ -22,23 +31,60 @@ function badgeClass(status: MultiAgentColumn["status"]): string {
   return "bg-[#f2f4f7] text-[#475467]";
 }
 
+function eventTone(eventType: MultiAgentEvent["type"]): string {
+  if (eventType === "error") {
+    return "border-[#fecaca] bg-[#fef2f2] text-[#991b1b]";
+  }
+  if (eventType === "warning") {
+    return "border-[#fed7aa] bg-[#fffbeb] text-[#9a3412]";
+  }
+  return "border-black/[0.06] bg-white text-[#344054]";
+}
+
 export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
+  const eventListRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      Object.values(eventListRefs.current).forEach((node) => {
+        if (!node) {
+          return;
+        }
+        node.scrollTop = node.scrollHeight;
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [columns]);
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-black/[0.08] bg-white p-4">
       <div className="flex min-w-max gap-3">
         {columns.map((column, index) => (
           <section key={column.agentId} className="w-[300px] rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[14px] font-semibold text-[#111827]">{column.agentName}</h3>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="truncate text-[14px] font-semibold text-[#111827]">{column.agentName}</h3>
+                {column.skillName || column.skillId ? (
+                  <p className="mt-0.5 truncate text-[11px] text-[#667085]">{column.skillName || column.skillId}</p>
+                ) : null}
+              </div>
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeClass(column.status)}`}>
                 {column.status}
               </span>
             </div>
-            <div className="space-y-1">
+            <div
+              ref={(node) => {
+                eventListRefs.current[column.agentId] = node;
+              }}
+              className="max-h-[220px] space-y-1 overflow-y-auto pr-1"
+            >
               {column.events.length ? (
-                column.events.map((event) => (
-                  <p key={event} className="rounded-lg border border-black/[0.06] bg-white px-2 py-1 text-[12px] text-[#344054]">
-                    {event}
+                column.events.map((event, eventIndex) => (
+                  <p
+                    key={`${column.agentId}-${eventIndex}-${event.text}`}
+                    className={`rounded-lg border px-2 py-1 text-[12px] ${eventTone(event.type)}`}
+                  >
+                    {event.text}
                   </p>
                 ))
               ) : (
@@ -48,7 +94,7 @@ export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
               )}
             </div>
             {index < columns.length - 1 ? (
-              <div className="mt-3 text-center text-[12px] text-[#667085]">Delegates →</div>
+              <div className="mt-3 text-center text-[12px] text-[#667085]">Delegates to next</div>
             ) : null}
           </section>
         ))}
@@ -56,3 +102,5 @@ export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
     </div>
   );
 }
+
+export type { MultiAgentColumn, MultiAgentEvent };

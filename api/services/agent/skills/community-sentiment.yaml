@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [sentiment, community, reddit, research, product, marketing, brand]
-required_connectors: [reddit, brave_search, newsapi]
+required_connectors: [reddit]
 is_public: true
 pricing_model: free
 

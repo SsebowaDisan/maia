@@ -1,14 +1,14 @@
 id: anomaly-watch
-name: Anomaly Watch — GA4 & Ads
+name: Anomaly Watch — GA4
 description: >
-  Monitors your Google Analytics and Google Ads metrics on a daily schedule,
-  detects anomalies (traffic drops, conversion spikes, cost surges), generates
-  hypotheses for what caused each anomaly, and sends an alert to Slack or email
-  when thresholds are breached. Catch problems before your stakeholders do.
+  Monitors your Google Analytics 4 metrics daily, detects traffic anomalies
+  (sessions drops, conversion spikes, bounce rate changes), and alerts you with
+  clear hypotheses when thresholds are breached. For Google Ads monitoring,
+  see Anomaly Watch — Google Ads.
 version: "1.0.0"
 author: Maia Platform
-tags: [analytics, monitoring, anomaly-detection, ga4, google-ads, alerts, scheduled]
-required_connectors: [google_analytics, google_ads, gmail]
+tags: [analytics, monitoring, anomaly-detection, ga4, alerts, scheduled]
+required_connectors: [google_analytics]
 is_public: true
 pricing_model: free
 
@@ -34,24 +34,25 @@ system_prompt: |
        seasonal event, promotional email sent"
      - Cost surge: "Possible causes: competitor bidding activity, broad match
        expansion, budget cap lifted, new keywords triggered"
-  5. If anomalies are detected, send an alert via gmail.draft with:
+  5. Evaluate whether any genuine anomaly was found:
+     - If NO anomalies: output the single token "NO_ANOMALY" and stop.
+       Do NOT draft or send any email. Do NOT produce further output.
+     - If anomalies ARE detected: proceed to step 6.
+
+  6. Draft an alert via gmail.draft with:
      - Subject: "⚠️ Anomaly Alert — [Date] — [metric] [change]"
      - Summary table of anomalies with % change
      - Hypotheses and recommended immediate checks
-     - "No action required" verdict if everything is within normal range
-  6. If no anomalies, log "All metrics within normal range" and exit silently.
 
   Alert thresholds are configurable — ask the user to set custom thresholds
   on first run. Store the property_id and customer_id in settings for subsequent runs.
 
   Never send false alarms — only alert when a threshold is genuinely breached.
+  A silent NO_ANOMALY run is a success, not a failure.
 
 tools:
   - analytics.ga4.full_report
   - analytics.ga4.report
-  - google_ads.get_campaigns
-  - gmail.draft
-  - gmail.send
 
 trigger:
   family: scheduled

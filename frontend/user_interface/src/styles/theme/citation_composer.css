@@ -310,7 +310,7 @@
     padding: 0;
     text-align: left;
     color: #1d1d1f;
-    caret-color: #007aff;
+    caret-color: #6e6e73;
     transition: color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
@@ -328,7 +328,7 @@
   }
 
   .assistantComposerInput::selection {
-    background: rgba(0, 122, 255, 0.22);
+    background: rgba(29, 29, 31, 0.14);
     color: #1d1d1f;
   }
 
@@ -351,7 +351,7 @@
     gap: 12px;
     min-width: 0;
     flex: 1 1 auto;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .assistantComposerActions {

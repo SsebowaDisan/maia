@@ -15,6 +15,7 @@ import { ComposerQuickActionsCard } from "../ComposerQuickActionsCard";
 import { ComposerAttachmentChips } from "./composer/ComposerAttachmentChips";
 import { ComposerAgentPicker } from "./composer/ComposerAgentPicker";
 import { ComposerCommandMenu } from "./composer/ComposerCommandMenu";
+import type { AgentCommandSelection } from "./composer/AgentCommandMenu";
 import { useComposerCommandPalette } from "./composer/commandPalette";
 import { FilePreviewModal } from "./shared/FilePreviewModal";
 import type { ComposerAttachment } from "./types";
@@ -33,6 +34,8 @@ type ComposerPanelProps = {
   enableAgentMode: () => void;
   enableWebSearch: () => void;
   enableDeepResearch: () => void;
+  activeAgent?: { agent_id: string; name: string } | null;
+  onAgentSelect?: (agent: AgentCommandSelection | null) => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   isSending: boolean;
   isUploading: boolean;
@@ -50,6 +53,7 @@ type ComposerPanelProps = {
   pasteHighlightsToComposer: () => void;
   setMessage: (value: string) => void;
   submit: () => Promise<void>;
+  onFocusWithinChange?: (focused: boolean) => void;
 };
 
 function ComposerPanel({
@@ -64,6 +68,8 @@ function ComposerPanel({
   enableAgentMode,
   enableWebSearch,
   enableDeepResearch,
+  activeAgent = null,
+  onAgentSelect,
   fileInputRef,
   isSending,
   isUploading,
@@ -81,6 +87,7 @@ function ComposerPanel({
   pasteHighlightsToComposer,
   setMessage,
   submit,
+  onFocusWithinChange,
 }: ComposerPanelProps) {
   const canSubmit = Boolean(message.trim()) && !isUploading && !isSending;
   const sendDisabled = !canSubmit;
@@ -171,8 +178,17 @@ function ComposerPanel({
   };
 
   return (
-    <div className="bg-transparent">
-      <div className="mx-auto w-full max-w-[1460px] px-3 py-2">
+    <div
+      className="bg-transparent"
+      onFocusCapture={() => onFocusWithinChange?.(true)}
+      onBlurCapture={(event) => {
+        const nextTarget = event.relatedTarget as Node | null;
+        if (!event.currentTarget.contains(nextTarget)) {
+          onFocusWithinChange?.(false);
+        }
+      }}
+    >
+      <div className="mx-auto w-full max-w-[1460px] px-3 pt-2 pb-0">
         <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
           <div className="assistantComposerInputShell relative rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">
@@ -193,10 +209,15 @@ function ComposerPanel({
             {agentPickerVisible ? (
               <ComposerAgentPicker
                 query={trimmedMessage}
-                onPick={(agentName) => {
-                  const suffix = trimmedMessage.replace(/^@\S*\s*/, "");
-                  const next = `@${agentName.toLowerCase().replace(/\s+/g, "-")} ${suffix}`.trim();
-                  setMessage(`${next} `);
+                onPick={(agent) => {
+                  const suffix = trimmedMessage.replace(/^@\S*\s*/, "").trim();
+                  setMessage(suffix ? `${suffix} ` : "");
+                  onAgentSelect?.({
+                    agent_id: agent.agent_id,
+                    name: agent.name,
+                    description: String(agent.description || ""),
+                    trigger_family: String(agent.trigger_family || ""),
+                  });
                 }}
               />
             ) : null}
@@ -230,6 +251,8 @@ function ComposerPanel({
               />
               <ComposerModeSelector
                 value={composerMode}
+                activeAgent={activeAgent}
+                onAgentSelect={onAgentSelect}
                 onChange={(value) => {
                   if (value === "ask") {
                     enableAskMode();

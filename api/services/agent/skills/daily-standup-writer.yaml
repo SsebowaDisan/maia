@@ -6,8 +6,8 @@ description: >
   Post to Slack in one click — consistent stand-ups with zero effort.
 version: "1.0.0"
 author: Maia Platform
-tags: [standup, slack, calendar, productivity, daily, scheduled]
-required_connectors: [slack, google_calendar]
+tags: [standup, calendar, productivity, daily, scheduled]
+required_connectors: [google_calendar]
 is_public: true
 pricing_model: free
 
@@ -43,11 +43,18 @@ system_prompt: |
   not just "meetings". If there are no blockers, write "None — clear to proceed".
   Never post without user confirmation.
 
+  Slack limitation: slack.read_channel only works for public channels the bot
+  has been invited to. Private channels and DMs are not accessible. If a channel
+  returns no messages, ask the user to invite the bot or pick a different channel.
+  As an alternative, use workspace.docs.read to read a shared daily-notes Doc
+  if the user maintains one.
+
 tools:
   - gcalendar.list_events
   - slack.read_channel
   - slack.list_channels
   - slack.send_message
+  - workspace.docs.read
 
 trigger:
   family: scheduled

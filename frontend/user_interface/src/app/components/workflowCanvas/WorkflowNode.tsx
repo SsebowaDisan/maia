@@ -1,4 +1,12 @@
-import { CheckCircle2, CircleDashed, Loader2, OctagonAlert, PauseCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleDashed,
+  Loader2,
+  OctagonAlert,
+  PauseCircle,
+  Zap,
+} from "lucide-react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 
 import type {
@@ -13,111 +21,205 @@ type WorkflowFlowNodeData = WorkflowCanvasNodeData & {
   runOutput?: string;
 };
 
-function runTone(runState: WorkflowCanvasNodeRunState | undefined) {
-  if (runState === "running") {
-    return "border-[#2563eb]/35 bg-[#eff6ff]";
-  }
-  if (runState === "completed") {
-    return "border-[#16a34a]/35 bg-[#ecfdf3]";
-  }
-  if (runState === "failed") {
-    return "border-[#dc2626]/35 bg-[#fef2f2]";
-  }
-  if (runState === "skipped") {
-    return "border-[#a1a1aa]/45 bg-[#fafafa]";
-  }
-  return "border-black/[0.12] bg-white";
+// ── Run state styling ──────────────────────────────────────────────────────────
+
+function runBorder(runState: WorkflowCanvasNodeRunState | undefined) {
+  if (runState === "running")   return "border-[#2563eb]/40 ring-2 ring-[#2563eb]/20";
+  if (runState === "completed") return "border-[#16a34a]/40 ring-2 ring-[#16a34a]/15";
+  if (runState === "failed")    return "border-[#dc2626]/40 ring-2 ring-[#dc2626]/15";
+  if (runState === "blocked")   return "border-[#f59e0b]/50 ring-2 ring-[#f59e0b]/15";
+  if (runState === "skipped")   return "border-black/[0.08]";
+  return "border-black/[0.1]";
 }
 
-function RunIcon({ runState }: { runState?: WorkflowCanvasNodeRunState }) {
-  if (runState === "running") {
-    return <Loader2 size={13} className="animate-spin text-[#2563eb]" />;
-  }
-  if (runState === "completed") {
-    return <CheckCircle2 size={13} className="text-[#16a34a]" />;
-  }
-  if (runState === "failed") {
-    return <OctagonAlert size={13} className="text-[#dc2626]" />;
-  }
-  if (runState === "skipped") {
-    return <PauseCircle size={13} className="text-[#71717a]" />;
-  }
-  return <CircleDashed size={13} className="text-[#6b7280]" />;
+function runHeaderBg(runState: WorkflowCanvasNodeRunState | undefined) {
+  if (runState === "running")   return "from-[#eff6ff] to-[#dbeafe]";
+  if (runState === "completed") return "from-[#ecfdf3] to-[#d1fae5]";
+  if (runState === "failed")    return "from-[#fef2f2] to-[#fee2e2]";
+  if (runState === "blocked")   return "from-[#fffbeb] to-[#fef3c7]";
+  return "from-[#f0f4ff] to-[#e8eef8]";
 }
 
-function typeBadgeLabel(type: WorkflowCanvasNodeType): string {
-  if (type === "trigger") {
-    return "Trigger";
+function monogramColor(runState: WorkflowCanvasNodeRunState | undefined) {
+  if (runState === "running")   return "text-[#1d4ed8]";
+  if (runState === "completed") return "text-[#15803d]";
+  if (runState === "failed")    return "text-[#dc2626]";
+  if (runState === "blocked")   return "text-[#b45309]";
+  return "text-[#344054]";
+}
+
+function RunBadge({ runState }: { runState?: WorkflowCanvasNodeRunState }) {
+  if (runState === "running") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#2563eb] px-2 py-0.5 text-[10px] font-semibold text-white">
+        <Loader2 size={9} className="animate-spin" />
+        Running
+      </span>
+    );
   }
-  if (type === "condition") {
-    return "Condition";
+  if (runState === "completed") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#ecfdf3] px-2 py-0.5 text-[10px] font-semibold text-[#15803d]">
+        <CheckCircle2 size={9} />
+        Done
+      </span>
+    );
   }
-  if (type === "output") {
-    return "Output";
+  if (runState === "failed") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#fef2f2] px-2 py-0.5 text-[10px] font-semibold text-[#dc2626]">
+        <OctagonAlert size={9} />
+        Failed
+      </span>
+    );
   }
+  if (runState === "blocked") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#fffbeb] px-2 py-0.5 text-[10px] font-semibold text-[#b45309]">
+        <OctagonAlert size={9} />
+        Waiting
+      </span>
+    );
+  }
+  if (runState === "skipped") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-[#f4f4f5] px-2 py-0.5 text-[10px] font-semibold text-[#71717a]">
+        <PauseCircle size={9} />
+        Skipped
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-[#f8fafc] px-2 py-0.5 text-[10px] font-medium text-[#98a2b3]">
+      <CircleDashed size={9} />
+      Idle
+    </span>
+  );
+}
+
+function nodeTypeLabel(type: WorkflowCanvasNodeType): string {
+  if (type === "trigger")   return "Trigger";
+  if (type === "condition") return "Condition";
+  if (type === "output")    return "Output";
   return "Agent";
 }
 
+function agentMonogram(name: string): string {
+  const t = String(name || "").trim();
+  return t ? t.charAt(0).toUpperCase() : "A";
+}
+
+// ── Node ──────────────────────────────────────────────────────────────────────
+
 function WorkflowNode({ data, selected }: NodeProps<WorkflowFlowNodeData>) {
+  const agentName = String(data.agentName || data.agentId || "").trim();
+  const agentDescription = String(data.agentDescription || "").trim();
+  const agentTags = Array.isArray(data.agentTags)
+    ? data.agentTags.map((t) => String(t || "").trim()).filter(Boolean)
+    : [];
+  const monogram = agentMonogram(agentName);
   const snippet = String(data.runOutput || "").trim();
-  const hasSnippet = snippet.length > 0;
+  const validationWarning = String(data.validationWarning || "").trim();
+  const isTrigger = data.nodeType === "trigger";
 
   return (
     <div
-      className={`w-[290px] rounded-2xl border px-4 py-3 shadow-sm transition ${
-        runTone(data.runState)
-      } ${selected ? "ring-2 ring-[#2563eb]/35" : ""}`}
+      className={`w-[260px] overflow-hidden rounded-2xl border bg-white shadow-[0_4px_16px_-6px_rgba(15,23,42,0.16)] transition-all duration-150 ${
+        runBorder(data.runState)
+      } ${validationWarning ? "!border-[#f59e0b]/60" : ""} ${
+        selected ? "shadow-[0_8px_28px_-8px_rgba(37,99,235,0.35)]" : ""
+      }`}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="size-2.5 border border-white bg-[#93c5fd]"
-      />
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-[15px] font-semibold text-[#101828]">{data.label || "Untitled step"}</p>
-          <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-[#667085]">
-            {typeBadgeLabel(data.nodeType)}
-          </p>
-        </div>
-        <div className="mt-0.5 shrink-0">
-          <RunIcon runState={data.runState} />
-        </div>
-      </div>
+      {/* Input handle */}
+      {!isTrigger ? (
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
+        />
+      ) : null}
 
-      <div className="mt-2 flex items-center gap-1.5 text-[12px] text-[#475467]">
-        <span className="font-medium">Agent:</span>
-        <span className="truncate">{data.agentId || "Unassigned"}</span>
-      </div>
-
-      {Array.isArray(data.toolIds) && data.toolIds.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {data.toolIds.slice(0, 4).map((toolId) => (
-            <span
-              key={toolId}
-              className="rounded-full border border-black/[0.08] bg-white/80 px-2 py-0.5 text-[11px] text-[#344054]"
+      {/* Coloured header band with monogram */}
+      <div className={`bg-gradient-to-br px-3.5 pt-3.5 pb-3 ${runHeaderBg(data.runState)}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            {/* Monogram */}
+            <div
+              className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/60 bg-white/70 text-[15px] font-bold shadow-sm backdrop-blur-sm ${monogramColor(data.runState)}`}
             >
-              {toolId}
-            </span>
-          ))}
-          {data.toolIds.length > 4 ? (
-            <span className="rounded-full border border-black/[0.08] bg-white/80 px-2 py-0.5 text-[11px] text-[#667085]">
-              +{data.toolIds.length - 4}
-            </span>
-          ) : null}
+              {monogram}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-semibold leading-snug text-[#101828]">
+                {data.label || agentName || "Untitled step"}
+              </p>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[#667085]">
+                  {isTrigger ? <Zap size={9} className="text-[#f59e0b]" /> : null}
+                  {nodeTypeLabel(data.nodeType)}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="shrink-0 pt-0.5">
+            <RunBadge runState={data.runState} />
+          </div>
         </div>
-      ) : null}
+      </div>
 
-      {hasSnippet ? (
-        <p className="mt-2 line-clamp-2 text-[11px] text-[#667085]">
-          {snippet}
-        </p>
-      ) : null}
+      {/* Body */}
+      <div className="px-3.5 py-3">
+        {/* Description */}
+        {agentDescription ? (
+          <p className="line-clamp-2 text-[11px] leading-[1.55] text-[#667085]">
+            {agentDescription}
+          </p>
+        ) : null}
 
+        {/* Tags */}
+        {agentTags.length > 0 ? (
+          <div className={`flex flex-wrap gap-1 ${agentDescription ? "mt-2" : ""}`}>
+            {agentTags.slice(0, 3).map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full border border-black/[0.07] bg-[#f0f4ff] px-1.5 py-0.5 text-[9px] font-medium text-[#3b5bdb]"
+              >
+                {tag}
+              </span>
+            ))}
+            {agentTags.length > 3 ? (
+              <span className="rounded-full border border-black/[0.07] bg-[#f8fafc] px-1.5 py-0.5 text-[9px] font-medium text-[#667085]">
+                +{agentTags.length - 3}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Run output snippet */}
+        {snippet ? (
+          <div className="mt-2.5 rounded-xl border border-black/[0.06] bg-[#f8fafc] px-2.5 py-2">
+            <p className="line-clamp-3 font-mono text-[10px] leading-[1.6] text-[#475467]">
+              {snippet}
+            </p>
+          </div>
+        ) : null}
+
+        {/* Validation warning */}
+        {validationWarning ? (
+          <div className="mt-2.5 flex items-start gap-1.5 rounded-xl border border-[#f59e0b]/40 bg-[#fffbeb] px-2.5 py-2">
+            <AlertTriangle size={11} className="mt-[1px] shrink-0 text-[#d97706]" />
+            <p className="line-clamp-2 text-[10px] leading-[1.5] text-[#92400e]">
+              {validationWarning}
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Output handle */}
       <Handle
         type="source"
         position={Position.Right}
-        className="size-2.5 border border-white bg-[#93c5fd]"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-white !bg-[#93c5fd] shadow-sm"
       />
     </div>
   );

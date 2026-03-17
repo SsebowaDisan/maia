@@ -28,6 +28,8 @@ type WorkspaceAgentCard = {
   runs: AgentRunHistoryRecord[];
   requiredConnectors: string[];
   unhealthyConnectors: string[];
+  scheduleLabel?: string;
+  nextRunAt?: string | null;
 };
 
 type WorkspaceConnectorCard = {
@@ -153,6 +155,79 @@ function inferRequiredConnectors(definition: Record<string, unknown>): string[] 
   return Array.from(new Set(derived));
 }
 
+function describeCronExpression(cronExpression: string): string {
+  const parts = String(cronExpression || "").trim().split(/\s+/);
+  if (parts.length < 5) {
+    return "Custom schedule";
+  }
+  const [minuteRaw, hourRaw, dayOfMonth, month, dayOfWeek] = parts;
+  const minute = Number(minuteRaw);
+  const hour = Number(hourRaw);
+  const hasFixedTime = Number.isFinite(minute) && Number.isFinite(hour);
+  const timeText = hasFixedTime
+    ? `${String(Math.max(0, Math.min(23, hour))).padStart(2, "0")}:${String(
+        Math.max(0, Math.min(59, minute)),
+      ).padStart(2, "0")}`
+    : "scheduled time";
+  const weekdayMap: Record<string, string> = {
+    "0": "Sunday",
+    "1": "Monday",
+    "2": "Tuesday",
+    "3": "Wednesday",
+    "4": "Thursday",
+    "5": "Friday",
+    "6": "Saturday",
+    "7": "Sunday",
+  };
+  if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return `Every day at ${timeText} UTC`;
+  }
+  if (dayOfMonth === "*" && month === "*" && weekdayMap[dayOfWeek]) {
+    return `Every ${weekdayMap[dayOfWeek]} at ${timeText} UTC`;
+  }
+  return `Cron: ${cronExpression}`;
+}
+
+function getNextScheduledRun(cronExpression: string): Date | null {
+  const parts = String(cronExpression || "").trim().split(/\s+/);
+  if (parts.length < 5) {
+    return null;
+  }
+  const [minuteRaw, hourRaw, dayOfMonth, month, dayOfWeek] = parts;
+  if (dayOfMonth !== "*" || month !== "*") {
+    return null;
+  }
+  if (!/^\d+$/.test(minuteRaw) || !/^\d+$/.test(hourRaw)) {
+    return null;
+  }
+  const minute = Number(minuteRaw);
+  const hour = Number(hourRaw);
+  if (minute < 0 || minute > 59 || hour < 0 || hour > 23) {
+    return null;
+  }
+  const now = new Date();
+  const candidate = new Date(now);
+  candidate.setUTCSeconds(0, 0);
+  candidate.setUTCHours(hour, minute, 0, 0);
+  if (dayOfWeek === "*") {
+    if (candidate.getTime() <= now.getTime()) {
+      candidate.setUTCDate(candidate.getUTCDate() + 1);
+    }
+    return candidate;
+  }
+  if (!/^\d+$/.test(dayOfWeek)) {
+    return null;
+  }
+  const targetDay = Number(dayOfWeek) % 7;
+  const currentDay = candidate.getUTCDay();
+  let daysAhead = (targetDay - currentDay + 7) % 7;
+  if (daysAhead === 0 && candidate.getTime() <= now.getTime()) {
+    daysAhead = 7;
+  }
+  candidate.setUTCDate(candidate.getUTCDate() + daysAhead);
+  return candidate;
+}
+
 function navigateToPath(path: string) {
   window.history.pushState({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
@@ -257,6 +332,10 @@ export function WorkspacePage() {
           const unhealthyConnectors = requiredConnectors.filter(
             (connectorId) => !connectorReadyMap.get(normalizeConnectorId(connectorId)),
           );
+          const trigger = (rawDefinition.trigger || {}) as Record<string, unknown>;
+          const isScheduled = String(trigger.family || "").trim().toLowerCase() === "scheduled";
+          const cronExpression = String(trigger.cron_expression || "").trim();
+          const nextRunDate = isScheduled ? getNextScheduledRun(cronExpression) : null;
           return {
             id: agent.agent_id,
             name: agent.name,
@@ -267,6 +346,8 @@ export function WorkspacePage() {
             runs,
             requiredConnectors,
             unhealthyConnectors,
+            scheduleLabel: isScheduled ? describeCronExpression(cronExpression) : "",
+            nextRunAt: nextRunDate ? nextRunDate.toISOString() : null,
           } satisfies WorkspaceAgentCard;
         }),
       );
@@ -473,6 +554,11 @@ export function WorkspacePage() {
                     <p className="mt-1 text-[12px] text-[#98a2b3]">
                       Last run {agent.lastRun ? formatRelativeTime(agent.lastRun) : "never"} · {agent.totalRuns} total runs
                     </p>
+                    {agent.scheduleLabel ? (
+                      <p className="mt-1 text-[12px] text-[#1d4ed8]">
+                        Next run {agent.nextRunAt ? new Date(agent.nextRunAt).toLocaleString() : "scheduled"} · {agent.scheduleLabel}
+                      </p>
+                    ) : null}
                   </div>
                   <span
                     className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${

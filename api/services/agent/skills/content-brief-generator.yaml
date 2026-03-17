@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [content, seo, marketing, research, google-docs, brief]
-required_connectors: [brave_search, google_workspace]
+required_connectors: [brave_search]
 is_public: true
 pricing_model: free
 

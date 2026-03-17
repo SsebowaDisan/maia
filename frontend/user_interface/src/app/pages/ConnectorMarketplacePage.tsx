@@ -3,12 +3,31 @@ import { toast } from "sonner";
 
 import { listConnectorCatalog, type ConnectorCatalogRecord } from "../../api/client";
 
-type Category = "all" | "crm" | "productivity" | "database" | "communication" | "other";
+type Category =
+  | "all"
+  | "crm"
+  | "research"
+  | "finance"
+  | "productivity"
+  | "database"
+  | "communication"
+  | "other";
 
 function normalizeCategory(value: string): Category {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "crm") {
     return "crm";
+  }
+  if (
+    normalized === "research" ||
+    normalized === "search" ||
+    normalized === "news" ||
+    normalized === "sentiment"
+  ) {
+    return "research";
+  }
+  if (normalized === "finance" || normalized === "fintech" || normalized === "sec") {
+    return "finance";
   }
   if (normalized === "communication") {
     return "communication";
@@ -31,6 +50,12 @@ function toDisplayCategory(value: Category) {
   }
   if (value === "communication") {
     return "communication";
+  }
+  if (value === "research") {
+    return "research";
+  }
+  if (value === "finance") {
+    return "finance";
   }
   if (value === "crm") {
     return "crm";
@@ -83,7 +108,18 @@ export function ConnectorMarketplacePage() {
             Discover connectors
           </h1>
           <div className="mt-4 flex flex-wrap gap-2">
-            {(["all", "crm", "productivity", "database", "communication", "other"] as const).map(
+            {(
+              [
+                "all",
+                "crm",
+                "research",
+                "finance",
+                "productivity",
+                "database",
+                "communication",
+                "other",
+              ] as const
+            ).map(
               (value) => (
                 <button
                   key={value}

@@ -25,7 +25,28 @@ from jose import JWTError, jwt
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-_SECRET = os.getenv("MAIA_JWT_SECRET") or secrets.token_hex(32)
+def _load_dev_secret() -> str:
+    """Persist a stable dev secret across restarts when MAIA_JWT_SECRET is unset.
+
+    Writes the generated secret to .maia_dev_jwt_secret on first run and
+    reuses it on subsequent starts so tokens survive server restarts in dev.
+    Never used when MAIA_JWT_SECRET is set via environment.
+    """
+    import pathlib
+    secret_file = pathlib.Path(".maia_dev_jwt_secret")
+    try:
+        if secret_file.exists():
+            stored = secret_file.read_text().strip()
+            if stored:
+                return stored
+        new_secret = secrets.token_hex(32)
+        secret_file.write_text(new_secret)
+        return new_secret
+    except OSError:
+        return secrets.token_hex(32)
+
+
+_SECRET = os.getenv("MAIA_JWT_SECRET") or _load_dev_secret()
 _ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("MAIA_ACCESS_TOKEN_TTL_MINUTES", "60"))
 REFRESH_TOKEN_TTL_DAYS = int(os.getenv("MAIA_REFRESH_TOKEN_TTL_DAYS", "30"))

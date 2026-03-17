@@ -548,6 +548,21 @@ type WorkflowRunEvent =
       duration_ms?: number;
     }
   | {
+      event_type: "budget_exceeded";
+      run_id?: string;
+      workflow_id?: string;
+      step_id?: string;
+      detail: string;
+      tool_calls_made?: number;
+    }
+  | {
+      event_type: "error";
+      run_id?: string;
+      workflow_id?: string;
+      step_id?: string;
+      detail: string;
+    }
+  | {
       event_type: "done";
     }
   | {
@@ -560,6 +575,7 @@ type WorkflowStepRunResult = {
   agent_id?: string;
   status: "completed" | "failed" | "skipped" | string;
   output_preview?: string;
+  reason?: string;
   error?: string;
   duration_ms?: number;
 };

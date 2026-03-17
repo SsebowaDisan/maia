@@ -14,6 +14,19 @@ export type ConnectorDefinition = {
 
 export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
   {
+    id: "brave_search",
+    label: "Brave Search",
+    description: "Search the web with Brave Search for fresh, citation-friendly results.",
+    fields: [
+      {
+        key: "BRAVE_API_KEY",
+        label: "API key",
+        placeholder: "Brave Search API key",
+        sensitive: true,
+      },
+    ],
+  },
+  {
     id: "reddit",
     label: "Reddit",
     description:
@@ -51,6 +64,40 @@ export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
     label: "SEC EDGAR",
     description:
       "Access public SEC filings (10-K, 10-Q, 8-K). No credentials are required.",
+    fields: [],
+  },
+  {
+    id: "google_maps",
+    label: "Google Maps",
+    description: "Search places and local business data via Google Maps APIs.",
+    fields: [
+      {
+        key: "GOOGLE_MAPS_API_KEY",
+        label: "API key",
+        placeholder: "Google Maps API key",
+        sensitive: true,
+      },
+    ],
+  },
+  {
+    id: "playwright_browser",
+    label: "Web Browser (Playwright)",
+    description:
+      "System browser automation for navigation, extraction, and web interaction.",
+    fields: [],
+  },
+  {
+    id: "google_calendar",
+    label: "Google Calendar",
+    description:
+      "Calendar access is granted through Google OAuth scopes in the Google suite setup.",
+    fields: [],
+  },
+  {
+    id: "google_analytics",
+    label: "Google Analytics",
+    description:
+      "Analytics access is granted through Google OAuth scopes in the Google suite setup.",
     fields: [],
   },
   {

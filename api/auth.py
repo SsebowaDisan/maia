@@ -59,26 +59,53 @@ def get_current_user(
 
     Tries Bearer JWT first; falls back to X-User-Id if auth is disabled.
     """
-    # ── 1. JWT Bearer token ────────────────────────────────────────────────────
+    # ── 1. Bearer token — JWT or API key ──────────────────────────────────────
     if credentials and credentials.credentials:
-        try:
-            payload = decode_access_token(credentials.credentials)
-        except TokenError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(exc),
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from exc
+        token = credentials.credentials
 
-        uid = payload.get("sub")
-        user = get_user(str(uid)) if uid else None
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or deactivated.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return user
+        # B9: Try API key first (prefix "mk_")
+        if token.startswith("mk_"):
+            try:
+                from api.services.auth.api_keys import verify_api_key
+                key_record = verify_api_key(token)
+            except Exception:
+                key_record = None
+            if not key_record:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired API key.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            user = get_user(key_record.user_id)
+            if not user or not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="API key owner account not found or deactivated.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return user
+
+        # Standard JWT
+        try:
+            payload = decode_access_token(token)
+        except TokenError as exc:
+            if not _AUTH_DISABLED:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=str(exc),
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
+            # Dev mode: stale/invalid token — fall through to legacy fallback below
+        else:
+            uid = payload.get("sub")
+            user = get_user(str(uid)) if uid else None
+            if not user or not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found or deactivated.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return user
 
     # ── 2. Legacy header / query-param (dev / migration mode) ─────────────────
     if _AUTH_DISABLED:

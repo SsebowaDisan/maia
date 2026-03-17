@@ -62,32 +62,125 @@ def submit_for_review(publisher_id: str, agent_id: str) -> MarketplaceAgent:
         session.add(entry)
         session.commit()
         session.refresh(entry)
-        return entry
+
+    _fire_notification(publisher_id, entry, "submitted")
+    return entry
 
 
 def approve_agent(agent_id: str) -> MarketplaceAgent:
-    """Move agent from pending_review to approved (admin only)."""
-    return _set_status(agent_id, "approved")
+    """Move agent from pending_review → approved and snapshot the definition hash."""
+    import hashlib as _hl
+    with Session(engine) as session:
+        entry = session.exec(
+            select(MarketplaceAgent).where(MarketplaceAgent.agent_id == agent_id)
+        ).first()
+        if not entry:
+            raise ValueError(f"Marketplace agent '{agent_id}' not found.")
+        entry.status = "approved"
+        entry.approved_definition_hash = _hl.sha256(
+            entry.definition_json.encode()
+        ).hexdigest()
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+    _fire_notification(entry.publisher_id, entry, "approved")
+    return entry
 
 
 def publish_agent(agent_id: str) -> MarketplaceAgent:
-    """Move approved agent to published."""
+    """Move approved agent to published.
+
+    Re-runs safety checks and verifies the definition has not been altered
+    since approval (hash comparison).
+    """
+    import hashlib as _hl
     import time
 
-    entry = _set_status(agent_id, "published")
     with Session(engine) as session:
-        rec = session.get(MarketplaceAgent, entry.id)
-        if rec:
-            rec.published_at = time.time()
-            session.add(rec)
-            session.commit()
+        entry = session.exec(
+            select(MarketplaceAgent).where(MarketplaceAgent.agent_id == agent_id)
+        ).first()
+        if not entry:
+            raise ValueError(f"Marketplace agent '{agent_id}' not found.")
+        if entry.status != "approved":
+            raise PublishValidationError(
+                f"Only approved agents can be published. Current status: '{entry.status}'."
+            )
+        # Integrity check: ensure definition has not changed since approval
+        current_hash = _hl.sha256(entry.definition_json.encode()).hexdigest()
+        if entry.approved_definition_hash and current_hash != entry.approved_definition_hash:
+            raise PublishValidationError(
+                "Agent definition was modified after approval. "
+                "Please re-submit for review."
+            )
+        # Re-run safety checks against the definition that will be published
+        _run_safety_checks(_load_definition(entry))
+
+        entry.status = "published"
+        entry.published_at = time.time()
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+    _fire_notification(entry.publisher_id, entry, "published")
     return entry
 
 
 def reject_agent(agent_id: str, reason: str) -> MarketplaceAgent:
-    """Reject an agent with a reason."""
+    """Reject an agent with a reason (stored for developer visibility)."""
     logger.info("Rejecting agent %s: %s", agent_id, reason)
-    return _set_status(agent_id, "rejected")
+    with Session(engine) as session:
+        entry = session.exec(
+            select(MarketplaceAgent).where(MarketplaceAgent.agent_id == agent_id)
+        ).first()
+        if not entry:
+            raise ValueError(f"Marketplace agent '{agent_id}' not found.")
+        entry.status = "rejected"
+        entry.rejection_reason = reason
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+    _fire_notification(entry.publisher_id, entry, "rejected", detail=reason)
+    return entry
+
+
+def revise_agent(
+    publisher_id: str,
+    agent_id: str,
+    updated_definition: dict[str, Any],
+    changelog: str = "",
+) -> MarketplaceAgent:
+    """Allow a publisher to revise a rejected agent and re-enter review.
+
+    Re-runs all safety checks against the updated definition before resetting
+    status to pending_review.  Increments revision_count.
+    """
+    with Session(engine) as session:
+        entry = session.exec(
+            select(MarketplaceAgent)
+            .where(MarketplaceAgent.agent_id == agent_id)
+            .where(MarketplaceAgent.publisher_id == publisher_id)
+        ).first()
+        if not entry:
+            raise ValueError(f"Agent '{agent_id}' not found for publisher '{publisher_id}'.")
+        if entry.status != "rejected":
+            raise PublishValidationError(
+                f"Only rejected agents can be revised. Current status: '{entry.status}'."
+            )
+
+        _run_safety_checks(updated_definition)
+
+        import json as _json
+        entry.definition_json = _json.dumps(updated_definition)
+        entry.status = "pending_review"
+        entry.rejection_reason = ""
+        entry.revision_count = (entry.revision_count or 0) + 1
+        if changelog:
+            entry.changelog = changelog
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+    _fire_notification(publisher_id, entry, "revised")
+    return entry
 
 
 def deprecate_agent(agent_id: str) -> MarketplaceAgent:
@@ -151,6 +244,20 @@ def _run_safety_checks(definition: dict[str, Any]) -> None:
             raise PublishValidationError(
                 f"Computer Use max_steps={max_steps} exceeds the maximum allowed value of 50."
             )
+
+
+def _fire_notification(
+    user_id: str,
+    entry: "MarketplaceAgent",
+    event_type: str,
+    detail: str = "",
+) -> None:
+    """Dispatch a marketplace notification (best-effort — never raises)."""
+    try:
+        from api.services.marketplace.notifications import notify
+        notify(user_id, entry.agent_id, entry.name, event_type, detail)
+    except Exception:
+        logger.debug("Notification dispatch failed for event=%s agent=%s", event_type, entry.agent_id, exc_info=True)
 
 
 def _load_definition(entry: MarketplaceAgent) -> dict[str, Any]:

@@ -1,5 +1,7 @@
 export type AppPageRouteKey =
+  | "admin_review"
   | "marketplace"
+  | "my_agents"
   | "workspace"
   | "connectors"
   | "developer"
@@ -54,11 +56,25 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
       path: "/marketplace",
     };
   }
+  if (normalized === "/admin/review") {
+    return {
+      kind: "page",
+      key: "admin_review",
+      path: "/admin/review",
+    };
+  }
   if (normalized === "/workspace") {
     return {
       kind: "page",
       key: "workspace",
       path: "/workspace",
+    };
+  }
+  if (normalized === "/agents") {
+    return {
+      kind: "page",
+      key: "my_agents",
+      path: "/agents",
     };
   }
   if (normalized === "/connectors") {

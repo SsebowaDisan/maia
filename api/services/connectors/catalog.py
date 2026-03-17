@@ -88,7 +88,7 @@ _PROFILES: dict[str, dict] = {
     },
     "google_calendar": {
         "name": "Google Calendar",
-        "description": "Create and list Google Calendar events.",
+        "description": "Create, list, and manage Google Calendar events.",
         "category": ConnectorCategory.calendar,
         "auth": OAuth2AuthConfig(
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
@@ -117,6 +117,38 @@ _PROFILES: dict[str, dict] = {
                 parameters=[
                     ToolParameter(name="max_results", type=ToolParameterType.integer, description="Max events to return", required=False, default=10),
                     ToolParameter(name="time_min", type=ToolParameterType.string, description="Start of search window (ISO 8601)", required=False),
+                ],
+            ),
+            # CB01: additional calendar read/write tools
+            ToolSchema(
+                id="gcalendar.get_event_details",
+                name="Get event details",
+                description="Fetch full details of a specific Google Calendar event by ID.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="event_id", type=ToolParameterType.string, description="Google Calendar event ID"),
+                ],
+            ),
+            ToolSchema(
+                id="gcalendar.list_day_events",
+                name="List day events",
+                description="List all events on a specific calendar day.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="date", type=ToolParameterType.string, description="Date in YYYY-MM-DD format"),
+                ],
+            ),
+            ToolSchema(
+                id="gcalendar.update_event",
+                name="Update event",
+                description="Update the title, time, or description of an existing calendar event.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="event_id", type=ToolParameterType.string, description="Google Calendar event ID"),
+                    ToolParameter(name="title", type=ToolParameterType.string, description="New event title", required=False),
+                    ToolParameter(name="start", type=ToolParameterType.string, description="New start datetime ISO 8601", required=False),
+                    ToolParameter(name="end", type=ToolParameterType.string, description="New end datetime ISO 8601", required=False),
+                    ToolParameter(name="description", type=ToolParameterType.string, description="New event description", required=False),
                 ],
             ),
         ],
@@ -219,6 +251,39 @@ _PROFILES: dict[str, dict] = {
                     ToolParameter(name="output_title", type=ToolParameterType.string, description="Title for the new document"),
                 ],
             ),
+            # CB04-extra: PDF/binary export from Drive
+            ToolSchema(
+                id="workspace.drive.export_as_text",
+                name="Export file as text",
+                description="Export a Google Drive file (PDF, Slides, Sheets) as plain text for reading. Useful for PDF contracts or presentations.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="file_id", type=ToolParameterType.string, description="Google Drive file ID"),
+                ],
+            ),
+            # CB04: Google Slides write tools
+            ToolSchema(
+                id="workspace.slides.create",
+                name="Create presentation",
+                description="Create a new Google Slides presentation with a title slide.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="title", type=ToolParameterType.string, description="Presentation title"),
+                    ToolParameter(name="folder_id", type=ToolParameterType.string, description="Drive folder ID to save into", required=False),
+                ],
+            ),
+            ToolSchema(
+                id="workspace.slides.add_slide",
+                name="Add slide",
+                description="Add a new slide with title and body text to an existing Google Slides presentation.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="presentation_id", type=ToolParameterType.string, description="Google Slides presentation ID"),
+                    ToolParameter(name="slide_title", type=ToolParameterType.string, description="Slide title text"),
+                    ToolParameter(name="body", type=ToolParameterType.string, description="Slide body text (bullet points, one per line)"),
+                    ToolParameter(name="layout", type=ToolParameterType.string, description="Slide layout: TITLE_AND_BODY, TITLE_ONLY, BLANK", required=False, default="TITLE_AND_BODY"),
+                ],
+            ),
         ],
     },
     "slack": {
@@ -273,6 +338,18 @@ _PROFILES: dict[str, dict] = {
         "tags": ["microsoft", "email", "onedrive"],
         "tools": [
             ToolSchema(
+                id="outlook.draft",
+                name="Create draft",
+                description="Save an email as a draft in Outlook without sending it.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="to", type=ToolParameterType.string, description="Recipient email address"),
+                    ToolParameter(name="subject", type=ToolParameterType.string, description="Subject line"),
+                    ToolParameter(name="body", type=ToolParameterType.string, description="Email body"),
+                    ToolParameter(name="cc", type=ToolParameterType.string, description="CC recipients", required=False),
+                ],
+            ),
+            ToolSchema(
                 id="outlook.send",
                 name="Send email",
                 description="Send an email via Outlook.",
@@ -296,7 +373,7 @@ _PROFILES: dict[str, dict] = {
     },
     "playwright_browser": {
         "name": "Browser",
-        "description": "Browse and extract content from any web page using Playwright.",
+        "description": "Browse and extract structured content from any web page using Playwright.",
         "category": ConnectorCategory.data,
         "auth": NoAuthConfig(),
         "tags": ["browser", "web", "scraping"],
@@ -304,10 +381,49 @@ _PROFILES: dict[str, dict] = {
             ToolSchema(
                 id="browser.navigate",
                 name="Navigate",
-                description="Open a URL and extract page text and structure.",
+                description="Open a URL and extract the full page text content.",
                 action_class=ToolActionClass.read,
                 parameters=[
                     ToolParameter(name="url", type=ToolParameterType.string, description="URL to navigate to"),
+                ],
+            ),
+            # CB03: structured browser extraction tools
+            ToolSchema(
+                id="browser.get_meta_tags",
+                name="Get meta tags",
+                description="Extract the title tag, meta description, and Open Graph tags from a page.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to inspect"),
+                ],
+            ),
+            ToolSchema(
+                id="browser.get_headings",
+                name="Get headings",
+                description="Extract all H1-H4 headings from a page in document order.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to inspect"),
+                ],
+            ),
+            ToolSchema(
+                id="browser.get_links",
+                name="Get links",
+                description="Extract all hyperlinks from a page with their anchor text and href.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to inspect"),
+                    ToolParameter(name="internal_only", type=ToolParameterType.boolean, description="Return only links within the same domain", required=False, default=False),
+                ],
+            ),
+            ToolSchema(
+                id="browser.extract_text",
+                name="Extract text",
+                description="Extract clean readable text from a specific CSS selector on a page.",
+                action_class=ToolActionClass.read,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to inspect"),
+                    ToolParameter(name="selector", type=ToolParameterType.string, description="CSS selector to target (e.g. 'main', '#pricing', '.features')", required=False),
                 ],
             ),
         ],
@@ -404,7 +520,7 @@ _PROFILES: dict[str, dict] = {
     },
     "google_ads": {
         "name": "Google Ads",
-        "description": "Pull campaign performance data and manage Google Ads.",
+        "description": "Pull campaign performance data and manage Google Ads campaigns.",
         "category": ConnectorCategory.analytics,
         "auth": OAuth2AuthConfig(
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
@@ -426,6 +542,41 @@ _PROFILES: dict[str, dict] = {
                     ToolParameter(name="customer_id", type=ToolParameterType.string, description="Google Ads customer ID"),
                     ToolParameter(name="start_date", type=ToolParameterType.string, description="Start date YYYY-MM-DD"),
                     ToolParameter(name="end_date", type=ToolParameterType.string, description="End date YYYY-MM-DD"),
+                ],
+            ),
+            # CB02: Google Ads write tools
+            ToolSchema(
+                id="google_ads.pause_campaign",
+                name="Pause campaign",
+                description="Pause a Google Ads campaign to stop spend immediately.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="customer_id", type=ToolParameterType.string, description="Google Ads customer ID"),
+                    ToolParameter(name="campaign_id", type=ToolParameterType.string, description="Campaign ID to pause"),
+                ],
+            ),
+            ToolSchema(
+                id="google_ads.update_bid",
+                name="Update bid",
+                description="Update the CPC bid or target CPA/ROAS for a Google Ads campaign or ad group.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="customer_id", type=ToolParameterType.string, description="Google Ads customer ID"),
+                    ToolParameter(name="campaign_id", type=ToolParameterType.string, description="Campaign ID"),
+                    ToolParameter(name="bid_type", type=ToolParameterType.string, description="Bid type: cpc, target_cpa, target_roas"),
+                    ToolParameter(name="bid_value", type=ToolParameterType.string, description="New bid value (e.g. '1.50' for CPC, '25.00' for target CPA)"),
+                ],
+            ),
+            ToolSchema(
+                id="google_ads.add_negative_keyword",
+                name="Add negative keyword",
+                description="Add a negative keyword to a campaign to block irrelevant searches.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="customer_id", type=ToolParameterType.string, description="Google Ads customer ID"),
+                    ToolParameter(name="campaign_id", type=ToolParameterType.string, description="Campaign ID"),
+                    ToolParameter(name="keyword", type=ToolParameterType.string, description="Negative keyword text"),
+                    ToolParameter(name="match_type", type=ToolParameterType.string, description="Match type: broad, phrase, exact", required=False, default="exact"),
                 ],
             ),
         ],
@@ -636,6 +787,30 @@ _PROFILES: dict[str, dict] = {
                     ToolParameter(name="file_url", type=ToolParameterType.string, description="URL or path to the invoice PDF"),
                 ],
             ),
+            # CB05: invoice write-back tools
+            ToolSchema(
+                id="invoice.mark_paid",
+                name="Mark invoice paid",
+                description="Mark an invoice as paid in the invoice system and record the payment date.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="invoice_id", type=ToolParameterType.string, description="Invoice ID to mark as paid"),
+                    ToolParameter(name="payment_date", type=ToolParameterType.string, description="Payment date YYYY-MM-DD", required=False),
+                    ToolParameter(name="payment_reference", type=ToolParameterType.string, description="Payment reference or transaction ID", required=False),
+                ],
+            ),
+            ToolSchema(
+                id="invoice.create_invoice",
+                name="Create invoice",
+                description="Create a new invoice with line items and send to the specified recipient.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="recipient_email", type=ToolParameterType.string, description="Recipient email address"),
+                    ToolParameter(name="line_items", type=ToolParameterType.array, description="List of line item objects with description, quantity, unit_price"),
+                    ToolParameter(name="due_date", type=ToolParameterType.string, description="Due date YYYY-MM-DD", required=False),
+                    ToolParameter(name="currency", type=ToolParameterType.string, description="Currency code e.g. GBP, USD, EUR", required=False, default="GBP"),
+                ],
+            ),
         ],
         "emitted_event_types": [],
     },
@@ -747,6 +922,44 @@ _PROFILES: dict[str, dict] = {
             ),
         ],
         "emitted_event_types": [],
+    },
+    # ── CB07: Page Monitor connector ─────────────────────────────────────────
+    "page_monitor": {
+        "name": "Page Monitor",
+        "description": "Register URLs for automated change detection. Maia tracks content hashes and notifies when pages change.",
+        "category": ConnectorCategory.data,
+        "auth": NoAuthConfig(),
+        "tags": ["monitoring", "change-detection", "competitor", "web"],
+        "tools": [
+            ToolSchema(
+                id="page_monitor.register_url",
+                name="Register URL",
+                description="Register a URL for automated content change monitoring.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to monitor"),
+                    ToolParameter(name="label", type=ToolParameterType.string, description="Human-readable label for this URL (e.g. 'Competitor pricing')", required=False),
+                    ToolParameter(name="check_interval_hours", type=ToolParameterType.integer, description="How often to check for changes in hours", required=False, default=24),
+                ],
+            ),
+            ToolSchema(
+                id="page_monitor.list_monitored",
+                name="List monitored URLs",
+                description="List all URLs currently registered for change monitoring, with their last-checked status.",
+                action_class=ToolActionClass.read,
+                parameters=[],
+            ),
+            ToolSchema(
+                id="page_monitor.unregister_url",
+                name="Unregister URL",
+                description="Stop monitoring a previously registered URL.",
+                action_class=ToolActionClass.execute,
+                parameters=[
+                    ToolParameter(name="url", type=ToolParameterType.string, description="URL to stop monitoring"),
+                ],
+            ),
+        ],
+        "emitted_event_types": ["page_changed", "page_unreachable"],
     },
 }
 

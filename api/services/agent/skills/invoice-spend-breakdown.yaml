@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [finance, invoices, spend-analysis, accounts-payable, reporting, automation]
-required_connectors: [invoice, google_workspace]
+required_connectors: [invoice]
 is_public: true
 pricing_model: free
 

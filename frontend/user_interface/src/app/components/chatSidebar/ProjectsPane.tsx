@@ -71,6 +71,8 @@ type ProjectsPaneProps = {
   onRequestDeleteConversation: (conversation: ConversationSummary) => void;
   onNavigateAppRoute: (path: string) => void;
   insightsCount?: number;
+  reviewQueueCount?: number;
+  isSuperAdmin?: boolean;
 };
 
 export function ProjectsPane({
@@ -114,15 +116,20 @@ export function ProjectsPane({
   onRequestDeleteConversation,
   onNavigateAppRoute,
   insightsCount = 0,
+  reviewQueueCount = 0,
+  isSuperAdmin = false,
 }: ProjectsPaneProps) {
-  const quickLinks = [
-    { id: "marketplace", label: "Marketplace", icon: LayoutGrid, path: "/marketplace" },
-    { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
-    { id: "agents", label: "Agents", icon: Bot, path: "/workspace" },
+  const baseQuickLinks = [
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
     { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
     { id: "insights", label: "Insights", icon: Bell, path: "/insights" },
   ] as const;
+  const quickLinks = isSuperAdmin
+    ? [
+        ...baseQuickLinks,
+        { id: "review_queue", label: "Review Queue", icon: Check, path: "/admin/review" },
+      ]
+    : baseQuickLinks;
   const normalizedPath = String(currentPath || "/").toLowerCase();
 
   return (
@@ -147,6 +154,11 @@ export function ProjectsPane({
                 {entry.id === "insights" && insightsCount > 0 ? (
                   <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#111827] px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {insightsCount > 99 ? "99+" : insightsCount}
+                  </span>
+                ) : null}
+                {entry.id === "review_queue" && reviewQueueCount > 0 ? (
+                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#111827] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {reviewQueueCount > 99 ? "99+" : reviewQueueCount}
                   </span>
                 ) : null}
               </button>

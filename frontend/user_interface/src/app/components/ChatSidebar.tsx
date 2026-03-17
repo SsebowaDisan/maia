@@ -20,6 +20,7 @@ import { ProjectEvidenceModal } from "./chatSidebar/ProjectEvidenceModal";
 import { useDeletePromptController } from "./chatSidebar/useDeletePromptController";
 import { useProjectEvidenceDeletion } from "./chatSidebar/useProjectEvidenceDeletion";
 import { useProjectEvidenceState } from "./chatSidebar/useProjectEvidenceState";
+import { MarketplaceNotificationBell } from "./marketplace/MarketplaceNotificationBell";
 
 interface SidebarProject {
   id: string;
@@ -49,6 +50,8 @@ interface ChatSidebarProps {
   onOpenWorkspaceTab: (tab: "Files" | "Resources" | "Settings" | "Help") => void;
   onNavigateAppRoute: (path: string) => void;
   insightsCount?: number;
+  reviewQueueCount?: number;
+  isSuperAdmin?: boolean;
   width?: number;
 }
 
@@ -75,6 +78,8 @@ export function ChatSidebar({
   onOpenWorkspaceTab,
   onNavigateAppRoute,
   insightsCount = 0,
+  reviewQueueCount = 0,
+  isSuperAdmin = false,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -323,6 +328,7 @@ export function ChatSidebar({
             <h2 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Chats</h2>
           </div>
           <div className="inline-flex items-center gap-1.5">
+            <MarketplaceNotificationBell onNavigate={onNavigateAppRoute} />
             <button
               onClick={() => {
                 void onNewConversation(selectedProjectId);
@@ -384,6 +390,8 @@ export function ChatSidebar({
         onRequestDeleteConversation={requestDeleteConversation}
         onNavigateAppRoute={onNavigateAppRoute}
         insightsCount={insightsCount}
+        reviewQueueCount={reviewQueueCount}
+        isSuperAdmin={isSuperAdmin}
       />
 
       <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7] space-y-2.5">

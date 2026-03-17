@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { listAgents, listMarketplaceAgents } from "../../api/client";
 
-import { listAgents, type AgentSummaryRecord } from "../../api/client";
 import {
   createWorkflowRecord,
   generateWorkflowFromDescription,
@@ -10,6 +10,7 @@ import {
   runWorkflowWithStream,
   streamGenerateWorkflowFromDescription,
   updateWorkflowRecord,
+  validateWorkflowDefinition,
   type SaveWorkflowPayload,
 } from "../../api/client/workflows";
 import type { WorkflowDefinition, WorkflowRunRecord, WorkflowTemplate } from "../../api/client/types";
@@ -38,11 +39,65 @@ function toWorkflowSavePayload(
   };
 }
 
+const RUN_HISTORY_PAGE_SIZE = 30;
+
+type AgentMetadata = {
+  name: string;
+  description: string;
+  tags: string[];
+};
+
+function warningMapFromValidationWarnings(warnings: string[]): Record<string, string> {
+  const byStep: Record<string, string[]> = {};
+  for (const warning of warnings) {
+    const text = String(warning || "").trim();
+    if (!text) {
+      continue;
+    }
+    if (!/missing connector|requires connectors/i.test(text)) {
+      continue;
+    }
+    const match = text.match(/step\s+'([^']+)'/i) || text.match(/step\s+"([^"]+)"/i);
+    if (!match?.[1]) {
+      continue;
+    }
+    const stepId = String(match[1] || "").trim();
+    if (!stepId) {
+      continue;
+    }
+    const connectorsMatch = text.match(/tenant:\s*(.+?)\.?$/i);
+    const connectors = connectorsMatch?.[1]
+      ? connectorsMatch[1]
+          .split(",")
+          .map((connector) => connector.trim())
+          .filter(Boolean)
+      : [];
+    const normalizedConnectorText = connectors
+      .map((connector) =>
+        connector
+          .replace(/[_-]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .replace(/\b\w/g, (char) => char.toUpperCase()),
+      )
+      .join(", ");
+    const formatted = normalizedConnectorText
+      ? `Missing connector${connectors.length > 1 ? "s" : ""}: ${normalizedConnectorText} - configure in Settings`
+      : text;
+    byStep[stepId] = [...(byStep[stepId] || []), formatted];
+  }
+  const flattened: Record<string, string> = {};
+  for (const [stepId, messages] of Object.entries(byStep)) {
+    flattened[stepId] = messages.join(" ");
+  }
+  return flattened;
+}
 export function WorkflowBuilderPage() {
   const workflowId = useWorkflowStore((state) => state.workflowId);
   const workflowName = useWorkflowStore((state) => state.workflowName);
   const workflowDescription = useWorkflowStore((state) => state.workflowDescription);
   const isDirty = useWorkflowStore((state) => state.isDirty);
+  const nodes = useWorkflowStore((state) => state.nodes);
   const loadDefinition = useWorkflowStore((state) => state.loadDefinition);
   const toDefinition = useWorkflowStore((state) => state.toDefinition);
   const markSaved = useWorkflowStore((state) => state.markSaved);
@@ -51,8 +106,8 @@ export function WorkflowBuilderPage() {
   const setRunStatus = useWorkflowStore((state) => state.setRunStatus);
   const setNodeRunState = useWorkflowStore((state) => state.setNodeRunState);
   const hydrateRunOutputs = useWorkflowStore((state) => state.hydrateRunOutputs);
+  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
 
-  const [agents, setAgents] = useState<AgentSummaryRecord[]>([]);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
 
@@ -61,10 +116,32 @@ export function WorkflowBuilderPage() {
 
   const [runHistory, setRunHistory] = useState<WorkflowRunRecord[]>([]);
   const [runHistoryLoading, setRunHistoryLoading] = useState(false);
+  const [runHistoryLoadingMore, setRunHistoryLoadingMore] = useState(false);
+  const [runHistoryHasMore, setRunHistoryHasMore] = useState(false);
+
+  const [agentMetadataById, setAgentMetadataById] = useState<Record<string, AgentMetadata>>({});
 
   const [nlGenerating, setNlGenerating] = useState(false);
   const [nlStreamLog, setNlStreamLog] = useState("");
   const [nlError, setNlError] = useState("");
+  const [validationWarningsByNodeId, setValidationWarningsByNodeId] = useState<
+    Record<string, string>
+  >({});
+
+  const initialAgentHintId = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    const params = new URLSearchParams(window.location.search);
+    return String(params.get("agent") || "").trim();
+  }, []);
+  const openPickerFromRouteHint = useMemo(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("open_picker") === "1" || Boolean(initialAgentHintId);
+  }, [initialAgentHintId]);
 
   const refreshTemplates = async () => {
     setTemplatesLoading(true);
@@ -76,40 +153,179 @@ export function WorkflowBuilderPage() {
     }
   };
 
-  const refreshRunHistory = async (targetWorkflowId?: string | null) => {
+  const refreshRunHistory = async (
+    targetWorkflowId?: string | null,
+    options?: { append?: boolean },
+  ) => {
     const recordId = String(targetWorkflowId || workflowId || "").trim();
     if (!recordId) {
       setRunHistory([]);
+      setRunHistoryHasMore(false);
       return;
     }
-    setRunHistoryLoading(true);
+    const append = Boolean(options?.append);
+    if (append) {
+      setRunHistoryLoadingMore(true);
+    } else {
+      setRunHistoryLoading(true);
+    }
     try {
-      const rows = await listWorkflowRunHistory(recordId).catch(() => []);
-      setRunHistory(Array.isArray(rows) ? rows : []);
+      const offset = append ? runHistory.length : 0;
+      const rows = await listWorkflowRunHistory(recordId, {
+        limit: RUN_HISTORY_PAGE_SIZE,
+        offset,
+      }).catch(() => []);
+      const normalizedRows = Array.isArray(rows) ? rows : [];
+      setRunHistory((previous) =>
+        append ? [...previous, ...normalizedRows] : normalizedRows,
+      );
+      setRunHistoryHasMore(normalizedRows.length >= RUN_HISTORY_PAGE_SIZE);
     } finally {
-      setRunHistoryLoading(false);
+      if (append) {
+        setRunHistoryLoadingMore(false);
+      } else {
+        setRunHistoryLoading(false);
+      }
     }
   };
 
   const loadInitialData = async () => {
     try {
-      const [agentRows] = await Promise.all([listAgents(), refreshTemplates()]);
-      setAgents(Array.isArray(agentRows) ? agentRows : []);
+      await refreshTemplates();
     } catch (error) {
       toast.error(`Failed to load workflow data: ${String(error)}`);
     }
   };
 
+  const loadAgentMetadata = async () => {
+    try {
+      const [installedRows, catalogRows] = await Promise.all([
+        listAgents().catch(() => []),
+        listMarketplaceAgents({ limit: 100 }).catch(() => []),
+      ]);
+      const nextById: Record<string, AgentMetadata> = {};
+      for (const row of catalogRows || []) {
+        const agentId = String(row.agent_id || "").trim();
+        if (!agentId) {
+          continue;
+        }
+        nextById[agentId] = {
+          name: String(row.name || agentId).trim(),
+          description: String(row.description || "").trim(),
+          tags: Array.isArray(row.tags)
+            ? row.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+            : [],
+        };
+      }
+      for (const row of installedRows || []) {
+        const agentId = String(row.agent_id || "").trim();
+        if (!agentId) {
+          continue;
+        }
+        nextById[agentId] = {
+          name: String(row.name || nextById[agentId]?.name || agentId).trim(),
+          description: String(row.description || nextById[agentId]?.description || "").trim(),
+          tags: Array.isArray(row.tags)
+            ? row.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+            : nextById[agentId]?.tags || [],
+        };
+      }
+      setAgentMetadataById(nextById);
+    } catch {
+      // Keep workflow usable even if metadata lookup fails.
+    }
+  };
+
   useEffect(() => {
     void loadInitialData();
+    void loadAgentMetadata();
   }, []);
+
+  useEffect(() => {
+    if (!openPickerFromRouteHint) {
+      return;
+    }
+    const query = new URLSearchParams(window.location.search);
+    query.delete("agent");
+    query.delete("open_picker");
+    const nextQuery = query.toString();
+    const nextPath = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+    window.history.replaceState({}, "", nextPath);
+  }, [openPickerFromRouteHint]);
 
   useEffect(() => {
     void refreshRunHistory(workflowId);
   }, [workflowId]);
 
-  const persistWorkflow = async (): Promise<string | null> => {
+  useEffect(() => {
+    if (!nodes.length || !Object.keys(agentMetadataById).length) {
+      return;
+    }
+    for (const node of nodes) {
+      const agentId = String(node.data.agentId || "").trim();
+      if (!agentId) {
+        continue;
+      }
+      const metadata = agentMetadataById[agentId];
+      if (!metadata) {
+        continue;
+      }
+      const currentName = String(node.data.agentName || "").trim();
+      const currentDescription = String(node.data.agentDescription || "").trim();
+      const currentTags = Array.isArray(node.data.agentTags) ? node.data.agentTags : [];
+      const needsName = !currentName || currentName === agentId;
+      const needsDescription = !currentDescription;
+      const needsTags = currentTags.length === 0 && metadata.tags.length > 0;
+      if (!needsName && !needsDescription && !needsTags) {
+        continue;
+      }
+      updateNodeData(
+        node.id,
+        {
+          ...(needsName ? { agentName: metadata.name } : {}),
+          ...(needsDescription ? { agentDescription: metadata.description } : {}),
+          ...(needsTags ? { agentTags: metadata.tags } : {}),
+          config: {
+            ...(node.data.config || {}),
+            ...(needsName ? { agent_name: metadata.name } : {}),
+            ...(needsDescription ? { agent_description: metadata.description } : {}),
+            ...(needsTags ? { agent_tags: metadata.tags } : {}),
+          },
+        },
+        { markDirty: false },
+      );
+    }
+  }, [agentMetadataById, nodes, updateNodeData]);
+
+  const runValidation = async (definition: WorkflowDefinition): Promise<boolean> => {
+    try {
+      const result = await validateWorkflowDefinition(definition);
+      if (!result.valid) {
+        setValidationWarningsByNodeId({});
+        const firstError = result.errors[0] || "Workflow validation failed.";
+        toast.error(firstError);
+        return false;
+      }
+      const warningMap = warningMapFromValidationWarnings(result.warnings || []);
+      setValidationWarningsByNodeId(warningMap);
+      if (Object.keys(warningMap).length > 0) {
+        toast.warning("Workflow saved with connector warnings. Configure missing connectors in Settings.");
+      }
+      return true;
+    } catch (error) {
+      toast.error(`Validation request failed: ${String(error)}`);
+      return false;
+    }
+  };
+
+  const persistWorkflow = async (options?: { skipValidation?: boolean }): Promise<string | null> => {
     const definition = toDefinition();
+    if (!options?.skipValidation) {
+      const isValid = await runValidation(definition);
+      if (!isValid) {
+        return null;
+      }
+    }
     const payload = toWorkflowSavePayload(definition, workflowName, workflowDescription);
 
     setSaving(true);
@@ -141,9 +357,14 @@ export function WorkflowBuilderPage() {
   };
 
   const runWorkflow = async () => {
+    const definition = toDefinition();
+    const isValid = await runValidation(definition);
+    if (!isValid) {
+      return;
+    }
     let recordId = String(workflowId || "").trim();
     if (!recordId) {
-      const saved = await persistWorkflow();
+      const saved = await persistWorkflow({ skipValidation: true });
       if (!saved) {
         return;
       }
@@ -225,6 +446,7 @@ export function WorkflowBuilderPage() {
       }
 
       loadDefinition(streamedDefinition, { workflowId: null, activeTemplateId: null });
+      setValidationWarningsByNodeId({});
       useWorkflowStore.getState().setMetadata({
         workflowId: null,
         workflowName: String(streamedDefinition.name || "Generated workflow"),
@@ -245,6 +467,7 @@ export function WorkflowBuilderPage() {
       workflowId: null,
       activeTemplateId: template.template_id,
     });
+    setValidationWarningsByNodeId({});
     useWorkflowStore.getState().setMetadata({
       workflowId: null,
       workflowName: template.name,
@@ -282,17 +505,18 @@ export function WorkflowBuilderPage() {
   };
 
   return (
-    <div className="h-full overflow-hidden bg-[#eef1f5] p-3">
+    <div className="h-full overflow-hidden">
       <div className="mx-auto flex h-full max-w-[1540px] min-h-0 flex-col">
         <section className="min-h-0 flex-1">
           <WorkflowCanvas
-            agents={agents}
             isRunning={running}
             isDirty={isDirty}
             templates={templates}
             templatesLoading={templatesLoading}
             runHistory={runHistory}
             runHistoryLoading={runHistoryLoading}
+            runHistoryHasMore={runHistoryHasMore}
+            runHistoryLoadingMore={runHistoryLoadingMore}
             nlGenerating={nlGenerating}
             nlStreamLog={nlStreamLog}
             nlError={nlError}
@@ -311,12 +535,21 @@ export function WorkflowBuilderPage() {
             onRefreshRunHistory={() => {
               void refreshRunHistory();
             }}
+            onLoadMoreRunHistory={() => {
+              if (!runHistoryHasMore || runHistoryLoadingMore) {
+                return;
+              }
+              void refreshRunHistory(undefined, { append: true });
+            }}
             onGenerateFromDescription={generateFromDescription}
             onSelectTemplate={applyTemplate}
             onLoadRunOutputs={loadRunOutputs}
+            initialAgentHintId={openPickerFromRouteHint ? initialAgentHintId : null}
+            validationWarningsByNodeId={validationWarningsByNodeId}
           />
         </section>
       </div>
     </div>
   );
 }
+

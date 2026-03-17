@@ -38,9 +38,52 @@ class AgentSchedule(SQLModel, table=True):
     # Pre-computed: next UTC unix timestamp to fire (set on register or after run)
     next_run_at: float = 0.0
 
+    # ── B10: Failure recovery fields ──────────────────────────────────────────
+    failure_count: int = 0          # consecutive full-cron-tick failures
+    last_failure_at: Optional[float] = Field(default=None)
+    # Retry-after timestamp: set during exponential back-off retries
+    retry_after: Optional[float] = Field(default=None)
+
+    # ── B12: Per-agent budget controls ────────────────────────────────────────
+    max_runs_per_day: Optional[int] = Field(default=None)   # None = unlimited
+    runs_today: int = 0             # count of runs in the current UTC day
+    runs_today_date: str = ""       # ISO date string "YYYY-MM-DD" for day tracking
+
 
 def _ensure_tables() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate_schedule_columns()
+
+
+def _migrate_schedule_columns() -> None:
+    """Add columns introduced after initial maia_agent_schedule table creation.
+
+    Covers B10 (failure recovery) and B12 (per-agent budget) fields.
+    Safe to call on every startup — idempotent.
+    """
+    try:
+        from sqlalchemy import inspect as _inspect, text
+        insp = _inspect(engine)
+        existing = {col["name"] for col in insp.get_columns("maia_agent_schedule")}
+    except Exception:
+        return  # Table not yet created; create_all above will handle it
+
+    additions = [
+        # B10 — failure recovery
+        ("failure_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_failure_at", "FLOAT"),
+        ("retry_after", "FLOAT"),
+        # B12 — per-agent daily budget
+        ("max_runs_per_day", "INTEGER"),
+        ("runs_today", "INTEGER NOT NULL DEFAULT 0"),
+        ("runs_today_date", "VARCHAR NOT NULL DEFAULT ''"),
+    ]
+    with Session(engine) as session:
+        for col, defn in additions:
+            if col not in existing:
+                session.exec(text(f"ALTER TABLE maia_agent_schedule ADD COLUMN {col} {defn}"))  # type: ignore[call-overload]
+                logger.info("agent_schedule schema: added column %r", col)
+        session.commit()
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -139,8 +182,24 @@ class AgentScheduler:
             ).all()
 
         for schedule in due:
+            # B10: Skip if we are in an exponential back-off window
+            if schedule.retry_after and schedule.retry_after > now:
+                continue
+
+            # B12: Enforce per-agent daily run cap
+            if _is_daily_budget_exceeded(schedule, now):
+                logger.debug(
+                    "Daily run cap reached for agent %s/%s (max=%s)",
+                    schedule.tenant_id,
+                    schedule.agent_id,
+                    schedule.max_runs_per_day,
+                )
+                continue
+
+            success = False
             try:
                 _fire_agent(schedule.tenant_id, schedule.agent_id)
+                success = True
             except Exception:
                 logger.error(
                     "Scheduled run failed for agent %s/%s",
@@ -148,13 +207,47 @@ class AgentScheduler:
                     schedule.agent_id,
                     exc_info=True,
                 )
+
             with Session(engine) as session:
                 rec = session.get(AgentSchedule, schedule.id)
-                if rec:
-                    rec.last_run_at = now
+                if not rec:
+                    continue
+                rec.last_run_at = now
+                if success:
+                    # Reset failure tracking on success
+                    rec.failure_count = 0
+                    rec.last_failure_at = None
+                    rec.retry_after = None
                     rec.next_run_at = _next_timestamp(rec.cron_expression)
-                    session.add(rec)
-                    session.commit()
+                    # B12: Increment daily run count
+                    _increment_daily_count(rec, now)
+                else:
+                    rec.failure_count = (rec.failure_count or 0) + 1
+                    rec.last_failure_at = now
+                    # B10: Exponential back-off retry within same cron window
+                    # Retries: 5 min → 15 min → 45 min (3 attempts), then full tick
+                    backoff_minutes = [5, 15, 45]
+                    attempt = rec.failure_count - 1
+                    if attempt < len(backoff_minutes):
+                        rec.retry_after = now + backoff_minutes[attempt] * 60
+                        # Keep next_run_at so we don't skip the window entirely
+                    else:
+                        rec.retry_after = None
+                        rec.next_run_at = _next_timestamp(rec.cron_expression)
+
+                    # B10: Auto-pause after 7 consecutive tick failures
+                    if rec.failure_count >= 7:
+                        rec.enabled = False
+                        logger.warning(
+                            "Auto-pausing schedule for agent %s/%s after %d consecutive failures",
+                            rec.tenant_id,
+                            rec.agent_id,
+                            rec.failure_count,
+                        )
+                        _notify_schedule_paused(rec.tenant_id, rec.agent_id, rec.failure_count)
+
+                session.add(rec)
+                session.commit()
 
 
 def _fire_agent(tenant_id: str, agent_id: str) -> None:
@@ -192,8 +285,15 @@ def _fire_agent(tenant_id: str, agent_id: str) -> None:
         task = schema.description or f"Scheduled run for agent {schema.name}"
         allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
 
+        from api.services.agent.live_events import get_live_event_broker
+        _broker = get_live_event_broker()
+        _run_id_str = str(run.id)
         result_parts: list[str] = []
         for chunk in run_agent_task(task, tenant_id=tenant_id, run_id=run.id, allowed_tool_ids=allowed_tool_ids):
+            try:
+                _broker.publish(user_id=tenant_id, event=chunk, run_id=_run_id_str)
+            except Exception:
+                pass
             text = chunk.get("text") or chunk.get("content") or ""
             if text:
                 result_parts.append(str(text))
@@ -226,6 +326,104 @@ def _fire_agent(tenant_id: str, agent_id: str) -> None:
             )
         except Exception:
             logger.debug("submit_signal failed for scheduled run %s", run.id, exc_info=True)
+
+
+def _notify_schedule_paused(tenant_id: str, agent_id: str, failure_count: int) -> None:
+    """Best-effort notification to the agent owner when a schedule is auto-paused."""
+    try:
+        from api.services.agents.definition_store import get_agent
+        record = get_agent(tenant_id, agent_id)
+        if record:
+            logger.info(
+                "Schedule auto-paused notification: tenant=%s agent=%s failures=%d owner=%s",
+                tenant_id,
+                agent_id,
+                failure_count,
+                record.created_by_user_id,
+            )
+    except Exception:
+        logger.debug("Failed to dispatch pause notification", exc_info=True)
+
+
+def set_agent_run_cap(tenant_id: str, agent_id: str, max_runs_per_day: int | None) -> bool:
+    """B12: Set or clear the daily run cap for a scheduled agent."""
+    with Session(engine) as session:
+        rec = session.exec(
+            select(AgentSchedule)
+            .where(AgentSchedule.tenant_id == tenant_id)
+            .where(AgentSchedule.agent_id == agent_id)
+        ).first()
+        if not rec:
+            return False
+        rec.max_runs_per_day = max_runs_per_day
+        session.add(rec)
+        session.commit()
+    return True
+
+
+def get_agent_usage(tenant_id: str, agent_id: str) -> dict:
+    """B12: Return run count and daily cap for a scheduled agent."""
+    with Session(engine) as session:
+        rec = session.exec(
+            select(AgentSchedule)
+            .where(AgentSchedule.tenant_id == tenant_id)
+            .where(AgentSchedule.agent_id == agent_id)
+        ).first()
+    if not rec:
+        return {"found": False}
+    return {
+        "found": True,
+        "runs_today": rec.runs_today,
+        "runs_today_date": rec.runs_today_date,
+        "max_runs_per_day": rec.max_runs_per_day,
+        "cap_active": rec.max_runs_per_day is not None,
+    }
+
+
+def _is_daily_budget_exceeded(schedule: AgentSchedule, now: float) -> bool:
+    """B12: Return True if the per-agent daily run cap has been reached."""
+    if schedule.max_runs_per_day is None:
+        return False
+    today = _utc_date_str(now)
+    if schedule.runs_today_date != today:
+        return False  # New day — counter will be reset on next increment
+    return schedule.runs_today >= schedule.max_runs_per_day
+
+
+def _increment_daily_count(rec: AgentSchedule, now: float) -> None:
+    """B12: Increment (or reset) the daily run counter."""
+    today = _utc_date_str(now)
+    if rec.runs_today_date != today:
+        rec.runs_today = 1
+        rec.runs_today_date = today
+    else:
+        rec.runs_today = (rec.runs_today or 0) + 1
+
+
+def _utc_date_str(ts: float) -> str:
+    import datetime as _dt
+    return _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+def get_schedule_health(tenant_id: str, agent_id: str) -> dict:
+    """B10: Return failure count, last success, last failure for a schedule."""
+    with Session(engine) as session:
+        rec = session.exec(
+            select(AgentSchedule)
+            .where(AgentSchedule.tenant_id == tenant_id)
+            .where(AgentSchedule.agent_id == agent_id)
+        ).first()
+    if not rec:
+        return {"found": False}
+    return {
+        "found": True,
+        "enabled": rec.enabled,
+        "failure_count": rec.failure_count,
+        "last_run_at": rec.last_run_at,
+        "last_failure_at": rec.last_failure_at,
+        "next_run_at": rec.next_run_at,
+        "retry_after": rec.retry_after,
+    }
 
 
 def _seed_schedules_from_definitions() -> None:

@@ -7,7 +7,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [research, google-docs, writing, competitor, market-intelligence]
-required_connectors: [google_workspace, brave_search]
+required_connectors: [brave_search]
 is_public: true
 pricing_model: free
 

@@ -8,14 +8,25 @@ type WorkflowCanvasNodeType = "agent" | "trigger" | "condition" | "output";
 type WorkflowCanvasNodeData = {
   label: string;
   agentId: string;
+  agentName?: string;
+  agentDescription?: string;
+  agentTags?: string[];
+  requiredConnectors?: string[];
   toolIds: string[];
   config: Record<string, unknown>;
   inputMapping: Record<string, string>;
   outputKey: string;
   description?: string;
+  validationWarning?: string;
 };
 
-type WorkflowCanvasNodeRunState = "idle" | "running" | "completed" | "failed" | "skipped";
+type WorkflowCanvasNodeRunState =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "blocked";
 
 type WorkflowCanvasNode = {
   id: string;
@@ -40,6 +51,7 @@ type WorkflowRunState = {
   runId: string | null;
   status: WorkflowRunStatus;
   activeStepId: string | null;
+  detail: string | null;
   stepResults: Record<string, { output: string; duration_ms: number }>;
 };
 
@@ -70,7 +82,11 @@ type WorkflowStoreState = {
   setEdges: (edges: WorkflowCanvasEdge[]) => void;
   setSelectedNodeId: (nodeId: string | null) => void;
   setViewport: (viewport: Partial<WorkflowViewport>) => void;
-  updateNodeData: (nodeId: string, patch: Partial<WorkflowCanvasNodeData>) => void;
+  updateNodeData: (
+    nodeId: string,
+    patch: Partial<WorkflowCanvasNodeData>,
+    options?: { markDirty?: boolean },
+  ) => void;
   updateEdgeCondition: (edgeId: string, condition: string) => void;
   addNode: (node: WorkflowCanvasNode) => void;
   removeNode: (nodeId: string) => void;
@@ -85,8 +101,13 @@ type WorkflowStoreState = {
   reset: () => void;
   startRun: (runId: string) => void;
   setRunStatus: (status: WorkflowRunStatus) => void;
+  setRunDetail: (detail: string | null) => void;
   setActiveStep: (stepId: string | null) => void;
-  setNodeRunState: (nodeId: string, runState: WorkflowCanvasNodeRunState) => void;
+  setNodeRunState: (
+    nodeId: string,
+    runState: WorkflowCanvasNodeRunState,
+    detail?: string | null,
+  ) => void;
   appendStepOutput: (stepId: string, outputChunk: string) => void;
   setStepResult: (stepId: string, output: string, durationMs: number) => void;
   hydrateRunOutputs: (results: Array<{ step_id: string; output_preview?: string; duration_ms?: number }>) => void;
@@ -98,6 +119,7 @@ const defaultRunState: WorkflowRunState = {
   runId: null,
   status: "idle",
   activeStepId: null,
+  detail: null,
   stepResults: {},
 };
 
@@ -108,27 +130,105 @@ function inferNodeType(stepIndex: number): WorkflowCanvasNodeType {
   return "agent";
 }
 
+function applyAutoLayout(
+  nodes: WorkflowCanvasNode[],
+  edges: WorkflowCanvasEdge[],
+): WorkflowCanvasNode[] {
+  if (!nodes.length) {
+    return nodes;
+  }
+
+  const horizontalGap = 340;
+  const verticalGap = 190;
+  const originX = 120;
+  const originY = 120;
+
+  const nodeIds = nodes.map((node) => node.id);
+  const nodeIdSet = new Set(nodeIds);
+  const incomingCount = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  const depthMap = new Map<string, number>();
+
+  for (const nodeId of nodeIds) {
+    incomingCount.set(nodeId, 0);
+    depthMap.set(nodeId, 0);
+  }
+
+  for (const edge of edges) {
+    if (!nodeIdSet.has(edge.source) || !nodeIdSet.has(edge.target)) {
+      continue;
+    }
+    incomingCount.set(edge.target, (incomingCount.get(edge.target) || 0) + 1);
+    const currentOutgoing = outgoing.get(edge.source) || [];
+    currentOutgoing.push(edge.target);
+    outgoing.set(edge.source, currentOutgoing);
+  }
+
+  const queue: string[] = nodeIds.filter((nodeId) => (incomingCount.get(nodeId) || 0) === 0);
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const sourceId = queue[cursor++];
+    const sourceDepth = depthMap.get(sourceId) || 0;
+    for (const targetId of outgoing.get(sourceId) || []) {
+      const nextDepth = Math.max(depthMap.get(targetId) || 0, sourceDepth + 1);
+      depthMap.set(targetId, nextDepth);
+      const nextIncoming = (incomingCount.get(targetId) || 0) - 1;
+      incomingCount.set(targetId, nextIncoming);
+      if (nextIncoming === 0) {
+        queue.push(targetId);
+      }
+    }
+  }
+
+  let fallbackDepth = Math.max(...Array.from(depthMap.values(), (value) => Number(value || 0)));
+  for (const nodeId of nodeIds) {
+    if ((incomingCount.get(nodeId) || 0) > 0) {
+      fallbackDepth += 1;
+      depthMap.set(nodeId, fallbackDepth);
+    }
+  }
+
+  const lanesByDepth = new Map<number, number>();
+  const positionById = new Map<string, { x: number; y: number }>();
+  for (const nodeId of nodeIds) {
+    const depth = Math.max(0, Number(depthMap.get(nodeId) || 0));
+    const lane = lanesByDepth.get(depth) || 0;
+    lanesByDepth.set(depth, lane + 1);
+    positionById.set(nodeId, {
+      x: originX + depth * horizontalGap,
+      y: originY + lane * verticalGap,
+    });
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    position: positionById.get(node.id) || node.position,
+  }));
+}
+
 function definitionToNodes(definition: WorkflowDefinition): WorkflowCanvasNode[] {
   const steps = Array.isArray(definition.steps) ? definition.steps : [];
-  return steps.map((step, index) => ({
+  const baseNodes = steps.map((step, index) => ({
     id: step.step_id,
     type: inferNodeType(index),
-    position: {
-      x: 140 + index * 320,
-      y: 140 + (index % 2) * 220,
-    },
+    position: { x: 0, y: 0 },
     data: {
       label: String(step.description || step.output_key || step.step_id || "Step"),
       agentId: String(step.agent_id || "").trim(),
+      agentName: String(step.agent_id || "").trim(),
+      agentDescription: "",
+      agentTags: [],
       toolIds: [],
       config: {},
       inputMapping: step.input_mapping || {},
       outputKey: String(step.output_key || "").trim() || `${step.step_id}_output`,
       description: step.description,
+      validationWarning: "",
     },
     runState: "idle",
     runOutput: "",
   }));
+  return applyAutoLayout(baseNodes, definitionToEdges(definition));
 }
 
 function definitionToEdges(definition: WorkflowDefinition): WorkflowCanvasEdge[] {
@@ -200,7 +300,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
             zoom: viewport.zoom ?? state.viewport.zoom,
           },
         })),
-      updateNodeData: (nodeId, patch) =>
+      updateNodeData: (nodeId, patch, options) =>
         set((state) => ({
           ...state,
           nodes: state.nodes.map((node) =>
@@ -214,7 +314,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
                 }
               : node,
           ),
-          isDirty: true,
+          isDirty: options?.markDirty === false ? state.isDirty : true,
         })),
       updateEdgeCondition: (edgeId, condition) =>
         set((state) => ({
@@ -300,6 +400,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
             runId,
             status: "running",
             activeStepId: null,
+            detail: null,
             stepResults: {},
           },
           nodes: state.nodes.map((node) => ({
@@ -316,6 +417,14 @@ const useWorkflowStore = create<WorkflowStoreState>()(
             status,
           },
         })),
+      setRunDetail: (detail) =>
+        set((state) => ({
+          ...state,
+          run: {
+            ...state.run,
+            detail: detail ? String(detail) : null,
+          },
+        })),
       setActiveStep: (stepId) =>
         set((state) => ({
           ...state,
@@ -328,10 +437,18 @@ const useWorkflowStore = create<WorkflowStoreState>()(
             animated: Boolean(stepId && edge.target === stepId),
           })),
         })),
-      setNodeRunState: (nodeId, runState) =>
+      setNodeRunState: (nodeId, runState, detail) =>
         set((state) => ({
           ...state,
-          nodes: state.nodes.map((node) => (node.id === nodeId ? { ...node, runState } : node)),
+          nodes: state.nodes.map((node) =>
+            node.id === nodeId
+              ? {
+                  ...node,
+                  runState,
+                  runOutput: detail ? String(detail) : node.runOutput,
+                }
+              : node,
+          ),
         })),
       appendStepOutput: (stepId, outputChunk) =>
         set((state) => {
@@ -345,7 +462,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
               node.id === stepId
                 ? {
                     ...node,
-                    runOutput: `${String(node.runOutput || "")}${chunk}`.slice(-800),
+                    runOutput: `${String(node.runOutput || "")}${chunk}`,
                   }
                 : node,
             ),
@@ -434,7 +551,7 @@ const useWorkflowStore = create<WorkflowStoreState>()(
   ),
 );
 
-export { useWorkflowStore, definitionToEdges, definitionToNodes };
+export { useWorkflowStore, applyAutoLayout, definitionToEdges, definitionToNodes };
 export type {
   WorkflowCanvasEdge,
   WorkflowCanvasNode,

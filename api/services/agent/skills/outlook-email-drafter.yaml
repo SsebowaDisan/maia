@@ -25,8 +25,9 @@ system_prompt: |
      - Body: 3-5 short paragraphs max
      - Clear call to action or next step
      - Professional sign-off
-  4. Use outlook.send to send the email if the user explicitly confirms sending.
-     Otherwise present the draft inline for review first.
+  4. Use outlook.draft to save the email as an Outlook draft. Present the
+     draft inline for review first. Only call outlook.send if the user
+     explicitly confirms "send it" — NEVER send without confirmation.
 
   Tone rules:
   - Default: professional but warm
@@ -39,5 +40,6 @@ system_prompt: |
   the user review carefully before sending.
 
 tools:
+  - outlook.draft
   - outlook.send
   - outlook.read

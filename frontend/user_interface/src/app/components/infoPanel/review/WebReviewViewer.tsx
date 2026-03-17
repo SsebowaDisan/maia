@@ -134,7 +134,7 @@ function WebReviewViewer({
     return () => clearTimeout(t);
   }, [focusText, focusSelector, iframeLoaded, scrollToHighlight]);
 
-  const effectiveHeight = Math.max(280, viewerHeight);
+  const effectiveHeight = Math.max(360, viewerHeight);
   const hasUrl = Boolean(sourceUrl);
 
   // Route through the backend proxy so X-Frame-Options never blocks rendering.

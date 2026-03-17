@@ -62,6 +62,10 @@ class AgentDefinitionSchema(BaseModel):
     # IDs of agents this agent is permitted to delegate to.
     allowed_sub_agent_ids: list[str] = Field(default_factory=list)
 
+    # CB06: maximum tool calls per single run (prevents runaway tool loops).
+    # None means unlimited.
+    max_tool_calls_per_run: Annotated[int | None, Field(ge=1, le=500)] = None
+
     # ── Sub-configs ───────────────────────────────────────────────────────────
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

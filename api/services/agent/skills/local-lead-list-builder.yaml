@@ -3,12 +3,12 @@ name: Local Lead List Builder
 description: >
   Builds a targeted lead list from Google Maps — search by category and location,
   enrich each result with website and contact details, validate email addresses,
-  and export a campaign-ready CSV. Turn a city and a category into a qualified
-  prospect list in minutes.
+  and export results to a Google Sheet for campaign-ready outreach.
+  Turn a city and a category into a qualified prospect list in minutes.
 version: "1.0.0"
 author: Maia Platform
 tags: [leads, local, google-maps, sales, outreach, prospecting, email-validation]
-required_connectors: [google_maps, email_validation, playwright_browser]
+required_connectors: [google_maps]
 is_public: true
 pricing_model: free
 
@@ -31,11 +31,10 @@ system_prompt: |
      c. If an email is found, use email_validation.validate to check deliverability.
         Only include validated emails in the final list.
   4. Deduplicate results by business name and phone number.
-  5. Compile the final lead list and present it as a table:
-
-     | Business Name | Address | Phone | Website | Email | Rating | Email Valid |
-     |---|---|---|---|---|---|---|
-     | [name] | [address] | [phone] | [url] | [email] | [rating] | Yes/No |
+  5. Compile the final lead list. If the user provided a Google Sheet ID, use
+     workspace.sheets.append to write each lead as a row with columns:
+     Business Name | Address | Phone | Website | Email | Rating | Email Valid
+     Otherwise present the results as a table in the conversation.
 
   6. Provide a summary:
      - Total businesses found
@@ -55,3 +54,4 @@ tools:
   - browser.navigate
   - email_validation.validate
   - email_validation.bulk_validate
+  - workspace.sheets.append

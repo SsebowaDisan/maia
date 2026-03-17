@@ -52,6 +52,7 @@ def run_agent_task(
     agent_mode: str = "company_agent",
     allowed_tool_ids: list[str] | None = None,
     agent_id: str | None = None,
+    max_tool_calls: int | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """Run an agent task through the existing AgentOrchestrator.
 
@@ -69,6 +70,8 @@ def run_agent_task(
             tool IDs, enforcing the marketplace agent's declared capability scope.
         agent_id: When provided, top-k relevant long-term memories are recalled
             and prepended to the task context automatically (P7-04).
+        max_tool_calls: CB06 — hard cap on tool invocations per run. When the
+            limit is hit the run is stopped and a budget_exceeded event is emitted.
 
     Yields:
         Event dicts from the orchestrator — same format as the chat stream.
@@ -99,15 +102,42 @@ def run_agent_task(
     settings: dict[str, Any] = {}
     if allowed_tool_ids:
         settings["__allowed_tool_ids"] = list(allowed_tool_ids)
+    if max_tool_calls is not None:
+        settings["__max_tool_calls"] = max_tool_calls
+
+    # CB06: track tool call count and enforce the cap in the event stream
+    tool_call_count = 0
+    budget_exceeded = False
 
     orchestrator = get_orchestrator()
     try:
-        yield from orchestrator.run_stream(
+        for event in orchestrator.run_stream(
             user_id=tenant_id,
             conversation_id=effective_conversation_id,
             request=request,
             settings=settings,
-        )
+        ):
+            if budget_exceeded:
+                break
+            # Count tool-call events
+            if max_tool_calls is not None and event.get("event_type") in (
+                "tool_call", "tool_use", "tool_result"
+            ):
+                tool_call_count += 1
+                if tool_call_count >= max_tool_calls:
+                    budget_exceeded = True
+                    logger.warning(
+                        "run_agent_task: max_tool_calls=%d reached for agent=%s tenant=%s",
+                        max_tool_calls, agent_id, tenant_id,
+                    )
+                    yield event
+                    yield {
+                        "event_type": "budget_exceeded",
+                        "detail": f"Tool call limit of {max_tool_calls} reached. Run stopped.",
+                        "tool_calls_made": tool_call_count,
+                    }
+                    break
+            yield event
     except Exception as exc:
         logger.error("run_agent_task failed (tenant=%s): %s", tenant_id, exc, exc_info=True)
         yield {"event_type": "error", "detail": str(exc)[:300]}

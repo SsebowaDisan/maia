@@ -53,7 +53,7 @@ export function CitationPdfPreview({
   onZoomChange,
   onPageChange,
 }: CitationPdfPreviewProps) {
-  const effectiveViewerHeight = Math.max(220, Math.min(1200, Math.round(Number(viewerHeight) || 420)));
+  const effectiveViewerHeight = Math.max(360, Math.min(1200, Math.round(Number(viewerHeight) || 560)));
   const requestedPageSafe = parsePageNumber(page);
   const [numPages, setNumPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(requestedPageSafe);

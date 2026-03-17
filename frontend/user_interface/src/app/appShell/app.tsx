@@ -31,18 +31,25 @@ import { RoutePlaceholderPage } from "./RoutePlaceholderPage";
 import { resolveAppRouteShell } from "./routeShells";
 import { AgentBuilderPage } from "../pages/AgentBuilderPage";
 import { AgentDetailPage } from "../pages/AgentDetailPage";
+import { AdminReviewQueuePage } from "../pages/AdminReviewQueuePage";
 import { ConnectorMarketplacePage } from "../pages/ConnectorMarketplacePage";
 import { ConnectorsPage } from "../pages/ConnectorsPage";
 import { DeveloperDocsPage } from "../pages/DeveloperDocsPage";
 import { DeveloperPortalPage } from "../pages/DeveloperPortalPage";
 import { MarketplaceAgentDetailPage } from "../pages/MarketplaceAgentDetailPage";
 import { MarketplacePage } from "../pages/MarketplacePage";
+import { MyAgentsPage } from "../pages/MyAgentsPage";
+import {
+  MarketplaceHeaderControls,
+  type MarketplacePricingFilter,
+} from "../components/marketplace/MarketplaceHeaderControls";
 import { OperationsDashboardPage } from "../pages/OperationsDashboardPage";
 import { WorkflowBuilderPage } from "../pages/WorkflowBuilderPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { InsightsFeedPanel } from "../components/agentActivityPanel/InsightsFeedPanel";
 import { WorkflowHeaderFields } from "../components/workflowCanvas/WorkflowHeaderFields";
 import { useCanvasStore } from "../stores/canvasStore";
+import { useAuthStore } from "../stores/authStore";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
 type MindmapNodeFollowUpDraft = {
   nodeId: string;
@@ -55,8 +62,10 @@ type MindmapNodeFollowUpDraft = {
 };
 
 type SidebarOverlayKey =
+  | "admin_review"
   | "insights"
   | "connectors"
+  | "my_agents"
   | "workspace"
   | "marketplace"
   | "workflow_builder"
@@ -76,6 +85,12 @@ const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
     title: "Insights",
     subtitle: "Review proactive alerts, anomalies, and suggestions in one feed.",
   },
+  "/admin/review": {
+    key: "admin_review",
+    path: "/admin/review",
+    title: "Review Queue",
+    subtitle: "Review pending submissions and approve or reject marketplace agents.",
+  },
   "/connectors": {
     key: "connectors",
     path: "/connectors",
@@ -87,6 +102,12 @@ const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
     path: "/workspace",
     title: "Agents",
     subtitle: "Inspect agent runs, updates, and memory context while staying in the same session.",
+  },
+  "/agents": {
+    key: "my_agents",
+    path: "/agents",
+    title: "My Agents",
+    subtitle: "Review installed agents, statuses, and jump to chat-ready actions.",
   },
   "/marketplace": {
     key: "marketplace",
@@ -107,6 +128,26 @@ const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
     subtitle: "Track run reliability, budgets, and system health in real time.",
   },
 };
+
+function resolveSidebarOverlayForPath(path: string): SidebarOverlayConfig | null {
+  const normalizedPath = String(path || "/")
+    .trim()
+    .toLowerCase();
+  return SIDEBAR_OVERLAY_BY_PATH[normalizedPath] || null;
+}
+
+function resolveOverlayReturnPath(search: string): string | null {
+  const params = new URLSearchParams(String(search || ""));
+  const raw = String(params.get("from") || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const candidate = raw.startsWith("/") ? raw : `/${raw}`;
+  if (!resolveSidebarOverlayForPath(candidate)) {
+    return null;
+  }
+  return candidate;
+}
 export default function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname || "/");
   const deepLinkHandledRef = useRef(false);
@@ -114,14 +155,22 @@ export default function App() {
   const lastAutoOpenCitationKeyRef = useRef("");
   const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
   const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
-  const [sidebarOverlay, setSidebarOverlay] = useState<SidebarOverlayConfig | null>(null);
+  const [sidebarOverlay, setSidebarOverlay] = useState<SidebarOverlayConfig | null>(() =>
+    resolveSidebarOverlayForPath(window.location.pathname || "/"),
+  );
   const [insightsUnreadCount, setInsightsUnreadCount] = useState(0);
+  const [reviewQueueCount, setReviewQueueCount] = useState(0);
+  const [marketplaceQuery, setMarketplaceQuery] = useState("");
+  const [marketplacePricingFilter, setMarketplacePricingFilter] =
+    useState<MarketplacePricingFilter>("all");
+  const [marketplaceResultCount, setMarketplaceResultCount] = useState(0);
   const [mindmapNodeFollowUp, setMindmapNodeFollowUp] = useState<MindmapNodeFollowUpDraft | null>(null);
   const [isSendingMindmapFollowUp, setIsSendingMindmapFollowUp] = useState(false);
   const routeShell = useMemo(() => resolveAppRouteShell(pathname), [pathname]);
   const density = useUiPrefsStore((state) => state.density);
   const setLastVisitedPath = useUiPrefsStore((state) => state.setLastVisitedPath);
   const upsertCanvasDocuments = useCanvasStore((state) => state.upsertDocuments);
+  const isSuperAdmin = useAuthStore((state) => state.isSuperAdmin());
   const navigateToPath = (nextPath: string) => {
     const normalizedNext = String(nextPath || "/").trim() || "/";
     if (window.location.pathname === normalizedNext) {
@@ -175,6 +224,26 @@ export default function App() {
     }
   };
 
+  const refreshReviewQueueCount = async () => {
+    if (!isSuperAdmin) {
+      setReviewQueueCount(0);
+      return;
+    }
+    try {
+      const response = await fetch("/api/marketplace/admin/review-queue?status=pending_review", {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as unknown;
+      const count = Array.isArray(payload) ? payload.length : 0;
+      setReviewQueueCount(Math.max(0, count));
+    } catch {
+      // Keep sidebar usable if admin queue is temporarily unavailable.
+    }
+  };
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -189,6 +258,7 @@ export default function App() {
           upsertCanvasDocuments(documents);
         }
         await refreshInsightsUnreadCount();
+        await refreshReviewQueueCount();
       } catch {
         // Keep UI available even if backend is not ready.
       }
@@ -198,6 +268,7 @@ export default function App() {
     chatState.refreshConversations,
     fileLibrary.refreshFileCount,
     fileLibrary.refreshIngestionJobs,
+    isSuperAdmin,
     upsertCanvasDocuments,
   ]);
 
@@ -212,6 +283,18 @@ export default function App() {
       void refreshInsightsUnreadCount();
     }
   }, [chatState.isActivityStreaming, chatState.isSending, chatState.chatTurns.length]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      setReviewQueueCount(0);
+      return;
+    }
+    void refreshReviewQueueCount();
+    const timer = window.setInterval(() => {
+      void refreshReviewQueueCount();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [isSuperAdmin]);
 
   useEffect(() => {
     if (deepLinkHandledRef.current) {
@@ -402,7 +485,22 @@ export default function App() {
   };
 
   const closeSidebarOverlay = () => {
+    const returnPath = resolveOverlayReturnPath(window.location.search);
+    const activeOverlayPath = sidebarOverlay?.path || null;
+    if (returnPath) {
+      const returnOverlay = resolveSidebarOverlayForPath(returnPath);
+      if (returnOverlay) {
+        setSidebarOverlay(returnOverlay);
+      }
+      window.history.replaceState({}, "", returnPath);
+      setPathname(returnPath);
+      return;
+    }
     setSidebarOverlay(null);
+    if (activeOverlayPath && pathname === activeOverlayPath) {
+      window.history.replaceState({}, "", "/");
+      setPathname("/");
+    }
   };
 
   const handleSidebarConversationSelect = (conversationId: string) => {
@@ -427,6 +525,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const overlayFromPath = resolveSidebarOverlayForPath(pathname);
+    if (!overlayFromPath) {
+      return;
+    }
+    setSidebarOverlay((current) => {
+      if (current?.key === overlayFromPath.key) {
+        return current;
+      }
+      return overlayFromPath;
+    });
+    if (layout.activeTab !== "Chat") {
+      layout.setActiveTab("Chat");
+    }
+  }, [pathname, layout.activeTab, layout.setActiveTab]);
+
+  useEffect(() => {
     setLastVisitedPath(pathname);
   }, [pathname, setLastVisitedPath]);
 
@@ -437,14 +551,29 @@ export default function App() {
     if (sidebarOverlay.key === "insights") {
       return <InsightsFeedPanel className="h-full" />;
     }
+    if (sidebarOverlay.key === "admin_review") {
+      return <AdminReviewQueuePage />;
+    }
     if (sidebarOverlay.key === "connectors") {
       return <ConnectorsPage />;
     }
     if (sidebarOverlay.key === "workspace") {
       return <WorkspacePage />;
     }
+    if (sidebarOverlay.key === "my_agents") {
+      return <MyAgentsPage />;
+    }
     if (sidebarOverlay.key === "marketplace") {
-      return <MarketplacePage />;
+      return (
+        <MarketplacePage
+          query={marketplaceQuery}
+          onQueryChange={setMarketplaceQuery}
+          pricingFilter={marketplacePricingFilter}
+          onPricingFilterChange={setMarketplacePricingFilter}
+          onFilteredCountChange={setMarketplaceResultCount}
+          hideTopControls
+        />
+      );
     }
     if (sidebarOverlay.key === "workflow_builder") {
       return <WorkflowBuilderPage />;
@@ -455,15 +584,32 @@ export default function App() {
     return null;
   };
 
-  if (routeShell.kind === "page") {
+  if (routeShell.kind === "page" && !resolveSidebarOverlayForPath(pathname)) {
+    if (routeShell.key === "admin_review") {
+      return <AdminReviewQueuePage />;
+    }
     if (routeShell.key === "marketplace") {
       return <MarketplacePage />;
     }
     if (routeShell.key === "marketplace_agent_detail") {
-      return <MarketplaceAgentDetailPage agentId={String(routeShell.params?.agentId || "")} />;
+      return (
+        <div className="size-full bg-[#eef1f5]">
+          <MarketplacePage />
+          <AppRouteOverlayModal
+            title="Agent Details"
+            subtitle="Inspect capabilities, connectors, schedule, and reviews without leaving marketplace."
+            onClose={() => navigateToPath("/marketplace")}
+          >
+            <MarketplaceAgentDetailPage agentId={String(routeShell.params?.agentId || "")} />
+          </AppRouteOverlayModal>
+        </div>
+      );
     }
     if (routeShell.key === "workspace") {
       return <WorkspacePage />;
+    }
+    if (routeShell.key === "my_agents") {
+      return <MyAgentsPage />;
     }
     if (routeShell.key === "connectors") {
       return <ConnectorsPage />;
@@ -544,6 +690,8 @@ export default function App() {
               onOpenWorkspaceTab={openWorkspaceModal}
               onNavigateAppRoute={handleSidebarAppRoute}
               insightsCount={insightsUnreadCount}
+              reviewQueueCount={reviewQueueCount}
+              isSuperAdmin={isSuperAdmin}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -725,6 +873,19 @@ export default function App() {
                 headerActions={
                   sidebarOverlay.key === "workflow_builder" ? <WorkflowHeaderFields /> : null
                 }
+                headerToolbar={
+                  sidebarOverlay.key === "marketplace" ? (
+                    <MarketplaceHeaderControls
+                      query={marketplaceQuery}
+                      onQueryChange={setMarketplaceQuery}
+                      pricingFilter={marketplacePricingFilter}
+                      onPricingFilterChange={setMarketplacePricingFilter}
+                      resultCount={marketplaceResultCount}
+                      compact
+                    />
+                  ) : null
+                }
+                contentClassName={sidebarOverlay.key === "workflow_builder" ? "bg-transparent p-0" : ""}
                 onClose={closeSidebarOverlay}
               >
                 {renderSidebarOverlayContent()}

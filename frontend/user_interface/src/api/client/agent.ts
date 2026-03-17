@@ -31,6 +31,8 @@ type AgentSummaryRecord = {
   id: string;
   agent_id: string;
   name: string;
+  description?: string;
+  trigger_family?: string;
   version: string;
 };
 
@@ -190,6 +192,16 @@ type ImprovementSuggestionRecord = {
   reasoning: string;
   feedback_count: number;
   agent_id: string;
+};
+
+type AgentInstallHistoryRecord = {
+  id: string;
+  timestamp: number;
+  user_id: string;
+  marketplace_agent_id: string;
+  agent_id: string;
+  version: string;
+  connector_mapping: Record<string, string>;
 };
 
 function isNotFoundError(error: unknown): boolean {
@@ -412,6 +424,15 @@ function listAgents() {
   });
 }
 
+function listRecentAgents() {
+  return request<AgentSummaryRecord[]>("/api/agents/recent").catch((error) => {
+    if (isNotFoundError(error)) {
+      return [] as AgentSummaryRecord[];
+    }
+    throw error;
+  });
+}
+
 function getAgent(agentId: string, options?: { version?: string }) {
   const query = new URLSearchParams();
   if (options?.version) {
@@ -588,7 +609,12 @@ function rejectAgentRunGate(runId: string, gateId: string) {
 }
 
 function listWebhooks() {
-  return request<WebhookRecord[]>("/api/connectors/webhooks");
+  return request<WebhookRecord[]>("/api/connectors/webhooks").catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<WebhookRecord[]>("/api/agent/connectors/webhooks");
+  });
 }
 
 function registerWebhook(connectorId: string, eventTypes: string[]) {
@@ -599,13 +625,35 @@ function registerWebhook(connectorId: string, eventTypes: string[]) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ event_types: eventTypes }),
     },
-  );
+  ).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<RegisterWebhookResponse>(
+      `/api/agent/connectors/${encodeURIComponent(connectorId)}/webhooks`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_types: eventTypes }),
+      },
+    );
+  });
 }
 
 async function deregisterWebhook(webhookId: string) {
   const response = await fetchApi(`/api/connectors/webhooks/${encodeURIComponent(webhookId)}`, {
     method: "DELETE",
   });
+  if (response.status === 404) {
+    const legacy = await fetchApi(`/api/agent/connectors/webhooks/${encodeURIComponent(webhookId)}`, {
+      method: "DELETE",
+    });
+    if (legacy.ok || legacy.status === 204) {
+      return;
+    }
+    const legacyDetail = (await legacy.text()).trim();
+    throw new Error(legacyDetail || `Delete failed: ${legacy.status}`);
+  }
   if (!response.ok && response.status !== 204) {
     const detail = (await response.text()).trim();
     throw new Error(detail || `Delete failed: ${response.status}`);
@@ -724,13 +772,50 @@ function recordFeedback(
       corrected_output: correctedOutput,
       feedback_type: feedbackType,
     }),
+  }).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<FeedbackRecord>(`/api/agent/${encodeURIComponent(agentId)}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        run_id: runId,
+        original_output: originalOutput,
+        corrected_output: correctedOutput,
+        feedback_type: feedbackType,
+      }),
+    });
   });
 }
 
 function getImprovementSuggestion(agentId: string) {
   return request<ImprovementSuggestionRecord>(
     `/api/agents/${encodeURIComponent(agentId)}/improvement`,
-  );
+  ).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<ImprovementSuggestionRecord>(
+      `/api/agent/${encodeURIComponent(agentId)}/improvement`,
+    );
+  });
+}
+
+function listAgentInstallHistory(agentId: string, options?: { limit?: number }) {
+  const query = new URLSearchParams();
+  if (Number.isFinite(Number(options?.limit)) && Number(options?.limit) > 0) {
+    query.set("limit", String(Math.max(1, Number(options?.limit))));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<AgentInstallHistoryRecord[]>(
+    `/api/agents/${encodeURIComponent(agentId)}/install-history${suffix}`,
+  ).catch((error) => {
+    if (isNotFoundError(error)) {
+      return [] as AgentInstallHistoryRecord[];
+    }
+    throw error;
+  });
 }
 
 function subscribeAgentEvents(options?: {
@@ -793,6 +878,7 @@ export {
   listAgentApiRuns,
   listAgentRuns,
   listAgents,
+  listRecentAgents,
   listPlaybooks,
   listSchedules,
   listConnectorCredentials,
@@ -801,6 +887,7 @@ export {
   listWorkflows,
   listConnectorHealth,
   listConnectorPlugins,
+  listAgentInstallHistory,
   patchConnectorBinding,
   createWorkflow,
   deregisterWebhook,
@@ -825,6 +912,7 @@ export type {
   AgentSummaryRecord,
   ConnectorBindingRecord,
   FeedbackRecord,
+  AgentInstallHistoryRecord,
   GatePendingRecord,
   ImprovementSuggestionRecord,
   RegisterWebhookResponse,

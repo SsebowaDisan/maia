@@ -5,10 +5,14 @@ description: >
   data from your connected Google Sheets (for sales/CRM and finance data), Google
   Analytics, and Gmail (for support trends). Outputs a polished Google Doc ready
   to share with your leadership team — zero manual effort required.
+
+  Required Google Sheet column schema:
+  - Sales/CRM sheet: Deal Name | Stage | Value (£) | Owner | Close Date | Status
+  - Revenue sheet: Week | Revenue (£) | Target (£) | MoM % | YTD (£)
 version: "1.0.0"
 author: Maia Platform
 tags: [business-review, reporting, crm, finance, ops, scheduled, automation, executive]
-required_connectors: [google_workspace, google_analytics, gmail]
+required_connectors: [google_workspace]
 is_public: true
 pricing_model: free
 

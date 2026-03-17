@@ -1,10 +1,10 @@
 id: data-to-dashboard
-name: Data to Dashboard Builder
+name: Data Analysis Builder
 description: >
-  Takes a raw data file from Google Drive (CSV, Sheet, or spreadsheet export),
-  understands what the data represents, selects the right chart types, writes
-  the analysis narrative, and builds a formatted Google Slides or Docs report
-  with embedded charts and commentary. One agent, zero manual charting.
+  Takes a raw data file from Google Drive (CSV or Google Sheet), analyses the
+  data, selects the right chart types, and writes the analysis narrative into
+  a Google Doc report. The output is a Google Docs text report (not a Google
+  Slides deck or embedded chart). One agent, zero manual analysis.
 version: "1.0.0"
 author: Maia Platform
 tags: [data, analytics, dashboard, charts, reporting, google-workspace]

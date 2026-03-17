@@ -119,6 +119,7 @@ function sendChat(
     mindmapFocus?: Record<string, unknown>;
     settingOverrides?: Record<string, unknown>;
     agentMode?: "ask" | "company_agent" | "deep_search";
+    agentId?: string;
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
     attachments?: Array<{ name: string; fileId?: string }>;
@@ -137,6 +138,7 @@ function sendChat(
       mindmap_focus: options?.mindmapFocus ?? {},
       setting_overrides: options?.settingOverrides ?? {},
       agent_mode: options?.agentMode ?? "ask",
+      agent_id: options?.agentId ?? null,
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,
       attachments: (options?.attachments || []).map((item) => ({
@@ -188,6 +190,7 @@ async function sendChatStream(
     mindmapFocus?: Record<string, unknown>;
     settingOverrides?: Record<string, unknown>;
     agentMode?: "ask" | "company_agent" | "deep_search";
+    agentId?: string;
     agentGoal?: string;
     accessMode?: "restricted" | "full_access";
     attachments?: Array<{ name: string; fileId?: string }>;
@@ -224,6 +227,7 @@ async function sendChatStream(
       mindmap_focus: options?.mindmapFocus ?? {},
       setting_overrides: options?.settingOverrides ?? {},
       agent_mode: options?.agentMode ?? "ask",
+      agent_id: options?.agentId ?? null,
       agent_goal: options?.agentGoal,
       access_mode: options?.accessMode,
       attachments: (options?.attachments || []).map((item) => ({
