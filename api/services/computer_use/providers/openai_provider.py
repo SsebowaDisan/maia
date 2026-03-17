@@ -1,33 +1,31 @@
-"""Computer Use — OpenAI-compatible provider.
+"""Computer Use - OpenAI-compatible provider.
 
 Works with any OpenAI-compatible vision model:
   - OpenAI GPT-4o / GPT-4o-mini
-  - Ollama (qwen2-vl, llava, minicpm-v, etc.)  via OPENAI_API_BASE
-  - LM Studio, vLLM, Together AI, Groq, etc.
-
-Model is read from OPENAI_CHAT_MODEL env var (or passed explicitly).
-Base URL is read from OPENAI_API_BASE (defaults to https://api.openai.com/v1).
-
-The computer actions are exposed as a function-calling tool so any model
-that supports tool_use / function calling can drive the browser.
+  - Ollama (qwen2.5vl, llava, minicpm-v, etc.)
+  - LM Studio, vLLM, Together AI, Groq, and similar APIs
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import time
 from collections.abc import Generator
 from typing import Any
 
 from ..action_executor import execute_action
-from ..browser_session import BrowserSession, VIEWPORT_WIDTH, VIEWPORT_HEIGHT
+from ..browser_session import BrowserSession, VIEWPORT_HEIGHT, VIEWPORT_WIDTH
 from ..dom_snapshot import format_snapshot_block
+from ..runtime_config import (
+    DEFAULT_OPENAI_BASE_URL,
+    normalize_model_name,
+    resolve_openai_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BASE = "https://api.openai.com/v1"
 
-# The computer tool exposed as an OpenAI function — model-agnostic
 _COMPUTER_FUNCTION = {
     "type": "function",
     "function": {
@@ -65,7 +63,10 @@ _COMPUTER_FUNCTION = {
                 },
                 "text": {
                     "type": "string",
-                    "description": "Text to type (for 'type' action) or key name (for 'key' action, e.g. 'Return', 'ctrl+a').",
+                    "description": (
+                        "Text to type (for 'type' action) or key name "
+                        "(for 'key' action, e.g. 'Return', 'ctrl+a')."
+                    ),
                 },
                 "scroll_direction": {
                     "type": "string",
@@ -94,8 +95,17 @@ def _api_key() -> str:
     return str(os.environ.get("OPENAI_API_KEY", "")).strip()
 
 
-def _base_url() -> str:
-    return str(os.environ.get("OPENAI_API_BASE", _DEFAULT_BASE)).strip() or _DEFAULT_BASE
+def _read_retry_attempts() -> int:
+    raw = str(os.environ.get("MAIA_COMPUTER_USE_PROVIDER_RETRY_ATTEMPTS", "3")).strip()
+    try:
+        parsed = int(raw)
+    except ValueError:
+        parsed = 3
+    return max(1, min(parsed, 6))
+
+
+_MAX_API_ATTEMPTS = _read_retry_attempts()
+_RETRY_BASE_SECONDS = 0.6
 
 
 def run_openai_loop(
@@ -105,22 +115,40 @@ def run_openai_loop(
     model: str,
     max_iterations: int,
     system: str | None,
+    user_settings: dict[str, Any] | None = None,
 ) -> Generator[dict[str, Any], None, None]:
-    """Run the computer-use loop using any OpenAI-compatible vision model."""
+    """Run the computer-use loop using an OpenAI-compatible model."""
     try:
         from openai import OpenAI  # type: ignore[import]
     except ImportError:
         yield {"event_type": "error", "detail": "openai package not installed. Run: pip install openai"}
         return
 
-    api_key = _api_key()
-    base_url = _base_url()
-
-    # Ollama and some local providers don't require a real API key
-    if not api_key and base_url == _DEFAULT_BASE:
-        yield {"event_type": "error", "detail": "OPENAI_API_KEY is not set. Set it in settings or configure OPENAI_API_BASE to point to a local model."}
+    resolved_model = normalize_model_name(model)
+    if not resolved_model:
+        yield {"event_type": "error", "detail": "No valid computer-use model resolved."}
         return
 
+    api_key = _api_key()
+    base_url, base_source = resolve_openai_base_url(model=model, user_settings=user_settings)
+
+    # Local OpenAI-compatible providers usually do not need a real API key.
+    if not api_key and base_url == DEFAULT_OPENAI_BASE_URL:
+        yield {
+            "event_type": "error",
+            "detail": (
+                "OPENAI_API_KEY is not set, and the runtime resolved to api.openai.com. "
+                "Configure a local OpenAI-compatible base URL or set OPENAI_API_KEY."
+            ),
+        }
+        return
+
+    logger.info(
+        "Computer Use OpenAI-compatible runtime - model=%s base_url=%s source=%s",
+        resolved_model,
+        base_url,
+        base_source,
+    )
     client = OpenAI(
         api_key=api_key or "not-required",
         base_url=base_url,
@@ -133,62 +161,64 @@ def run_openai_loop(
         "When the task is complete, respond with a final text summary and do not call any more tools."
     )
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system_prompt},
-    ]
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
     for iteration in range(1, max_iterations + 1):
         b64 = session.screenshot_b64()
         dom_text = format_snapshot_block(session.dom_snapshot())
-        yield {"event_type": "screenshot", "iteration": iteration, "screenshot_b64": b64, "url": session.current_url()}
+        yield {
+            "event_type": "screenshot",
+            "iteration": iteration,
+            "screenshot_b64": b64,
+            "url": session.current_url(),
+        }
 
-        # Build the user message: task text on first turn, DOM index + screenshot every turn
         if iteration == 1:
-            user_content: list[dict[str, Any]] = [
-                {"type": "text", "text": task},
-            ]
+            user_content: list[dict[str, Any]] = [{"type": "text", "text": task}]
         else:
             user_content = []
 
         if dom_text:
             user_content.append({"type": "text", "text": dom_text})
-
         user_content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
-
         messages.append({"role": "user", "content": user_content})
 
-        # Call the model
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,  # type: ignore[arg-type]
-                tools=[_COMPUTER_FUNCTION],  # type: ignore[arg-type]
-                tool_choice="auto",
-                max_tokens=1024,
+            response = _create_chat_completion_with_retry(
+                client=client,
+                model=resolved_model,
+                messages=messages,
             )
         except Exception as exc:
-            yield {"event_type": "error", "iteration": iteration, "detail": str(exc)[:400]}
+            detail = str(exc)[:400]
+            yield {"event_type": "error", "iteration": iteration, "detail": detail}
             return
 
         choice = response.choices[0]
         assistant_message = choice.message
 
-        # Emit any text the model produced
         if assistant_message.content:
             yield {"event_type": "text", "iteration": iteration, "text": assistant_message.content}
 
-        # No tool calls → model is done
         if not assistant_message.tool_calls:
             yield {"event_type": "done", "iteration": iteration, "url": session.current_url()}
             return
 
-        # Append assistant turn to history
-        messages.append({"role": "assistant", "content": assistant_message.content or "", "tool_calls": [
-            {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-            for tc in assistant_message.tool_calls
-        ]})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in assistant_message.tool_calls
+                ],
+            }
+        )
 
-        # Execute each tool call and collect results
         tool_results: list[dict[str, Any]] = []
         for tool_call in assistant_message.tool_calls:
             try:
@@ -197,11 +227,15 @@ def run_openai_loop(
                 args = {}
 
             action = str(args.get("action", ""))
-            yield {"event_type": "action", "iteration": iteration, "tool_id": tool_call.id, "action": action, "input": args}
+            yield {
+                "event_type": "action",
+                "iteration": iteration,
+                "tool_id": tool_call.id,
+                "action": action,
+                "input": args,
+            }
 
-            # Map openai function args to action_executor format
             tool_input = _normalise_args(args)
-
             try:
                 result = execute_action(session, tool_input)
                 if "screenshot_b64" in result:
@@ -211,11 +245,13 @@ def run_openai_loop(
             except Exception as exc:
                 result_text = f"Error executing {action}: {exc}"
 
-            tool_results.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result_text,
-            })
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_text,
+                }
+            )
 
         messages.extend(tool_results)
 
@@ -223,8 +259,74 @@ def run_openai_loop(
 
 
 def _normalise_args(args: dict[str, Any]) -> dict[str, Any]:
-    """Normalise OpenAI function args to the action_executor dict format."""
-    normalised = dict(args)
-    # The action executor uses "coordinate" for [x, y]; our tool uses the same name — pass through.
-    # Map "text" action key to the same field name (action_executor reads tool_input["text"]).
-    return normalised
+    """Normalize function-call args for action_executor."""
+    return dict(args)
+
+
+def _create_chat_completion_with_retry(
+    *,
+    client: Any,
+    model: str,
+    messages: list[dict[str, Any]],
+) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_API_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore[arg-type]
+                tools=[_COMPUTER_FUNCTION],  # type: ignore[arg-type]
+                tool_choice="auto",
+                max_tokens=1024,
+            )
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _MAX_API_ATTEMPTS or not _is_retryable_exception(exc):
+                raise
+            sleep_for = _RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "Computer Use OpenAI call failed (attempt %d/%d) status=%s; retrying in %.1fs: %s",
+                attempt,
+                _MAX_API_ATTEMPTS,
+                _exception_status_code(exc),
+                sleep_for,
+                str(exc)[:220],
+            )
+            time.sleep(sleep_for)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("OpenAI completion retry loop failed without an exception.")
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    if response is not None:
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+    return None
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    status = _exception_status_code(exc)
+    if isinstance(status, int):
+        return status in {408, 409, 425, 429} or status >= 500
+    lowered = str(exc).lower()
+    retryable_tokens = (
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "rate limit",
+        "too many requests",
+        "server error",
+        "bad gateway",
+        "gateway timeout",
+        "service unavailable",
+        "network",
+    )
+    return any(token in lowered for token in retryable_tokens)

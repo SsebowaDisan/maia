@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Generator
 from typing import Any
 
@@ -24,6 +25,19 @@ _COMPUTER_TOOL = {
     "display_height_px": VIEWPORT_HEIGHT,
     "display_number": 1,
 }
+
+
+def _read_retry_attempts() -> int:
+    raw = str(os.environ.get("MAIA_COMPUTER_USE_PROVIDER_RETRY_ATTEMPTS", "3")).strip()
+    try:
+        parsed = int(raw)
+    except ValueError:
+        parsed = 3
+    return max(1, min(parsed, 6))
+
+
+_MAX_API_ATTEMPTS = _read_retry_attempts()
+_RETRY_BASE_SECONDS = 0.6
 
 
 def run_anthropic_loop(
@@ -72,13 +86,11 @@ def run_anthropic_loop(
             )
 
         try:
-            response = client.beta.messages.create(
+            response = _create_message_with_retry(
+                client=client,
                 model=model,
-                max_tokens=4096,
-                system=system_prompt,
-                tools=[_COMPUTER_TOOL],  # type: ignore[arg-type]
+                system_prompt=system_prompt,
                 messages=messages,
-                betas=["computer-use-2025-11-24"],
             )
         except Exception as exc:
             yield {"event_type": "error", "iteration": iteration, "detail": str(exc)[:400]}
@@ -113,3 +125,74 @@ def run_anthropic_loop(
         messages.append({"role": "user", "content": tool_results})
 
     yield {"event_type": "max_iterations", "iteration": max_iterations, "url": session.current_url()}
+
+
+def _create_message_with_retry(
+    *,
+    client: Any,
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(1, _MAX_API_ATTEMPTS + 1):
+        try:
+            return client.beta.messages.create(
+                model=model,
+                max_tokens=4096,
+                system=system_prompt,
+                tools=[_COMPUTER_TOOL],  # type: ignore[arg-type]
+                messages=messages,
+                betas=["computer-use-2025-11-24"],
+            )
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _MAX_API_ATTEMPTS or not _is_retryable_exception(exc):
+                raise
+            sleep_for = _RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "Computer Use Anthropic call failed (attempt %d/%d) status=%s; retrying in %.1fs: %s",
+                attempt,
+                _MAX_API_ATTEMPTS,
+                _exception_status_code(exc),
+                sleep_for,
+                str(exc)[:220],
+            )
+            time.sleep(sleep_for)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Anthropic completion retry loop failed without an exception.")
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    if response is not None:
+        response_status = getattr(response, "status_code", None)
+        if isinstance(response_status, int):
+            return response_status
+    return None
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    status = _exception_status_code(exc)
+    if isinstance(status, int):
+        return status in {408, 409, 425, 429} or status >= 500
+    lowered = str(exc).lower()
+    retryable_tokens = (
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "rate limit",
+        "too many requests",
+        "server error",
+        "bad gateway",
+        "gateway timeout",
+        "service unavailable",
+        "network",
+    )
+    return any(token in lowered for token in retryable_tokens)

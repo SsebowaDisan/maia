@@ -228,7 +228,7 @@ function AgentDesktopScene({
     }
     computerUseBootstrapRef.current = bootstrapKey;
     let disposed = false;
-    void startComputerUseSession({ url: startUrl })
+    void startComputerUseSession({ url: startUrl, requestId: bootstrapKey })
       .then((session) => {
         if (disposed) {
           return;
@@ -608,6 +608,7 @@ function AgentDesktopScene({
         narration={compactValue(activeSceneData["narration"]) || null}
         roadmapSteps={roadmapSteps}
         roadmapActiveIndex={roadmapActiveIdx}
+        runId={runId || undefined}
         computerUseSessionId={computerUseSessionId || undefined}
         computerUseTask={computerUseTask || undefined}
         computerUseModel={computerUseModel || undefined}

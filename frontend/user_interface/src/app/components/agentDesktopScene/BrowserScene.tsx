@@ -70,6 +70,7 @@ type BrowserSceneProps = {
   narration?: string | null;
   roadmapSteps?: Array<{ toolId: string; title: string; whyThisStep: string }>;
   roadmapActiveIndex?: number;
+  runId?: string;
   computerUseSessionId?: string;
   computerUseTask?: string;
   computerUseModel?: string;
@@ -123,6 +124,7 @@ function BrowserScene({
   narration = null,
   roadmapSteps = [],
   roadmapActiveIndex = -1,
+  runId = "",
   computerUseSessionId = "",
   computerUseTask = "",
   computerUseModel = "",
@@ -177,6 +179,7 @@ function BrowserScene({
       task,
       String(computerUseModel || ""),
       String(computerUseMaxIterations ?? ""),
+      String(runId || ""),
     ].join("::");
     if (computerUseStreamKeyRef.current === streamKey) {
       return;
@@ -199,6 +202,7 @@ function BrowserScene({
         typeof computerUseMaxIterations === "number" && Number.isFinite(computerUseMaxIterations)
           ? computerUseMaxIterations
           : undefined,
+      runId: String(runId || "").trim() || undefined,
       onEvent: (event: ComputerUseStreamEvent) => {
         const eventType = String(event.event_type || "").trim().toLowerCase();
         const iterationRaw = Number(event.iteration ?? Number.NaN);
@@ -265,7 +269,7 @@ function BrowserScene({
         computerUseCleanupRef.current = null;
       }
     };
-  }, [computerUseMaxIterations, computerUseModel, computerUseSessionId, computerUseTask]);
+  }, [computerUseMaxIterations, computerUseModel, computerUseSessionId, computerUseTask, runId]);
   const streamStatusChip =
     computerUseStreamStatus === "streaming"
       ? `Computer Use${computerUseIteration ? ` · Step ${computerUseIteration}` : ""}`

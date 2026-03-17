@@ -2,6 +2,7 @@ import { API_BASE, request, withUserIdQuery } from "./core";
 
 type StartComputerUseSessionInput = {
   url: string;
+  requestId?: string;
 };
 
 type StartComputerUseSessionResponse = {
@@ -70,6 +71,7 @@ type StreamComputerUseSessionOptions = {
   task: string;
   model?: string;
   maxIterations?: number;
+  runId?: string;
   onEvent?: (event: ComputerUseStreamEvent) => void;
   onDone?: () => void;
   onError?: (error: Error) => void;
@@ -83,10 +85,14 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 function startComputerUseSession(body: StartComputerUseSessionInput) {
-  return request<StartComputerUseSessionResponse>("/api/computer-use/sessions", {
+  const requestId = String(body.requestId || "").trim();
+  const query = requestId
+    ? `?request_id=${encodeURIComponent(requestId)}`
+    : "";
+  return request<StartComputerUseSessionResponse>(`/api/computer-use/sessions${query}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ url: body.url }),
   });
 }
 
@@ -130,12 +136,12 @@ function getComputerUseActiveModel() {
       if (override) {
         return {
           model: override,
-          source: "agent.computer_use_model",
+          source: "settings:agent.computer_use_model",
         };
       }
       return {
-        model: "gpt-4o",
-        source: "fallback_default",
+        model: "qwen2.5vl:7b",
+        source: "default:open_source",
       };
     },
   );
@@ -143,7 +149,7 @@ function getComputerUseActiveModel() {
 
 function streamComputerUseSession(
   sessionId: string,
-  { task, model, maxIterations, onEvent, onDone, onError }: StreamComputerUseSessionOptions,
+  { task, model, maxIterations, runId, onEvent, onDone, onError }: StreamComputerUseSessionOptions,
 ) {
   const query = new URLSearchParams();
   query.set("task", task);
@@ -153,15 +159,24 @@ function streamComputerUseSession(
   if (typeof maxIterations === "number" && Number.isFinite(maxIterations) && maxIterations > 0) {
     query.set("max_iterations", String(Math.round(maxIterations)));
   }
+  if (runId) {
+    query.set("run_id", runId);
+  }
   const basePath = `/api/computer-use/sessions/${encodeURIComponent(sessionId)}/stream?${query.toString()}`;
   const eventSource = new EventSource(`${API_BASE}${withUserIdQuery(basePath)}`);
+  let closed = false;
 
   eventSource.onmessage = (message) => {
+    if (closed) {
+      return;
+    }
     const chunk = String(message.data || "").trim();
     if (!chunk) {
       return;
     }
     if (chunk === "[DONE]") {
+      closed = true;
+      eventSource.close();
       onDone?.();
       return;
     }
@@ -173,10 +188,16 @@ function streamComputerUseSession(
     }
   };
   eventSource.onerror = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    eventSource.close();
     onError?.(new Error("Computer Use SSE stream disconnected."));
   };
 
   return () => {
+    closed = true;
     eventSource.close();
   };
 }
