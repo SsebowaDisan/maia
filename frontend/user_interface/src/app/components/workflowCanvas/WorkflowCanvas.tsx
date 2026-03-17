@@ -657,36 +657,36 @@ function WorkflowCanvasInner({
         }}
       />
       <div
-        className={`absolute left-3 right-3 top-3 z-20 flex items-start gap-2 transition-all duration-200 ${
-          toolbarVisible
-            ? "pointer-events-auto translate-y-0 opacity-100"
-            : "pointer-events-none -translate-y-2 opacity-0"
+        className={`pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start gap-2 transition-all duration-200 ${
+          toolbarVisible ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
         }`}
-        onMouseEnter={() => {
-          toolbarHoverLockRef.current = true;
-          setToolbarVisible(true);
-          clearToolbarHideTimer();
-        }}
-        onMouseMove={() => {
-          toolbarHoverLockRef.current = true;
-          setToolbarVisible(true);
-          clearToolbarHideTimer();
-        }}
-        onMouseLeave={() => {
-          toolbarHoverLockRef.current = false;
-          scheduleToolbarHide(700);
-        }}
-        onFocusCapture={() => {
-          toolbarHoverLockRef.current = true;
-          setToolbarVisible(true);
-          clearToolbarHideTimer();
-        }}
-        onBlurCapture={() => {
-          toolbarHoverLockRef.current = false;
-          scheduleToolbarHide(700);
-        }}
       >
-        <div>
+        <div
+          className="pointer-events-auto"
+          onMouseEnter={() => {
+            toolbarHoverLockRef.current = true;
+            setToolbarVisible(true);
+            clearToolbarHideTimer();
+          }}
+          onMouseMove={() => {
+            toolbarHoverLockRef.current = true;
+            setToolbarVisible(true);
+            clearToolbarHideTimer();
+          }}
+          onMouseLeave={() => {
+            toolbarHoverLockRef.current = false;
+            scheduleToolbarHide(700);
+          }}
+          onFocusCapture={() => {
+            toolbarHoverLockRef.current = true;
+            setToolbarVisible(true);
+            clearToolbarHideTimer();
+          }}
+          onBlurCapture={() => {
+            toolbarHoverLockRef.current = false;
+            scheduleToolbarHide(700);
+          }}
+        >
           <WorkflowToolbar
             isRunning={isRunning}
             isDirty={isDirty}
