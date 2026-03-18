@@ -1,5 +1,6 @@
 import {
   Bug,
+  Calendar,
   Check,
   ChevronLeft,
   History,
@@ -18,6 +19,7 @@ type WorkflowToolbarProps = {
   onStop?: () => void;
   onAddStep: () => void;
   onSave: () => void;
+  onSchedule: () => void;
   onOpenTemplates: () => void;
   onOpenNlBuilder: () => void;
   onOpenRunHistory: () => void;
@@ -32,6 +34,7 @@ function WorkflowToolbar({
   onStop,
   onAddStep,
   onSave,
+  onSchedule,
   onOpenTemplates,
   onOpenNlBuilder,
   onOpenRunHistory,

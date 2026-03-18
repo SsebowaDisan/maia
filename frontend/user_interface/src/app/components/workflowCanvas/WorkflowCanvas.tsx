@@ -58,6 +58,7 @@ type WorkflowCanvasProps = {
   onRun: () => void;
   onStop?: () => void;
   onSave: () => void;
+  onSchedule?: () => void;
   onRefreshTemplates: () => void;
   onRefreshRunHistory: () => void;
   onLoadMoreRunHistory: () => void;
@@ -753,6 +754,7 @@ function WorkflowCanvasInner({
             onStop={onStop}
             onAddStep={handleAddNode}
             onSave={onSave}
+            onSchedule={onSchedule || (() => {})}
             onOpenTemplates={() => setTemplatesOpen((current) => !current)}
             onOpenNlBuilder={() => setNlBuilderOpen(true)}
             onOpenRunHistory={() => setRunHistoryOpen((current) => !current)}

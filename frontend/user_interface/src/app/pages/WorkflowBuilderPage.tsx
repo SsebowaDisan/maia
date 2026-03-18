@@ -16,6 +16,7 @@ import type { WorkflowDefinition, WorkflowRecord, WorkflowRunRecord, WorkflowTem
 import { WorkflowCanvas } from "../components/workflowCanvas/WorkflowCanvas";
 import { WorkflowGallery } from "../components/workflowCanvas/WorkflowGallery";
 import { WorkflowQuickSwitcher } from "../components/workflowCanvas/WorkflowQuickSwitcher";
+import { ScheduleWorkflowPanel } from "../components/workflowCanvas/ScheduleWorkflowPanel";
 import { useWorkflowStore } from "../stores/workflowStore";
 import { useWorkflowViewStore } from "../stores/workflowViewStore";
 
@@ -159,6 +160,7 @@ export function WorkflowBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [showSavedDialog, setShowSavedDialog] = useState(false);
   const [savedDialogName, setSavedDialogName] = useState("");
+  const [schedulePanelOpen, setSchedulePanelOpen] = useState(false);
   const [running, setRunning] = useState(false);
 
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
@@ -598,6 +600,9 @@ export function WorkflowBuilderPage() {
               onSave={() => {
                 void persistWorkflow();
               }}
+              onSchedule={() => {
+                setSchedulePanelOpen(true);
+              }}
               onRefreshTemplates={() => {
                 void refreshTemplates();
               }}
@@ -626,6 +631,44 @@ export function WorkflowBuilderPage() {
         onClose={closeQuickSwitcher}
         onSelectWorkflow={handleSelectWorkflow}
         onNewWorkflow={handleNewWorkflow}
+      />
+
+      {/* Schedule panel */}
+      <ScheduleWorkflowPanel
+        open={schedulePanelOpen}
+        workflowName={workflowName}
+        onClose={() => setSchedulePanelOpen(false)}
+        onSchedule={async (schedule) => {
+          setSchedulePanelOpen(false);
+          // Save workflow first if needed
+          let wfId = useWorkflowStore.getState().workflowId;
+          if (!wfId) {
+            wfId = await persistWorkflow({ skipValidation: true }) || "";
+          }
+          if (!wfId) {
+            toast.error("Save the workflow first before scheduling.");
+            return;
+          }
+          // Create the schedule via API
+          try {
+            const response = await fetch("/api/agent/schedules", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: `${workflowName} — ${schedule.description}`,
+                prompt: `Run workflow ${wfId}`,
+                frequency: schedule.cron,
+                enabled: true,
+              }),
+            });
+            if (!response.ok) {
+              throw new Error(`Schedule creation failed: ${response.status}`);
+            }
+            toast.success(`Scheduled: ${schedule.description}`);
+          } catch (err) {
+            toast.error(`Failed to schedule: ${String(err)}`);
+          }
+        }}
       />
 
       {/* Saved success dialog */}
