@@ -181,7 +181,8 @@ export function CitationPdfPreview({
     stopHighlightFocusTimer();
     clearHighlights();
     highlightFocusAttemptsRef.current = 0;
-    const maxAttempts = externalOverlayRects.length ? 18 : 80;
+    const maxAttempts = externalOverlayRects.length ? 10 : 25;
+    const TICK_MS = 80;
     const tick = () => {
       const hitFound = tryFocusHighlight({
         targetPage: safePage,
@@ -206,9 +207,9 @@ export function CitationPdfPreview({
         stopHighlightFocusTimer();
         return;
       }
-      highlightFocusTimerRef.current = window.setTimeout(tick, 140);
+      highlightFocusTimerRef.current = window.setTimeout(tick, TICK_MS);
     };
-    highlightFocusTimerRef.current = window.setTimeout(tick, 140);
+    highlightFocusTimerRef.current = window.setTimeout(tick, TICK_MS);
   };
 
   useEffect(() => {
@@ -293,7 +294,7 @@ export function CitationPdfPreview({
               [pageNumber]: "stalled",
             };
           });
-        }, 9000),
+        }, 4000),
       );
     }
     return () => {

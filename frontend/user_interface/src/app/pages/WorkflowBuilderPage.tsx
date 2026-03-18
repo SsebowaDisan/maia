@@ -157,6 +157,8 @@ export function WorkflowBuilderPage() {
   }, [clearRun, setMetadata, markSaved, setView]);
 
   const [saving, setSaving] = useState(false);
+  const [showSavedDialog, setShowSavedDialog] = useState(false);
+  const [savedDialogName, setSavedDialogName] = useState("");
   const [running, setRunning] = useState(false);
 
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
@@ -394,7 +396,8 @@ export function WorkflowBuilderPage() {
       });
       markSaved();
       await refreshRunHistory(nextWorkflowId);
-      toast.success("Workflow saved.");
+      setSavedDialogName(normalizeWorkflowRecordName(response));
+      setShowSavedDialog(true);
       return nextWorkflowId;
     } catch (error) {
       toast.error(`Failed to save workflow: ${String(error)}`);
@@ -624,6 +627,49 @@ export function WorkflowBuilderPage() {
         onSelectWorkflow={handleSelectWorkflow}
         onNewWorkflow={handleNewWorkflow}
       />
+
+      {/* Saved success dialog */}
+      {showSavedDialog ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm transition-opacity duration-200"
+          onClick={() => setShowSavedDialog(false)}
+          style={{ animation: "fadeIn 200ms ease-out" }}
+        >
+          <div
+            className="mx-4 w-full max-w-sm rounded-2xl border border-black/[0.08] bg-white p-6 text-center shadow-[0_20px_60px_-12px_rgba(0,0,0,0.25)]"
+            onClick={(e) => e.stopPropagation()}
+            style={{ animation: "scaleIn 200ms ease-out" }}
+          >
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#ecfdf5]">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+            </div>
+            <h3 className="mt-4 text-[16px] font-semibold text-[#101828]">Workflow saved</h3>
+            <p className="mt-2 text-[13px] leading-relaxed text-[#667085]">
+              <span className="font-medium text-[#344054]">{savedDialogName || "Your workflow"}</span>{" "}
+              has been saved and is ready to run. You can run it now or continue editing.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSavedDialog(false)}
+                className="flex-1 rounded-xl border border-black/[0.08] px-4 py-2.5 text-[13px] font-semibold text-[#344054] transition-colors hover:bg-[#f2f4f7]"
+              >
+                Continue editing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSavedDialog(false);
+                  void runWorkflow();
+                }}
+                className="flex-1 rounded-xl bg-[#7c3aed] px-4 py-2.5 text-[13px] font-semibold text-white transition-colors hover:bg-[#6d28d9]"
+              >
+                Run now
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

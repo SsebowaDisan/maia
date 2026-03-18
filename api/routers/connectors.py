@@ -8,6 +8,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from api.auth import get_current_user_id
@@ -29,6 +30,78 @@ def _tenant(user_id: str) -> str:
     return user_id
 
 
+def _emit_connector_theatre_event(
+    user_id: str,
+    connector_id: str,
+    event_type: str,
+    detail: str,
+) -> None:
+    """Publish a theatre-friendly event so setup/test progress is visible in theatre."""
+    try:
+        from api.services.agent.live_events import get_live_event_broker
+        from api.services.connectors.product_meta import PRODUCT_META
+
+        meta = PRODUCT_META.get(connector_id, {})
+        get_live_event_broker().publish(
+            user_id=user_id,
+            run_id=None,
+            event={
+                "event_type": event_type,
+                "title": f"Connector: {connector_id}",
+                "detail": detail,
+                "stage": "execute",
+                "status": "completed" if "completed" in event_type else ("failed" if "failed" in event_type else "running"),
+                "data": {
+                    "event_type": event_type,
+                    "connector_id": connector_id,
+                    "connector_label": meta.get("brand_slug", connector_id).replace("_", " ").title(),
+                    "brand_slug": meta.get("brand_slug", connector_id),
+                    "scene_family": meta.get("scene_family", "api"),
+                    "operation_label": event_type.replace("connector_", "").replace("_", " ").title(),
+                },
+            },
+        )
+    except Exception:
+        logger.debug("Failed to emit theatre event for %s", connector_id, exc_info=True)
+
+
+def _oauth_popup_result_html(*, success: bool, message: str = "") -> HTMLResponse:
+    """Return a popup-safe HTML response that notifies opener and closes."""
+    payload_success = "true" if success else "false"
+    safe_message = (
+        message.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
+    html = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>OAuth Complete</title>
+  </head>
+  <body>
+    <script>
+      (function () {{
+        var payload = {{
+          type: 'oauth_complete',
+          success: {payload_success},
+          error: '{safe_message}'
+        }};
+        try {{
+          if (window.opener && !window.opener.closed) {{
+            window.opener.postMessage(payload, '*');
+          }}
+        }} finally {{
+          window.close();
+        }}
+      }})();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 # ── Request / Response bodies ──────────────────────────────────────────────
 
 class ApiKeyCredentialRequest(BaseModel):
@@ -38,6 +111,11 @@ class ApiKeyCredentialRequest(BaseModel):
 class BasicCredentialRequest(BaseModel):
     username: str
     password: str
+
+
+class CredentialUpsertRequest(BaseModel):
+    values: dict[str, Any]
+    auth_strategy: str | None = None
 
 
 class OAuthStartResponse(BaseModel):
@@ -69,9 +147,17 @@ class WebhookRegisterRequest(BaseModel):
 @router.get("", summary="List all available connectors")
 def list_connectors(
     user_id: Annotated[str, Depends(get_current_user_id)],
+    include_internal: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return ConnectorDefinitionSchema for every registered connector."""
-    definitions = catalog.list_definitions()
+    """Return ConnectorDefinitionSchema for every registered connector.
+
+    Internal/runtime connectors are excluded by default. Pass
+    ``include_internal=true`` to include them (admin use only).
+    """
+    definitions = catalog.list_definitions(
+        include_internal=include_internal,
+        tenant_id=_tenant(user_id),
+    )
     return [d.model_dump(mode="json") for d in definitions]
 
 
@@ -114,7 +200,7 @@ def get_connector(
     connector_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict[str, Any]:
-    definition = catalog.get_definition(connector_id)
+    definition = catalog.get_definition(connector_id, tenant_id=_tenant(user_id))
     if not definition:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connector not found.")
     return definition.model_dump(mode="json")
@@ -145,6 +231,7 @@ def store_api_key(
     values = {"api_key": body.api_key}
     vault.store_credential(_tenant(user_id), connector_id, values, auth_strategy="api_key")
     _mirror_to_legacy_store(_tenant(user_id), connector_id, values)
+    _emit_connector_theatre_event(user_id, connector_id, "connector_setup_completed", "API key stored successfully.")
     return {"status": "stored", "connector_id": connector_id}
 
 
@@ -161,6 +248,32 @@ def store_basic_credential(
 
     values = {"username": body.username, "password": body.password}
     vault.store_credential(_tenant(user_id), connector_id, values, auth_strategy="basic")
+    _mirror_to_legacy_store(_tenant(user_id), connector_id, values)
+    return {"status": "stored", "connector_id": connector_id}
+
+
+@router.post("/{connector_id}/credentials", status_code=status.HTTP_201_CREATED)
+def upsert_credential(
+    connector_id: str,
+    body: CredentialUpsertRequest,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict[str, Any]:
+    """Store arbitrary connector credentials for this tenant+connector."""
+    definition = catalog.get_definition(connector_id)
+    if not definition:
+        raise HTTPException(status_code=404, detail="Connector not found.")
+
+    values = {str(k): str(v) for k, v in (body.values or {}).items() if str(k).strip()}
+    if not values:
+        raise HTTPException(status_code=400, detail="Credential values cannot be empty.")
+
+    auth_strategy = (
+        str(body.auth_strategy or "").strip().lower() or str(definition.auth_kind or "api_key")
+    )
+    if auth_strategy == "service_identity":
+        auth_strategy = "api_key"
+
+    vault.store_credential(_tenant(user_id), connector_id, values, auth_strategy=auth_strategy)
     _mirror_to_legacy_store(_tenant(user_id), connector_id, values)
     return {"status": "stored", "connector_id": connector_id}
 
@@ -207,19 +320,25 @@ def oauth_callback(
     state: str | None = None,
     code: str | None = None,
     error: str | None = None,
-) -> dict[str, Any]:
+) -> HTMLResponse:
     """OAuth2 callback. Exchange code for tokens and store via vault."""
     if error:
-        raise HTTPException(status_code=400, detail=f"OAuth provider error: {error}")
+        return _oauth_popup_result_html(
+            success=False,
+            message=f"OAuth provider error: {error}",
+        )
     if not state or not code:
-        raise HTTPException(status_code=400, detail="Missing state or code in OAuth callback.")
+        return _oauth_popup_result_html(
+            success=False,
+            message="Missing state or code in OAuth callback.",
+        )
 
     try:
-        result = oauth_service.exchange_code(state=state, code=code)
+        oauth_service.exchange_code(state=state, code=code)
     except OAuthError as exc:
-        raise HTTPException(status_code=400, detail=exc.message) from exc
+        return _oauth_popup_result_html(success=False, message=exc.message)
 
-    return {"status": "connected", **result}
+    return _oauth_popup_result_html(success=True)
 
 
 @router.post("/{connector_id}/oauth/refresh")
@@ -250,6 +369,9 @@ def test_connector(
     if not credentials:
         return {"status": "error", "detail": "No credentials stored for this connector."}
 
+    # Emit theatre-friendly test event
+    _emit_connector_theatre_event(user_id, connector_id, "connector_test_started", "Testing connection…")
+
     # Delegate to the existing agent-layer connector for the actual health check.
     try:
         from api.services.agent.connectors.registry import get_connector_registry
@@ -261,14 +383,22 @@ def test_connector(
         start = time.perf_counter()
         health = connector.health_check()
         latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        result_status = "ok" if health.ok else "error"
+        _emit_connector_theatre_event(
+            user_id, connector_id,
+            "connector_test_completed" if health.ok else "connector_test_failed",
+            f"Test {'passed' if health.ok else 'failed'}: {health.message}" if health.message else ("Connection verified" if health.ok else "Test failed"),
+        )
         return {
-            "status": "ok" if health.ok else "error",
+            "status": result_status,
             "latency_ms": latency_ms,
             "detail": health.message,
         }
     except KeyError:
+        _emit_connector_theatre_event(user_id, connector_id, "connector_test_completed", "Credentials stored (no health check available).")
         return {"status": "ok", "latency_ms": 0, "detail": "Credentials stored (no health check available)."}
     except Exception as exc:
+        _emit_connector_theatre_event(user_id, connector_id, "connector_test_failed", str(exc)[:200])
         return {"status": "error", "latency_ms": 0, "detail": str(exc)[:300]}
 
 

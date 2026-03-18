@@ -93,29 +93,13 @@ def store_google_connector_tokens(
     for connector_id in connector_ids:
         if connector_id not in get_connector_registry().names():
             continue
-        credential_values: dict[str, Any] = {}
-        if connector_id == "google_workspace":
-            credential_values["GOOGLE_WORKSPACE_ACCESS_TOKEN"] = access_token
-            if refresh_token:
-                credential_values["GOOGLE_WORKSPACE_REFRESH_TOKEN"] = refresh_token
-        elif connector_id == "gmail":
-            credential_values["GMAIL_ACCESS_TOKEN"] = access_token
-            if refresh_token:
-                credential_values["GMAIL_REFRESH_TOKEN"] = refresh_token
-        elif connector_id == "google_calendar":
-            credential_values["GOOGLE_CALENDAR_ACCESS_TOKEN"] = access_token
-            if refresh_token:
-                credential_values["GOOGLE_CALENDAR_REFRESH_TOKEN"] = refresh_token
-        elif connector_id == "google_analytics":
-            credential_values["GOOGLE_ANALYTICS_ACCESS_TOKEN"] = access_token
-            if refresh_token:
-                credential_values["GOOGLE_ANALYTICS_REFRESH_TOKEN"] = refresh_token
-        elif connector_id == "google_ads":
-            credential_values["GOOGLE_ADS_ACCESS_TOKEN"] = access_token
-            if refresh_token:
-                credential_values["GOOGLE_ADS_REFRESH_TOKEN"] = refresh_token
-        if not credential_values:
-            continue
+        # Generic OAuth credential mapping — derive env key prefix from connector_id
+        env_prefix = connector_id.upper().replace("-", "_")
+        credential_values: dict[str, Any] = {
+            f"{env_prefix}_ACCESS_TOKEN": access_token,
+        }
+        if refresh_token:
+            credential_values[f"{env_prefix}_REFRESH_TOKEN"] = refresh_token
         get_credential_store().set(
             tenant_id=tenant_id,
             connector_id=connector_id,

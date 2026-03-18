@@ -60,10 +60,27 @@ def execute_workflow(
     outputs_lock = threading.Lock()
     skipped_steps: set[str] = set()
 
+    # Per-worker cost tracking — stored in context for step-level access
+    cost_tracker = None
+    try:
+        from api.services.workflows.per_worker_cost import WorkflowCostTracker
+        cost_tracker = WorkflowCostTracker(run_id=effective_run_id)
+        ctx.set("__cost_tracker", cost_tracker)
+    except Exception:
+        pass
+
     try:
         ordered_ids = workflow.topological_order()
     except ValueError as exc:
         raise WorkflowExecutionError(str(exc)) from exc
+
+    # Dynamic dependency tracking for runtime unblocking visibility
+    task_dag = None
+    try:
+        from api.services.workflows.task_dag import TaskDAG
+        task_dag = TaskDAG.from_workflow(workflow)
+    except Exception:
+        pass
 
     _emit(on_event, {
         "event_type": "workflow_started",
@@ -85,6 +102,8 @@ def execute_workflow(
             incoming = [e for e in workflow.edges if e.to_step == step_id]
             if any(e.from_step in skipped_steps for e in incoming):
                 skipped_steps.add(step_id)
+                if task_dag:
+                    task_dag.mark_skipped(step_id)
                 _emit(on_event, {
                     "event_type": "workflow_step_skipped",
                     "workflow_id": workflow.workflow_id,
@@ -94,8 +113,14 @@ def execute_workflow(
                 continue
             if _check_conditions(incoming, outputs, on_event, workflow, step_id):
                 skipped_steps.add(step_id)
+                if task_dag:
+                    task_dag.mark_skipped(step_id)
             else:
                 runnable.append(step_id)
+                if task_dag:
+                    task_dag.mark_running(step_id)
+                if cost_tracker:
+                    cost_tracker.start_step(step_id, step.agent_id if step else "")
 
         if not runnable:
             continue
@@ -106,11 +131,32 @@ def execute_workflow(
             # B8: Run independent steps concurrently
             _execute_batch(workflow, runnable, outputs, outputs_lock, ctx, tenant_id, on_event, skipped_steps, step_timeout_s, effective_run_id)
 
+        # Update DAG + cost for completed/failed steps in this batch
+        for step_id in runnable:
+            if step_id in skipped_steps:
+                continue
+            if cost_tracker:
+                cost_tracker.end_step(step_id)
+                # Estimate cost from result length as a rough proxy
+                result = outputs.get(workflow.get_step(step_id).output_key if workflow.get_step(step_id) else "", "")
+                result_len = len(str(result or ""))
+                cost_tracker.record(step_id=step_id, agent_id=workflow.get_step(step_id).agent_id if workflow.get_step(step_id) else "", tokens_in=result_len // 4, tokens_out=result_len // 4)
+            if task_dag:
+                if step_id in outputs or any(workflow.get_step(step_id) and workflow.get_step(step_id).output_key in outputs for _ in [1]):
+                    newly_ready = task_dag.mark_completed(step_id)
+                    if newly_ready:
+                        _emit(on_event, {"event_type": "workflow_steps_unblocked", "workflow_id": workflow.workflow_id, "unblocked": newly_ready})
+                else:
+                    task_dag.mark_failed(step_id)
+
+    # Emit cost breakdown with completion
+    cost_summary = cost_tracker.summary() if cost_tracker else {}
     _emit(on_event, {
         "event_type": "workflow_completed",
         "workflow_id": workflow.workflow_id,
         "run_id": effective_run_id,
         "outputs": {k: str(v)[:200] for k, v in outputs.items()},
+        "cost_summary": cost_summary,
     })
 
     cleanup_context(effective_run_id)
@@ -339,6 +385,73 @@ def _validate_output(
         })
 
 
+# ── Stage contract validation ─────────────────────────────────────────────────
+
+def _validate_stage_contract(
+    step: WorkflowStep,
+    phase: str,
+    data: dict[str, Any],
+    workflow_id: str,
+    on_event: Optional[Callable],
+) -> None:
+    """Validate inputs or outputs against the step type's stage contract."""
+    try:
+        from api.services.workflows.stage_contracts import validate_step_boundary
+        errors = validate_step_boundary(step_type=step.step_type, phase=phase, data=data if isinstance(data, dict) else {})
+        if errors:
+            logger.warning("Step %s %s contract violation: %s", step.step_id, phase, errors)
+            _emit(on_event, {
+                "event_type": f"workflow_step_{phase}_contract_violation",
+                "workflow_id": workflow_id,
+                "step_id": step.step_id,
+                "violations": errors,
+            })
+    except Exception:
+        pass
+
+
+# ── Quality gate ──────────────────────────────────────────────────────────────
+
+def _run_quality_gate(
+    step: WorkflowStep,
+    result: Any,
+    workflow_id: str,
+    on_event: Optional[Callable],
+) -> None:
+    """Check output quality for agent steps (detect placeholders, filler)."""
+    if step.step_type not in ("agent", ""):
+        return
+    text = str(result or "")
+    if len(text) < 50:
+        return
+    try:
+        from api.services.agent.reasoning.quality_gate import check_output_quality
+        qr = check_output_quality(text)
+        if not qr["passed"]:
+            logger.warning("Step %s quality gate failed: %s", step.step_id, qr["issues"])
+            _emit(on_event, {
+                "event_type": "workflow_step_quality_warning",
+                "workflow_id": workflow_id,
+                "step_id": step.step_id,
+                "quality_score": qr["score"],
+                "issues": [i["message"] for i in qr["issues"]],
+            })
+    except Exception:
+        pass
+
+
+# ── Evolution store — record lessons from failures ────────────────────────────
+
+def _record_failure_lesson(tenant_id: str, step: WorkflowStep, error: str, run_id: str) -> None:
+    """Record a lesson when a step fails, for cross-run learning."""
+    try:
+        from api.services.agent.reasoning.evolution_store import EvolutionStore
+        store = EvolutionStore(tenant_id=tenant_id)
+        store.record_failure_lesson(step_id=step.step_id, error=error, run_id=run_id)
+    except Exception:
+        pass
+
+
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 def _run_step_with_retry(
@@ -350,12 +463,19 @@ def _run_step_with_retry(
     on_event: Optional[Callable] = None,
 ) -> Any:
     """Run a step with exponential backoff retries; dead-letter on exhaustion."""
+    # Validate input contract
+    _validate_stage_contract(step, "input", step_inputs, workflow_id, on_event)
+
     last_exc: Exception | None = None
     max_attempts = 1 + step.max_retries
 
     for attempt in range(1, max_attempts + 1):
         try:
-            return _dispatch_step(step, step_inputs, tenant_id, on_event)
+            result = _dispatch_step(step, step_inputs, tenant_id, on_event)
+            # Validate output contract + quality gate
+            _validate_stage_contract(step, "output", result if isinstance(result, dict) else {}, workflow_id, on_event)
+            _run_quality_gate(step, result, workflow_id, on_event)
+            return result
         except Exception as exc:
             last_exc = exc
             if attempt < max_attempts:
@@ -375,9 +495,10 @@ def _run_step_with_retry(
                 })
                 time.sleep(delay)
 
-    # Exhausted retries — record in dead-letter store
+    # Exhausted retries — record lesson for cross-run learning + dead-letter store
     if last_exc is None:
         last_exc = WorkflowExecutionError(f"Step '{step.step_id}' failed with unknown error")
+    _record_failure_lesson(tenant_id, step, str(last_exc)[:300], run_id)
 
     try:
         from api.services.workflows.dead_letter import record_dead_letter
@@ -428,6 +549,11 @@ def _run_agent_step(
         raise ValueError(f"Agent '{agent_id}' not found in tenant '{tenant_id}'.")
 
     schema = load_schema(record)
+
+    # Inject evolution store lessons as prompt overlay
+    system_prompt = schema.system_prompt or ""
+    system_prompt = _inject_evolution_overlay(tenant_id, agent_id, system_prompt)
+
     task = step_inputs.get("message") or step_inputs.get("task") or (
         f"Execute your task with the following context:\n{_format_inputs(step_inputs)}"
     )
@@ -437,7 +563,7 @@ def _run_agent_step(
     for chunk in run_agent_task(
         task,
         tenant_id=tenant_id,
-        system_prompt=schema.system_prompt or None,
+        system_prompt=system_prompt or None,
         allowed_tool_ids=allowed_tool_ids,
         max_tool_calls=max_tool_calls,
     ):
@@ -446,7 +572,59 @@ def _run_agent_step(
             result_parts.append(str(text))
         if on_event:
             on_event({**chunk, "step_agent_id": agent_id})
-    return "".join(result_parts)
+
+    raw_result = "".join(result_parts)
+
+    # Citation verification for agent output
+    raw_result = _verify_and_clean_citations(raw_result, tenant_id)
+
+    return raw_result
+
+
+def _inject_evolution_overlay(tenant_id: str, agent_id: str, system_prompt: str) -> str:
+    """Inject cross-run lessons into the agent's system prompt."""
+    try:
+        from api.services.agent.reasoning.evolution_store import EvolutionStore
+        store = EvolutionStore(tenant_id=tenant_id)
+        overlay = store.get_prompt_overlay(stage=agent_id, max_lessons=5)
+        if overlay:
+            return f"{system_prompt}\n\n{overlay}" if system_prompt else overlay
+    except Exception:
+        pass
+    return system_prompt
+
+
+def _verify_and_clean_citations(text: str, tenant_id: str) -> str:
+    """Verify citations in agent output and strip hallucinated ones."""
+    if not text or len(text) < 100:
+        return text
+    try:
+        from api.services.agent.reasoning.citation_verify import verify_citations, strip_hallucinated_citations
+        # Get list of uploaded filenames for L1 verification
+        filenames: list[str] = []
+        try:
+            from api.context import get_context
+            ctx = get_context()
+            index = ctx.get_index()
+            Source = index._resources.get("Source")
+            if Source:
+                from sqlmodel import Session, select
+                from ktem.db.engine import engine
+                with Session(engine) as session:
+                    rows = session.exec(select(Source.name)).all()
+                    filenames = [str(r) for r in rows if r]
+        except Exception:
+            pass
+
+        results = verify_citations(text, uploaded_filenames=filenames)
+        if results:
+            hallucinated = [r for r in results if r["status"] == "hallucinated"]
+            if hallucinated:
+                logger.info("Stripping %d hallucinated citations from agent output", len(hallucinated))
+                text = strip_hallucinated_citations(text, results)
+    except Exception:
+        pass
+    return text
 
 
 def _resolve_inputs(

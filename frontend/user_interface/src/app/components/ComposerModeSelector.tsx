@@ -130,6 +130,10 @@ export function ComposerModeSelector({
           onSelectWorkflow?.(workflow);
           setWorkflowMenuOpen(false);
         }}
+        onOpenWorkflow={(workflowId) => {
+          setWorkflowMenuOpen(false);
+          window.location.href = `/workflow-builder?id=${encodeURIComponent(workflowId)}`;
+        }}
         onSelectStandard={() => {
           onChange("ask");
           setWorkflowMenuOpen(false);

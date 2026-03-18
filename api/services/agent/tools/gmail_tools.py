@@ -13,11 +13,6 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
 )
 from api.services.agent.tools.gmail_draft_tool import GmailDraftTool
-from api.services.agent.tools.gmail_live_desktop import (
-    desktop_mode_enabled,
-    desktop_mode_required,
-    stream_live_desktop_compose,
-)
 from api.services.agent.tools.gmail_tools_helpers import (
     _attach_to_gmail_draft,
     _chunk_text,
@@ -87,66 +82,8 @@ class GmailSendTool(AgentTool):
             params=params,
         )
         dry_run = _truthy(params.get("dry_run")) or _infer_dry_run(prompt)
-        live_desktop = desktop_mode_enabled(context, params)
-        desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
-        if attachments and live_desktop and not dry_run:
-            if desktop_required:
-                raise ToolExecutionError(
-                    "Live desktop send does not support attachments yet. Set `live_desktop=false`."
-                )
-            attachment_fallback = ToolTraceEvent(
-                event_type="tool_progress",
-                title="Attachments require Gmail API send flow",
-                detail="Switching from live desktop to Gmail API to attach files",
-                data={"attachments": len(attachments)},
-            )
-            trace_events.append(attachment_fallback)
-            yield attachment_fallback
-            live_desktop = False
-        if live_desktop and not dry_run:
-            try:
-                desktop_result = yield from stream_live_desktop_compose(
-                    context=context,
-                    trace_events=trace_events,
-                    to=to,
-                    subject=subject,
-                    body=body,
-                    send=True,
-                )
-                compose_url = str(desktop_result.get("url") or "")
-                return ToolExecutionResult(
-                    summary=f"Gmail message sent to {to} via live desktop session.",
-                    content=(
-                        "Gmail desktop sent the message through live browser execution.\n"
-                        f"- To: {to}\n"
-                        f"- Subject: {subject}\n"
-                        f"- Compose URL: {compose_url or 'unknown'}"
-                    ),
-                    data={
-                        "to": to,
-                        "subject": subject,
-                        "id": str(desktop_result.get("message_id") or ""),
-                        "thread_id": str(desktop_result.get("thread_id") or ""),
-                        "compose_url": compose_url,
-                        "delivery_mode": "playwright_desktop",
-                    },
-                    sources=[],
-                    next_steps=["Track replies and update lead status."],
-                    events=trace_events,
-                )
-            except Exception as exc:
-                if desktop_required:
-                    raise ToolExecutionError(f"Live Gmail desktop send failed: {exc}") from exc
-                fallback = ToolTraceEvent(
-                    event_type="tool_progress",
-                    title="Live desktop send unavailable",
-                    detail="Falling back to Gmail API send flow",
-                    data={"reason": str(exc)},
-                )
-                trace_events.append(fallback)
-                yield fallback
 
         open_compose_event = ToolTraceEvent(
             event_type="email_open_compose",

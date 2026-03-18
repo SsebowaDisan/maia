@@ -8,7 +8,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [cro, landing-page, conversion, marketing, ux, audit]
-required_connectors: [playwright_browser]
+required_connectors: [computer_use_browser]
 is_public: true
 pricing_model: free
 

@@ -133,6 +133,17 @@ class LiveRunStream:
         normalized_event = str(event_type or "").strip().lower()
         normalized_tool = str(tool_id or "").strip().lower()
 
+        # Priority 1: Use scene_family from event metadata (no heuristics needed)
+        scene_family = str(payload.get("scene_family") or payload.get("plugin_scene_family") or "").strip().lower()
+        if scene_family:
+            _SCENE_FAMILY_MAP = {
+                "email": "email", "sheet": "sheet", "document": "document",
+                "api": "api", "browser": "browser", "chat": "api",
+                "crm": "api", "support": "api", "commerce": "api",
+            }
+            if scene_family in _SCENE_FAMILY_MAP:
+                return _SCENE_FAMILY_MAP[scene_family]
+
         def _surface_from_url(candidate: Any) -> str:
             url = str(candidate or "").strip().lower()
             if not url:

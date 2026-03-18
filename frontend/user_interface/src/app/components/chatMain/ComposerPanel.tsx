@@ -140,10 +140,16 @@ function ComposerPanel({
   });
 
   const trimmedMessage = message.trimStart();
-  const agentPickerVisible = trimmedMessage.startsWith("@");
+  // "@" now triggers the document/file command palette, not the agent picker.
+  // Agent picker is accessed via the mode selector button instead.
+  const agentPickerVisible = false;
 
   useEffect(() => {
     if (!previewAttachment) {
+      return;
+    }
+    // Don't auto-close previews for files opened from the document menu (kind === "file")
+    if (previewAttachment.kind === "file") {
       return;
     }
     if (!attachments.some((item) => item.id === previewAttachment.id)) {
@@ -211,6 +217,26 @@ function ComposerPanel({
             </span>
           </div>
         ) : null}
+        {/* Document/file mention popup — renders above the composer */}
+        {commandQuery && commandOptions.length > 0 ? (
+          <div className="relative mb-2">
+            <ComposerCommandMenu
+              query={commandQuery}
+              options={commandOptions}
+              activeIndex={commandActiveIndex}
+              onSelect={selectCommandOption}
+              onPreview={(option) => {
+                setPreviewAttachment({
+                  id: option.id,
+                  name: option.label,
+                  status: "uploaded",
+                  fileId: option.id,
+                  kind: "file",
+                });
+              }}
+            />
+          </div>
+        ) : null}
         <div className="assistantComposer rounded-[24px] border border-black/[0.07] bg-gradient-to-b from-[#f7f7f9] to-[#efeff2] shadow-[0_10px_28px_-24px_rgba(0,0,0,0.4)]">
           <div className="assistantComposerInputShell relative rounded-[16px] border border-black/[0.07] bg-white/96">
             <div className="flex min-w-0 flex-1">
@@ -228,29 +254,6 @@ function ComposerPanel({
                 onClick={syncCommandQueryFromTextarea}
               />
             </div>
-            {agentPickerVisible ? (
-              <ComposerAgentPicker
-                query={trimmedMessage}
-                onPick={(agent) => {
-                  const suffix = trimmedMessage.replace(/^@\S*\s*/, "").trim();
-                  setMessage(suffix ? `${suffix} ` : "");
-                  onAgentSelect?.({
-                    agent_id: agent.agent_id,
-                    name: agent.name,
-                    description: String(agent.description || ""),
-                    trigger_family: String(agent.trigger_family || ""),
-                  });
-                }}
-              />
-            ) : null}
-            {commandQuery && commandOptions.length > 0 && !agentPickerVisible ? (
-              <ComposerCommandMenu
-                query={commandQuery}
-                options={commandOptions}
-                activeIndex={commandActiveIndex}
-                onSelect={selectCommandOption}
-              />
-            ) : null}
           </div>
 
           <div className="assistantComposerToolbar">

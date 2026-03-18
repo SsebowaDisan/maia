@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 
 StepType = Literal[
     "agent", "http_request", "condition", "code", "transform",
-    "delay", "foreach", "merge", "switch",
+    "delay", "foreach", "merge", "switch", "knowledge_search",
+    "multi_perspective",
 ]
 
 
@@ -48,6 +49,7 @@ class WorkflowStep(BaseModel):
             "condition": ["expression"],
             "code": ["code"],
             "switch": ["value_key"],
+            "knowledge_search": ["query_key"],
         }
         missing = [f for f in required.get(step_type, []) if f not in config]
         if missing:

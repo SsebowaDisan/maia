@@ -34,12 +34,12 @@ from api.services.agent.llm_runtime import call_json_response, env_bool
 
 router = APIRouter(prefix="/api/web", tags=["web"])
 
-_PREVIEW_CACHE_TTL_SECONDS = 120.0
+_PREVIEW_CACHE_TTL_SECONDS = 600.0
 _PREVIEW_MAX_BYTES = 2_500_000
-_PREVIEW_TIMEOUT_SECONDS = 14
+_PREVIEW_TIMEOUT_SECONDS = 8
 _PREVIEW_CACHE_LOCK = threading.Lock()
 _PREVIEW_HTML_CACHE: dict[str, tuple[float, str, str]] = {}
-_SCOPE_CACHE_TTL_SECONDS = 300.0
+_SCOPE_CACHE_TTL_SECONDS = 600.0
 _SCOPE_CACHE_LOCK = threading.Lock()
 _HIGHLIGHT_SCOPE_CACHE: dict[str, tuple[float, str]] = {}
 _ALLOWED_HIGHLIGHT_SCOPES = {"tight", "sentence", "context", "block"}

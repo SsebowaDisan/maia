@@ -21,6 +21,7 @@ type AgentCommandMenuProps = {
   onClose: () => void;
   onSelect: (agent: AgentCommandSelection) => void;
   onSelectWorkflow?: (workflow: WorkflowCommandSelection) => void;
+  onOpenWorkflow?: (workflowId: string) => void;
   onSelectStandard?: () => void;
 };
 
@@ -45,7 +46,7 @@ function AgentMenuSkeleton() {
   );
 }
 
-function AgentCommandMenu({ open, onClose, onSelectWorkflow, onSelectStandard }: AgentCommandMenuProps) {
+function AgentCommandMenu({ open, onClose, onSelectWorkflow, onOpenWorkflow, onSelectStandard }: AgentCommandMenuProps) {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -146,6 +147,9 @@ function AgentCommandMenu({ open, onClose, onSelectWorkflow, onSelectStandard }:
   }
 
   return (
+    <>
+    {/* Invisible backdrop — click outside to close */}
+    <div className="fixed inset-0 z-[139]" onClick={onClose} />
     <div className="absolute bottom-full left-0 z-[140] mb-2 w-[360px] overflow-hidden rounded-2xl border border-black/[0.1] bg-white shadow-[0_18px_42px_-26px_rgba(0,0,0,0.6)]">
       <div className="border-b border-black/[0.06] px-3 py-2.5">
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
@@ -228,6 +232,7 @@ function AgentCommandMenu({ open, onClose, onSelectWorkflow, onSelectStandard }:
                       event.preventDefault();
                       onSelectWorkflow?.(workflow);
                     }}
+                    onDoubleClick={() => onOpenWorkflow?.(workflow.workflow_id)}
                     onMouseEnter={() => setActiveIndex(index)}
                     className={`w-full rounded-xl border px-2.5 py-2 text-left transition-colors ${
                       isActive
@@ -261,7 +266,13 @@ function AgentCommandMenu({ open, onClose, onSelectWorkflow, onSelectStandard }:
       ) : null}
 
       <div className="flex items-center justify-between border-t border-black/[0.06] bg-[#fcfcfd] px-3 py-2">
-        <p className="text-[11px] text-[#667085]">Select a workflow to run.</p>
+        <a
+          href="/workflow-builder"
+          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7c3aed] hover:text-[#6d28d9]"
+        >
+          <GitBranch className="h-3 w-3" />
+          Create new workflow
+        </a>
         <button
           type="button"
           onClick={onClose}
@@ -272,6 +283,7 @@ function AgentCommandMenu({ open, onClose, onSelectWorkflow, onSelectStandard }:
         </button>
       </div>
     </div>
+    </>
   );
 }
 

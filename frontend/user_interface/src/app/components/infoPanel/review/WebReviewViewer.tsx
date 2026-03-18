@@ -72,7 +72,7 @@ function WebReviewViewer({
   const paragraphRefs = useRef<Array<HTMLParagraphElement | null>>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const [viewMode, setViewMode] = useState<"page" | "text">(hasExtractedText ? "text" : "page");
+  const [viewMode, setViewMode] = useState<"page" | "text">("page");
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
   useEffect(() => {
@@ -87,50 +87,79 @@ function WebReviewViewer({
     node.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeParagraphIndex, paragraphs, viewMode]);
 
-  // Scroll the iframe to the injected citation highlight.
-  // Since the proxy serves same-origin HTML we can reach into the iframe's document directly.
-  // Try a CSS selector first (most precise), then the backend-injected <mark> element.
+  // Scroll the iframe to the highlighted citation text.
+  // Uses multiple strategies with retries to ensure the highlight is found.
   const scrollToHighlight = useCallback(() => {
     const iframeDoc =
       iframeRef.current?.contentDocument ??
       iframeRef.current?.contentWindow?.document;
-    if (!iframeDoc) return;
+    if (!iframeDoc) return false;
 
     let target: HTMLElement | null = null;
 
-    // 1. Prefer an exact CSS selector for the source element (provided by the agent)
+    // Strategy 1: Exact CSS selector (provided by the agent)
     if (focusSelector) {
       try {
         target = iframeDoc.querySelector(focusSelector) as HTMLElement | null;
-      } catch {
-        // Invalid selector — ignore
-      }
+      } catch { /* invalid selector */ }
     }
 
-    // 2. Fall back to the highlight <mark> the backend injected
+    // Strategy 2: Backend-injected <mark> highlight
     if (!target) {
       target = iframeDoc.querySelector("mark.maia-citation-highlight") as HTMLElement | null;
     }
 
+    // Strategy 3: Any <mark> element on the page
+    if (!target) {
+      target = iframeDoc.querySelector("mark") as HTMLElement | null;
+    }
+
+    // Strategy 4: Text content search — find a paragraph containing the focus text
+    if (!target && focusText && focusText.length >= 10) {
+      const searchTerms = focusText.toLowerCase().split(/\s+/).filter((w) => w.length >= 4).slice(0, 5);
+      if (searchTerms.length >= 2) {
+        const paragraphs = iframeDoc.querySelectorAll("p, li, td, h1, h2, h3, h4, blockquote, span");
+        for (const el of paragraphs) {
+          const text = (el as HTMLElement).innerText?.toLowerCase() || "";
+          const matches = searchTerms.filter((term) => text.includes(term)).length;
+          if (matches >= Math.min(3, searchTerms.length)) {
+            target = el as HTMLElement;
+            // Add a visual highlight to the found element
+            target.style.outline = "3px solid #fbbf24";
+            target.style.outlineOffset = "2px";
+            target.style.borderRadius = "4px";
+            break;
+          }
+        }
+      }
+    }
+
     if (target) {
       target.scrollIntoView({ block: "center", behavior: "smooth" });
+      return true;
     }
-  }, [focusSelector]);
+    return false;
+  }, [focusSelector, focusText]);
 
-  // After the iframe fully loads, trigger two scroll attempts:
-  //  • 300 ms — after initial CSS/font rendering settles (covers most pages)
-  //  • 1 200 ms — catches pages that shift layout due to lazy images / web fonts
+  // After iframe loads, retry scrolling with increasing delays until highlight is found
   const handleIframeLoad = useCallback(() => {
     setIframeLoaded(true);
-    const t1 = setTimeout(scrollToHighlight, 300);
-    const t2 = setTimeout(scrollToHighlight, 1200);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    let attempts = 0;
+    const maxAttempts = 8;
+    const tryScroll = () => {
+      attempts += 1;
+      const found = scrollToHighlight();
+      if (!found && attempts < maxAttempts) {
+        setTimeout(tryScroll, attempts < 3 ? 200 : 500);
+      }
+    };
+    setTimeout(tryScroll, 150);
   }, [scrollToHighlight]);
 
-  // Also re-scroll whenever focusText / focusSelector change while the page is already loaded
+  // Re-scroll when focus changes while page is already loaded
   useEffect(() => {
     if (!iframeLoaded) return;
-    const t = setTimeout(scrollToHighlight, 150);
+    const t = setTimeout(scrollToHighlight, 100);
     return () => clearTimeout(t);
   }, [focusText, focusSelector, iframeLoaded, scrollToHighlight]);
 

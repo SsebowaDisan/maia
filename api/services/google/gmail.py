@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import html
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
 import mimetypes
 from pathlib import Path
+import re
 from typing import Any
 
 from api.services.google.auth import GoogleAuthSession
@@ -29,6 +31,153 @@ def _decode_urlsafe_base64(raw_value: str) -> bytes:
 
 def _encode_urlsafe_base64(raw_bytes: bytes) -> str:
     return base64.urlsafe_b64encode(raw_bytes).decode("utf-8")
+
+
+_HTML_TAG_PATTERN = re.compile(r"<[a-zA-Z][^>]*>")
+_URL_PATTERN = re.compile(r"(https?://[^\s<]+)")
+_MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$")
+_LIST_BULLET_PATTERN = re.compile(r"^[-*]\s+(.+)$")
+_LIST_ORDERED_PATTERN = re.compile(r"^\d+\.\s+(.+)$")
+
+
+def _looks_like_html(value: str) -> bool:
+    return bool(_HTML_TAG_PATTERN.search(value or ""))
+
+
+def _html_to_text(value: str) -> str:
+    normalized = str(value or "")
+    normalized = re.sub(r"(?i)<br\s*/?>", "\n", normalized)
+    normalized = re.sub(r"(?i)</p\s*>", "\n\n", normalized)
+    normalized = re.sub(r"(?i)</div\s*>", "\n", normalized)
+    stripped = re.sub(r"<[^>]+>", "", normalized)
+    return html.unescape(stripped).strip()
+
+
+def _text_to_html(value: str) -> str:
+    normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        normalized = "No message content provided."
+
+    def _linkify(text: str) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            raw_url = match.group(1)
+            trimmed = raw_url
+            trailing = ""
+            while trimmed and trimmed[-1] in ".,);:!?":
+                trailing = trimmed[-1] + trailing
+                trimmed = trimmed[:-1]
+            href = html.escape(trimmed, quote=True)
+            label = html.escape(trimmed)
+            return (
+                f"<a href=\"{href}\" target=\"_blank\" rel=\"noopener noreferrer\">{label}</a>"
+                f"{html.escape(trailing)}"
+            )
+
+        return _URL_PATTERN.sub(_replace, text)
+
+    def _format_inline(text: str) -> str:
+        escaped = html.escape(text.strip())
+        escaped = re.sub(
+            r"`([^`]+)`",
+            lambda m: (
+                "<code style=\"padding:1px 5px;border-radius:6px;background:#f2f4f7;"
+                "font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;\">"
+                f"{m.group(1)}</code>"
+            ),
+            escaped,
+        )
+        escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"__(.+?)__", r"<strong>\1</strong>", escaped)
+        return _linkify(escaped)
+
+    rows = normalized.split("\n")
+    parts: list[str] = []
+    paragraph_lines: list[str] = []
+    in_unordered = False
+    in_ordered = False
+
+    def _flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        if not paragraph_lines:
+            return
+        paragraph = " ".join(item.strip() for item in paragraph_lines if item.strip()).strip()
+        paragraph_lines = []
+        if paragraph:
+            parts.append(f"<p style=\"margin:0 0 12px 0;\">{paragraph}</p>")
+
+    def _close_lists() -> None:
+        nonlocal in_unordered, in_ordered
+        if in_unordered:
+            parts.append("</ul>")
+            in_unordered = False
+        if in_ordered:
+            parts.append("</ol>")
+            in_ordered = False
+
+    for raw_line in rows:
+        stripped = raw_line.strip()
+        if not stripped:
+            _flush_paragraph()
+            _close_lists()
+            continue
+
+        heading_match = _MARKDOWN_HEADING_PATTERN.match(stripped)
+        if heading_match:
+            _flush_paragraph()
+            _close_lists()
+            level = min(4, max(1, len(heading_match.group(1))))
+            heading_text = _format_inline(heading_match.group(2))
+            parts.append(
+                f"<h{level} style=\"margin:16px 0 10px 0;font-size:{30 - (level * 3)}px;"
+                "line-height:1.25;font-weight:700;\">"
+                f"{heading_text}</h{level}>"
+            )
+            continue
+
+        bullet_match = _LIST_BULLET_PATTERN.match(stripped)
+        if bullet_match:
+            _flush_paragraph()
+            if in_ordered:
+                parts.append("</ol>")
+                in_ordered = False
+            if not in_unordered:
+                parts.append("<ul style=\"margin:0 0 12px 0;padding-left:20px;\">")
+                in_unordered = True
+            parts.append(f"<li style=\"margin:0 0 6px 0;\">{_format_inline(bullet_match.group(1))}</li>")
+            continue
+
+        ordered_match = _LIST_ORDERED_PATTERN.match(stripped)
+        if ordered_match:
+            _flush_paragraph()
+            if in_unordered:
+                parts.append("</ul>")
+                in_unordered = False
+            if not in_ordered:
+                parts.append("<ol style=\"margin:0 0 12px 0;padding-left:22px;\">")
+                in_ordered = True
+            parts.append(f"<li style=\"margin:0 0 6px 0;\">{_format_inline(ordered_match.group(1))}</li>")
+            continue
+
+        if stripped.endswith(":") and len(stripped) <= 80:
+            _flush_paragraph()
+            _close_lists()
+            parts.append(
+                "<h3 style=\"margin:14px 0 8px 0;font-size:18px;line-height:1.3;font-weight:650;\">"
+                f"{_format_inline(stripped[:-1])}</h3>"
+            )
+            continue
+
+        paragraph_lines.append(_format_inline(stripped))
+
+    _flush_paragraph()
+    _close_lists()
+    rich_content = "".join(parts) if parts else "<p style=\"margin:0;\">No message content provided.</p>"
+    return (
+        "<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.55;"
+        "color:#111827;white-space:normal;\">"
+        f"{rich_content}"
+        "</div>"
+    )
 
 
 class GmailService:
@@ -61,7 +210,14 @@ class GmailService:
             msg["Cc"] = ", ".join(cc_list)
         if bcc_list:
             msg["Bcc"] = ", ".join(bcc_list)
-        msg.set_content(body_html or "", subtype="html")
+        normalized_body = str(body_html or "").strip()
+        if _looks_like_html(normalized_body):
+            text_body = _html_to_text(normalized_body)
+            msg.set_content(text_body or "")
+            msg.add_alternative(normalized_body, subtype="html")
+        else:
+            msg.set_content(normalized_body)
+            msg.add_alternative(_text_to_html(normalized_body), subtype="html")
         return msg
 
     def create_draft(

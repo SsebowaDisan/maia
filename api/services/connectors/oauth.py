@@ -129,6 +129,10 @@ def exchange_code(
     refresh_token = str(token_response.get("refresh_token") or "").strip()
     expires_in = int(token_response.get("expires_in") or 3600)
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+    scope_text = str(token_response.get("scope") or "").strip()
+    granted_scopes = [s for s in scope_text.split() if s]
+    if not granted_scopes:
+        granted_scopes = list(auth_config.scopes or [])
 
     vault.store_oauth_tokens(
         tenant_id=tenant_id,
@@ -136,7 +140,10 @@ def exchange_code(
         access_token=access_token,
         refresh_token=refresh_token,
         token_expires_at=expires_at,
-        extra={"scopes": token_response.get("scope", "")},
+        extra={
+            "scope": scope_text,
+            "granted_scopes": granted_scopes,
+        },
     )
 
     return {
@@ -144,7 +151,7 @@ def exchange_code(
         "tenant_id": tenant_id,
         "token_type": token_response.get("token_type", "Bearer"),
         "expires_at": expires_at.isoformat(),
-        "scopes": token_response.get("scope", ""),
+        "scopes": " ".join(granted_scopes),
     }
 
 
@@ -178,6 +185,12 @@ def refresh_token(tenant_id: str, connector_id: str) -> dict[str, Any]:
     new_refresh = str(token_response.get("refresh_token") or stored_refresh).strip()
     expires_in = int(token_response.get("expires_in") or 3600)
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+    refreshed_scope_text = str(token_response.get("scope") or "").strip()
+    granted_scopes = [s for s in refreshed_scope_text.split() if s]
+    if not granted_scopes:
+        granted_scopes = vault.get_granted_scopes(tenant_id, connector_id)
+    if not granted_scopes and isinstance(definition.auth, OAuth2AuthConfig):
+        granted_scopes = list(definition.auth.scopes or [])
 
     vault.store_oauth_tokens(
         tenant_id=tenant_id,
@@ -185,12 +198,17 @@ def refresh_token(tenant_id: str, connector_id: str) -> dict[str, Any]:
         access_token=access_token,
         refresh_token=new_refresh,
         token_expires_at=expires_at,
+        extra={
+            "scope": refreshed_scope_text,
+            "granted_scopes": granted_scopes,
+        },
     )
 
     return {
         "connector_id": connector_id,
         "tenant_id": tenant_id,
         "expires_at": expires_at.isoformat(),
+        "scopes": " ".join(granted_scopes),
     }
 
 

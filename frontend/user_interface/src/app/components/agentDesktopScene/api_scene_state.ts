@@ -14,6 +14,8 @@ type ApiSceneState = {
   isApiScene: boolean;
   connectorId: string;
   connectorLabel: string;
+  brandSlug: string;
+  sceneFamily: string;
   objectType: string;
   objectId: string;
   operationLabel: string;
@@ -103,6 +105,8 @@ function parseApiSceneState(args: {
 
   const connectorId = compact(sceneData["connector_id"] || sceneData["provider"] || sceneData["integration_id"]);
   const connectorLabel = compact(sceneData["connector_label"] || sceneData["provider_label"] || connectorId);
+  const brandSlug = compact(sceneData["brand_slug"] || sceneData["plugin_brand_slug"] || connectorId);
+  const sceneFamily = compact(sceneData["scene_family"] || sceneData["plugin_scene_family"]) || "api";
   const objectType = compact(sceneData["object_type"] || sceneData["resource_type"] || sceneData["entity_type"]);
   const objectId = compact(sceneData["object_id"] || sceneData["record_id"] || sceneData["resource_id"]);
   const operationLabel =
@@ -118,6 +122,8 @@ function parseApiSceneState(args: {
     isApiScene,
     connectorId,
     connectorLabel,
+    brandSlug,
+    sceneFamily,
     objectType,
     objectId,
     operationLabel,

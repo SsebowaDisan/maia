@@ -219,7 +219,7 @@ class BrowserContactFormSendTool(AgentTool):
         subject = _safe_text(polished.get("subject"), fallback=raw_subject, max_len=180)
         message = _safe_text(polished.get("message_text"), fallback=raw_message, max_len=900)
 
-        connector = get_connector_registry().build("playwright_contact_form", settings=context.settings)
+        connector = get_connector_registry().build("computer_use_browser", settings=context.settings)
         trace_events: list[ToolTraceEvent] = []
         stream = connector.submit_contact_form_live_stream(
             url=url,

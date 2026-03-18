@@ -37,4 +37,6 @@ def _load_all() -> None:
         transform,
         code_sandbox,
         merge,
+        knowledge_search,
+        multi_perspective,
     )

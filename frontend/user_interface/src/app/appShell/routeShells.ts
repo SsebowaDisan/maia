@@ -84,6 +84,13 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
       path: "/connectors",
     };
   }
+  if (normalized === "/settings") {
+    return {
+      kind: "page",
+      key: "connectors",
+      path: "/connectors",
+    };
+  }
   if (normalized === "/developer") {
     return {
       kind: "page",

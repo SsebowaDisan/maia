@@ -182,7 +182,7 @@ def store_oauth_tokens(
                 encrypted_refresh_token=enc_refresh,
                 token_expires_at=token_expires_at,
                 auth_strategy="oauth2",
-                metadata=extra or {},
+                extra_metadata=extra or {},
                 date_created=now,
                 date_updated=now,
             )
@@ -257,3 +257,18 @@ def get_binding(tenant_id: str, connector_id: str) -> ConnectorBinding | None:
             .where(ConnectorBinding.tenant_id == tenant_id)
             .where(ConnectorBinding.connector_id == connector_id)
         ).first()
+
+
+def get_granted_scopes(tenant_id: str, connector_id: str) -> list[str]:
+    """Return the list of OAuth scopes granted for this binding.
+
+    Scopes are stored in extra_metadata["granted_scopes"] at OAuth callback time.
+    Returns an empty list if no binding or no scope data.
+    """
+    binding = get_binding(tenant_id, connector_id)
+    if not binding or not binding.extra_metadata:
+        return []
+    scopes = binding.extra_metadata.get("granted_scopes")
+    if isinstance(scopes, list):
+        return [str(s) for s in scopes if s]
+    return []

@@ -29,7 +29,10 @@ type WorkflowGalleryProps = {
 
 function timeAgo(ts?: number): string {
   if (!ts) return "";
-  const seconds = Math.floor((Date.now() / 1000) - ts);
+  // Normalize: if ts looks like seconds (before year 2100), convert to ms
+  const ms = ts < 1e12 ? ts * 1000 : ts;
+  const diff = Math.max(0, Date.now() - ms);
+  const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return "just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -44,15 +47,19 @@ function stepCount(record: WorkflowRecord): number {
   return Array.isArray(record.definition?.steps) ? record.definition.steps.length : 0;
 }
 
-// Color palette for template cards — cycles through
-const TEMPLATE_COLORS = [
-  { bg: "from-[#f5f3ff] to-[#ede9fe]", icon: "text-[#7c3aed]", hover: "hover:border-[#7c3aed]/25" },
-  { bg: "from-[#ecfdf5] to-[#d1fae5]", icon: "text-[#059669]", hover: "hover:border-[#059669]/25" },
-  { bg: "from-[#fff7ed] to-[#ffedd5]", icon: "text-[#ea580c]", hover: "hover:border-[#ea580c]/25" },
-  { bg: "from-[#f5f3ff] to-[#ede9fe]", icon: "text-[#7c3aed]", hover: "hover:border-[#7c3aed]/25" },
-  { bg: "from-[#fdf2f8] to-[#fce7f3]", icon: "text-[#db2777]", hover: "hover:border-[#db2777]/25" },
-  { bg: "from-[#f0fdfa] to-[#ccfbf1]", icon: "text-[#0d9488]", hover: "hover:border-[#0d9488]/25" },
+// Color palette — cycles through for cards
+const CARD_COLORS = [
+  { accent: "#7c3aed", bg: "from-[#f5f3ff] to-[#ede9fe]", text: "text-[#7c3aed]", mono: "from-[#ede9fe] to-[#ddd6fe]", hover: "hover:border-[#7c3aed]/25" },
+  { accent: "#059669", bg: "from-[#ecfdf5] to-[#d1fae5]", text: "text-[#059669]", mono: "from-[#d1fae5] to-[#a7f3d0]", hover: "hover:border-[#059669]/25" },
+  { accent: "#ea580c", bg: "from-[#fff7ed] to-[#ffedd5]", text: "text-[#ea580c]", mono: "from-[#ffedd5] to-[#fed7aa]", hover: "hover:border-[#ea580c]/25" },
+  { accent: "#2563eb", bg: "from-[#eff6ff] to-[#dbeafe]", text: "text-[#2563eb]", mono: "from-[#dbeafe] to-[#bfdbfe]", hover: "hover:border-[#2563eb]/25" },
+  { accent: "#db2777", bg: "from-[#fdf2f8] to-[#fce7f3]", text: "text-[#db2777]", mono: "from-[#fce7f3] to-[#fbcfe8]", hover: "hover:border-[#db2777]/25" },
+  { accent: "#0d9488", bg: "from-[#f0fdfa] to-[#ccfbf1]", text: "text-[#0d9488]", mono: "from-[#ccfbf1] to-[#99f6e4]", hover: "hover:border-[#0d9488]/25" },
 ];
+
+function cardColor(index: number) {
+  return CARD_COLORS[index % CARD_COLORS.length];
+}
 
 export function WorkflowGallery({
   onSelectWorkflow,
@@ -169,7 +176,7 @@ export function WorkflowGallery({
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 {templates.slice(0, 6).map((template, i) => {
-                  const color = TEMPLATE_COLORS[i % TEMPLATE_COLORS.length];
+                  const color = cardColor(i);
                   const steps = template.step_count || (Array.isArray(template.definition?.steps) ? template.definition.steps.length : 0);
                   const tags = Array.isArray(template.tags) ? template.tags.slice(0, 2) : [];
 
@@ -205,7 +212,7 @@ export function WorkflowGallery({
                           {tags.map((tag) => (
                             <span
                               key={tag}
-                              className={`rounded-full bg-gradient-to-r ${color.bg} px-1.5 py-px text-[9px] font-medium ${color.icon}`}
+                              className={`rounded-full bg-gradient-to-r ${color.bg} px-1.5 py-px text-[9px] font-medium ${color.text}`}
                             >
                               {tag}
                             </span>
@@ -280,23 +287,33 @@ export function WorkflowGallery({
             <button
               type="button"
               onClick={onNewWorkflow}
-              className="group flex h-[160px] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-black/[0.08] bg-white/40 transition hover:border-[#0071e3]/30 hover:bg-white/70"
+              className="group flex min-h-[180px] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-black/[0.08] bg-white/40 transition hover:border-[#7c3aed]/30 hover:bg-[#f5f3ff]/50"
             >
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#0071e3]/10 text-[#0071e3] transition group-hover:bg-[#0071e3]/15">
-                <Plus size={20} strokeWidth={2.5} />
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#7c3aed]/10 text-[#7c3aed] transition group-hover:bg-[#7c3aed]/15">
+                <Plus size={22} strokeWidth={2.5} />
               </div>
-              <span className="text-[13px] font-medium text-[#86868b] transition group-hover:text-[#1d1d1f]">
-                New Workflow
-              </span>
+              <div className="text-center">
+                <p className="text-[13px] font-semibold text-[#86868b] transition group-hover:text-[#1d1d1f]">
+                  New Workflow
+                </p>
+                <p className="mt-0.5 text-[11px] text-[#aeaeb2]">Start from scratch</p>
+              </div>
             </button>
 
             {/* Workflow cards */}
-            {sorted.map((record) => {
+            {sorted.map((record, idx) => {
               const name = String(record.name || record.definition?.name || "Untitled").trim();
               const desc = String(record.description || record.definition?.description || "").trim();
               const steps = stepCount(record);
               const monogram = name.charAt(0).toUpperCase() || "W";
               const isDeleting = deletingId === record.id;
+              const color = cardColor(idx);
+              const stepNames = Array.isArray(record.definition?.steps)
+                ? record.definition.steps
+                    .slice(0, 4)
+                    .map((s: { description?: string; step_id?: string }) => String(s.description || s.step_id || "").trim())
+                    .filter(Boolean)
+                : [];
 
               return (
                 <button
@@ -304,49 +321,59 @@ export function WorkflowGallery({
                   type="button"
                   onClick={() => void handleSelect(record)}
                   disabled={isDeleting}
-                  className="group relative flex h-[160px] flex-col justify-between overflow-hidden rounded-2xl border border-black/[0.06] bg-white p-4 text-left shadow-sm transition hover:border-black/[0.1] hover:shadow-md disabled:opacity-50"
+                  className={`group relative flex flex-col overflow-hidden rounded-2xl border border-black/[0.06] bg-white text-left shadow-sm transition hover:shadow-md disabled:opacity-50 ${color.hover}`}
                 >
-                  {/* Delete button */}
-                  <button
-                    type="button"
-                    onClick={(e) => void handleDelete(e, record.id)}
-                    className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-lg bg-black/[0.04] text-[#aeaeb2] opacity-0 transition hover:bg-[#ff3b30]/10 hover:text-[#ff3b30] group-hover:opacity-100"
-                  >
-                    {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                  </button>
-
-                  {/* Top: monogram + name */}
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f0f4ff] to-[#e0e7ff] text-[16px] font-bold text-[#3b5bdb]">
+                  {/* Color accent header */}
+                  <div className={`flex items-center gap-3 bg-gradient-to-r ${color.bg} px-4 pb-3 pt-4`}>
+                    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${color.mono} text-[17px] font-bold ${color.text} shadow-sm`}>
                       {monogram}
                     </div>
-                    <div className="min-w-0 pt-0.5">
-                      <p className="truncate text-[14px] font-semibold text-[#1d1d1f]">
-                        {name}
-                      </p>
-                      {desc ? (
-                        <p className="mt-0.5 line-clamp-2 text-[11px] leading-[1.4] text-[#86868b]">
-                          {desc}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-semibold text-[#1d1d1f]">{name}</p>
+                      {steps > 0 ? (
+                        <p className={`mt-0.5 text-[11px] font-medium ${color.text}`}>
+                          {steps} step{steps !== 1 ? "s" : ""}
                         </p>
                       ) : null}
                     </div>
                   </div>
 
-                  {/* Bottom: metadata */}
-                  <div className="flex items-center gap-3 text-[11px] text-[#aeaeb2]">
-                    {steps > 0 ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Route size={10} />
-                        {steps} step{steps !== 1 ? "s" : ""}
-                      </span>
-                    ) : null}
-                    {record.updated_at || record.created_at ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Clock size={10} />
-                        {timeAgo(record.updated_at || record.created_at)}
-                      </span>
-                    ) : null}
+                  {/* Body */}
+                  <div className="flex flex-1 flex-col justify-between px-4 pb-3.5 pt-3">
+                    {desc ? (
+                      <p className="line-clamp-2 text-[12px] leading-[1.5] text-[#667085]">{desc}</p>
+                    ) : stepNames.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {stepNames.map((s, i) => (
+                          <span key={i} className="rounded-full border border-black/[0.06] bg-[#f8fafc] px-2 py-0.5 text-[10px] text-[#667085]">
+                            {s.length > 24 ? `${s.slice(0, 24)}…` : s}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[12px] text-[#aeaeb2]">No description</p>
+                    )}
+
+                    {/* Footer */}
+                    <div className="mt-3 flex items-center justify-between">
+                      {record.updated_at || record.created_at ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[#aeaeb2]">
+                          <Clock size={10} />
+                          {timeAgo(record.updated_at || record.created_at)}
+                        </span>
+                      ) : <span />}
+                      <ArrowRight size={13} className="text-[#aeaeb2] opacity-0 transition group-hover:opacity-100" />
+                    </div>
                   </div>
+
+                  {/* Delete button */}
+                  <button
+                    type="button"
+                    onClick={(e) => void handleDelete(e, record.id)}
+                    className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-lg bg-white/80 text-[#aeaeb2] opacity-0 shadow-sm backdrop-blur transition hover:bg-[#ff3b30]/10 hover:text-[#ff3b30] group-hover:opacity-100"
+                  >
+                    {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                  </button>
                 </button>
               );
             })}

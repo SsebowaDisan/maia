@@ -33,6 +33,23 @@ function startGoogleOAuth(options?: {
   }>(`/api/agent/oauth/google/start${suffix}`);
 }
 
+function startConnectorOAuth(options: {
+  connectorId: string;
+  redirectUri: string;
+}) {
+  const query = new URLSearchParams();
+  query.set("redirect_uri", options.redirectUri);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<{
+    auth_url: string;
+    state: string;
+    connector_id: string;
+    scopes: string[];
+  }>(
+    `/api/connectors/${encodeURIComponent(options.connectorId)}/oauth/start${suffix}`,
+  );
+}
+
 function exchangeGoogleOAuthCode(payload: {
   code: string;
   redirectUri?: string;
@@ -128,5 +145,6 @@ export {
   getGoogleOAuthStatus,
   requestGoogleOAuthSetup,
   saveGoogleOAuthConfig,
+  startConnectorOAuth,
   startGoogleOAuth,
 };

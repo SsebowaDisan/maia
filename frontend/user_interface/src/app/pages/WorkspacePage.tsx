@@ -17,6 +17,7 @@ import { AgentRunHistory, type AgentRunHistoryRecord } from "../components/agent
 import { MemoryExplorer } from "../components/agents/MemoryExplorer";
 import { WorkspaceSidebar } from "../components/workspace/WorkspaceSidebar";
 import { UpdateBanner } from "../components/workspace/UpdateBanner";
+import { formatConnectorLabel } from "../utils/connectorLabels";
 import { openConnectorOverlay } from "../utils/connectorOverlay";
 
 type WorkspaceAgentCard = {
@@ -375,8 +376,19 @@ export function WorkspacePage() {
   const updatesAvailable = updates.length;
   const activeConnector = connectorCards.find((connector) => connector.id === selectedConnectorId) || null;
   const connectorHint = activeConnector
-    ? `${activeConnector.name} selected from workspace sidebar.`
-    : "Select a connector from the sidebar for quick context.";
+    ? `${activeConnector.name} opens in the shared connector drawer so you can fix setup without leaving workspace.`
+    : "Use the sidebar or the agent cards to open connector setup in the shared drawer.";
+
+  const openConnectorSetup = useCallback((connectorId?: string | null) => {
+    const normalizedConnectorId = String(connectorId || "").trim();
+    if (!normalizedConnectorId) {
+      return;
+    }
+    setSelectedConnectorId(normalizedConnectorId);
+    openConnectorOverlay(normalizedConnectorId, {
+      fromPath: window.location.pathname,
+    });
+  }, []);
 
   const runsByAgent = useMemo(
     () =>
@@ -419,7 +431,7 @@ export function WorkspacePage() {
         <WorkspaceSidebar
           connectors={connectorCards}
           agents={agentCards.map((agent) => ({ id: agent.id, status: agent.status }))}
-          onOpenConnector={setSelectedConnectorId}
+          onOpenConnector={openConnectorSetup}
         />
 
         <div className="min-w-0 flex-1 space-y-4">
@@ -548,11 +560,11 @@ export function WorkspacePage() {
                     <h2 className="text-[18px] font-semibold text-[#111827]">{agent.name}</h2>
                     <p className="mt-1 text-[13px] text-[#667085]">{agent.description}</p>
                     <p className="mt-1 text-[12px] text-[#98a2b3]">
-                      Last run {agent.lastRun ? formatRelativeTime(agent.lastRun) : "never"} · {agent.totalRuns} total runs
+                      Last run {agent.lastRun ? formatRelativeTime(agent.lastRun) : "never"} | {agent.totalRuns} total runs
                     </p>
                     {agent.scheduleLabel ? (
                       <p className="mt-1 text-[12px] text-[#7c3aed]">
-                        Next run {agent.nextRunAt ? new Date(agent.nextRunAt).toLocaleString() : "scheduled"} · {agent.scheduleLabel}
+                        Next run {agent.nextRunAt ? new Date(agent.nextRunAt).toLocaleString() : "scheduled"} | {agent.scheduleLabel}
                       </p>
                     ) : null}
                   </div>
@@ -578,11 +590,7 @@ export function WorkspacePage() {
                   {agent.unhealthyConnectors.length > 0 ? (
                     <button
                       type="button"
-                      onClick={() =>
-                        openConnectorOverlay(agent.unhealthyConnectors[0], {
-                          fromPath: window.location.pathname,
-                        })
-                      }
+                      onClick={() => openConnectorSetup(agent.unhealthyConnectors[0])}
                       className="rounded-full border border-[#f59e0b] bg-[#fffbeb] px-3 py-1.5 text-[12px] font-semibold text-[#92400e]"
                     >
                       Configure connectors
@@ -591,15 +599,25 @@ export function WorkspacePage() {
                 </div>
                 {agent.unhealthyConnectors.length > 0 ? (
                   <div className="mt-2 rounded-xl border border-[#fde68a] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
-                    This agent needs connector setup before it can run reliably:
-                    {" "}
-                    {agent.unhealthyConnectors.join(", ")}
+                    <p>This agent needs connector setup before it can run reliably.</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {agent.unhealthyConnectors.map((connectorId) => (
+                        <button
+                          key={`${agent.id}:${connectorId}`}
+                          type="button"
+                          onClick={() => openConnectorSetup(connectorId)}
+                          className="rounded-full border border-[#f59e0b] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#92400e] hover:bg-[#fef3c7]"
+                        >
+                          {formatConnectorLabel(connectorId)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
                 <div className="mt-3 space-y-1 text-[12px] text-[#667085]">
                   {runs.slice(0, 2).map((run) => (
                     <p key={run.runId}>
-                      {run.runId}: {run.status} · ${(run.llmCostUsd || 0).toFixed(2)}
+                      {run.runId}: {run.status} | ${(run.llmCostUsd || 0).toFixed(2)}
                     </p>
                   ))}
                   {runs.length === 0 ? <p>No runs yet.</p> : null}

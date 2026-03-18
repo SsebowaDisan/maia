@@ -112,6 +112,33 @@ function deriveSurfaceCommit(visibleEvents: AgentActivityEvent[]): SurfaceCommit
     const event = visibleEvents[idx];
     const normalizedType = readString(event.event_type).toLowerCase();
     const sceneSurface = readString(sceneSurfaceFromEvent(event)).toLowerCase();
+
+    // Metadata-first: use scene_family from event data if available
+    const sceneFamily = readString(event.data?.["scene_family"] ?? event.metadata?.["scene_family"]).toLowerCase();
+    if (sceneFamily) {
+      const sfMap: Record<string, { tab: string; surface: string }> = {
+        email: { tab: "email", surface: "email" },
+        sheet: { tab: "document", surface: "sheet" },
+        document: { tab: "document", surface: "document" },
+        browser: { tab: "browser", surface: "website" },
+        api: { tab: "system", surface: "api" },
+        chat: { tab: "system", surface: "api" },
+      };
+      const mapped = sfMap[sceneFamily];
+      if (mapped) {
+        const sourceUrl = extractUrlFromEvent(event);
+        return {
+          tab: mapped.tab,
+          surface: mapped.surface,
+          subtype: readString(event.data?.["brand_slug"]) || sceneFamily,
+          sourceUrl,
+          committedEventId: readString(event.event_id),
+          committedAt: readString(event.timestamp || event.ts),
+          confidence: "high",
+        };
+      }
+    }
+
     const uiTarget = readString(event.data?.["ui_target"] ?? event.metadata?.["ui_target"]).toLowerCase();
     const uiCommitCandidate =
       (event.data?.["ui_commit"] as Record<string, unknown> | undefined) ||

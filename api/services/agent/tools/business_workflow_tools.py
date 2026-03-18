@@ -122,7 +122,7 @@ class BusinessRoutePlanTool(AgentTool):
                         mode,
                     ]
                 )
-            workspace_connector = get_connector_registry().build("google_workspace", settings=context.settings)
+            workspace_connector = get_connector_registry().build(str(context.settings.get("workspace_connector_id", "")).strip() or "google_workspace", settings=context.settings)
             events.extend(
                 [
                     ToolTraceEvent(
@@ -260,7 +260,7 @@ class BusinessGa4KpiSheetReportTool(AgentTool):
             )
         )
 
-        workspace = get_connector_registry().build("google_workspace", settings=context.settings)
+        workspace = get_connector_registry().build(str(context.settings.get("workspace_connector_id", "")).strip() or "google_workspace", settings=context.settings)
         spreadsheet_url = ""
         if not spreadsheet_id:
             title = str(params.get("title") or "Maia GA4 KPI Report").strip() or "Maia GA4 KPI Report"

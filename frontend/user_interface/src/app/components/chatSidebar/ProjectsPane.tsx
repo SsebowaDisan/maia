@@ -114,8 +114,8 @@ export function ProjectsPane({
   onNavigateAppRoute,
 }: ProjectsPaneProps) {
   const quickLinks = [
-    { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
     { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
+    { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
     { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
     { id: "marketplace", label: "Marketplace", icon: Store, path: "/marketplace" },
   ] as const;

@@ -14,6 +14,7 @@ import {
 import { AgentInstallModal } from "../components/marketplace/AgentInstallModal";
 import { ConnectorStatusPill } from "../components/marketplace/ConnectorStatusPill";
 import { AppRouteOverlayModal } from "../components/AppRouteOverlayModal";
+import { formatConnectorLabel } from "../utils/connectorLabels";
 import { openConnectorOverlay } from "../utils/connectorOverlay";
 import {
   MarketplaceHeaderControls,
@@ -115,6 +116,15 @@ function readConnectorStatusSummary(
     return { status: "connected", missing: 0, connected };
   }
   return { status: "not_required", missing: 0, connected: 0 };
+}
+
+function readMissingConnectorIds(agent: MarketplaceAgentSummary): string[] {
+  const required = Array.isArray(agent.required_connectors) ? agent.required_connectors : [];
+  const map = (agent.connector_status || {}) as Record<string, string>;
+  return required.filter((connectorId) => {
+    const value = String(map[connectorId] || "not_required").trim().toLowerCase();
+    return value === "missing";
+  });
 }
 
 type MarketplacePageProps = {
@@ -444,6 +454,7 @@ export function MarketplacePage({
               const requiredConnectors = Array.isArray(agent.required_connectors)
                 ? agent.required_connectors
                 : [];
+              const missingConnectorIds = readMissingConnectorIds(agent);
               const connectorSummary = readConnectorStatusSummary(agent);
               const connectorsReady = connectorSummary.missing === 0;
               const complexity = getSetupComplexity(requiredConnectors.length);
@@ -535,6 +546,15 @@ export function MarketplacePage({
                         Customize
                       </button>
                     ) : null}
+                    {!installed && !connectorsReady && missingConnectorIds.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => openConnectorSetup(missingConnectorIds[0])}
+                        className="rounded-full border border-[#f59e0b] bg-[#fffbeb] px-4 py-2 text-[12px] font-semibold text-[#92400e]"
+                      >
+                        Setup connectors
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => setSelectedDetailAgentId(agent.agent_id)}
@@ -543,6 +563,20 @@ export function MarketplacePage({
                       View detail
                     </button>
                   </div>
+                  {!installed && missingConnectorIds.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {missingConnectorIds.map((connectorId) => (
+                        <button
+                          key={`${agent.agent_id}:${connectorId}`}
+                          type="button"
+                          onClick={() => openConnectorSetup(connectorId)}
+                          className="rounded-full border border-[#f59e0b] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#92400e] hover:bg-[#fffbeb]"
+                        >
+                          Connect {formatConnectorLabel(connectorId)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </article>
               );
             })}

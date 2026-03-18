@@ -319,7 +319,7 @@ export function MindMapViewer({
       if (layoutMode === "horizontal") {
         const depth = depthMap[nodeId] ?? 1;
         const halfWidth = depth <= 0 ? 200 : depth === 1 ? 160 : 140;
-        const halfHeight = depth <= 0 ? 38 : 34;
+        const halfHeight = depth <= 0 ? 54 : depth === 1 ? 42 : 34;
         return { x: pos.x + halfWidth, y: pos.y + halfHeight };
       }
       return pos;

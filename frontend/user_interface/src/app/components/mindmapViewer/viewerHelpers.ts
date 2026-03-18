@@ -174,7 +174,7 @@ export function computeNotebookLayout(
 
 /** Approximate half-width/height of a pill node — used to convert center→top-left position. */
 export const NODE_HALF_W = 140;
-export const NODE_HALF_H = 34;
+export const NODE_HALF_H = 42;
 
 /** Radius from root center to depth-1 branch nodes (px). */
 export const RADIAL_BASE = 200;

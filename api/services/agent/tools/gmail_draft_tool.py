@@ -11,11 +11,6 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
 )
 from api.services.agent.llm_execution_support import polish_email_content
-from api.services.agent.tools.gmail_live_desktop import (
-    desktop_mode_enabled,
-    desktop_mode_required,
-    stream_live_desktop_compose,
-)
 from api.services.agent.tools.gmail_tools_helpers import (
     _attach_to_gmail_draft,
     _chunk_text,
@@ -85,67 +80,8 @@ class GmailDraftTool(AgentTool):
             context=context,
             params=params,
         )
-        live_desktop = desktop_mode_enabled(context, params)
-        desktop_required = desktop_mode_required(context, params)
 
         trace_events: list[ToolTraceEvent] = []
-        if attachments and live_desktop:
-            if desktop_required:
-                raise ToolExecutionError(
-                    "Live desktop draft does not support attachments yet. Set `live_desktop=false`."
-                )
-            attachment_fallback = ToolTraceEvent(
-                event_type="tool_progress",
-                title="Attachments require Gmail API draft flow",
-                detail="Switching from live desktop to Gmail API to attach files",
-                data={"attachments": len(attachments)},
-            )
-            trace_events.append(attachment_fallback)
-            yield attachment_fallback
-            live_desktop = False
-        if live_desktop:
-            try:
-                desktop_result = yield from stream_live_desktop_compose(
-                    context=context,
-                    trace_events=trace_events,
-                    to=to,
-                    subject=subject,
-                    body=body,
-                    send=False,
-                )
-                draft_id = str(desktop_result.get("draft_id") or "")
-                compose_url = str(desktop_result.get("url") or "")
-                return ToolExecutionResult(
-                    summary=f"Gmail draft created for {to} via live desktop session.",
-                    content=(
-                        "Created Gmail draft via live browser desktop.\n"
-                        f"- To: {to}\n"
-                        f"- Subject: {subject}\n"
-                        f"- Compose URL: {compose_url or 'unknown'}\n"
-                        f"- Draft ID: {draft_id or 'unknown'}"
-                    ),
-                    data={
-                        "to": to,
-                        "subject": subject,
-                        "draft_id": draft_id,
-                        "compose_url": compose_url,
-                        "delivery_mode": "playwright_desktop",
-                    },
-                    sources=[],
-                    next_steps=["Review draft in Gmail and send when ready."],
-                    events=trace_events,
-                )
-            except Exception as exc:
-                if desktop_required:
-                    raise ToolExecutionError(f"Live Gmail desktop draft failed: {exc}") from exc
-                fallback = ToolTraceEvent(
-                    event_type="tool_progress",
-                    title="Live desktop draft unavailable",
-                    detail="Falling back to Gmail API draft flow",
-                    data={"reason": str(exc)},
-                )
-                trace_events.append(fallback)
-                yield fallback
 
         open_compose_event = ToolTraceEvent(
             event_type="email_open_compose",

@@ -105,7 +105,7 @@ class GmailToolsReportFlowTests(unittest.TestCase):
             result = tool.execute(
                 context=self.context,
                 prompt="send the report to ssebowadisan1@gmail.com",
-                params={"to": "ssebowadisan1@gmail.com", "live_desktop": False},
+                params={"to": "ssebowadisan1@gmail.com"},
             )
         self.assertEqual(connector.last_draft.get("subject"), "Website Analysis Report")
         self.assertEqual(
@@ -122,7 +122,7 @@ class GmailToolsReportFlowTests(unittest.TestCase):
             result = tool.execute(
                 context=self.context,
                 prompt="send the report to ssebowadisan1@gmail.com",
-                params={"to": "ssebowadisan1@gmail.com", "confirmed": True, "live_desktop": False},
+                params={"to": "ssebowadisan1@gmail.com", "confirmed": True},
             )
         self.assertEqual(connector.last_send.get("subject"), "Website Analysis Report")
         self.assertEqual(
@@ -141,7 +141,6 @@ class GmailToolsReportFlowTests(unittest.TestCase):
                 prompt="draft with attachment",
                 params={
                     "to": "ssebowadisan1@gmail.com",
-                    "live_desktop": False,
                     "attachments": [{"local_path": str(self.latest_pdf_path)}],
                 },
             )
@@ -162,7 +161,6 @@ class GmailToolsReportFlowTests(unittest.TestCase):
                 params={
                     "to": "ssebowadisan1@gmail.com",
                     "confirmed": True,
-                    "live_desktop": False,
                     "attach_latest_report_pdf": True,
                 },
             )
@@ -189,7 +187,6 @@ class GmailToolsReportFlowTests(unittest.TestCase):
                 params={
                     "to": "ssebowadisan1@gmail.com",
                     "confirmed": True,
-                    "live_desktop": False,
                     "attach_latest_report_pdf": True,
                 },
             )

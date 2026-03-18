@@ -23,8 +23,11 @@ function CurvedMindEdge({ id, data, style }: EdgeProps) {
   const sourceDepth = Number(edge.sourceDepth ?? 0);
   const targetDepth = Number(edge.targetDepth ?? sourceDepth + 1);
 
-  const sourceHalfW = sourceDepth <= 0 ? 190 : sourceDepth === 1 ? 160 : 140;
-  const targetHalfW = targetDepth <= 0 ? 190 : targetDepth === 1 ? 160 : 140;
+  // srcX/srcY and tgtX/tgtY are already node centers (from getCenter).
+  // Half-widths must match getCenter so lines start at the node's right edge.
+  const sourceHalfW = sourceDepth <= 0 ? 200 : sourceDepth === 1 ? 160 : 140;
+  const targetHalfW = targetDepth <= 0 ? 200 : targetDepth === 1 ? 160 : 140;
+  // Note: the card CSS widths are 400/320/280 → halves are 200/160/140.
   const startX = srcX + sourceHalfW;
   const startY = srcY;
   const endX = tgtX - targetHalfW;

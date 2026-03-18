@@ -716,28 +716,9 @@ function WorkflowCanvasInner({
       }}
       onMouseLeave={() => scheduleToolbarHide(600)}
     >
+      {/* Toolbar is always visible — no hover trigger needed */}
       <div
-        aria-hidden
-        className="absolute left-0 top-0 z-[15] h-16 w-1/2"
-        onMouseEnter={() => {
-          toolbarHoverLockRef.current = true;
-          setToolbarVisible(true);
-          clearToolbarHideTimer();
-        }}
-        onMouseMove={() => {
-          toolbarHoverLockRef.current = true;
-          setToolbarVisible(true);
-          clearToolbarHideTimer();
-        }}
-        onMouseLeave={() => {
-          toolbarHoverLockRef.current = false;
-          scheduleToolbarHide(700);
-        }}
-      />
-      <div
-        className={`pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start gap-2 transition-all duration-200 ${
-          toolbarVisible ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
-        }`}
+        className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start gap-2"
       >
         <div
           className="pointer-events-auto"
@@ -818,6 +799,18 @@ function WorkflowCanvasInner({
       >
         <Background gap={22} size={1.2} color="#d7e0ee" />
       </ReactFlow>
+
+      {/* Click-outside backdrop for side panels */}
+      {(templatesOpen || runHistoryOpen || runInspectorOpen) ? (
+        <div
+          className="absolute inset-0 z-[18]"
+          onClick={() => {
+            setTemplatesOpen(false);
+            setRunHistoryOpen(false);
+            setRunInspectorOpen(false);
+          }}
+        />
+      ) : null}
 
       <WorkflowTemplates
         open={templatesOpen}

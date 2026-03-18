@@ -97,10 +97,10 @@ class WebStructuredExtractTool(AgentTool):
                     event_type="api_call_started",
                     title="Load web page content",
                     detail=url[:180],
-                    data={"web_provider": "playwright_browser"},
+                    data={"web_provider": "computer_use_browser"},
                 )
             )
-            connector = get_connector_registry().build("playwright_browser", settings=context.settings)
+            connector = get_connector_registry().build("computer_use_browser", settings=context.settings)
             capture = connector.browse_and_capture(
                 url=url,
                 follow_same_domain_links=False,

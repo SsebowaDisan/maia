@@ -95,7 +95,7 @@ class BusinessInvoiceWorkflowTool(AgentTool):
         spreadsheet_id = str(params.get("spreadsheet_id") or "").strip()
         spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit" if spreadsheet_id else ""
         if spreadsheet_id:
-            workspace = get_connector_registry().build("google_workspace", settings=context.settings)
+            workspace = get_connector_registry().build(str(context.settings.get("workspace_connector_id", "")).strip() or "google_workspace", settings=context.settings)
             rows = [
                 [
                     "InvoiceNumber",
@@ -267,7 +267,7 @@ class BusinessMeetingSchedulerTool(AgentTool):
         agenda_url = ""
         agenda_id = ""
         if create_agenda:
-            workspace = get_connector_registry().build("google_workspace", settings=context.settings)
+            workspace = get_connector_registry().build(str(context.settings.get("workspace_connector_id", "")).strip() or "google_workspace", settings=context.settings)
             agenda_title = str(params.get("agenda_title") or f"Agenda - {summary}").strip() or f"Agenda - {summary}"
             agenda_body = str(
                 params.get("agenda_body")
@@ -375,7 +375,7 @@ class BusinessProposalWorkflowTool(AgentTool):
         doc_url = ""
         doc_id = ""
         try:
-            workspace = get_connector_registry().build("google_workspace", settings=context.settings)
+            workspace = get_connector_registry().build(str(context.settings.get("workspace_connector_id", "")).strip() or "google_workspace", settings=context.settings)
             events.extend(
                 [
                     ToolTraceEvent(event_type="doc_open", title="Open proposal document", detail=title),

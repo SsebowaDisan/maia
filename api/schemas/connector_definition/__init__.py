@@ -9,7 +9,16 @@ from .auth_config import (
     NoAuthConfig,
     OAuth2AuthConfig,
 )
-from .schema import ConnectorCategory, ConnectorDefinitionSchema
+from .schema import (
+    ConnectorAuthKind,
+    ConnectorCategory,
+    ConnectorDefinitionSchema,
+    ConnectorSceneFamily,
+    ConnectorSetupMode,
+    ConnectorSetupStatus,
+    ConnectorSubService,
+    ConnectorVisibility,
+)
 from .tool_schema import (
     ToolActionClass,
     ToolParameter,
@@ -23,8 +32,14 @@ __all__ = [
     "AuthStrategy",
     "BasicAuthConfig",
     "BearerAuthConfig",
+    "ConnectorAuthKind",
     "ConnectorCategory",
     "ConnectorDefinitionSchema",
+    "ConnectorSceneFamily",
+    "ConnectorSetupMode",
+    "ConnectorSetupStatus",
+    "ConnectorSubService",
+    "ConnectorVisibility",
     "CustomAuthConfig",
     "NoAuthConfig",
     "OAuth2AuthConfig",

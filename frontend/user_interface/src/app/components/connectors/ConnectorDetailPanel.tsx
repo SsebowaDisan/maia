@@ -1,15 +1,25 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Loader2, RefreshCw, X } from "lucide-react";
 
 import {
   deleteConnectorCredentials,
-  listConnectorHealth,
+  startConnectorOAuth,
   startGoogleOAuth,
+  testConnectorConnection,
   upsertConnectorCredentials,
 } from "../../../api/client";
 import type { ConnectorSummary } from "../../types/connectorSummary";
-import { MANUAL_CONNECTOR_DEFINITIONS } from "../settings/connectorDefinitions";
 import { openOAuthPopup } from "../../utils/oauthPopup";
+import {
+  MANUAL_CONNECTOR_DEFINITIONS,
+  type ConnectorDefinition,
+} from "../settings/connectorDefinitions";
+import { ConnectorAgentAccessList } from "./ConnectorAgentAccessList";
+import { ConnectorDetailActions } from "./ConnectorDetailActions";
+import { ConnectorDetailHeader } from "./ConnectorDetailHeader";
+import { ConnectorDetailShell } from "./ConnectorDetailShell";
+import { ConnectorSetupPanel } from "./ConnectorSetupPanel";
+import { GoogleSuitePanel } from "./GoogleSuitePanel";
+import { MicrosoftSuitePanel } from "./MicrosoftSuitePanel";
 import { WebhookManager } from "./WebhookManager";
 
 type ConnectorDetailPanelProps = {
@@ -18,16 +28,27 @@ type ConnectorDetailPanelProps = {
   onClose: () => void;
   onRefresh: () => Promise<void> | void;
   advancedSettings?: ReactNode;
+  permissionAgents?: Array<{
+    id: string;
+    name: string;
+  }>;
+  permissionValue?: Record<string, string[]>;
+  permissionSaving?: boolean;
+  permissionError?: string;
+  onPermissionChange?: (next: Record<string, string[]>) => Promise<void> | void;
 };
 
-function subServiceDotClass(status: "Connected" | "Needs permission" | "Disabled"): string {
-  if (status === "Connected") {
-    return "bg-[#16a34a]";
+const GENERIC_CREDENTIAL_FIELD_KEY = "__generic_credential";
+
+function formatLabel(value?: string) {
+  if (!value) {
+    return null;
   }
-  if (status === "Needs permission") {
-    return "bg-[#d97706]";
-  }
-  return "bg-[#98a2b3]";
+  return value
+    .split(/[_-]+/g)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
 }
 
 export function ConnectorDetailPanel({
@@ -36,19 +57,26 @@ export function ConnectorDetailPanel({
   onClose,
   onRefresh,
   advancedSettings,
+  permissionAgents = [],
+  permissionValue = {},
+  permissionSaving = false,
+  permissionError = "",
+  onPermissionChange,
 }: ConnectorDetailPanelProps) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
   const [lastTestedAt, setLastTestedAt] = useState<string | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 
-  const connectorDefinition = useMemo(
+  const connectorDefinition = useMemo<ConnectorDefinition | null>(
     () =>
       MANUAL_CONNECTOR_DEFINITIONS.find(
         (definition) => definition.id === connector?.id,
       ) || null,
     [connector?.id],
   );
+
+  const allowedAgentIds = connector ? permissionValue[connector.id] || [] : [];
 
   const updateField = (key: string, value: string) => {
     setFieldValues((previous) => ({ ...previous, [key]: value }));
@@ -61,7 +89,8 @@ export function ConnectorDetailPanel({
     setSaving(true);
     setStatus("");
     try {
-      if (connector.id === "google_workspace") {
+      const setupMode = (connector as Record<string, unknown>).setup_mode || (connector as Record<string, unknown>).auth_kind || "";
+      if (setupMode === "oauth_popup" || connector.id === "google_workspace") {
         const oauthStart = await startGoogleOAuth();
         const result = await openOAuthPopup(oauthStart.authorize_url);
         if (!result.success) {
@@ -72,7 +101,21 @@ export function ConnectorDetailPanel({
         await onRefresh();
         return;
       }
-      setStatus("OAuth flow is not configured for this connector yet.");
+      const redirectUri =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/api/connectors/oauth/callback`
+          : "/api/connectors/oauth/callback";
+      const oauthStart = await startConnectorOAuth({
+        connectorId: connector.id,
+        redirectUri,
+      });
+      const result = await openOAuthPopup(oauthStart.auth_url);
+      if (!result.success) {
+        setStatus(result.error);
+        return;
+      }
+      setStatus("OAuth completed. Refreshing connector status...");
+      await onRefresh();
     } catch (error) {
       setStatus(`Failed to start OAuth: ${String(error)}`);
     } finally {
@@ -80,15 +123,23 @@ export function ConnectorDetailPanel({
     }
   };
 
-  const handleSaveApiKeys = async () => {
-    if (!connector || !connectorDefinition) {
+  const handleSaveCredentials = async () => {
+    if (!connector) {
       return;
     }
     const payload: Record<string, string> = {};
-    for (const field of connectorDefinition.fields) {
-      const value = String(fieldValues[field.key] || "").trim();
+    if (connectorDefinition) {
+      for (const field of connectorDefinition.fields) {
+        const value = String(fieldValues[field.key] || "").trim();
+        if (value) {
+          payload[field.key] = value;
+        }
+      }
+    } else {
+      const value = String(fieldValues[GENERIC_CREDENTIAL_FIELD_KEY] || "").trim();
       if (value) {
-        payload[field.key] = value;
+        const key = connector.authType === "bearer" ? "ACCESS_TOKEN" : "API_KEY";
+        payload[key] = value;
       }
     }
     if (!Object.keys(payload).length) {
@@ -115,10 +166,9 @@ export function ConnectorDetailPanel({
     setSaving(true);
     setStatus("");
     try {
-      const rows = await listConnectorHealth();
-      const row = rows.find((entry) => String(entry?.connector_id || "") === connector.id);
-      const ok = Boolean(row?.ok);
-      const message = String(row?.message || "");
+      const row = await testConnectorConnection(connector.id);
+      const ok = String(row?.status || "").toLowerCase() === "ok";
+      const message = String(row?.detail || "");
       setStatus(ok ? "Test passed." : `Test failed: ${message || "Unknown connector error."}`);
       setLastTestedAt(new Date().toISOString());
     } catch (error) {
@@ -149,150 +199,141 @@ export function ConnectorDetailPanel({
     }
   };
 
+  const handlePermissionChange = async (nextAllowedAgentIds: string[]) => {
+    if (!connector || !onPermissionChange) {
+      return;
+    }
+    await onPermissionChange({
+      ...permissionValue,
+      [connector.id]: nextAllowedAgentIds,
+    });
+  };
+
   if (!open || !connector) {
     return null;
   }
 
+  const setupPanel = (
+    <ConnectorSetupPanel
+      connector={connector}
+      connectorDefinition={connectorDefinition}
+      saving={saving}
+      fieldValues={fieldValues}
+      onFieldChange={updateField}
+      onOAuthConnect={() => {
+        void handleOAuthConnect();
+      }}
+      onSaveCredentials={() => {
+        void handleSaveCredentials();
+      }}
+    />
+  );
+
+  // Use suite_id from backend metadata to decide which panel to render
+  const suiteId = String((connector as Record<string, unknown>).suite_id || "").trim().toLowerCase();
+  const panelContent =
+    suiteId === "google" ? (
+      <GoogleSuitePanel connector={connector} advancedSettings={advancedSettings} />
+    ) : suiteId === "microsoft" ? (
+      <MicrosoftSuitePanel connector={connector} setupPanel={setupPanel} />
+    ) : (
+      setupPanel
+    );
+
   return (
-    <div className="fixed inset-0 z-[120] bg-black/30 backdrop-blur-[2px]">
-      <div className="absolute inset-y-0 right-0 w-full max-w-[480px] border-l border-black/[0.08] bg-white shadow-[-30px_0_64px_rgba(15,23,42,0.24)]">
-        <div className="flex items-start justify-between border-b border-black/[0.08] px-5 py-4">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#667085]">Connector detail</p>
-            <h2 className="mt-1 text-[24px] font-semibold tracking-[-0.02em] text-[#101828]">{connector.name}</h2>
-            <p className="mt-1 text-[13px] text-[#667085]">{connector.description}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-black/[0.1] text-[#475467] hover:text-[#111827]"
-            aria-label="Close connector details"
-          >
-            <X size={16} />
-          </button>
+    <ConnectorDetailShell
+      header={<ConnectorDetailHeader connector={connector} onClose={onClose} />}
+    >
+      <section className="grid grid-cols-3 gap-3">
+        <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] px-3.5 py-3">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#98a2b3]">Auth type</p>
+          <p className="mt-1 text-[14px] font-semibold text-[#111827]">
+            {formatLabel(connector.authType) || connector.authType}
+          </p>
         </div>
-
-        <div className="space-y-4 overflow-y-auto px-5 py-4">
-          <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] px-4 py-3 text-[13px] text-[#475467]">
-            Auth type: <span className="font-semibold text-[#111827]">{connector.authType}</span>
-          </div>
-
-          {connector.subServices && connector.subServices.length > 0 ? (
-            <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
-                Google services
-              </p>
-              <div className="mt-2 space-y-2">
-                {connector.subServices.map((service) => (
-                  <div
-                    key={service.id}
-                    className="flex items-start justify-between gap-3 rounded-xl border border-black/[0.06] bg-[#f8fafc] px-3 py-2"
-                  >
-                    <div>
-                      <p className="text-[13px] font-semibold text-[#101828]">{service.label}</p>
-                      <p className="text-[12px] text-[#667085]">{service.description}</p>
-                    </div>
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-2 py-1 text-[11px] font-semibold text-[#475467]">
-                      <span className={`h-1.5 w-1.5 rounded-full ${subServiceDotClass(service.status)}`} />
-                      {service.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {connector.authType === "oauth2" ? (
-            <button
-              type="button"
-              onClick={() => void handleOAuthConnect()}
-              disabled={saving}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7c3aed] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-              Connect with OAuth
-            </button>
-          ) : null}
-
-          {connector.authType === "none" ? (
-            <div className="rounded-2xl border border-[#c4b5fd] bg-[#f5f3ff] px-4 py-3 text-[13px] text-[#7c3aed]">
-              No credentials required. This connector uses a public API.
-            </div>
-          ) : null}
-
-          {connector.authType !== "oauth2" && connector.authType !== "none" && connectorDefinition ? (
-            <div className="space-y-3 rounded-2xl border border-black/[0.08] bg-white p-4">
-              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#667085]">Credential form</p>
-              {connectorDefinition.fields.map((field) => (
-                <label key={field.key} className="block">
-                  <span className="mb-1 block text-[12px] font-semibold text-[#344054]">{field.label}</span>
-                  <input
-                    type={field.sensitive ? "password" : "text"}
-                    value={fieldValues[field.key] || ""}
-                    onChange={(event) => updateField(field.key, event.target.value)}
-                    placeholder={field.placeholder}
-                    className="w-full rounded-xl border border-black/[0.12] bg-white px-3 py-2 text-[13px] text-[#111827] focus:border-black/[0.28] focus:outline-none"
-                  />
-                </label>
-              ))}
-              <button
-                type="button"
-                onClick={() => void handleSaveApiKeys()}
-                disabled={saving}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#7c3aed] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? <Loader2 size={14} className="animate-spin" /> : null}
-                Save credential
-              </button>
-            </div>
-          ) : null}
-
-          <div className={`grid gap-3 ${connector.authType === "none" ? "grid-cols-1" : "grid-cols-2"}`}>
-            <button
-              type="button"
-              onClick={() => void handleTestConnection()}
-              disabled={saving}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-black/[0.12] bg-white px-3 py-2 text-[13px] font-semibold text-[#111827] hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <RefreshCw size={13} />
-              Test connection
-            </button>
-            {connector.authType !== "none" ? (
-              <button
-                type="button"
-                onClick={() => void handleRevoke()}
-                disabled={saving}
-                className="inline-flex items-center justify-center rounded-xl border border-[#fda4af] bg-[#fff1f2] px-3 py-2 text-[13px] font-semibold text-[#9f1239] hover:bg-[#ffe4e6] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Revoke
-              </button>
-            ) : null}
-          </div>
-
-          {lastTestedAt ? (
-            <p className="text-[12px] text-[#667085]">
-              Last tested: {new Date(lastTestedAt).toLocaleString()}
-            </p>
-          ) : null}
-
-          {status ? (
-            <div className="rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[13px] text-[#344054]">
-              {status}
-            </div>
-          ) : null}
-
-          {advancedSettings ? (
-            <section className="rounded-2xl border border-black/[0.08] bg-white p-3">
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
-                Advanced settings
-              </p>
-              {advancedSettings}
-            </section>
-          ) : null}
-
-          <WebhookManager connectorId={connector.id} />
+        <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] px-3.5 py-3">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#98a2b3]">Setup mode</p>
+          <p className="mt-1 text-[14px] font-semibold text-[#111827]">
+            {formatLabel(connector.setupMode) || "Default"}
+          </p>
         </div>
-      </div>
-    </div>
+        <div className="rounded-2xl border border-black/[0.08] bg-[#f8fafc] px-3.5 py-3">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#98a2b3]">Tools</p>
+          <p className="mt-1 text-[14px] font-semibold text-[#111827]">
+            {connector.tools.length}
+          </p>
+        </div>
+      </section>
+
+      {connector.statusMessage ? (
+        <div className="rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[13px] text-[#344054]">
+          {connector.statusMessage}
+        </div>
+      ) : null}
+
+      {panelContent}
+
+      {connector.tools.length ? (
+        <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
+            Enabled tools
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {connector.tools.map((toolId) => (
+              <span
+                key={toolId}
+                className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-medium text-[#475467]"
+              >
+                {toolId}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {permissionAgents.length ? (
+        <>
+          <ConnectorAgentAccessList
+            connectorId={connector.id}
+            agents={permissionAgents}
+            allowedAgentIds={allowedAgentIds}
+            disabled={permissionSaving}
+            onChange={(nextAllowedAgentIds) => {
+              void handlePermissionChange(nextAllowedAgentIds);
+            }}
+          />
+          {permissionError ? (
+            <div className="rounded-xl border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#9f1239]">
+              {permissionError}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      <ConnectorDetailActions
+        canRevoke={connector.authType !== "none"}
+        disabled={saving}
+        onTest={() => {
+          void handleTestConnection();
+        }}
+        onRevoke={() => {
+          void handleRevoke();
+        }}
+      />
+
+      {lastTestedAt ? (
+        <p className="text-[12px] text-[#667085]">
+          Last tested: {new Date(lastTestedAt).toLocaleString()}
+        </p>
+      ) : null}
+
+      {status ? (
+        <div className="rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[13px] text-[#344054]">
+          {status}
+        </div>
+      ) : null}
+
+      <WebhookManager connectorId={connector.id} />
+    </ConnectorDetailShell>
   );
 }

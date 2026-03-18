@@ -95,9 +95,9 @@ export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
   },
   {
     id: "gmail_playwright",
-    label: "Gmail (Playwright)",
+    label: "Gmail (deprecated)",
     description:
-      "Browser-assisted Gmail workflows use the same Google Workspace account connection.",
+      "Deprecated — Gmail now uses the API connector directly. This entry exists for backward compatibility.",
     fields: [],
   },
   {
@@ -109,16 +109,23 @@ export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
   },
   {
     id: "playwright_browser",
-    label: "Web Browser (Playwright)",
+    label: "Web Browser (deprecated)",
     description:
-      "System browser automation for navigation, extraction, and web interaction.",
+      "Deprecated — browser tasks now use Computer Use. This entry exists for backward compatibility.",
     fields: [],
   },
   {
     id: "playwright_contact_form",
-    label: "Web Contact Form (Playwright)",
+    label: "Contact Form (deprecated)",
     description:
-      "Automates website contact form submissions through browser automation.",
+      "Deprecated — contact form tasks now use Computer Use. This entry exists for backward compatibility.",
+    fields: [],
+  },
+  {
+    id: "computer_use_browser",
+    label: "Web Browser (Computer Use)",
+    description:
+      "Browse websites, extract content, and fill forms using Computer Use with live theatre streaming.",
     fields: [],
   },
   {
@@ -223,6 +230,30 @@ export const MANUAL_CONNECTOR_DEFINITIONS: ConnectorDefinition[] = [
         key: "M365_ACCESS_TOKEN",
         label: "Access token",
         placeholder: "Bearer token",
+        sensitive: true,
+      },
+    ],
+  },
+  {
+    id: "sap",
+    label: "SAP",
+    description:
+      "Connect SAP landscapes for enterprise workflows, approvals, and operational data handoffs.",
+    fields: [
+      {
+        key: "SAP_BASE_URL",
+        label: "Base URL",
+        placeholder: "https://your-sap-host.example.com",
+      },
+      {
+        key: "SAP_CLIENT_ID",
+        label: "Client ID",
+        placeholder: "SAP OAuth client ID",
+      },
+      {
+        key: "SAP_CLIENT_SECRET",
+        label: "Client secret",
+        placeholder: "SAP OAuth client secret",
         sensitive: true,
       },
     ],

@@ -74,7 +74,7 @@ RESEARCH_ONLY_BLOCKED_TOOL_IDS = {
 }
 
 DEFAULT_WEB_RESEARCH_PROVIDER = "brave_search"
-DEFAULT_WEB_PROVIDER = "playwright_browser"
+DEFAULT_WEB_PROVIDER = "computer_use_browser"
 
 
 def planning_allowed_tool_ids(

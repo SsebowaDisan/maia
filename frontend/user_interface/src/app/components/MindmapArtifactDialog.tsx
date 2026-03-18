@@ -87,8 +87,8 @@ export function MindmapArtifactDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
-        <DialogOverlay className="bg-[#0f1014]/26 backdrop-blur-[10px]" />
-        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[min(1180px,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[34px] border border-black/[0.06] bg-[#fbfbf8] shadow-[0_40px_140px_rgba(15,23,42,0.22)] duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.985]">
+        <DialogOverlay className="bg-[#0f1014]/26 backdrop-blur-[10px] duration-300 ease-out" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[min(1180px,calc(100vw-2.5rem))] max-w-[calc(100vw-2.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[34px] border border-black/[0.06] bg-[#fbfbf8] shadow-[0_40px_140px_rgba(15,23,42,0.22)] duration-300 ease-out data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.985]">
           <div className="relative flex max-h-[calc(100vh-2rem)] min-h-[560px] flex-col overflow-hidden">
             <div className="shrink-0 border-b border-black/[0.05] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,247,243,0.95))] px-6 pb-4 pt-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.88)] md:px-8 md:pb-5 md:pt-7">
               <div className="flex items-start justify-between gap-4">

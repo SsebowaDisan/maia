@@ -219,8 +219,9 @@ class DocumentCreateTool(AgentTool):
             )
         )
 
-        if provider == "google_workspace":
-            connector = get_connector_registry().build("google_workspace", settings=context.settings)
+        resolved_provider = str(context.settings.get("workspace_connector_id", "")).strip() or provider
+        if resolved_provider in ("google_workspace", "m365"):
+            connector = get_connector_registry().build(resolved_provider, settings=context.settings)
             created = connector.create_docs_document(title=title)
             doc_id = str(created.get("documentId") or "")
             doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else ""

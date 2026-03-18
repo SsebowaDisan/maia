@@ -19,10 +19,17 @@ export function normalizeConnectorSetupId(connectorId: string | null | undefined
   if (!normalized) {
     return "";
   }
-  if (normalized === "google_calendar" || normalized === "google_analytics") {
-    return "google_workspace";
-  }
-  return normalized;
+  // Suite normalization — map any suite member to the setup root connector
+  const SUITE_MAP: Record<string, string> = {
+    google_workspace: "google_workspace", gmail: "google_workspace", gmail_playwright: "google_workspace",
+    google_calendar: "google_workspace", google_drive: "google_workspace", google_docs: "google_workspace",
+    google_sheets: "google_workspace", google_analytics: "google_workspace", google_ads: "google_workspace",
+    google_maps: "google_workspace", google_api_hub: "google_workspace",
+    gcalendar: "google_workspace", gdrive: "google_workspace", gdocs: "google_workspace", gsheets: "google_workspace",
+    m365: "m365", microsoft: "m365", microsoft_365: "m365", outlook: "m365",
+    microsoft_calendar: "m365", onedrive: "m365", excel: "m365", word: "m365", teams: "m365",
+  };
+  return SUITE_MAP[normalized] || normalized;
 }
 
 export function buildConnectorOverlayPath(

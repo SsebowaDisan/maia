@@ -111,6 +111,16 @@ type MarketplaceListAgentsParams = {
   limit?: number;
 };
 
+type ConnectorSubServiceRecord = {
+  id: string;
+  label: string;
+  description?: string;
+  brand_slug: string;
+  scene_family: string;
+  status: "connected" | "needs_setup" | "needs_permission" | "disabled";
+  required_scopes?: string[];
+};
+
 type ConnectorCatalogRecord = {
   id: string;
   name: string;
@@ -127,6 +137,19 @@ type ConnectorCatalogRecord = {
     title?: string;
     description?: string;
   }>;
+  // Product metadata
+  brand_slug?: string;
+  visibility?: "user_facing" | "internal";
+  auth_kind?: "oauth2" | "api_key" | "bearer" | "basic" | "service_identity" | "none";
+  setup_mode?: "oauth_popup" | "manual_credentials" | "service_identity" | "none";
+  scene_family?: "email" | "sheet" | "document" | "api" | "browser" | "chat" | "crm" | "support" | "commerce";
+  setup_status?: "connected" | "needs_setup" | "needs_permission" | "expired" | "invalid";
+  setup_message?: string;
+  required_scopes?: string[];
+  suite_id?: string;
+  suite_label?: string;
+  service_order?: number;
+  sub_services?: ConnectorSubServiceRecord[];
 };
 
 type MarketplaceReviewStatus = "pending_review" | "approved" | "rejected" | "published" | "deprecated";
@@ -444,6 +467,7 @@ export {
 
 export type {
   ConnectorCatalogRecord,
+  ConnectorSubServiceRecord,
   MarketplaceNotificationRecord,
   MarketplaceReviewQueueItem,
   MarketplaceReviewStatus,

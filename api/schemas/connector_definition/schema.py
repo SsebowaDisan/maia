@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,7 +29,43 @@ class ConnectorCategory(str, Enum):
     hr = "hr"
     developer_tools = "developer_tools"
     data = "data"
+    project_management = "project_management"
+    commerce = "commerce"
+    support = "support"
     other = "other"
+
+
+# ── Product metadata enums ────────────────────────────────────────────────
+
+ConnectorVisibility = Literal["user_facing", "internal"]
+
+ConnectorAuthKind = Literal[
+    "oauth2", "api_key", "bearer", "basic", "service_identity", "none"
+]
+
+ConnectorSetupMode = Literal[
+    "oauth_popup", "manual_credentials", "service_identity", "none"
+]
+
+ConnectorSceneFamily = Literal[
+    "email", "sheet", "document", "api", "browser", "chat", "crm", "support", "commerce"
+]
+
+ConnectorSetupStatus = Literal[
+    "connected", "needs_setup", "needs_permission", "expired", "invalid"
+]
+
+
+class ConnectorSubService(BaseModel):
+    """A sub-service within a suite connector (e.g. Gmail inside Google Suite)."""
+
+    id: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(default="", max_length=300)
+    brand_slug: str = Field(default="", max_length=80)
+    scene_family: ConnectorSceneFamily = "api"
+    status: Literal["connected", "needs_setup", "needs_permission", "disabled"] = "needs_setup"
+    required_scopes: list[str] = Field(default_factory=list)
 
 
 class ConnectorDefinitionSchema(BaseModel):
@@ -67,6 +104,35 @@ class ConnectorDefinitionSchema(BaseModel):
 
     # Display order within a suite (lower = first).
     service_order: int = 99
+
+    # ── Product metadata ──────────────────────────────────────────────────────
+
+    # Stable slug for brand icon resolution (e.g. "gmail", "outlook", "slack").
+    brand_slug: str = Field(default="", max_length=80)
+
+    # Whether this connector is shown to end users or is runtime-only.
+    visibility: ConnectorVisibility = "user_facing"
+
+    # Auth mechanism type for the frontend to drive setup UX.
+    auth_kind: ConnectorAuthKind = "none"
+
+    # How the setup drawer/popup should behave.
+    setup_mode: ConnectorSetupMode = "none"
+
+    # Theatre scene family — tells the frontend which visual surface to use.
+    scene_family: ConnectorSceneFamily = "api"
+
+    # Computed setup status per tenant (populated at response time, not stored).
+    setup_status: ConnectorSetupStatus = "needs_setup"
+
+    # Human-readable status message (e.g. "Token expired 2 days ago").
+    setup_message: str = ""
+
+    # Scopes required for this connector to function.
+    required_scopes: list[str] = Field(default_factory=list)
+
+    # Sub-services for suite connectors (Google, Microsoft).
+    sub_services: list[ConnectorSubService] = Field(default_factory=list)
 
     # ── Authentication ────────────────────────────────────────────────────────
 

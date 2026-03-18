@@ -532,10 +532,54 @@ function resolveCitationFocusFromAnchor(params: {
   };
 }
 
+/**
+ * Prefetch citation preview URLs in the background so they're cached by click time.
+ * Call this after a chat response renders citations in the DOM.
+ */
+const _prefetchedUrls = new Set<string>();
+
+function prefetchCitationSources(container: HTMLElement): void {
+  const anchors = container.querySelectorAll(CITATION_ANCHOR_SELECTOR);
+  for (const anchor of anchors) {
+    const sourceUrl = String(anchor.getAttribute("data-source-url") || anchor.getAttribute("href") || "").trim();
+    if (!sourceUrl || sourceUrl.startsWith("#") || _prefetchedUrls.has(sourceUrl)) {
+      continue;
+    }
+    _prefetchedUrls.add(sourceUrl);
+    // Warm the backend preview cache with a HEAD request
+    if (sourceUrl.startsWith("http")) {
+      const previewUrl = `/api/web/preview?url=${encodeURIComponent(sourceUrl)}`;
+      try {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = previewUrl;
+        link.as = "document";
+        document.head.appendChild(link);
+      } catch {
+        // Silently ignore prefetch failures
+      }
+    }
+    // For uploaded files, prefetch the raw file URL
+    const fileId = String(anchor.getAttribute("data-file-id") || "").trim();
+    if (fileId) {
+      try {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = `/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
+        link.as = "fetch";
+        document.head.appendChild(link);
+      } catch {
+        // Silently ignore
+      }
+    }
+  }
+}
+
 export {
   CITATION_ANCHOR_SELECTOR,
   normalizeCitationExtract,
   parseEvidenceRefId,
+  prefetchCitationSources,
   resolveCitationFocusFromAnchor,
   resolveCitationAnchorInteractionPolicy,
   resolveStrengthTier,

@@ -11,6 +11,7 @@ import {
 } from "./interactions/attachmentActions";
 import { ComposerMode, WEB_SEARCH_SETTING_OVERRIDES } from "./interactions/constants";
 import { handleComposerFileChange } from "./interactions/fileUpload";
+import { useWorkflowViewStore } from "../../stores/workflowViewStore";
 
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
@@ -507,6 +508,19 @@ function useChatMainInteractions({
       disposed = true;
     };
   }, [onAgentModeChange, showActionStatus]);
+
+  // Pick up staged workflow message — pre-fills composer so user can review/attach before sending
+  useEffect(() => {
+    let prev = "";
+    return useWorkflowViewStore.subscribe((state) => {
+      const staged = state.stagedMessage;
+      if (staged && staged !== prev) {
+        prev = staged;
+        setMessage(staged);
+        useWorkflowViewStore.setState({ stagedMessage: "" });
+      }
+    });
+  }, []);
 
   useEffect(
     () => () => {

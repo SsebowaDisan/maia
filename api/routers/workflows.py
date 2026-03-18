@@ -74,223 +74,10 @@ from api.services.agents.workflow_run_store import (
 
 # ── Templates ─────────────────────────────────────────────────────────────────
 
-_TEMPLATES: list[dict[str, Any]] = [
-    {
-        "template_id": "research-summarise-email",
-        "name": "Research → Summarise → Email",
-        "description": "Search the web for a topic, summarise the findings, then draft and send an email report.",
-        "step_count": 3,
-        "tags": ["research", "email", "report"],
-        "definition": {
-            "workflow_id": "research-summarise-email",
-            "name": "Research → Summarise → Email",
-            "description": "Search the web for a topic, summarise the findings, then send an email.",
-            "version": "1.0.0",
-            "steps": [
-                {
-                    "step_id": "step_research",
-                    "agent_id": "researcher",
-                    "input_mapping": {"query": "literal:Enter your research topic here"},
-                    "output_key": "research_result",
-                    "description": "Search the web and gather key findings on the topic.",
-                },
-                {
-                    "step_id": "step_summarise",
-                    "agent_id": "analyst",
-                    "input_mapping": {"content": "research_result"},
-                    "output_key": "summary",
-                    "description": "Synthesise the research into a concise executive summary.",
-                },
-                {
-                    "step_id": "step_email",
-                    "agent_id": "deliverer",
-                    "input_mapping": {"body": "summary", "subject": "literal:Research Summary"},
-                    "output_key": "email_sent",
-                    "description": "Draft and send the summary as an email.",
-                },
-            ],
-            "edges": [
-                {"from_step": "step_research", "to_step": "step_summarise"},
-                {"from_step": "step_summarise", "to_step": "step_email"},
-            ],
-        },
-    },
-    {
-        "template_id": "scrape-analyse-report",
-        "name": "Scrape → Analyse → Report",
-        "description": "Browse a URL, extract structured data, analyse it, and produce a markdown report.",
-        "step_count": 3,
-        "tags": ["scraping", "analysis", "report"],
-        "definition": {
-            "workflow_id": "scrape-analyse-report",
-            "name": "Scrape → Analyse → Report",
-            "description": "Browse a URL, extract data, and produce a markdown report.",
-            "version": "1.0.0",
-            "steps": [
-                {
-                    "step_id": "step_scrape",
-                    "agent_id": "browser",
-                    "input_mapping": {"url": "literal:https://example.com"},
-                    "output_key": "raw_content",
-                    "description": "Browse the target URL and extract the page content.",
-                },
-                {
-                    "step_id": "step_analyse",
-                    "agent_id": "analyst",
-                    "input_mapping": {"data": "raw_content"},
-                    "output_key": "analysis",
-                    "description": "Identify key patterns, numbers, and insights in the extracted content.",
-                },
-                {
-                    "step_id": "step_report",
-                    "agent_id": "writer",
-                    "input_mapping": {"content": "analysis"},
-                    "output_key": "report",
-                    "description": "Format the analysis as a structured markdown report with sections and tables.",
-                },
-            ],
-            "edges": [
-                {"from_step": "step_scrape", "to_step": "step_analyse"},
-                {"from_step": "step_analyse", "to_step": "step_report"},
-            ],
-        },
-    },
-    {
-        "template_id": "monitor-alert-escalate",
-        "name": "Monitor → Alert → Escalate",
-        "description": "Check a data source for anomalies, send an alert if found, escalate if critical.",
-        "step_count": 3,
-        "tags": ["monitoring", "alerting", "conditional"],
-        "definition": {
-            "workflow_id": "monitor-alert-escalate",
-            "name": "Monitor → Alert → Escalate",
-            "description": "Check a source, alert on anomaly, escalate if critical.",
-            "version": "1.0.0",
-            "steps": [
-                {
-                    "step_id": "step_monitor",
-                    "agent_id": "analyst",
-                    "input_mapping": {"source": "literal:Describe the data source to monitor"},
-                    "output_key": "monitor_result",
-                    "description": "Fetch and evaluate the data source for anomalies or threshold breaches.",
-                },
-                {
-                    "step_id": "step_alert",
-                    "agent_id": "deliverer",
-                    "input_mapping": {"message": "monitor_result"},
-                    "output_key": "alert_sent",
-                    "description": "Send a Slack or email alert with the anomaly details.",
-                },
-                {
-                    "step_id": "step_escalate",
-                    "agent_id": "deliverer",
-                    "input_mapping": {"message": "monitor_result", "channel": "literal:escalation-team"},
-                    "output_key": "escalation_sent",
-                    "description": "Escalate to the on-call team if the severity is critical.",
-                },
-            ],
-            "edges": [
-                {"from_step": "step_monitor", "to_step": "step_alert"},
-                {
-                    "from_step": "step_alert",
-                    "to_step": "step_escalate",
-                    "condition": "output.alert_sent == 'critical'",
-                },
-            ],
-        },
-    },
-    {
-        "template_id": "ingest-index-notify",
-        "name": "Ingest → Index → Notify",
-        "description": "Pull a document from a URL, index it into the knowledge base, then notify the team.",
-        "step_count": 3,
-        "tags": ["ingestion", "knowledge-base", "notification"],
-        "definition": {
-            "workflow_id": "ingest-index-notify",
-            "name": "Ingest → Index → Notify",
-            "description": "Fetch a document, index it, notify the team.",
-            "version": "1.0.0",
-            "steps": [
-                {
-                    "step_id": "step_fetch",
-                    "agent_id": "browser",
-                    "input_mapping": {"url": "literal:https://example.com/document.pdf"},
-                    "output_key": "document_content",
-                    "description": "Download and extract the raw text content of the document.",
-                },
-                {
-                    "step_id": "step_index",
-                    "agent_id": "indexer",
-                    "input_mapping": {"content": "document_content"},
-                    "output_key": "index_result",
-                    "description": "Chunk, embed, and store the document in the vector knowledge base.",
-                },
-                {
-                    "step_id": "step_notify",
-                    "agent_id": "deliverer",
-                    "input_mapping": {"message": "index_result"},
-                    "output_key": "notification_sent",
-                    "description": "Send a notification confirming the document was indexed successfully.",
-                },
-            ],
-            "edges": [
-                {"from_step": "step_fetch", "to_step": "step_index"},
-                {"from_step": "step_index", "to_step": "step_notify"},
-            ],
-        },
-    },
-    {
-        "template_id": "competitive-intel",
-        "name": "Competitive Intelligence",
-        "description": "Research competitors, extract positioning data, and produce a comparison table.",
-        "step_count": 4,
-        "tags": ["research", "competitive", "analysis"],
-        "definition": {
-            "workflow_id": "competitive-intel",
-            "name": "Competitive Intelligence",
-            "description": "Research competitors and produce a comparison report.",
-            "version": "1.0.0",
-            "steps": [
-                {
-                    "step_id": "step_research_a",
-                    "agent_id": "researcher",
-                    "input_mapping": {"query": "literal:Competitor A pricing and features"},
-                    "output_key": "competitor_a",
-                    "description": "Research Competitor A — gather pricing, key features, and market positioning.",
-                },
-                {
-                    "step_id": "step_research_b",
-                    "agent_id": "researcher",
-                    "input_mapping": {"query": "literal:Competitor B pricing and features"},
-                    "output_key": "competitor_b",
-                    "description": "Research Competitor B — gather pricing, key features, and market positioning.",
-                },
-                {
-                    "step_id": "step_compare",
-                    "agent_id": "analyst",
-                    "input_mapping": {
-                        "data_a": "competitor_a",
-                        "data_b": "competitor_b",
-                    },
-                    "output_key": "comparison",
-                    "description": "Compare both competitors across price, features, strengths, and weaknesses.",
-                },
-                {
-                    "step_id": "step_report",
-                    "agent_id": "writer",
-                    "input_mapping": {"content": "comparison"},
-                    "output_key": "report",
-                    "description": "Produce a markdown report with an executive summary and comparison table.",
-                },
-            ],
-            "edges": [
-                {"from_step": "step_research_a", "to_step": "step_compare"},
-                {"from_step": "step_research_b", "to_step": "step_compare"},
-                {"from_step": "step_compare", "to_step": "step_report"},
-            ],
-        },
-    },
-]
+from api.routers.workflow_templates import WORKFLOW_TEMPLATES
+from api.routers.workflow_templates_ext import WORKFLOW_TEMPLATES_EXT
+
+_TEMPLATES = WORKFLOW_TEMPLATES + WORKFLOW_TEMPLATES_EXT
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -420,6 +207,23 @@ def validate_workflow(
 def list_templates() -> list[dict[str, Any]]:
     """Return curated starter workflow templates."""
     return _TEMPLATES
+
+
+@router.get("/team-archetypes")
+def list_team_archetypes() -> list[dict[str, Any]]:
+    """Return available team archetypes for multi-agent workflows."""
+    from api.services.workflows.team_archetypes import list_archetypes
+    return list_archetypes()
+
+
+@router.get("/team-archetypes/{archetype_id}")
+def get_team_archetype(archetype_id: str) -> dict[str, Any]:
+    """Return a specific team archetype with full agent definitions."""
+    from api.services.workflows.team_archetypes import get_archetype
+    result = get_archetype(archetype_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Archetype not found.")
+    return {"id": archetype_id, **result}
 
 
 @router.get("")

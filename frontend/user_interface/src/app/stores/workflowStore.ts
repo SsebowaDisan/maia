@@ -15,7 +15,8 @@ type StepType =
   | "delay"
   | "foreach"
   | "merge"
-  | "switch";
+  | "switch"
+  | "knowledge_search";
 
 type WorkflowCanvasNodeData = {
   label: string;

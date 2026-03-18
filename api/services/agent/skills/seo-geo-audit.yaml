@@ -9,7 +9,7 @@ description: >
 version: "1.0.0"
 author: Maia Platform
 tags: [seo, geo, audit, content, technical-seo, marketing]
-required_connectors: [playwright_browser]
+required_connectors: [computer_use_browser]
 is_public: true
 pricing_model: free
 

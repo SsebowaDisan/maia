@@ -354,6 +354,32 @@ function listConnectorHealth() {
   return request<Array<Record<string, unknown>>>("/api/agent/connectors/health");
 }
 
+function testConnectorConnection(connectorId: string) {
+  return request<{
+    status: string;
+    connector_id?: string;
+    detail?: string;
+  }>(`/api/connectors/${encodeURIComponent(connectorId)}/test`).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return listConnectorHealth().then((rows) => {
+      const row = rows.find((entry) => String(entry?.connector_id || "") === connectorId);
+      if (!row) {
+        return {
+          status: "error",
+          detail: "Connector health response did not include this connector.",
+        };
+      }
+      return {
+        status: Boolean(row?.ok) ? "ok" : "error",
+        connector_id: connectorId,
+        detail: String(row?.message || ""),
+      };
+    });
+  });
+}
+
 function listConnectorPlugins() {
   return request<ConnectorPluginManifest[]>("/api/agent/connectors/plugins");
 }
@@ -367,23 +393,47 @@ function listConnectorCredentials() {
 }
 
 function upsertConnectorCredentials(connectorId: string, values: Record<string, string>) {
-  return request<ConnectorCredentialRecord>("/api/agent/connectors/credentials", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      connector_id: connectorId,
-      values,
-    }),
+  return request<{ status: string; connector_id: string }>(
+    `/api/connectors/${encodeURIComponent(connectorId)}/credentials`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        values,
+      }),
+    },
+  ).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<ConnectorCredentialRecord>("/api/agent/connectors/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        connector_id: connectorId,
+        values,
+      }),
+    });
   });
 }
 
 function deleteConnectorCredentials(connectorId: string) {
   return request<{ status: string; connector_id: string }>(
-    `/api/agent/connectors/credentials/${encodeURIComponent(connectorId)}`,
+    `/api/connectors/${encodeURIComponent(connectorId)}/credentials`,
     {
       method: "DELETE",
     },
-  );
+  ).catch((error) => {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+    return request<{ status: string; connector_id: string }>(
+      `/api/agent/connectors/credentials/${encodeURIComponent(connectorId)}`,
+      {
+        method: "DELETE",
+      },
+    );
+  });
 }
 
 function createAgent(definition: AgentDefinitionInput) {
@@ -933,6 +983,7 @@ export {
   listWebhooks,
   listWorkflows,
   listConnectorHealth,
+  testConnectorConnection,
   listConnectorPlugins,
   listAgentInstallHistory,
   patchConnectorBinding,

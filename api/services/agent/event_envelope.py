@@ -80,6 +80,13 @@ class EventEnvelope(BaseModel):
     scene_ref: str | None = None
     evidence_refs: list[str] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
+    # Theatre correlation fields
+    scene_family: str | None = None
+    connector_id: str | None = None
+    connector_label: str | None = None
+    brand_slug: str | None = None
+    operation_label: str | None = None
+    computer_use_session_id: str | None = None
 
 
 def _clean_text(value: Any) -> str:
@@ -194,6 +201,16 @@ def infer_event_family(
     data: dict[str, Any] | None = None,
 ) -> EventFamily:
     normalized = _normalized_text(event_type)
+
+    # Priority 1: Check declared scene_family from event data (metadata-driven, no heuristics)
+    declared_scene_family = _normalized_text((data or {}).get("scene_family"))
+    _SCENE_FAMILY_TO_EVENT_FAMILY: dict[str, EventFamily] = {
+        "email": "email", "sheet": "sheet", "document": "doc", "api": "api",
+        "browser": "browser", "chat": "api", "crm": "api", "support": "api", "commerce": "api",
+    }
+    if declared_scene_family in _SCENE_FAMILY_TO_EVENT_FAMILY:
+        return _SCENE_FAMILY_TO_EVENT_FAMILY[declared_scene_family]
+
     if normalized in _FAMILY_EXACT:
         return _FAMILY_EXACT[normalized]
     if normalized.startswith("graph_"):
@@ -208,9 +225,13 @@ def infer_event_family(
         return "doc"
     if normalized.startswith(("sheet_", "sheet.", "sheets.")):
         return "sheet"
-    if normalized.startswith(("email_", "email.", "gmail_", "gmail.")):
+    if normalized.startswith(("email_", "email.", "gmail_", "gmail.", "outlook_", "outlook.")):
         return "email"
-    if normalized.startswith(("api_", "api.", "api_call_")):
+    if normalized.startswith(("api_", "api.", "api_call_", "sap_", "sap.", "connector_", "connector.")):
+        return "api"
+    if normalized.startswith(("computer_use_",)):
+        return "browser"
+    if normalized.startswith(("slack_", "slack.", "teams_", "teams.")):
         return "api"
     if normalized.startswith(("memory_", "llm.context_memory", "llm.context_session", "llm.working_context")):
         return "memory"
@@ -359,6 +380,24 @@ def build_event_envelope(
         default_render_mode=infer_render_mode(event_family=family, priority=priority),
         default_replay_importance=infer_replay_importance(priority=priority),
     )
+    # Theatre correlation
+    connector_id = _first_text(payload, "connector_id", "provider", "integration_id")
+    connector_label = _first_text(payload, "connector_label", "provider_label")
+    brand_slug = _first_text(payload, "brand_slug", "plugin_brand_slug")
+    scene_family = _first_text(payload, "scene_family", "plugin_scene_family")
+    operation_label = _first_text(payload, "operation_label", "action_label", "operation")
+    cu_session_id = _first_text(payload, "computer_use_session_id")
+
+    # Enrich from plugin metadata if connector is known
+    if connector_id and not scene_family:
+        try:
+            hints = connector_plugin_action_hints(connector_id=connector_id)
+            scene_family = scene_family or hints.get("plugin_scene_family")
+            brand_slug = brand_slug or hints.get("plugin_brand_slug")
+            connector_label = connector_label or hints.get("plugin_connector_label")
+        except Exception:
+            pass
+
     return EventEnvelope(
         event_family=family,
         event_type=_clean_text(event_type) or "unknown",
@@ -375,6 +414,12 @@ def build_event_envelope(
         scene_ref=_first_text(payload, "scene_ref", "scene_surface"),
         evidence_refs=_collect_refs(payload, "evidence_refs", "evidence_ids"),
         artifact_refs=_collect_refs(payload, "artifact_refs", "artifact_ids"),
+        scene_family=scene_family,
+        connector_id=connector_id,
+        connector_label=connector_label,
+        brand_slug=brand_slug,
+        operation_label=operation_label,
+        computer_use_session_id=cu_session_id,
     )
 
 
@@ -425,6 +470,21 @@ def merge_event_envelope_data(
                 merged["scene_surface"] = plugin_hints["plugin_scene_type"]
             if not _clean_text(merged.get("scene_ref")) and _clean_text(plugin_hints.get("plugin_scene_type")):
                 merged["scene_ref"] = plugin_hints["plugin_scene_type"]
+
+    # Propagate theatre correlation fields from envelope to event data
+    if envelope.scene_family and not _clean_text(merged.get("scene_family")):
+        merged["scene_family"] = envelope.scene_family
+    if envelope.connector_id and not _clean_text(merged.get("connector_id")):
+        merged["connector_id"] = envelope.connector_id
+    if envelope.connector_label and not _clean_text(merged.get("connector_label")):
+        merged["connector_label"] = envelope.connector_label
+    if envelope.brand_slug and not _clean_text(merged.get("brand_slug")):
+        merged["brand_slug"] = envelope.brand_slug
+    if envelope.operation_label and not _clean_text(merged.get("operation_label")):
+        merged["operation_label"] = envelope.operation_label
+    if envelope.computer_use_session_id and not _clean_text(merged.get("computer_use_session_id")):
+        merged["computer_use_session_id"] = envelope.computer_use_session_id
+
     merged["event_envelope"] = envelope.model_dump(mode="json")
     return merged
 

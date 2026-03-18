@@ -62,10 +62,14 @@ def execute_playwright_inspect_stream(
     url = resolve_url_fn(prompt=prompt, params=params)
     if not url:
         raise ToolExecutionError("Provide a valid URL for browser inspection.")
-    web_provider = str(params.get("web_provider") or "playwright_browser").strip() or "playwright_browser"
-    if web_provider != "playwright_browser":
+    _SUPPORTED_BROWSER_PROVIDERS = {"playwright_browser", "computer_use_browser"}
+    web_provider = str(params.get("web_provider") or "computer_use_browser").strip() or "computer_use_browser"
+    # Redirect deprecated provider to new default
+    if web_provider == "playwright_browser":
+        web_provider = "computer_use_browser"
+    if web_provider not in _SUPPORTED_BROWSER_PROVIDERS:
         raise ToolExecutionError(
-            f"Unsupported web_provider `{web_provider}`. Supported value: `playwright_browser`."
+            f"Unsupported web_provider `{web_provider}`. Supported: {', '.join(sorted(_SUPPORTED_BROWSER_PROVIDERS))}."
         )
     auto_accept_cookies = truthy_fn(params.get("auto_accept_cookies"), default=True)
     follow_same_domain_links = truthy_fn(params.get("follow_same_domain_links"), default=True)
@@ -164,6 +168,7 @@ def execute_playwright_inspect_stream(
             url=capture_url,
             auto_accept_cookies=auto_accept_cookies,
             highlight_color=highlight_color,
+            highlight_query=prompt,
             follow_same_domain_links=follow_links,
             interaction_actions=actions,
         )
@@ -526,7 +531,7 @@ def execute_playwright_inspect_stream(
             barrier_type="human_verification",
             barrier_scope="website_navigation",
             verification_context={
-                "tool_id": "browser.playwright.inspect",
+                "tool_id": "browser.inspect",
                 "url": final_url or inspected_url or url,
                 "blocked_reason": blocked_reason or "",
             },
@@ -583,9 +588,23 @@ def execute_playwright_inspect_stream(
             "title": title,
             "screenshot_path": screenshot_path,
             "keywords": keywords,
+            "highlight_regions": (
+                [dict(row) for row in capture.get("highlight_regions", []) if isinstance(row, dict)]
+                if isinstance(capture, dict)
+                else []
+            )[:12],
+            "highlight_sentences": (
+                [str(row).strip() for row in capture.get("highlight_sentences", []) if str(row).strip()]
+                if isinstance(capture, dict)
+                else []
+            )[:12],
+            "highlight_color": (
+                str(capture.get("highlight_color") or highlight_color)
+                if isinstance(capture, dict)
+                else highlight_color
+            ),
             "pages": pages if isinstance(pages, list) else [],
             "auto_accept_cookies": auto_accept_cookies,
-            "highlight_color": highlight_color,
             "highlighted_keywords": list(dict.fromkeys(highlighted_keywords))[:24],
             "copied_snippets": copied_snippets[:8],
             "web_provider": web_provider,

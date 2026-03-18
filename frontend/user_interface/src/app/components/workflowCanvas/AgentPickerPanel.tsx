@@ -314,8 +314,8 @@ export function AgentPickerPanel({
   return (
     // Backdrop
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: "rgba(15, 23, 42, 0.38)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center transition-opacity duration-200"
+      style={{ background: "rgba(15, 23, 42, 0.38)", animation: "fadeIn 200ms ease-out" }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -323,6 +323,7 @@ export function AgentPickerPanel({
       {/* Dialog */}
       <div
         className="relative flex w-[820px] max-h-[88vh] flex-col overflow-hidden rounded-[24px] border border-black/[0.08] bg-white shadow-[0_32px_72px_-20px_rgba(15,23,42,0.5)]"
+        style={{ animation: "scaleIn 200ms ease-out" }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}

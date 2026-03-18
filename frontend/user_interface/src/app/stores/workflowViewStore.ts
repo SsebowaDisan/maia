@@ -11,9 +11,13 @@ type WorkflowViewStore = {
   /** Callback set by app shell to send a message to chat and close the overlay. */
   runInChat: ((message: string) => void) | null;
   setRunInChat: (fn: ((message: string) => void) | null) => void;
+  /** Staged message — pre-fills the composer so the user can review/attach before sending. */
+  stagedMessage: string;
+  setStagedMessage: (message: string) => void;
+  consumeStagedMessage: () => string;
 };
 
-export const useWorkflowViewStore = create<WorkflowViewStore>((set) => ({
+export const useWorkflowViewStore = create<WorkflowViewStore>((set, get) => ({
   view: "gallery",
   quickSwitcherOpen: false,
   setView: (view) => set({ view }),
@@ -21,4 +25,11 @@ export const useWorkflowViewStore = create<WorkflowViewStore>((set) => ({
   closeQuickSwitcher: () => set({ quickSwitcherOpen: false }),
   runInChat: null,
   setRunInChat: (fn) => set({ runInChat: fn }),
+  stagedMessage: "",
+  setStagedMessage: (message) => set({ stagedMessage: message }),
+  consumeStagedMessage: () => {
+    const msg = get().stagedMessage;
+    set({ stagedMessage: "" });
+    return msg;
+  },
 }));

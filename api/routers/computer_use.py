@@ -313,6 +313,12 @@ def stream_agent_loop(
                 "computer_use_max_iterations": max_iterations,
                 "url": str(event.get("url") or ""),
                 "iteration": int(event.get("iteration") or 0),
+                # Theatre correlation
+                "scene_family": "browser",
+                "brand_slug": "browser",
+                "connector_id": "computer_use_browser",
+                "connector_label": "Computer Browser",
+                "operation_label": f"Computer Use: {event_type}",
             },
         }
 

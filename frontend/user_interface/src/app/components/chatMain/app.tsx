@@ -24,6 +24,7 @@ import { EmptyState } from "./EmptyState";
 import { GateApprovalCard } from "./GateApprovalCard";
 import {
   CITATION_ANCHOR_SELECTOR,
+  prefetchCitationSources,
   resolveCitationAnchorInteractionPolicy,
   resolveCitationFocusFromAnchor,
   shouldOpenCitationSourceUrlForPointerEvent,
@@ -435,6 +436,14 @@ function ChatMain({
       container.scrollHeight - (container.scrollTop + container.clientHeight);
     setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
   }, [chatTurns.length, composerFocused, isActivityStreaming, selectedTurnIndex]);
+
+  // Prefetch citation source URLs after new turns render — warms the backend cache
+  useEffect(() => {
+    const container = contentScrollRef.current;
+    if (!container || chatTurns.length === 0) return;
+    const timer = window.setTimeout(() => prefetchCitationSources(container), 500);
+    return () => window.clearTimeout(timer);
+  }, [chatTurns.length]);
 
   const composerVisible = !composerCollapsed || composerHovering || composerFocused;
 

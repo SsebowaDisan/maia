@@ -72,20 +72,24 @@ def execute_action(session: BrowserSession, tool_input: dict[str, Any]) -> dict[
         return {"action": "key", "key": key}
 
     if action == "scroll":
-        x, y = _coords(tool_input)
+        x, y = _coords_or_center(session=session, tool_input=tool_input)
         delta_x = int(tool_input.get("delta_x") or 0)
         delta_y = int(tool_input.get("delta_y") or 0)
         # Claude uses "coordinate" + scroll_direction / scroll_amount in some specs
         direction = str(tool_input.get("scroll_direction", "")).lower()
         amount = int(tool_input.get("scroll_amount") or 3)
+        viewport = session.viewport()
+        base_step = max(220, int(viewport.get("height", 800) * 0.82))
         if direction == "down":
-            delta_y = amount * 100
+            delta_y = max(amount * 100, base_step)
         elif direction == "up":
-            delta_y = -(amount * 100)
+            delta_y = -max(amount * 100, base_step)
         elif direction == "right":
-            delta_x = amount * 100
+            delta_x = max(amount * 100, int(viewport.get("width", 1280) * 0.5))
         elif direction == "left":
-            delta_x = -(amount * 100)
+            delta_x = -max(amount * 100, int(viewport.get("width", 1280) * 0.5))
+        elif delta_x == 0 and delta_y == 0:
+            delta_y = base_step
         session.scroll(x, y, delta_x=delta_x, delta_y=delta_y)
         return {"action": "scroll", "x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y}
 
@@ -101,6 +105,14 @@ def execute_action(session: BrowserSession, tool_input: dict[str, Any]) -> dict[
 def _coords(tool_input: dict[str, Any]) -> tuple[int, int]:
     """Extract [x, y] from tool_input.coordinate."""
     return _field_coords(tool_input, "coordinate")
+
+
+def _coords_or_center(*, session: BrowserSession, tool_input: dict[str, Any]) -> tuple[int, int]:
+    coord = tool_input.get("coordinate")
+    if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+        return int(coord[0]), int(coord[1])
+    viewport = session.viewport()
+    return int(viewport.get("width", 1280) // 2), int(viewport.get("height", 800) // 2)
 
 
 def _field_coords(tool_input: dict[str, Any], field: str) -> tuple[int, int]:

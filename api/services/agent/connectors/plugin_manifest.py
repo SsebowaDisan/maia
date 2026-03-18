@@ -252,6 +252,23 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
             "scene_mapping": [{"scene_type": "api", "action_ids": ["google_api_hub.call"]}],
             "graph_mapping": [{"action_id": "google_api_hub.call", "node_type": "api_operation"}],
         },
+        "sap": {
+            "label": "SAP",
+            "actions": [
+                {"action_id": "sap.read_po", "title": "Read purchase order", "event_family": "api", "scene_type": "api", "tool_ids": ["sap.read_purchase_order"]},
+                {"action_id": "sap.create_po", "title": "Create purchase order", "event_family": "api", "scene_type": "api", "tool_ids": ["sap.create_purchase_order"]},
+                {"action_id": "sap.goods_receipt", "title": "Post goods receipt", "event_family": "api", "scene_type": "api", "tool_ids": ["sap.post_goods_receipt"]},
+            ],
+            "evidence_emitters": [
+                {"emitter_id": "sap.document", "source_type": "api", "fields": ["document_number", "document_type", "status"]},
+            ],
+            "scene_mapping": [{"scene_type": "api", "action_ids": ["sap.read_po", "sap.create_po", "sap.goods_receipt"]}],
+            "graph_mapping": [
+                {"action_id": "sap.read_po", "node_type": "research"},
+                {"action_id": "sap.create_po", "node_type": "api_operation"},
+                {"action_id": "sap.goods_receipt", "node_type": "api_operation"},
+            ],
+        },
         "brave_search": {
             "label": "Brave Search",
             "actions": [
@@ -293,47 +310,27 @@ def _profile_for_connector(connector_id: str) -> dict[str, object]:
                 {"action_id": "http.post", "node_type": "api_operation"},
             ],
         },
-        "playwright_browser": {
-            "label": "Playwright Browser",
+        "computer_use_browser": {
+            "label": "Browser (Computer Use)",
             "actions": [
                 {"action_id": "browser.navigate", "title": "Navigate", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.navigate"]},
-                {"action_id": "browser.extract", "title": "Extract", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.navigate"]},
+                {"action_id": "browser.extract", "title": "Extract content", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.extract_text"]},
+                {"action_id": "browser.fill_form", "title": "Fill form", "event_family": "browser", "scene_type": "browser", "tool_ids": ["contact_form.fill"]},
             ],
             "evidence_emitters": [
                 {"emitter_id": "browser.capture", "source_type": "web", "fields": ["url", "snippet", "event_id"]},
             ],
-            "scene_mapping": [{"scene_type": "browser", "action_ids": ["browser.navigate", "browser.extract"]}],
+            "scene_mapping": [{"scene_type": "browser", "action_ids": ["browser.navigate", "browser.extract", "browser.fill_form"]}],
             "graph_mapping": [
                 {"action_id": "browser.navigate", "node_type": "browser_action"},
                 {"action_id": "browser.extract", "node_type": "research"},
+                {"action_id": "browser.fill_form", "node_type": "browser_action"},
             ],
         },
-        "gmail_playwright": {
-            "label": "Gmail (Browser)",
-            "actions": [
-                {"action_id": "gmail_pw.send", "title": "Send email", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail_playwright.send"]},
-                {"action_id": "gmail_pw.read", "title": "Read inbox", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail_playwright.read"]},
-            ],
-            "evidence_emitters": [
-                {"emitter_id": "gmail_pw.thread", "source_type": "email", "fields": ["subject", "snippet"]},
-            ],
-            "scene_mapping": [{"scene_type": "email", "action_ids": ["gmail_pw.send", "gmail_pw.read"]}],
-            "graph_mapping": [
-                {"action_id": "gmail_pw.send", "node_type": "email_draft"},
-                {"action_id": "gmail_pw.read", "node_type": "research"},
-            ],
-        },
-        "playwright_contact_form": {
-            "label": "Contact Form",
-            "actions": [
-                {"action_id": "contact_form.fill", "title": "Fill form", "event_family": "browser", "scene_type": "browser", "tool_ids": ["playwright_contact_form.fill"]},
-            ],
-            "evidence_emitters": [
-                {"emitter_id": "contact_form.submission", "source_type": "web", "fields": ["url", "status"]},
-            ],
-            "scene_mapping": [{"scene_type": "browser", "action_ids": ["contact_form.fill"]}],
-            "graph_mapping": [{"action_id": "contact_form.fill", "node_type": "browser_action"}],
-        },
+        # Deprecated — kept for backward compat, redirects at runtime
+        "playwright_browser": {"label": "Browser (deprecated)", "actions": [{"action_id": "browser.navigate", "title": "Navigate", "event_family": "browser", "scene_type": "browser", "tool_ids": ["browser.navigate"]}], "evidence_emitters": [], "scene_mapping": [{"scene_type": "browser", "action_ids": ["browser.navigate"]}], "graph_mapping": [{"action_id": "browser.navigate", "node_type": "browser_action"}]},
+        "gmail_playwright": {"label": "Gmail (deprecated)", "actions": [{"action_id": "gmail_pw.send", "title": "Send email", "event_family": "email", "scene_type": "email", "tool_ids": ["gmail.send"]}], "evidence_emitters": [], "scene_mapping": [{"scene_type": "email", "action_ids": ["gmail_pw.send"]}], "graph_mapping": [{"action_id": "gmail_pw.send", "node_type": "email_draft"}]},
+        "playwright_contact_form": {"label": "Contact Form (deprecated)", "actions": [{"action_id": "contact_form.fill", "title": "Fill form", "event_family": "browser", "scene_type": "browser", "tool_ids": ["contact_form.fill"]}], "evidence_emitters": [], "scene_mapping": [{"scene_type": "browser", "action_ids": ["contact_form.fill"]}], "graph_mapping": [{"action_id": "contact_form.fill", "node_type": "browser_action"}]},
         "email_validation": {
             "label": "Email Validation",
             "actions": [
@@ -451,6 +448,16 @@ def connector_plugin_action_hints(
         "plugin_connector_id": manifest.connector_id,
         "plugin_connector_label": manifest.label,
     }
+
+    try:
+        from api.services.connectors.product_meta import PRODUCT_META
+        pm = PRODUCT_META.get(manifest.connector_id, {})
+        if pm.get("brand_slug"):
+            hints["plugin_brand_slug"] = pm["brand_slug"]
+        if pm.get("scene_family"):
+            hints["plugin_scene_family"] = pm["scene_family"]
+    except Exception:
+        pass
     if selected_action:
         hints["plugin_action_id"] = selected_action.action_id
         hints["plugin_action_title"] = selected_action.title
@@ -464,11 +471,7 @@ def connector_plugin_action_hints(
 
 
 __all__ = [
-    "ConnectorPluginManifest",
-    "PluginActionManifest",
-    "PluginEvidenceEmitter",
-    "PluginGraphMapping",
-    "PluginSceneMapping",
-    "connector_plugin_action_hints",
-    "connector_plugin_manifest",
+    "ConnectorPluginManifest", "PluginActionManifest", "PluginEvidenceEmitter",
+    "PluginGraphMapping", "PluginSceneMapping",
+    "connector_plugin_action_hints", "connector_plugin_manifest",
 ]

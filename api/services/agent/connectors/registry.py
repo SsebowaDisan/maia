@@ -5,11 +5,11 @@ from typing import Any
 
 from api.services.agent.auth.credentials import get_credential_store
 
+import logging
+
 from .base import BaseConnector
 from .brave_search_connector import BraveSearchConnector
 from .bing_search_connector import BingSearchConnector
-from .browser_contact_connector import BrowserContactConnector
-from .browser_connector import BrowserConnector
 from .email_validation_connector import EmailValidationConnector
 from .google_ads_connector import GoogleAdsConnector
 from .google_analytics_connector import GoogleAnalyticsConnector
@@ -18,11 +18,20 @@ from .google_calendar_connector import GoogleCalendarConnector
 from .google_maps_connector import GoogleMapsConnector
 from .google_workspace_connector import GoogleWorkspaceConnector
 from .gmail_connector import GmailConnector
-from .gmail_playwright_connector import GmailPlaywrightConnector
 from .invoice_connector import InvoiceConnector
 from .m365_connector import M365Connector
 from .plugin_manifest import connector_plugin_manifest
 from .slack_connector import SlackConnector
+
+_logger = logging.getLogger(__name__)
+
+# Deprecated Playwright connectors → route to API or Computer Use equivalents.
+# Old IDs still resolve for backward compatibility but log a deprecation notice.
+_DEPRECATED_REDIRECTS: dict[str, str] = {
+    "gmail_playwright": "gmail",
+    "playwright_browser": "computer_use_browser",
+    "playwright_contact_form": "computer_use_browser",
+}
 
 
 def _env_flag(name: str) -> bool:
@@ -40,15 +49,18 @@ class ConnectorRegistry:
             "google_analytics": GoogleAnalyticsConnector,
             "google_api_hub": GoogleApiHubConnector,
             "gmail": GmailConnector,
-            "gmail_playwright": GmailPlaywrightConnector,
             "bing_search": BingSearchConnector,
             "brave_search": BraveSearchConnector,
-            "playwright_browser": BrowserConnector,
-            "playwright_contact_form": BrowserContactConnector,
             "email_validation": EmailValidationConnector,
             "m365": M365Connector,
             "invoice": InvoiceConnector,
         }
+        # Computer Use browser connector — uses the CU agent loop instead of Playwright
+        try:
+            from .computer_use_browser_connector import ComputerUseBrowserConnector
+            self._factories["computer_use_browser"] = ComputerUseBrowserConnector
+        except ImportError:
+            _logger.debug("ComputerUseBrowserConnector not available, browser tasks disabled")
         # Source federation connectors — enabled via environment flags (S1)
         if _env_flag("MAIA_ARXIV_ENABLED"):
             from .arxiv_connector import ArXivConnector
@@ -64,9 +76,16 @@ class ConnectorRegistry:
             self._factories["reddit"] = RedditConnector
 
     def names(self) -> list[str]:
-        return sorted(self._factories.keys())
+        # Include deprecated IDs so existing workflows still resolve
+        all_ids = set(self._factories.keys()) | set(_DEPRECATED_REDIRECTS.keys())
+        return sorted(all_ids)
 
     def build(self, connector_id: str, settings: dict[str, Any] | None = None) -> BaseConnector:
+        # Handle deprecated Playwright connectors → redirect to new target
+        if connector_id in _DEPRECATED_REDIRECTS:
+            target = _DEPRECATED_REDIRECTS[connector_id]
+            _logger.info("Connector '%s' is deprecated, routing to '%s'", connector_id, target)
+            connector_id = target
         factory = self._factories.get(connector_id)
         if factory is None:
             raise KeyError(f"Unknown connector: {connector_id}")

@@ -23,6 +23,7 @@ function StepTypeConfig({ stepType, stepConfig, onChange }: StepTypeConfigProps)
     foreach: () => <ForEachConfig config={stepConfig} onChange={onChange} />,
     delay: () => <DelayConfig config={stepConfig} onChange={onChange} />,
     merge: () => <MergeConfig config={stepConfig} onChange={onChange} />,
+    knowledge_search: () => <KnowledgeSearchConfig config={stepConfig} onChange={onChange} />,
   };
 
   const renderer = renderers[stepType];
@@ -210,6 +211,103 @@ function MergeConfig({ config, onChange }: { config: Record<string, unknown>; on
           <option value="list">Collect as list</option>
           <option value="concat">Concatenate strings</option>
         </select>
+      </label>
+    </div>
+  );
+}
+
+function KnowledgeSearchConfig({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const set = (k: string, v: unknown) => onChange({ ...config, [k]: v });
+  const topK = Number(config.top_k || 5);
+  const threshold = Number(config.score_threshold || 0);
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <span className="mb-1 block text-[12px] font-semibold text-[#344054]">What to search for</span>
+        <span className="mb-2 block text-[11px] text-[#667085]">
+          Which input should be used as the search query? This is usually the question or topic from a previous step.
+        </span>
+        <ConfigField
+          label="Query input key"
+          value={String(config.query_key || "query")}
+          onChange={(v) => set("query_key", v)}
+          placeholder="query"
+        />
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[12px] font-semibold text-[#344054]">How many results</span>
+        <span className="mb-2 block text-[11px] text-[#667085]">
+          More results give broader context but take longer to process.
+        </span>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={1}
+            max={20}
+            value={topK}
+            onChange={(e) => set("top_k", Number(e.target.value))}
+            className="flex-1 accent-[#7c3aed]"
+          />
+          <span className="w-8 text-center text-[13px] font-semibold text-[#101828]">{topK}</span>
+        </div>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[12px] font-semibold text-[#344054]">Search method</span>
+        <div className="flex gap-1.5">
+          {([
+            { value: "hybrid", label: "Smart", hint: "Combines keywords + meaning" },
+            { value: "vector", label: "Meaning", hint: "Finds similar meaning" },
+            { value: "text", label: "Keyword", hint: "Matches exact words" },
+          ] as const).map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => set("retrieval_mode", opt.value)}
+              className={`flex-1 rounded-lg border px-2 py-2 text-center transition-colors ${
+                String(config.retrieval_mode || "hybrid") === opt.value
+                  ? "border-[#7c3aed] bg-[#f5f3ff]"
+                  : "border-black/[0.08] bg-white hover:bg-[#f8fafc]"
+              }`}
+            >
+              <p className={`text-[12px] font-semibold ${String(config.retrieval_mode || "hybrid") === opt.value ? "text-[#7c3aed]" : "text-[#344054]"}`}>{opt.label}</p>
+              <p className="mt-0.5 text-[10px] text-[#667085]">{opt.hint}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <span className="mb-1 block text-[12px] font-semibold text-[#344054]">Minimum relevance</span>
+        <span className="mb-2 block text-[11px] text-[#667085]">
+          Only return results above this quality threshold. 0 returns everything.
+        </span>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(threshold * 100)}
+            onChange={(e) => set("score_threshold", Number(e.target.value) / 100)}
+            className="flex-1 accent-[#7c3aed]"
+          />
+          <span className="w-10 text-center text-[13px] font-semibold text-[#101828]">
+            {threshold === 0 ? "Any" : `${Math.round(threshold * 100)}%`}
+          </span>
+        </div>
+      </div>
+
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={config.include_metadata !== false}
+          onChange={(e) => set("include_metadata", e.target.checked)}
+          className="rounded accent-[#7c3aed]"
+        />
+        <span className="text-[12px] text-[#344054]">Include source file names and page numbers</span>
       </label>
     </div>
   );

@@ -51,9 +51,11 @@ class BrowserConnector(BaseConnector):
         wait_ms: int = 1200,
         auto_accept_cookies: bool = True,
         highlight_color: str = "yellow",
+        highlight_query: str = "",
         follow_same_domain_links: bool = True,
         interaction_actions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        del highlight_query
         stream = self.browse_live_stream(
             url=url,
             timeout_ms=timeout_ms,
@@ -81,9 +83,11 @@ class BrowserConnector(BaseConnector):
         max_scroll_steps: int = 3,
         auto_accept_cookies: bool = True,
         highlight_color: str = "yellow",
+        highlight_query: str = "",
         follow_same_domain_links: bool = True,
         interaction_actions: list[dict[str, Any]] | None = None,
     ) -> Generator[dict[str, Any], None, dict[str, Any]]:
+        del highlight_query
         if not playwright_available():
             raise ConnectorError(
                 "Playwright is not installed. Run `pip install playwright` and `playwright install`."

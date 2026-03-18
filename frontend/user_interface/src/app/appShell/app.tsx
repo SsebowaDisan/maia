@@ -89,6 +89,12 @@ const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
     title: "Connectors",
     subtitle: "Manage integration credentials, health, and permissions without leaving chat.",
   },
+  "/settings": {
+    key: "connectors",
+    path: "/connectors",
+    title: "Settings",
+    subtitle: "Manage integrations and connector settings.",
+  },
   "/workspace": {
     key: "workspace",
     path: "/workspace",
@@ -243,10 +249,10 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Register runInChat callback so the workflow builder can send messages to chat
+  // Register runInChat callback so the workflow builder can stage messages in the composer
   useEffect(() => {
     useWorkflowViewStore.getState().setRunInChat((message: string) => {
-      // Close overlay inline (avoid TDZ with closeSidebarOverlay const)
+      // Close overlay and navigate to chat
       setSidebarOverlay(null);
       const currentPath = window.location.pathname;
       if (currentPath && currentPath !== "/") {
@@ -255,16 +261,14 @@ export default function App() {
       }
       layout.setActiveTab("Chat");
       layout.setIsInfoPanelOpen(true);
-      void chatState.handleSendMessage(message, undefined, {
-        agentMode: chatState.composerMode,
-        accessMode: chatState.accessMode,
-        citationMode: chatState.citationMode,
-      });
+      // Stage the message in the composer instead of sending immediately.
+      // This lets the user review, edit, and attach documents before sending.
+      useWorkflowViewStore.getState().setStagedMessage(message);
     });
     return () => {
       useWorkflowViewStore.getState().setRunInChat(null);
     };
-  }, [chatState, layout, setSidebarOverlay]);
+  }, [layout, setSidebarOverlay]);
 
   useEffect(() => {
     const load = async () => {
