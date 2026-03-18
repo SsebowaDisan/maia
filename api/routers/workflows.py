@@ -442,6 +442,20 @@ def save_workflow(
         definition=body.definition,
         created_by=user_id,
     )
+    # Record initial version for audit trail
+    try:
+        from api.services.versions.store import create_version
+        create_version(
+            resource_type="workflow",
+            resource_id=record.id,
+            tenant_id=user_id,
+            version="1.0.0",
+            definition=json.dumps(body.definition, default=str),
+            created_by=user_id,
+            changelog="Initial creation",
+        )
+    except Exception:
+        pass
     return _db_to_dict(record)
 
 
@@ -467,6 +481,22 @@ def update_workflow(
     record = _db_update(workflow_id, user_id, body.name, body.description, body.definition)
     if not record:
         raise HTTPException(status_code=404, detail="Workflow not found.")
+    # Record new version for audit trail
+    try:
+        from api.services.versions.store import create_version, get_latest_version, next_version
+        latest = get_latest_version("workflow", workflow_id)
+        ver = next_version(latest.version) if latest else "1.0.0"
+        create_version(
+            resource_type="workflow",
+            resource_id=workflow_id,
+            tenant_id=user_id,
+            version=ver,
+            definition=json.dumps(body.definition, default=str),
+            created_by=user_id,
+            changelog="Updated workflow",
+        )
+    except Exception:
+        pass
     return _db_to_dict(record)
 
 

@@ -212,12 +212,26 @@ def run_agent(
         trigger_type="manual",
     )
 
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="agent.run_started",
+            resource_type="agent",
+            resource_id=agent_id,
+            detail=f"Agent run started for {agent_id}, run {run.id}",
+        )
+    except Exception:
+        pass
+
     def _generate():
         from api.services.agents.gate_engine import GateRejectedError
         from api.services.agents.memory import record_episode, WorkingMemory
         from api.services.agents.runner import run_agent_task
         from api.services.observability.telemetry import record_run_start, record_run_end
-        from api.services.observability.cost_tracker import assert_budget_ok, BudgetExceededError
+        from api.services.observability.cost_tracker import assert_budget_ok, record_token_cost, BudgetExceededError
+        from api.services.agent.observability import get_agent_observability
 
         try:
             assert_budget_ok(tenant_id)
@@ -264,7 +278,15 @@ def run_agent(
             summary = ("".join(result_parts))[:500]
             record_episode(tenant_id, agent_id, run.id, summary=summary, outcome="success")
             run_store.complete_run(run.id, result_summary=summary)
-            record_run_end(run.id, status="completed")
+            # Collect token metrics from observability singleton
+            obs = get_agent_observability()
+            total_in = sum(obs._llm_prompt_tokens_by_model.values())
+            total_out = sum(obs._llm_completion_tokens_by_model.values())
+            record_run_end(run.id, status="completed", tokens_in=total_in, tokens_out=total_out)
+            try:
+                record_token_cost(tenant_id, agent_id, total_in, total_out)
+            except Exception:
+                pass
             yield f"data: {json.dumps({'event_type': 'run_completed', 'run_id': run.id})}\n\n"
 
         except GateRejectedError as exc:

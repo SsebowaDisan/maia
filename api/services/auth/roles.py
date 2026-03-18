@@ -25,9 +25,11 @@ ALL_SCOPES: list[str] = [
     "workflow:read", "workflow:write", "workflow:run", "workflow:delete",
     "agent:read", "agent:write", "agent:run",
     "connector:read", "connector:write", "connector:manage_credentials",
-    "secret:read", "secret:write",
+    "secret:read", "secret:write", "secrets:manage",
     "user:read", "user:invite", "user:manage_roles",
+    "roles:manage",
     "audit:read", "audit:export",
+    "sso:manage",
 ]
 
 # ---------------------------------------------------------------------------
@@ -47,6 +49,9 @@ BUILTIN_SCOPES: dict[str, set[str]] = {
 # Give org_admin audit:read but not audit:export
 BUILTIN_SCOPES["org_admin"].add("audit:read")
 BUILTIN_SCOPES["org_admin"].add("user:invite")
+BUILTIN_SCOPES["org_admin"].add("roles:manage")
+BUILTIN_SCOPES["org_admin"].add("secrets:manage")
+BUILTIN_SCOPES["org_admin"].add("sso:manage")
 
 
 # ---------------------------------------------------------------------------

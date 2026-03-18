@@ -52,9 +52,6 @@ interface ChatSidebarProps {
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onOpenWorkspaceTab: (tab: "Files" | "Resources" | "Settings" | "Help") => void;
   onNavigateAppRoute: (path: string) => void;
-  insightsCount?: number;
-  reviewQueueCount?: number;
-  isSuperAdmin?: boolean;
   width?: number;
 }
 
@@ -80,9 +77,6 @@ export function ChatSidebar({
   onDeleteConversation,
   onOpenWorkspaceTab,
   onNavigateAppRoute,
-  insightsCount = 0,
-  reviewQueueCount = 0,
-  isSuperAdmin = false,
   width = 300,
 }: ChatSidebarProps) {
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -393,9 +387,6 @@ export function ChatSidebar({
         onMoveConversationToProject={onMoveConversationToProject}
         onRequestDeleteConversation={requestDeleteConversation}
         onNavigateAppRoute={onNavigateAppRoute}
-        insightsCount={insightsCount}
-        reviewQueueCount={reviewQueueCount}
-        isSuperAdmin={isSuperAdmin}
       />
 
       <div className="px-3 py-3 border-t border-black/[0.06] bg-[#f6f6f7]">

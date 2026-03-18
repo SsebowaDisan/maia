@@ -195,7 +195,26 @@ def _queue_agent_run(
     from api.services.agents.run_store import create_run
 
     run = create_run(tenant_id, agent_id, trigger_type="event")
-    _executor.submit(_run_agent_for_event, tenant_id, agent_id, run.id, event_type, payload)
+    # Try to enqueue via task queue; fall back to direct thread pool execution
+    _enqueued = False
+    try:
+        from api.services.tasks.queue import get_task_queue
+        queue = get_task_queue()
+        queue.enqueue(
+            "agent.event_run",
+            {
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "event_type": event_type,
+                "event_payload": payload,
+            },
+            priority=5,
+        )
+        _enqueued = True
+    except Exception:
+        pass
+    if not _enqueued:
+        _executor.submit(_run_agent_for_event, tenant_id, agent_id, run.id, event_type, payload)
     return run.id
 
 

@@ -448,6 +448,47 @@ _CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = (
         description="Read content from a Google Doc.",
         execution_policy="auto_execute",
     ),
+    # --- Filesystem tools ---
+    AgentToolCapability(
+        domain="filesystem",
+        tool_id="file_read",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Read a file from the agent workspace.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="filesystem",
+        tool_id="file_write",
+        action_class=ACTION_CLASS_DRAFT,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Write content to a file in the agent workspace.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="filesystem",
+        tool_id="file_edit",
+        action_class=ACTION_CLASS_DRAFT,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Replace exact text in a workspace file.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="filesystem",
+        tool_id="file_search",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="Search file contents in the workspace using regex.",
+        execution_policy="auto_execute",
+    ),
+    AgentToolCapability(
+        domain="filesystem",
+        tool_id="file_list",
+        action_class=ACTION_CLASS_READ,
+        minimum_role=USER_ROLE_MEMBER,
+        description="List files and directories in the agent workspace.",
+        execution_policy="auto_execute",
+    ),
 )
 
 _GOOGLE_API_CAPABILITY_MATRIX: tuple[AgentToolCapability, ...] = tuple(

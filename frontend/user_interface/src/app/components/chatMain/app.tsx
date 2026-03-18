@@ -382,7 +382,7 @@ function ChatMain({
     const container = event.currentTarget;
     setScrollIconSettling(true);
     refreshScrollToLatestVisibility(container);
-    if (!composerFocused && !programmaticScrollRef.current) {
+    if (!composerFocused && !programmaticScrollRef.current && !isActivityStreaming) {
       const distanceToBottom =
         container.scrollHeight - (container.scrollTop + container.clientHeight);
       setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
@@ -395,6 +395,13 @@ function ChatMain({
       scrollIconHideTimeoutRef.current = null;
     }, SCROLL_ICON_SETTLE_MS);
   };
+
+  // Keep composer expanded while agent is streaming, and restore it when streaming ends.
+  useEffect(() => {
+    if (isActivityStreaming || isSending) {
+      setComposerCollapsed(false);
+    }
+  }, [isActivityStreaming, isSending]);
 
   useEffect(() => {
     if (!isSending || showScrollToLatest) {
@@ -421,13 +428,13 @@ function ChatMain({
 
   useEffect(() => {
     const container = contentScrollRef.current;
-    if (!container || composerFocused || programmaticScrollRef.current) {
+    if (!container || composerFocused || programmaticScrollRef.current || isActivityStreaming) {
       return;
     }
     const distanceToBottom =
       container.scrollHeight - (container.scrollTop + container.clientHeight);
     setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
-  }, [chatTurns.length, composerFocused, selectedTurnIndex]);
+  }, [chatTurns.length, composerFocused, isActivityStreaming, selectedTurnIndex]);
 
   const composerVisible = !composerCollapsed || composerHovering || composerFocused;
 
@@ -463,10 +470,10 @@ function ChatMain({
           <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Conversation</h3>
         </div>
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 grow">
         <div
           ref={contentScrollRef}
-          className="h-full overflow-y-auto overscroll-none px-6 pb-3 pt-6"
+          className="absolute inset-0 overflow-y-auto overscroll-none px-6 pb-3 pt-6"
           onScroll={handleContentScroll}
         >
           {pendingGate ? (
@@ -528,7 +535,7 @@ function ChatMain({
         ) : null}
       </div>
       <div
-        className="z-20 shrink-0"
+        className="z-20 mt-auto shrink-0"
         onMouseEnter={() => setComposerHovering(true)}
         onMouseLeave={() => setComposerHovering(false)}
       >

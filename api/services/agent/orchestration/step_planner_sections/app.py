@@ -7,6 +7,14 @@ from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep, build_plan, resolve_web_routing
+from api.services.agent.reasoning import TreeOfThoughtPlanner
+
+# Causal DAG (Innovation #4) — optional, try/except wrapped
+try:
+    from api.services.agent.reasoning import CausalDAG
+    _CAUSAL_DAG_AVAILABLE = True
+except Exception:
+    _CAUSAL_DAG_AVAILABLE = False
 
 from ..models import PlanPreparation, TaskPreparation
 from ..role_router import build_role_owned_steps, role_owned_steps_to_payload
@@ -131,11 +139,67 @@ def build_execution_steps(
             web_routing=web_routing,
         )
     )
-    steps = build_plan(
-        planning_request,
-        preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
-        web_routing=web_routing,
-    )
+
+    # --- Tree-of-Thought planning (Innovation #6) -------------------------
+    # Try multi-candidate planning first; fall back to single-plan if it fails.
+    steps: list[PlannedStep] = []
+    _tot_used = False
+    try:
+        _tot_planner = TreeOfThoughtPlanner()
+        _tot_candidates = _tot_planner.generate_plan_candidates(
+            task_goal=str(request.message or ""),
+            available_tools=sorted(available_tool_ids)[:60],
+            context=str(request.agent_goal or ""),
+            num_candidates=3,
+        )
+        if _tot_candidates:
+            _task_contract = getattr(task_prep, "task_contract", None) or {}
+            _scored = _tot_planner.score_candidates(_tot_candidates, _task_contract)
+            _best = _tot_planner.select_best(_scored)
+            if _best and _best.steps:
+                steps = [
+                    PlannedStep(
+                        tool_id=str(s.get("tool_id") or ""),
+                        title=str(s.get("title") or "")[:120],
+                        params=dict(s.get("params") or {}),
+                        why_this_step=str(s.get("why_this_step") or "")[:240],
+                        expected_evidence=tuple(
+                            str(e)[:220]
+                            for e in (s.get("expected_evidence") or [])
+                            if str(e).strip()
+                        ),
+                    )
+                    for s in _best.steps
+                    if str(s.get("tool_id") or "").strip()
+                ]
+                _tot_used = bool(steps)
+                # Store alternatives for fallback in settings.
+                settings["__tot_alternatives"] = [
+                    {
+                        "plan_id": alt.plan_id,
+                        "rationale": alt.rationale[:200],
+                        "score": alt.score,
+                        "step_count": len(alt.steps),
+                    }
+                    for alt in _tot_planner.alternatives[:4]
+                ]
+                settings["__tot_selected_plan_id"] = _best.plan_id
+    except Exception:
+        import logging as _tot_log
+        _tot_log.getLogger(__name__).debug(
+            "Tree-of-Thought planning failed — falling back to single-plan",
+            exc_info=True,
+        )
+
+    # Fall back to the original single-plan LLM call if ToT did not produce steps.
+    if not _tot_used:
+        steps = build_plan(
+            planning_request,
+            preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
+            web_routing=web_routing,
+        )
+    # --- end Tree-of-Thought -----------------------------------------------
+
     steps = _filter_steps_by_available_tools(
         steps=steps,
         available_tool_ids=available_tool_ids,
@@ -320,6 +384,53 @@ def build_execution_steps(
             role_owned_steps=role_owned_steps,
         )
     )
+    # --- Causal DAG (Innovation #4) -------------------------------------------
+    # Build a dependency graph from the plan, detect conflicts, compute optimal
+    # execution order, and store the graph in settings for brain/step executor.
+    try:
+        if _CAUSAL_DAG_AVAILABLE and len(steps) >= 2:
+            _causal = CausalDAG()
+            _step_dicts = [
+                {
+                    "step_id": f"step_{i + 1}",
+                    "tool_id": s.tool_id,
+                    "title": s.title[:80],
+                    "expected_output_type": "",
+                    "side_effects": [],
+                }
+                for i, s in enumerate(steps)
+            ]
+            _causal_graph = _causal.build_from_steps(_step_dicts)
+            _conflicts = _causal.detect_conflicts(_causal_graph)
+            _exec_order = _causal.optimal_execution_order(_causal_graph)
+            settings["__causal_dag"] = {
+                "node_count": len(_causal_graph.nodes),
+                "edge_count": len(_causal_graph.edges),
+                "conflicts": [
+                    {"from": c[0], "to": c[1]} for c in _conflicts[:5]
+                ],
+                "optimal_order": _exec_order[:40],
+            }
+            # Store the graph object for use by the brain during execution.
+            settings["__causal_graph_obj"] = _causal_graph
+            if _conflicts:
+                yield emit_event(
+                    activity_event_factory(
+                        event_type="causal_dag_conflicts",
+                        title=f"Causal DAG: {len(_conflicts)} conflict(s) detected",
+                        detail="; ".join(
+                            f"{c[0]} ↔ {c[1]}" for c in _conflicts[:3]
+                        ),
+                        metadata=settings["__causal_dag"],
+                    )
+                )
+    except Exception:
+        import logging as _cdag_log
+        _cdag_log.getLogger(__name__).debug(
+            "CausalDAG planning failed — non-blocking", exc_info=True,
+        )
+    # --- end Causal DAG -------------------------------------------------------
+
     get_agent_observability().observe_plan_steps(
         tool_ids=[item.tool_id for item in steps],
     )

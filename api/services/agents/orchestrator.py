@@ -166,3 +166,171 @@ def _emit(on_event: Optional[Callable], event: dict[str, Any]) -> None:
 
 def _format_context(context: dict[str, Any]) -> str:
     return "\n".join(f"{k}: {v}" for k, v in context.items())
+
+
+# ── Multi-agent consensus delegation (Innovation #9) ─────────────────────────
+
+def delegate_with_consensus(
+    task: str,
+    agent_ids: list[str],
+    context: dict[str, Any],
+    *,
+    tenant_id: str,
+    run_id: str | None = None,
+    on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> dict[str, Any]:
+    """Delegate the same task to multiple agents and return the consensus answer.
+
+    Uses ConsensusEngine to gather proposals in parallel, evaluate agreement,
+    and synthesise or arbitrate the best result.
+
+    Returns:
+        dict with keys: ``success``, ``result``, ``consensus_type``,
+        ``agreement_score``, ``dissenting_views``.
+    """
+    try:
+        from api.services.agent.coordination.consensus import ConsensusEngine
+
+        engine = ConsensusEngine(
+            tenant_id=tenant_id,
+            run_id=run_id or str(uuid.uuid4()),
+            on_event=on_event,
+        )
+
+        proposals = engine.gather_proposals(task, agent_ids, context)
+        if not proposals:
+            return {
+                "success": False,
+                "result": None,
+                "error": "No agent proposals were collected.",
+                "consensus_type": "no_consensus",
+                "agreement_score": 0.0,
+            }
+
+        consensus = engine.evaluate_proposals(proposals)
+
+        # If no_consensus, attempt arbitration
+        if consensus.consensus_type == "no_consensus" and len(proposals) > 1:
+            winner = engine.arbitrate(proposals, "accuracy, completeness, evidence quality")
+            return {
+                "success": True,
+                "result": winner.response,
+                "consensus_type": "arbitrated",
+                "agreement_score": consensus.agreement_score,
+                "dissenting_views": consensus.dissenting_views,
+                "winning_agent": winner.agent_id,
+            }
+
+        return {
+            "success": True,
+            "result": consensus.synthesis or consensus.winning_proposal.response,
+            "consensus_type": consensus.consensus_type,
+            "agreement_score": consensus.agreement_score,
+            "dissenting_views": consensus.dissenting_views,
+            "winning_agent": consensus.winning_proposal.agent_id,
+        }
+
+    except Exception as exc:
+        logger.error("delegate_with_consensus failed: %s", exc, exc_info=True)
+        return {
+            "success": False,
+            "result": None,
+            "error": str(exc)[:300],
+            "consensus_type": "error",
+            "agreement_score": 0.0,
+        }
+
+
+def delegate_hierarchical(
+    goal: str,
+    agent_definitions: list[dict[str, Any]],
+    context: dict[str, Any],
+    *,
+    tenant_id: str,
+    run_id: str | None = None,
+    on_event: Optional[Callable[[dict[str, Any]], None]] = None,
+) -> dict[str, Any]:
+    """Decompose a goal into sub-tasks, delegate each, and merge results.
+
+    Args:
+        goal: High-level natural-language goal.
+        agent_definitions: List of dicts with ``id`` and ``description`` keys.
+        context: Shared context for all sub-task agents.
+        tenant_id: Active tenant.
+        run_id: Optional parent run identifier.
+        on_event: Optional callback for activity events.
+
+    Returns:
+        dict with keys: ``success``, ``result``, ``unmet_goals``, ``goal_tree_size``.
+    """
+    try:
+        from api.services.agent.coordination.hierarchical_goals import GoalDecomposer
+
+        effective_run_id = run_id or str(uuid.uuid4())
+        decomposer = GoalDecomposer()
+        tree = decomposer.decompose_goal(goal, agent_definitions)
+
+        _emit(on_event, {
+            "event_type": "hierarchical.decomposed",
+            "goal": goal[:200],
+            "sub_goal_count": len(tree.all_leaves()),
+        })
+
+        # Execute each leaf sub-goal via delegate_to_agent
+        agent_results: dict[str, Any] = {}
+        for node in tree.all_leaves():
+            if not node.assigned_agent_id:
+                logger.warning("Sub-goal has no assigned agent: %s", node.goal_text[:100])
+                continue
+
+            try:
+                result = delegate_to_agent(
+                    parent_agent_id="hierarchical_coordinator",
+                    child_agent_id=node.assigned_agent_id,
+                    task=node.goal_text,
+                    context=context,
+                    tenant_id=tenant_id,
+                    run_id=effective_run_id,
+                    on_event=on_event,
+                )
+                if result.get("success"):
+                    agent_results[node.goal_text] = str(result.get("result") or "")
+                else:
+                    logger.warning(
+                        "Sub-goal agent '%s' failed: %s",
+                        node.assigned_agent_id,
+                        result.get("error", "unknown"),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Sub-goal execution failed for '%s': %s",
+                    node.goal_text[:100], exc,
+                )
+
+        # Merge results
+        merged = decomposer.merge_results(tree, agent_results)
+        unmet = decomposer.validate_completeness(tree, agent_results)
+
+        _emit(on_event, {
+            "event_type": "hierarchical.complete",
+            "goal": goal[:200],
+            "completed_count": len(agent_results),
+            "unmet_count": len(unmet),
+        })
+
+        return {
+            "success": True,
+            "result": merged,
+            "unmet_goals": unmet,
+            "goal_tree_size": len(tree.all_leaves()),
+        }
+
+    except Exception as exc:
+        logger.error("delegate_hierarchical failed: %s", exc, exc_info=True)
+        return {
+            "success": False,
+            "result": None,
+            "error": str(exc)[:300],
+            "unmet_goals": [],
+            "goal_tree_size": 0,
+        }

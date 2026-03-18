@@ -58,6 +58,7 @@ from api.services.agent.tools.validation_tools import EmailValidationTool
 from api.services.agent.tools.web_adapter_tools import WebDatasetAdapterTool
 from api.services.agent.tools.web_extract_tools import WebStructuredExtractTool
 from api.services.agent.tools.workplace_tools import SlackPostMessageTool
+from api.services.agent.tools.filesystem.adapters import FILESYSTEM_AGENT_TOOLS
 from api.services.agent.tools.sub_agent_tool import SubAgentDelegateTool
 from api.services.agent.tools.workspace_tools import (
     WorkspaceDocsReadTool,
@@ -132,6 +133,8 @@ class ToolRegistry:
         self.register(MapsGeocodeTool())
         self.register(MapsDistanceTool())
         self.register(SubAgentDelegateTool())
+        for fs_tool in FILESYSTEM_AGENT_TOOLS:
+            self.register(fs_tool)
         for google_api_tool in build_google_api_tools():
             self.register(google_api_tool)
 
@@ -206,6 +209,43 @@ class ToolRegistry:
             access=access,
             params=params,
         )
+
+        # HITL gate check: if this tool requires confirmation, consult the gate engine
+        # before executing.  This is a soft integration — if the gate engine is not
+        # available or not configured, we fall back to existing behaviour.
+        if effective_policy == "confirm_before_execute":
+            try:
+                from api.services.agents.gate_engine import (
+                    GateRejectedError,
+                    GateTimeoutError,
+                    check_gate,
+                )
+
+                run_id = context.run_id
+                gate_config = context.settings.get("__gate_config")
+                if gate_config is not None:
+                    check_gate(
+                        run_id,
+                        tool_id,
+                        params,
+                        gate_config=gate_config,
+                    )
+            except GateRejectedError as exc:
+                raise ToolExecutionError(
+                    f"Tool `{tool_id}` execution rejected by gate: {exc}"
+                ) from exc
+            except GateTimeoutError as exc:
+                err_msg = str(exc)
+                if err_msg.startswith("__skip__:"):
+                    raise ToolExecutionError(
+                        f"Tool `{tool_id}` gate timed out (skipped)."
+                    ) from exc
+                raise ToolExecutionError(
+                    f"Tool `{tool_id}` gate timed out: {exc}"
+                ) from exc
+            except Exception:
+                pass  # Gate engine not available or not configured — fall through
+
         stream = tool.execute_stream(context=context, prompt=prompt, params=params)
         observed_trace = False
         while True:

@@ -46,10 +46,8 @@ import {
 import { OperationsDashboardPage } from "../pages/OperationsDashboardPage";
 import { WorkflowBuilderPage } from "../pages/WorkflowBuilderPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
-import { InsightsFeedPanel } from "../components/agentActivityPanel/InsightsFeedPanel";
 import { WorkflowHeaderFields } from "../components/workflowCanvas/WorkflowHeaderFields";
 import { useCanvasStore } from "../stores/canvasStore";
-import { useAuthStore } from "../stores/authStore";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
 import { useWorkflowViewStore } from "../stores/workflowViewStore";
 type MindmapNodeFollowUpDraft = {
@@ -64,7 +62,6 @@ type MindmapNodeFollowUpDraft = {
 
 type SidebarOverlayKey =
   | "admin_review"
-  | "insights"
   | "connectors"
   | "my_agents"
   | "workspace"
@@ -80,12 +77,6 @@ type SidebarOverlayConfig = {
 };
 
 const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
-  "/insights": {
-    key: "insights",
-    path: "/insights",
-    title: "Insights",
-    subtitle: "Review proactive alerts, anomalies, and suggestions in one feed.",
-  },
   "/admin/review": {
     key: "admin_review",
     path: "/admin/review",
@@ -167,8 +158,6 @@ export default function App() {
   const [sidebarOverlay, setSidebarOverlay] = useState<SidebarOverlayConfig | null>(() =>
     resolveSidebarOverlayForPath(window.location.pathname || "/"),
   );
-  const [insightsUnreadCount, setInsightsUnreadCount] = useState(0);
-  const [reviewQueueCount, setReviewQueueCount] = useState(0);
   const [marketplaceQuery, setMarketplaceQuery] = useState("");
   const [marketplacePricingFilter, setMarketplacePricingFilter] =
     useState<MarketplacePricingFilter>("all");
@@ -179,7 +168,6 @@ export default function App() {
   const density = useUiPrefsStore((state) => state.density);
   const setLastVisitedPath = useUiPrefsStore((state) => state.setLastVisitedPath);
   const upsertCanvasDocuments = useCanvasStore((state) => state.upsertDocuments);
-  const isSuperAdmin = useAuthStore((state) => state.isSuperAdmin());
   const navigateToPath = (nextPath: string) => {
     const normalizedNext = String(nextPath || "/").trim() || "/";
     if (window.location.pathname === normalizedNext) {
@@ -190,6 +178,31 @@ export default function App() {
   };
   const handleSidebarAppRoute = (nextPath: string) => {
     const normalizedNext = String(nextPath || "/").trim().toLowerCase();
+    // Redirect legacy paths into Operations tabs
+    if (normalizedNext === "/insights") {
+      const opsOverlay = SIDEBAR_OVERLAY_BY_PATH["/operations"];
+      if (opsOverlay) {
+        setSidebarOverlay(opsOverlay);
+        if (layout.activeTab !== "Chat") {
+          layout.setActiveTab("Chat");
+        }
+      }
+      window.history.replaceState({}, "", "/operations?tab=insights");
+      setPathname("/operations");
+      return;
+    }
+    if (normalizedNext === "/run-timeline") {
+      const opsOverlay = SIDEBAR_OVERLAY_BY_PATH["/operations"];
+      if (opsOverlay) {
+        setSidebarOverlay(opsOverlay);
+        if (layout.activeTab !== "Chat") {
+          layout.setActiveTab("Chat");
+        }
+      }
+      window.history.replaceState({}, "", "/operations?tab=timeline");
+      setPathname("/operations");
+      return;
+    }
     const overlay = SIDEBAR_OVERLAY_BY_PATH[normalizedNext];
     if (overlay) {
       setSidebarOverlay(overlay);
@@ -214,44 +227,6 @@ export default function App() {
     setConversationModes: projectState.setConversationModes,
     defaultIndexId: fileLibrary.defaultIndexId,
   });
-
-  const refreshInsightsUnreadCount = async () => {
-    try {
-      const response = await fetch("/api/insights/count", { credentials: "include" });
-      if (!response.ok) {
-        return;
-      }
-      const payload = (await response.json()) as Record<string, unknown>;
-      const countCandidate = Number(payload.unread_count ?? payload.unread ?? payload.count ?? 0);
-      if (!Number.isFinite(countCandidate) || countCandidate < 0) {
-        setInsightsUnreadCount(0);
-        return;
-      }
-      setInsightsUnreadCount(Math.round(countCandidate));
-    } catch {
-      // Keep sidebar responsive even if insights service is unavailable.
-    }
-  };
-
-  const refreshReviewQueueCount = async () => {
-    if (!isSuperAdmin) {
-      setReviewQueueCount(0);
-      return;
-    }
-    try {
-      const response = await fetch("/api/marketplace/admin/review-queue?status=pending_review", {
-        credentials: "include",
-      });
-      if (!response.ok) {
-        return;
-      }
-      const payload = (await response.json()) as unknown;
-      const count = Array.isArray(payload) ? payload.length : 0;
-      setReviewQueueCount(Math.max(0, count));
-    } catch {
-      // Keep sidebar usable if admin queue is temporarily unavailable.
-    }
-  };
 
   // Cmd+K / Ctrl+K to open workflow quick-switcher when on workflow builder
   useEffect(() => {
@@ -304,8 +279,6 @@ export default function App() {
         if (Array.isArray(documents) && documents.length > 0) {
           upsertCanvasDocuments(documents);
         }
-        await refreshInsightsUnreadCount();
-        await refreshReviewQueueCount();
       } catch {
         // Keep UI available even if backend is not ready.
       }
@@ -315,33 +288,8 @@ export default function App() {
     chatState.refreshConversations,
     fileLibrary.refreshFileCount,
     fileLibrary.refreshIngestionJobs,
-    isSuperAdmin,
     upsertCanvasDocuments,
   ]);
-
-  const previousRunActivityRef = useRef<boolean>(
-    Boolean(chatState.isSending || chatState.isActivityStreaming),
-  );
-  useEffect(() => {
-    const currentlyActive = Boolean(chatState.isSending || chatState.isActivityStreaming);
-    const wasActive = previousRunActivityRef.current;
-    previousRunActivityRef.current = currentlyActive;
-    if (wasActive && !currentlyActive) {
-      void refreshInsightsUnreadCount();
-    }
-  }, [chatState.isActivityStreaming, chatState.isSending, chatState.chatTurns.length]);
-
-  useEffect(() => {
-    if (!isSuperAdmin) {
-      setReviewQueueCount(0);
-      return;
-    }
-    void refreshReviewQueueCount();
-    const timer = window.setInterval(() => {
-      void refreshReviewQueueCount();
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [isSuperAdmin]);
 
   useEffect(() => {
     if (deepLinkHandledRef.current) {
@@ -594,9 +542,6 @@ export default function App() {
     if (!sidebarOverlay) {
       return null;
     }
-    if (sidebarOverlay.key === "insights") {
-      return <InsightsFeedPanel className="h-full" />;
-    }
     if (sidebarOverlay.key === "admin_review") {
       return <AdminReviewQueuePage />;
     }
@@ -735,9 +680,6 @@ export default function App() {
               onDeleteConversation={chatState.handleDeleteConversation}
               onOpenWorkspaceTab={openWorkspaceModal}
               onNavigateAppRoute={handleSidebarAppRoute}
-              insightsCount={insightsUnreadCount}
-              reviewQueueCount={reviewQueueCount}
-              isSuperAdmin={isSuperAdmin}
             />
 
             {!layout.isSidebarCollapsed ? (
@@ -896,23 +838,7 @@ export default function App() {
               </WorkspaceOverlayModal>
             ) : null}
 
-            {sidebarOverlay?.key === "insights" ? (
-              <div
-                className="fixed inset-0 z-[172] flex justify-end p-0"
-                role="dialog"
-                aria-modal="true"
-                aria-label="Insights panel"
-                onClick={closeSidebarOverlay}
-              >
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_6%,rgba(255,255,255,0.24)_0%,rgba(27,27,31,0.28)_100%)] backdrop-blur-[8px]" />
-                <div
-                  className="relative z-[173] h-full w-full max-w-[460px] border-l border-black/[0.08] bg-white shadow-[-22px_0_54px_-42px_rgba(15,23,42,0.55)]"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  {renderSidebarOverlayContent()}
-                </div>
-              </div>
-            ) : sidebarOverlay ? (
+            {sidebarOverlay ? (
               <AppRouteOverlayModal
                 title={sidebarOverlay.title}
                 subtitle={sidebarOverlay.subtitle}

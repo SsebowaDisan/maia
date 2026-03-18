@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Generator
 from typing import TYPE_CHECKING, Any
@@ -8,8 +9,11 @@ from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent, utc_now
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
+from api.services.agent.middleware.integration import build_step_context
 
 from api.services.agent.interaction_suggestion.emitter import maybe_emit_interaction_suggestion
+
+_mw_logger = logging.getLogger(__name__)
 
 from ..execution_trace import record_retry_trace
 from ..handoff_state import handoff_pause_notice, is_handoff_paused
@@ -25,6 +29,22 @@ from .success import _tool_surface_info, handle_step_success
 
 if TYPE_CHECKING:
     from api.services.agent.brain import Brain
+
+# Lazy-loaded chain-of-thought reasoner (avoids import cost when not used).
+_cot_reasoner = None
+
+
+def _get_cot_reasoner():
+    """Lazy-load ChainOfThoughtReasoner to avoid circular imports."""
+    global _cot_reasoner
+    if _cot_reasoner is None:
+        try:
+            from api.services.agent.reasoning.chain_of_thought import ChainOfThoughtReasoner
+            _cot_reasoner = ChainOfThoughtReasoner()
+        except Exception as _cot_exc:
+            _mw_logger.debug("cot_reasoner_init_failed error=%s", _cot_exc)
+            _cot_reasoner = None
+    return _cot_reasoner
 
 
 def _extract_content_summary(result: Any) -> str:
@@ -269,6 +289,47 @@ def execute_planned_steps(
                 )
                 yield emit_event(_rationale_event)
 
+        # --- Chain-of-Thought: explicit reasoning before tool execution ---
+        try:
+            _cot = _get_cot_reasoner()
+            if _cot is not None and brain is not None:
+                _cot_step_dict = {
+                    "tool_id": step.tool_id,
+                    "title": step.title,
+                    "params": step.params,
+                    "why_this_step": step.why_this_step,
+                }
+                _cot_evidence = list(brain.state.evidence_pool) if hasattr(brain, "state") else []
+                _cot_remaining = max(0, len(steps) - step_cursor - 1)
+                _cot_goal = str(
+                    getattr(brain.state, "user_message", "") if hasattr(brain, "state") else ""
+                )[:300]
+                _reasoning_chain = _cot.reason_before_action(
+                    task_goal=_cot_goal,
+                    current_step=_cot_step_dict,
+                    evidence_so_far=_cot_evidence,
+                    remaining_steps=_cot_remaining,
+                )
+                if _reasoning_chain.thoughts:
+                    _cot_detail = " | ".join(_reasoning_chain.thoughts[:5])
+                    if _reasoning_chain.conclusion:
+                        _cot_detail += f" => {_reasoning_chain.conclusion}"
+                    _cot_event = activity_event_factory(
+                        event_type="brain_thinking",
+                        title="Chain-of-thought reasoning",
+                        detail=_cot_detail[:600],
+                        metadata={
+                            "tool_id": step.tool_id,
+                            "step": display_step_index,
+                            "confidence": _reasoning_chain.confidence,
+                            "should_modify_params": _reasoning_chain.should_modify_params,
+                            "reasoning_type": "chain_of_thought_pre_action",
+                        },
+                    )
+                    yield emit_event(_cot_event)
+        except Exception as _cot_exc:
+            _mw_logger.debug("chain_of_thought.pre_action_failed error=%s", _cot_exc)
+
         event_family, scene_surface = _tool_surface_info(step.tool_id)
         queued_event = activity_event_factory(
             event_type="tool_queued",
@@ -357,6 +418,42 @@ def execute_planned_steps(
             continue
 
         _step_halt = False
+
+        # -- Middleware: build context and run before-hooks --
+        _mw_pipeline = state.execution_context.settings.get("__middleware_pipeline")
+        _mw_ctx = None
+        _mw_active: list[Any] = []
+        if _mw_pipeline is not None:
+            try:
+                _mw_ctx = build_step_context(
+                    run_id=run_id,
+                    tenant_id=state.execution_context.tenant_id,
+                    user_id=state.execution_context.user_id,
+                    step_index=index,
+                    step_name=step.title,
+                    tool_id=step.tool_id,
+                    tool_params=guard_outcome.params,
+                    depth=0,
+                )
+                _mw_active = [s for s in _mw_pipeline._stages if s.enabled]
+                _mw_before_ran = 0
+                for _mw_stage in _mw_active:
+                    _mw_ctx = _mw_stage.before_step(_mw_ctx)
+                    _mw_before_ran += 1
+            except Exception as _mw_exc:
+                _mw_logger.warning("Middleware before_step aborted: %s", _mw_exc)
+                # On before-hook failure, run on_error for stages that already ran,
+                # then fall through to direct execution (pipeline becomes no-op).
+                if _mw_ctx is not None:
+                    _mw_ctx.error = _mw_exc
+                    for _prev in reversed(_mw_active[: _mw_before_ran]):
+                        try:
+                            _mw_ctx = _prev.on_error(_mw_ctx, _mw_exc)
+                        except Exception:
+                            pass
+                _mw_ctx = None  # Disable after-hooks
+                _mw_active = []
+
         tool_started_clock = time.perf_counter()
         try:
             result = yield from run_tool_live(
@@ -366,6 +463,17 @@ def execute_planned_steps(
                 params=guard_outcome.params,
             )
             elapsed = time.perf_counter() - tool_started_clock
+
+            # -- Middleware: run after-hooks on success --
+            if _mw_ctx is not None:
+                _mw_ctx.result = result
+                _mw_ctx.duration_ms = elapsed * 1000
+                for _mw_stage in reversed(_mw_active):
+                    try:
+                        _mw_ctx = _mw_stage.after_step(_mw_ctx)
+                    except Exception as _mw_after_exc:
+                        _mw_logger.warning("Middleware %s.after_step failed: %s", _mw_stage.name, _mw_after_exc)
+
             get_agent_observability().observe_tool_execution(
                 tool_id=step.tool_id,
                 status="success",
@@ -402,6 +510,17 @@ def execute_planned_steps(
                     _step_halt = True
         except Exception as exc:
             elapsed = time.perf_counter() - tool_started_clock
+
+            # -- Middleware: run on_error hooks --
+            if _mw_ctx is not None:
+                _mw_ctx.error = exc
+                _mw_ctx.duration_ms = elapsed * 1000
+                for _mw_stage in reversed(_mw_active):
+                    try:
+                        _mw_ctx = _mw_stage.on_error(_mw_ctx, exc)
+                    except Exception:
+                        pass
+
             if _should_retry_transient_failure(
                 step=step,
                 params=guard_outcome.params,
@@ -508,6 +627,58 @@ def execute_planned_steps(
                 emit_event=emit_event,
                 activity_event_factory=activity_event_factory,
             )
+            # --- Chain-of-Thought: structured failure analysis ---
+            try:
+                _cot_fail = _get_cot_reasoner()
+                if _cot_fail is not None:
+                    _fail_step_dict = {
+                        "tool_id": step.tool_id,
+                        "title": step.title,
+                        "params": step.params,
+                        "why_this_step": step.why_this_step,
+                    }
+                    _fail_evidence = []
+                    if brain is not None and hasattr(brain, "state"):
+                        _fail_evidence = list(brain.state.evidence_pool)
+                    _fail_tools: list[str] = []
+                    try:
+                        if hasattr(registry, "list_tool_ids"):
+                            _fail_tools = list(registry.list_tool_ids())[:30]
+                        elif hasattr(registry, "tools"):
+                            _fail_tools = [
+                                t.tool_id for t in list(registry.tools.values())[:30]
+                            ]
+                    except Exception:
+                        pass
+                    _recovery = _cot_fail.reason_after_failure(
+                        failed_step=_fail_step_dict,
+                        error=str(exc)[:400],
+                        evidence_pool=_fail_evidence,
+                        available_tools=_fail_tools,
+                    )
+                    if _recovery.analysis:
+                        _recovery_detail = (
+                            f"Root cause: {_recovery.root_cause}. "
+                            f"{_recovery.analysis[:300]} "
+                            f"Recommended: {_recovery.recommended_action}"
+                        )
+                        _recovery_event = activity_event_factory(
+                            event_type="brain_thinking",
+                            title="Failure analysis",
+                            detail=_recovery_detail[:600],
+                            metadata={
+                                "tool_id": step.tool_id,
+                                "step": index,
+                                "root_cause": _recovery.root_cause[:120],
+                                "recommended_action": _recovery.recommended_action,
+                                "recovery_option_count": len(_recovery.recovery_options),
+                                "reasoning_type": "chain_of_thought_failure_analysis",
+                            },
+                        )
+                        yield emit_event(_recovery_event)
+            except Exception as _cot_fail_exc:
+                _mw_logger.debug("chain_of_thought.failure_analysis_failed error=%s", _cot_fail_exc)
+
             if brain is not None:
                 _directive = yield from brain.observe_step(
                     signal=_make_brain_signal(

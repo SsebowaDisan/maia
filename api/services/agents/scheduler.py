@@ -198,7 +198,21 @@ class AgentScheduler:
 
             success = False
             try:
-                _fire_agent(schedule.tenant_id, schedule.agent_id)
+                # Try to enqueue via task queue; fall back to direct execution
+                _enqueued = False
+                try:
+                    from api.services.tasks.queue import get_task_queue
+                    queue = get_task_queue()
+                    queue.enqueue(
+                        "agent.scheduled_run",
+                        {"tenant_id": schedule.tenant_id, "agent_id": schedule.agent_id},
+                        priority=5,
+                    )
+                    _enqueued = True
+                except Exception:
+                    pass
+                if not _enqueued:
+                    _fire_agent(schedule.tenant_id, schedule.agent_id)
                 success = True
             except Exception:
                 logger.error(

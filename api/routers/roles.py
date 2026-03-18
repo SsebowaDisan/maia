@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from api.auth import get_current_user, require_org_admin
 from api.models.user import User
+from api.services.auth.dependencies import require_scope
 from api.services.auth.roles import (
     ALL_SCOPES,
     create_role,
@@ -87,6 +88,7 @@ def list_tenant_roles(
 def create(
     body: CreateRoleBody,
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("roles:manage"),
 ) -> dict:
     """Create a new custom role. Requires org_admin."""
     # Validate scopes
@@ -104,6 +106,18 @@ def create(
         created_by=admin.id,
         description=body.description,
     )
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=tenant_id,
+            user_id=admin.id,
+            action="role.created",
+            resource_type="role",
+            resource_id=role.id,
+            detail=f"Role '{body.name}' created",
+        )
+    except Exception:
+        pass
     return _role_to_dict(role)
 
 
@@ -134,6 +148,7 @@ def update(
     role_id: str,
     body: UpdateRoleBody,
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("roles:manage"),
 ) -> dict:
     """Update a custom role. Requires org_admin."""
     if body.scopes is not None:
@@ -155,6 +170,18 @@ def update(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Role not found.",
         )
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=admin.tenant_id or "",
+            user_id=admin.id,
+            action="role.updated",
+            resource_type="role",
+            resource_id=role_id,
+            detail=f"Role '{role_id}' updated",
+        )
+    except Exception:
+        pass
     return _role_to_dict(role)
 
 
@@ -166,6 +193,7 @@ def update(
 def delete(
     role_id: str,
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("roles:manage"),
 ) -> dict:
     """Delete a custom role. Requires org_admin."""
     if not delete_role(role_id):
@@ -173,4 +201,16 @@ def delete(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Role not found.",
         )
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=admin.tenant_id or "",
+            user_id=admin.id,
+            action="role.deleted",
+            resource_type="role",
+            resource_id=role_id,
+            detail=f"Role '{role_id}' deleted",
+        )
+    except Exception:
+        pass
     return {"deleted": True}

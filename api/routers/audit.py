@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from api.auth import require_org_admin
 from api.models.audit_event import AuditEvent
 from api.models.user import User
+from api.services.auth.dependencies import require_scope
 from api.services.audit.trail import (
     count_events,
     export_events_ndjson,
@@ -29,6 +30,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 @router.get("/events")
 def list_events(
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("audit:read"),
     action: Annotated[str | None, Query()] = None,
     user_id: Annotated[str | None, Query()] = None,
     resource_type: Annotated[str | None, Query()] = None,
@@ -58,6 +60,7 @@ def list_events(
 @router.get("/events/export")
 def export_events(
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("audit:read"),
     since: Annotated[float | None, Query()] = None,
     until: Annotated[float | None, Query()] = None,
 ) -> StreamingResponse:
@@ -86,6 +89,7 @@ _ACTIONS = [
 @router.get("/events/stats")
 def event_stats(
     admin: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("audit:read"),
 ) -> dict:
     tenant_id = admin.tenant_id or ""
     since_24h = time.time() - 86400

@@ -43,10 +43,13 @@ def _load_defaults() -> None:
 
     # ── agent.event_run ────────────────────────────────────────────────────
     def _handle_event_run(payload: dict[str, Any]) -> Any:
-        from api.services.agents.event_triggers import _execute_event_agent
-        _execute_event_agent(
+        from api.services.agents.event_triggers import _run_agent_for_event
+        from api.services.agents.run_store import create_run
+        run = create_run(payload["tenant_id"], payload["agent_id"], trigger_type="event")
+        _run_agent_for_event(
             payload["tenant_id"],
             payload["agent_id"],
+            run.id,
             payload.get("event_type", "unknown"),
             payload.get("event_payload", {}),
         )

@@ -1,3 +1,8 @@
+"""Legacy agent memory service (originally memory.py).
+
+Moved into the memory package to allow co-existence with the new
+advanced memory subsystems while preserving all existing imports.
+"""
 from __future__ import annotations
 
 import json

@@ -6,7 +6,11 @@ human approval, and resume or cancel based on the decision.
 The gate engine is stateless per-call — it reads GateConfig from the
 AgentDefinitionSchema and blocks/approves tool calls accordingly.
 
-Gate state is stored in-memory keyed by run_id for the lifetime of a run.
+Gate state is stored in-memory keyed by run_id for real-time signaling via
+threading.Event objects. All gate state is also persisted to the database
+via ``gate_store`` so that pending gates survive process restarts and
+provide a full audit trail.
+
 Clients call ``approve_gate`` or ``reject_gate`` to unblock a pending gate.
 """
 from __future__ import annotations
@@ -19,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from api.schemas.agent_definition.gate_config import GateFallbackAction
+from api.services.agents import gate_store
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,22 @@ def check_gate(
     state = _get_or_create_state(run_id)
     evt = state.register(gate_id, pending)
 
+    # Persist the pending gate so it survives restarts.
+    try:
+        gate_store.record_gate(
+            run_id,
+            gate_id,
+            tenant_id=getattr(gate_config, "_tenant_id", ""),
+            agent_id=getattr(gate_config, "_agent_id", ""),
+            gate_type="tool_approval",
+            description=f"Approval required for tool '{tool_id}'",
+            timeout_seconds=timeout,
+            fallback_action=str(fallback),
+            metadata={**params_preview, "__tool_id__": tool_id},
+        )
+    except Exception:
+        logger.warning("Failed to persist gate %s to store", gate_id, exc_info=True)
+
     if on_pending_event:
         try:
             on_pending_event(pending)
@@ -180,16 +201,54 @@ def check_gates(
             return  # first matching gate wins
 
 
-def approve_gate(run_id: str, gate_id: str) -> bool:
+def approve_gate(run_id: str, gate_id: str, *, decided_by: str = "") -> bool:
     """Signal that an operator approved the gate.  Returns True if gate existed."""
+    # Persist decision to durable store.
+    try:
+        gate_store.decide_gate(run_id, gate_id, "approve", decided_by=decided_by)
+    except Exception:
+        logger.warning("Failed to persist approve for gate %s", gate_id, exc_info=True)
+
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id="",
+            user_id=decided_by,
+            action="gate.approved",
+            resource_type="gate",
+            resource_id=gate_id,
+            detail=f"Gate {gate_id} approved for run {run_id}",
+        )
+    except Exception:
+        pass
+
     state = _run_states.get(run_id)
     if not state:
         return False
     return state.decide(gate_id, "approve")
 
 
-def reject_gate(run_id: str, gate_id: str) -> bool:
+def reject_gate(run_id: str, gate_id: str, *, decided_by: str = "") -> bool:
     """Signal that an operator rejected the gate.  Returns True if gate existed."""
+    # Persist decision to durable store.
+    try:
+        gate_store.decide_gate(run_id, gate_id, "reject", decided_by=decided_by)
+    except Exception:
+        logger.warning("Failed to persist reject for gate %s", gate_id, exc_info=True)
+
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id="",
+            user_id=decided_by,
+            action="gate.rejected",
+            resource_type="gate",
+            resource_id=gate_id,
+            detail=f"Gate {gate_id} rejected for run {run_id}",
+        )
+    except Exception:
+        pass
+
     state = _run_states.get(run_id)
     if not state:
         return False
@@ -211,6 +270,45 @@ def list_pending_gates(run_id: str) -> list[dict[str, Any]]:
         for p in state.pending.values()
         if not state._events.get(p.gate_id, threading.Event()).is_set()
     ]
+
+
+# ── Recovery ───────────────────────────────────────────────────────────────────
+
+def recover_pending_gates(run_id: str) -> list[GatePendingEvent]:
+    """Reload pending gates from the durable store into in-memory state.
+
+    Call this on startup (or when resuming a run) to restore gates that were
+    waiting for a decision when the process last exited.  The returned list
+    can be re-emitted as SSE events so the UI picks them up again.
+    """
+    import json as _json
+
+    recovered: list[GatePendingEvent] = []
+    try:
+        records = gate_store.get_pending_gates(run_id=run_id)
+    except Exception:
+        logger.warning("Failed to recover pending gates for run %s", run_id, exc_info=True)
+        return recovered
+
+    state = _get_or_create_state(run_id)
+    for rec in records:
+        try:
+            meta = _json.loads(rec.metadata_json) if rec.metadata_json else {}
+        except Exception:
+            meta = {}
+
+        pending = GatePendingEvent(
+            gate_id=rec.gate_id,
+            run_id=rec.run_id,
+            tool_id=meta.get("__tool_id__", rec.description.split("'")[1] if "'" in rec.description else "unknown"),
+            params_preview=meta,
+            created_at=rec.requested_at,
+        )
+        state.register(rec.gate_id, pending)
+        recovered.append(pending)
+        logger.info("Recovered pending gate %s for run %s", rec.gate_id, run_id)
+
+    return recovered
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

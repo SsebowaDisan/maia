@@ -50,6 +50,7 @@ from api.routers.versions import router as versions_router
 from api.routers.secrets import router as secrets_router
 from api.routers.mfa import router as mfa_router
 from api.routers.roles import router as roles_router
+from api.routers.mcp import router as mcp_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -133,6 +134,21 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
         get_page_monitor().start()
     except Exception:
         pass
+    try:
+        from api.routers.mcp import get_mcp_registry
+        import json as _json
+        mcp_config = os.environ.get("MAIA_MCP_SERVERS", "")
+        if mcp_config:
+            configs = _json.loads(mcp_config)
+            registry = get_mcp_registry()
+            for cfg in configs:
+                try:
+                    from api.services.agent.tools.mcp import McpServerConfig
+                    registry.register_server(McpServerConfig(**cfg))
+                except Exception:
+                    pass
+    except Exception:
+        pass
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     get_ingestion_manager().stop()
@@ -207,6 +223,7 @@ app.include_router(versions_router)
 app.include_router(secrets_router)
 app.include_router(mfa_router)
 app.include_router(roles_router)
+app.include_router(mcp_router)
 
 
 @app.get("/api/health", response_model=HealthResponse)

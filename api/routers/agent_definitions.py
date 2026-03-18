@@ -126,6 +126,22 @@ def create_definition(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    # Record initial version for audit trail
+    try:
+        import json
+        from api.services.versions.store import create_version
+        create_version(
+            resource_type="agent_definition",
+            resource_id=record.agent_id,
+            tenant_id=body.tenant_id,
+            version=record.version or "1.0.0",
+            definition=json.dumps(dict(record.definition or {}), default=str),
+            created_by=user_id,
+            changelog="Initial creation",
+        )
+    except Exception:
+        pass
+
     return AgentDefinitionDetail.from_record(record)
 
 
@@ -165,6 +181,24 @@ def update_definition(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
+
+    # Record new version for audit trail
+    try:
+        import json
+        from api.services.versions.store import create_version, get_latest_version, next_version
+        latest = get_latest_version("agent_definition", record.agent_id)
+        ver = next_version(latest.version) if latest else (record.version or "1.0.0")
+        create_version(
+            resource_type="agent_definition",
+            resource_id=record.agent_id,
+            tenant_id=record.tenant_id,
+            version=ver,
+            definition=json.dumps(dict(record.definition or {}), default=str),
+            created_by=user_id,
+            changelog="Updated definition",
+        )
+    except Exception:
+        pass
 
     return AgentDefinitionDetail.from_record(record)
 

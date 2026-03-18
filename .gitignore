@@ -348,6 +348,9 @@ venv.bak/
 # Project-specific exclusions
 flow_tmp/
 .maia_agent/
+.maia_dev_jwt_secret
+.run_logs/
+data/install_history/
 
 # Spyder project settings
 .spyderproject

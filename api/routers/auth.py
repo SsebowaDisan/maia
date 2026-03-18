@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
@@ -194,10 +194,23 @@ def register(body: RegisterRequest) -> TokenResponse:
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest) -> TokenResponse:
+def login(body: LoginRequest, request: Request) -> TokenResponse:
     """Authenticate with email and password, return JWT tokens."""
     user = get_user_by_email(body.email)
     if not user or not verify_password(body.password, user.hashed_password):
+        try:
+            from api.services.audit.trail import record_event
+            record_event(
+                tenant_id="",
+                user_id="",
+                action="user.login_failed",
+                resource_type="auth",
+                resource_id=body.email,
+                detail=f"Failed login attempt for {body.email}",
+                ip_address=request.client.host if request.client else "",
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",
@@ -208,7 +221,21 @@ def login(body: LoginRequest) -> TokenResponse:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated. Contact your administrator.",
         )
-    return _issue_tokens(user)
+    tokens = _issue_tokens(user)
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=user.tenant_id or "",
+            user_id=user.id,
+            action="user.login",
+            resource_type="auth",
+            resource_id=user.id,
+            detail=f"User {user.email} logged in successfully",
+            ip_address=request.client.host if request.client else "",
+        )
+    except Exception:
+        pass
+    return tokens
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -237,9 +264,24 @@ def refresh_token(body: RefreshRequest) -> TokenResponse:
 def logout(
     _current_user: Annotated[User, Depends(get_current_user)],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())],
+    request: Request,
 ) -> None:
     """Revoke the caller's access token so it cannot be reused."""
-    return logout_with_revocation(_current_user, credentials)
+    result = logout_with_revocation(_current_user, credentials)
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=_current_user.tenant_id or "",
+            user_id=_current_user.id,
+            action="user.logout",
+            resource_type="auth",
+            resource_id=_current_user.id,
+            detail=f"User {_current_user.email} logged out",
+            ip_address=request.client.host if request.client else "",
+        )
+    except Exception:
+        pass
+    return result
 
 
 @router.get("/me", response_model=UserResponse)

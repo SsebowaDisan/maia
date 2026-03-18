@@ -26,6 +26,17 @@ from .finalization_evidence import (
 )
 from .finalization_scope import filter_sources_for_response_scope
 
+# ---------------------------------------------------------------------------
+# Self-reflection imports (Innovation #8 + #10) — optional, try/except wrapped
+# ---------------------------------------------------------------------------
+try:
+    from api.services.agent.reflection import ConfidenceScorer, SelfRepairEngine
+    _REFLECTION_AVAILABLE = True
+except Exception:
+    _REFLECTION_AVAILABLE = False
+
+_SELF_REPAIR_MAX_CYCLES = 2
+
 
 _CITATION_SECTION_HEADING_RE = re.compile(
     r"^##\s+(?:Evidence\s+Citations|Sources|References)\s*$",
@@ -173,6 +184,121 @@ def finalize_run(
         metadata=verification_report,
     )
     yield emit_event(verification_completed_event)
+
+    # ------------------------------------------------------------------
+    # Self-Repair Loop (Innovation #10)
+    # After verification, if result has warnings, attempt auto-repair.
+    # ------------------------------------------------------------------
+    try:
+        if _REFLECTION_AVAILABLE:
+            _self_repair = SelfRepairEngine()
+            _repair_cycle = 0
+            while (
+                _repair_cycle < _SELF_REPAIR_MAX_CYCLES
+                and _self_repair.should_repair(verification_report)
+            ):
+                _repair_cycle += 1
+                repair_started_event = activity_event_factory(
+                    event_type="self_repair_started",
+                    title=f"Self-repair cycle {_repair_cycle}",
+                    detail="Diagnosing verification issues and generating repair plan",
+                    metadata={
+                        "repair_cycle": _repair_cycle,
+                        "verification_score": verification_report.get("score"),
+                    },
+                )
+                yield emit_event(repair_started_event)
+
+                _diagnosis = _self_repair.diagnose_failure(
+                    verification_result=verification_report,
+                    step_history=state.executed_steps,
+                    evidence_pool=[
+                        str(s.get("summary", ""))
+                        for s in state.executed_steps
+                        if str(s.get("summary", "")).strip()
+                    ],
+                )
+
+                _available_tools = [step.tool_id for step in steps]
+                _repair_steps = _self_repair.generate_repair_plan(
+                    diagnosis=_diagnosis,
+                    available_tools=_available_tools,
+                )
+
+                if not _repair_steps:
+                    _self_repair.record_repair_attempt(
+                        run_id=run_id,
+                        diagnosis=_diagnosis,
+                        outcome="no_plan",
+                    )
+                    repair_skipped_event = activity_event_factory(
+                        event_type="self_repair_skipped",
+                        title=f"Self-repair cycle {_repair_cycle}: no actionable plan",
+                        detail=f"Diagnosis: {_diagnosis.failure_type} — {_diagnosis.root_cause[:120]}",
+                        metadata={
+                            "repair_cycle": _repair_cycle,
+                            "failure_type": _diagnosis.failure_type,
+                            "repair_strategy": _diagnosis.repair_strategy,
+                        },
+                    )
+                    yield emit_event(repair_skipped_event)
+                    break
+
+                repair_plan_event = activity_event_factory(
+                    event_type="self_repair_plan",
+                    title=f"Repair plan: {_diagnosis.repair_strategy}",
+                    detail=f"{len(_repair_steps)} step(s) to address: {_diagnosis.root_cause[:120]}",
+                    metadata={
+                        "repair_cycle": _repair_cycle,
+                        "failure_type": _diagnosis.failure_type,
+                        "repair_strategy": _diagnosis.repair_strategy,
+                        "repair_steps": _repair_steps[:3],
+                    },
+                )
+                yield emit_event(repair_plan_event)
+
+                # Store repair metadata on the run
+                state.execution_context.settings.setdefault(
+                    "__self_repair_history", []
+                ).append({
+                    "cycle": _repair_cycle,
+                    "failure_type": _diagnosis.failure_type,
+                    "repair_strategy": _diagnosis.repair_strategy,
+                    "root_cause": _diagnosis.root_cause[:200],
+                    "repair_step_count": len(_repair_steps),
+                })
+
+                _self_repair.record_repair_attempt(
+                    run_id=run_id,
+                    diagnosis=_diagnosis,
+                    outcome="plan_generated",
+                )
+
+                # Re-run verification after recording repair plan
+                # (actual step re-execution is handled by the orchestrator in future cycles)
+                verification_report = build_verification_report(
+                    task=task_prep.task_intelligence,
+                    planned_tool_ids=[step.tool_id for step in steps],
+                    executed_steps=state.executed_steps,
+                    actions=state.all_actions,
+                    sources=response_sources,
+                    runtime_settings=state.execution_context.settings,
+                )
+
+                repair_completed_event = activity_event_factory(
+                    event_type="self_repair_completed",
+                    title=f"Self-repair cycle {_repair_cycle} completed",
+                    detail=f"Post-repair score: {verification_report.get('score')}% ({verification_report.get('grade')})",
+                    metadata={
+                        "repair_cycle": _repair_cycle,
+                        "post_repair_score": verification_report.get("score"),
+                        "post_repair_grade": verification_report.get("grade"),
+                    },
+                )
+                yield emit_event(repair_completed_event)
+    except Exception:
+        pass  # Self-repair is non-blocking; fall through on any error.
+
     web_kpi_summary = summarize_web_kpi(state.execution_context.settings)
     web_evidence_summary = summarize_web_evidence(state.execution_context.settings)
     web_kpi_gate = evaluate_web_kpi_gate(
@@ -484,6 +610,94 @@ def finalize_run(
                 },
             )
             yield emit_event(approval_granted_event)
+
+    # ------------------------------------------------------------------
+    # Confidence Scoring (Innovation #8)
+    # Score the final response and store in run metadata.
+    # ------------------------------------------------------------------
+    try:
+        if _REFLECTION_AVAILABLE:
+            _confidence_scorer = ConfidenceScorer()
+            _claims_for_scoring = verification_report.get("unsupported_claims", []) + [
+                str(ca.get("claim", ""))
+                for ca in (verification_report.get("claim_assessments") or [])
+                if str(ca.get("claim", "")).strip()
+            ]
+            _evidence_for_scoring = [
+                str(eu.get("text", ""))
+                for eu in (verification_report.get("evidence_units") or [])
+                if str(eu.get("text", "")).strip()
+            ]
+            _response_score = _confidence_scorer.score_response(
+                response_text=answer,
+                claims=_claims_for_scoring[:10],
+                evidence_pool=_evidence_for_scoring[:12],
+            )
+            state.execution_context.settings["__confidence_score"] = {
+                "overall_confidence": _response_score.overall_confidence,
+                "weakest_claims": _response_score.weakest_claims[:3],
+                "strongest_claims": _response_score.strongest_claims[:3],
+                "claim_count": len(_response_score.claim_scores),
+                "reasoning": _response_score.reasoning[:300],
+            }
+            _confidence_summary = _confidence_scorer.generate_confidence_summary(
+                _response_score,
+            )
+            confidence_event = activity_event_factory(
+                event_type="confidence_scored",
+                title=f"Response confidence: {_response_score.overall_confidence:.0%}",
+                detail=_confidence_summary[:300],
+                metadata=state.execution_context.settings["__confidence_score"],
+            )
+            yield emit_event(confidence_event)
+    except Exception:
+        pass  # Confidence scoring is non-blocking.
+
+    # ------------------------------------------------------------------
+    # Knowledge Graph from evidence (Innovation #5)
+    # Build entity/relationship graph, detect contradictions, generate insights.
+    # ------------------------------------------------------------------
+    try:
+        from api.services.agent.reasoning import KnowledgeGraphBuilder
+        _evidence_texts = [
+            str(eu.get("text", ""))
+            for eu in (verification_report.get("evidence_units") or [])
+            if str(eu.get("text", "")).strip()
+        ]
+        if _evidence_texts and len(_evidence_texts) >= 2:
+            _kg_builder = KnowledgeGraphBuilder()
+            _kg = _kg_builder.build_graph(_evidence_texts[:20])
+            if _kg.entity_count() > 0:
+                _contradictions = _kg_builder.detect_contradictions(_kg)
+                _insights = _kg_builder.generate_insights(_kg)
+                _kg_summary = _kg.summary()
+                _kg_summary["insight_count"] = len(_insights)
+                _kg_summary["insights"] = [
+                    {"text": ins.text[:200], "confidence": ins.confidence}
+                    for ins in _insights[:5]
+                ]
+                state.execution_context.settings["__knowledge_graph"] = _kg_summary
+                kg_event = activity_event_factory(
+                    event_type="knowledge_graph_built",
+                    title=f"Knowledge graph: {_kg.entity_count()} entities, {_kg.relationship_count()} relationships",
+                    detail=(
+                        f"{len(_contradictions)} contradiction(s), {len(_insights)} insight(s) found"
+                    ),
+                    metadata=_kg_summary,
+                )
+                yield emit_event(kg_event)
+                if _contradictions:
+                    contradiction_event = activity_event_factory(
+                        event_type="knowledge_graph_contradictions",
+                        title=f"{len(_contradictions)} contradiction(s) in evidence",
+                        detail="; ".join(
+                            f"{c['source']} ↔ {c['target']}" for c in _contradictions[:3]
+                        ),
+                        metadata={"contradictions": _contradictions[:5]},
+                    )
+                    yield emit_event(contradiction_event)
+    except Exception:
+        pass  # Knowledge graph is non-blocking.
 
     citation_url_to_idx = _extract_citation_url_to_idx(answer)
     evidence_items = _build_evidence_items_from_sources(

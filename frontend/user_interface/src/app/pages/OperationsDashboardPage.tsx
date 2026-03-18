@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  getBudget,
+  getCostSummary,
   listAgentApiRuns,
   listAgents,
   type AgentApiRunRecord,
   type AgentSummaryRecord,
+  type BudgetResponse,
+  type CostSummaryResponse,
 } from "../../api/client";
+import { InsightsFeedPanel } from "../components/agentActivityPanel/InsightsFeedPanel";
 import { ScheduledReviewsPanel } from "../components/agentActivityPanel/ScheduledReviewsPanel";
 import { ROIDashboard } from "../components/canvas/ROIDashboard";
 import { LiveRunMonitor, type LiveRunMonitorRecord } from "../components/observability/LiveRunMonitor";
 import { RunErrorLog, type RunErrorRecord } from "../components/observability/RunErrorLog";
 import { BudgetSettings } from "../components/workspace/BudgetSettings";
+import { RunTimelinePage } from "./RunTimelinePage";
 
 type OperationsRunRecord = LiveRunMonitorRecord &
   RunErrorRecord & {
@@ -18,7 +24,7 @@ type OperationsRunRecord = LiveRunMonitorRecord &
     llmCostUsd: number;
   };
 
-type OperationsTab = "overview" | "reviews" | "roi";
+type OperationsTab = "overview" | "reviews" | "roi" | "insights" | "timeline";
 
 function deriveDurationMs(startedAt: string, endedAt?: string | null, fallback?: number | null): number {
   if (typeof fallback === "number" && Number.isFinite(fallback) && fallback >= 0) {
@@ -58,7 +64,7 @@ export function OperationsDashboardPage() {
       return "overview";
     }
     const tab = new URLSearchParams(window.location.search).get("tab");
-    if (tab === "reviews" || tab === "roi" || tab === "overview") {
+    if (tab === "reviews" || tab === "roi" || tab === "overview" || tab === "insights" || tab === "timeline") {
       return tab;
     }
     return "overview";
@@ -67,14 +73,18 @@ export function OperationsDashboardPage() {
   const [loadError, setLoadError] = useState("");
   const [runs, setRuns] = useState<OperationsRunRecord[]>([]);
   const [agents, setAgents] = useState<AgentSummaryRecord[]>([]);
+  const [budgetData, setBudgetData] = useState<BudgetResponse | null>(null);
+  const [costData, setCostData] = useState<CostSummaryResponse | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     try {
-      const [runRows, agentRows] = await Promise.all([
+      const [runRows, agentRows, budget, cost] = await Promise.all([
         listAgentApiRuns({ limit: 200 }),
         listAgents(),
+        getBudget().catch(() => null),
+        getCostSummary(7).catch(() => null),
       ]);
       const normalizedRuns = (runRows || [])
         .map(normalizeApiRun)
@@ -82,6 +92,8 @@ export function OperationsDashboardPage() {
         .sort((left, right) => new Date(right.startedAt).getTime() - new Date(left.startedAt).getTime());
       setRuns(normalizedRuns);
       setAgents(agentRows || []);
+      setBudgetData(budget);
+      setCostData(cost);
     } catch (error) {
       setLoadError(`Failed to load operations telemetry: ${String(error)}`);
       setRuns([]);
@@ -103,10 +115,13 @@ export function OperationsDashboardPage() {
     [runs],
   );
   const successRate = runs.length ? Math.round((successfulRuns / runs.length) * 100) : 0;
-  const totalCost = useMemo(
+  const todayCostUsdFromRuns = useMemo(
     () => runs.reduce((total, run) => total + run.llmCostUsd, 0),
     [runs],
   );
+  // Prefer backend cost data (tracks all LLM + Computer Use spend); fall back to run-level sum
+  const todayCostUsd = budgetData?.today_cost_usd ?? todayCostUsdFromRuns;
+  const weekCosts = costData?.daily_costs ?? [];
   const activeRuns = useMemo(
     () =>
       runs.filter((run) => {
@@ -125,6 +140,8 @@ export function OperationsDashboardPage() {
           <div className="mt-4 flex items-center gap-2">
             {([
               { key: "overview", label: "Overview" },
+              { key: "insights", label: "Insights" },
+              { key: "timeline", label: "Timeline" },
               { key: "reviews", label: "Business Reviews" },
               { key: "roi", label: "ROI" },
             ] as const).map((tab) => (
@@ -169,7 +186,7 @@ export function OperationsDashboardPage() {
           </article>
           <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
             <p className="text-[12px] text-[#667085]">Cost today</p>
-            <p className="mt-1 text-[26px] font-semibold text-[#111827]">${totalCost.toFixed(2)}</p>
+            <p className="mt-1 text-[26px] font-semibold text-[#111827]">${todayCostUsd.toFixed(2)}</p>
           </article>
           <article className="rounded-2xl border border-black/[0.08] bg-white p-4">
             <p className="text-[12px] text-[#667085]">Active runs</p>
@@ -180,8 +197,36 @@ export function OperationsDashboardPage() {
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <LiveRunMonitor runs={runs} />
-          <BudgetSettings currentCostUsd={totalCost} />
+          <BudgetSettings currentCostUsd={todayCostUsd} />
         </section>
+
+        {weekCosts.length > 0 ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+            <h3 className="text-[18px] font-semibold text-[#111827]">7-day cost trend</h3>
+            <p className="mt-1 text-[13px] text-[#667085]">Daily LLM + Computer Use spend.</p>
+            <div className="mt-3 flex items-end gap-1" style={{ height: 80 }}>
+              {weekCosts
+                .slice()
+                .reverse()
+                .map((day) => {
+                  const maxCost = Math.max(...weekCosts.map((d) => d.total_cost_usd), 0.01);
+                  const pct = Math.max(4, (day.total_cost_usd / maxCost) * 100);
+                  return (
+                    <div key={day.date_key} className="flex flex-1 flex-col items-center gap-1">
+                      <div
+                        className="w-full rounded-t-md bg-[#7c3aed]"
+                        style={{ height: `${pct}%` }}
+                        title={`$${day.total_cost_usd.toFixed(4)} on ${day.date_key}`}
+                      />
+                      <span className="text-[10px] text-[#98a2b3]">
+                        {day.date_key.slice(5)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </section>
+        ) : null}
 
         <RunErrorLog runs={runs} />
           </>
@@ -198,6 +243,22 @@ export function OperationsDashboardPage() {
         {activeTab === "roi" ? (
           <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
             <ROIDashboard className="h-[720px] overflow-y-auto" />
+          </section>
+        ) : null}
+
+        {activeTab === "insights" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            <div className="h-[720px] min-h-0">
+              <InsightsFeedPanel className="h-full" />
+            </div>
+          </section>
+        ) : null}
+
+        {activeTab === "timeline" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-0">
+            <div className="h-[720px] min-h-0 overflow-y-auto">
+              <RunTimelinePage />
+            </div>
           </section>
         ) : null}
       </div>

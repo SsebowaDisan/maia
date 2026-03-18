@@ -8,7 +8,6 @@ import {
   FolderPlus,
   LayoutGrid,
   LineChart,
-  Bell,
   PlugZap,
   PencilLine,
   Route,
@@ -71,9 +70,6 @@ type ProjectsPaneProps = {
   onMoveConversationToProject: (conversationId: string, projectId: string) => void;
   onRequestDeleteConversation: (conversation: ConversationSummary) => void;
   onNavigateAppRoute: (path: string) => void;
-  insightsCount?: number;
-  reviewQueueCount?: number;
-  isSuperAdmin?: boolean;
 };
 
 export function ProjectsPane({
@@ -116,23 +112,13 @@ export function ProjectsPane({
   onMoveConversationToProject,
   onRequestDeleteConversation,
   onNavigateAppRoute,
-  insightsCount = 0,
-  reviewQueueCount = 0,
-  isSuperAdmin = false,
 }: ProjectsPaneProps) {
-  const baseQuickLinks = [
+  const quickLinks = [
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
     { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
     { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
-    { id: "insights", label: "Insights", icon: Bell, path: "/insights" },
     { id: "marketplace", label: "Marketplace", icon: Store, path: "/marketplace" },
   ] as const;
-  const quickLinks = isSuperAdmin
-    ? [
-        ...baseQuickLinks,
-        { id: "review_queue", label: "Review Queue", icon: Check, path: "/admin/review" },
-      ]
-    : baseQuickLinks;
   const normalizedPath = String(currentPath || "/").toLowerCase();
 
   return (
@@ -142,7 +128,7 @@ export function ProjectsPane({
           {quickLinks.map((entry) => {
             const active =
               normalizedPath === entry.path ||
-              (entry.path !== "/" && normalizedPath.startsWith(`${entry.path}/`));
+              normalizedPath.startsWith(`${entry.path}/`);
             return (
               <button
                 key={entry.id}
@@ -154,16 +140,6 @@ export function ProjectsPane({
               >
                 <entry.icon className="h-4 w-4 text-[#1d1d1f]" />
                 <span className="truncate">{entry.label}</span>
-                {entry.id === "insights" && insightsCount > 0 ? (
-                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#7c3aed] px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                    {insightsCount > 99 ? "99+" : insightsCount}
-                  </span>
-                ) : null}
-                {entry.id === "review_queue" && reviewQueueCount > 0 ? (
-                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-[#7c3aed] px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                    {reviewQueueCount > 99 ? "99+" : reviewQueueCount}
-                  </span>
-                ) : null}
               </button>
             );
           })}

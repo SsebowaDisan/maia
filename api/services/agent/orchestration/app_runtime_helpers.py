@@ -169,6 +169,19 @@ def build_execution_prompt(
         else []
     )
     if not context_summary and not working_context_preview and not snippets and not session_snippets and not memory_snippets:
+        # Still check for skill pack before returning early.
+        skill_pack_path = settings.get("skill_pack_path")
+        if skill_pack_path:
+            try:
+                from pathlib import Path
+
+                from api.services.agent.skills import SkillExecutor, load_skill_pack
+
+                pack = load_skill_pack(Path(skill_pack_path))
+                executor = SkillExecutor(pack)
+                return executor.build_system_prompt(base_prompt=base)
+            except Exception:
+                pass
         return base
     lines = [base]
     if working_context_preview:
@@ -184,7 +197,23 @@ def build_execution_prompt(
     if memory_snippets:
         lines.append("Relevant past memory:")
         lines.extend(f"- {snippet}" for snippet in memory_snippets[:4])
-    return "\n".join(lines).strip()[:2400]
+    prompt = "\n".join(lines).strip()[:2400]
+
+    # If a skill pack is configured, layer its instructions onto the prompt.
+    skill_pack_path = settings.get("skill_pack_path")
+    if skill_pack_path:
+        try:
+            from pathlib import Path
+
+            from api.services.agent.skills import SkillExecutor, load_skill_pack
+
+            pack = load_skill_pack(Path(skill_pack_path))
+            executor = SkillExecutor(pack)
+            prompt = executor.build_system_prompt(base_prompt=prompt)
+        except Exception:
+            pass  # Skill pack loading is optional; fall back to base prompt
+
+    return prompt
 
 
 def build_scoped_execution_prompt(

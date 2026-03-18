@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from api.auth import require_org_admin
 from api.models.user import User
+from api.services.auth.dependencies import require_scope
 from api.services.secrets.provider import get_secret_provider
 
 router = APIRouter(prefix="/api/secrets", tags=["secrets"])
@@ -63,7 +64,7 @@ class HealthResponse(BaseModel):
 
 
 @router.get("/health", response_model=HealthResponse)
-def secret_health(user: Annotated[User, Depends(require_org_admin)]):
+def secret_health(user: Annotated[User, Depends(require_org_admin)], _scope=require_scope("secrets:manage")):
     """Check the secret provider's connectivity."""
     provider = get_secret_provider()
     return provider.health_check()
@@ -73,6 +74,7 @@ def secret_health(user: Annotated[User, Depends(require_org_admin)]):
 def list_secrets(
     user: Annotated[User, Depends(require_org_admin)],
     prefix: str = "",
+    _scope=require_scope("secrets:manage"),
 ):
     """List secret keys for the current tenant."""
     provider = get_secret_provider()
@@ -84,6 +86,7 @@ def list_secrets(
 def get_secret(
     key: str,
     user: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("secrets:manage"),
 ):
     """Return a masked view of a secret value."""
     provider = get_secret_provider()
@@ -98,20 +101,46 @@ def set_secret(
     key: str,
     body: SecretBody,
     user: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("secrets:manage"),
 ):
     """Create or update a secret."""
     provider = get_secret_provider()
     provider.set(key, body.value, tenant_id=_tenant_id(user))
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=_tenant_id(user),
+            user_id=user.id,
+            action="secret.set",
+            resource_type="secret",
+            resource_id=key,
+            detail=f"Secret '{key}' created or updated",
+        )
+    except Exception:
+        pass
 
 
 @router.delete("/{key:path}")
 def delete_secret(
     key: str,
     user: Annotated[User, Depends(require_org_admin)],
+    _scope=require_scope("secrets:manage"),
 ):
     """Delete a secret. Returns 404 if not found."""
     provider = get_secret_provider()
     deleted = provider.delete(key, tenant_id=_tenant_id(user))
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found.")
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=_tenant_id(user),
+            user_id=user.id,
+            action="secret.deleted",
+            resource_type="secret",
+            resource_id=key,
+            detail=f"Secret '{key}' deleted",
+        )
+    except Exception:
+        pass
     return {"deleted": True}

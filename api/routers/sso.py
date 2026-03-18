@@ -12,7 +12,7 @@ import logging
 import secrets
 import time
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.services.auth.oidc import (
@@ -101,6 +101,7 @@ def oidc_start() -> StartResponse:
 
 @router.get("/oidc/callback", response_model=TokenResponse)
 def oidc_callback(
+    request: Request,
     code: str = Query(..., description="Authorization code from the IdP"),
     state: str = Query(..., description="State parameter for CSRF protection"),
 ) -> TokenResponse:
@@ -123,12 +124,38 @@ def oidc_callback(
         claims = exchange_code(code=code, state=state, nonce=nonce)
     except ValueError as exc:
         logger.warning("OIDC token exchange failed: %s", exc)
+        try:
+            from api.services.audit.trail import record_event
+            record_event(
+                tenant_id="",
+                user_id="",
+                action="sso.callback_failed",
+                resource_type="sso",
+                resource_id=state,
+                detail=f"OIDC token exchange failed: {exc}",
+                ip_address=request.client.host if request.client else "",
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from exc
     except Exception as exc:
         logger.error("OIDC token exchange error: %s", exc)
+        try:
+            from api.services.audit.trail import record_event
+            record_event(
+                tenant_id="",
+                user_id="",
+                action="sso.callback_error",
+                resource_type="sso",
+                resource_id=state,
+                detail=f"OIDC provider communication error: {exc}",
+                ip_address=request.client.host if request.client else "",
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Identity provider communication error.",
@@ -163,4 +190,17 @@ def oidc_callback(
         tenant_id=user.tenant_id,
     )
     refresh = create_refresh_token(user_id=user.id)
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=user.tenant_id or "",
+            user_id=user.id,
+            action="sso.callback_success",
+            resource_type="sso",
+            resource_id=user.id,
+            detail=f"SSO login successful for {user.email}",
+            ip_address=request.client.host if request.client else "",
+        )
+    except Exception:
+        pass
     return TokenResponse(access_token=access, refresh_token=refresh)

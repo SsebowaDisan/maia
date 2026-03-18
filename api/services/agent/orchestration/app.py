@@ -22,6 +22,8 @@ from api.services.agent.policy import ACCESS_MODE_FULL, build_access_context
 from api.services.agent.tools.base import ToolExecutionContext
 from api.services.agent.tools.registry import get_tool_registry
 
+from api.services.agent.middleware.integration import create_pipeline_for_run
+
 from .app_runtime_helpers import (
     build_execution_context_settings,
     build_execution_prompt,
@@ -196,6 +198,10 @@ class AgentOrchestrator:
                 registry=self.registry,
             )
             apply_memory_to_state(_brain.state, _brain_memory)
+            # Attach CausalDAG graph (Innovation #4) if the planner built one.
+            _causal_graph_obj = settings.get("__causal_graph_obj")
+            if _causal_graph_obj is not None:
+                _brain.state._causal_graph = _causal_graph_obj
 
             role_dispatch_plan = build_role_dispatch_plan(steps=steps)
             settings["__role_dispatch_plan"] = role_dispatch_plan[:40]
@@ -265,6 +271,13 @@ class AgentOrchestrator:
                     role_dispatch_plan=role_dispatch_plan,
                 ),
             )
+
+            # Create middleware pipeline and attach to settings so step loop can use it.
+            try:
+                middleware_pipeline = create_pipeline_for_run(settings)
+                execution_context.settings["__middleware_pipeline"] = middleware_pipeline
+            except Exception:
+                pass  # Middleware is optional; fall back to direct execution.
             resumed_handoff = maybe_resume_handoff_from_settings(
                 settings=execution_context.settings,
             )
@@ -479,6 +492,75 @@ class AgentOrchestrator:
                 activity_event_factory=activity_event_factory,
                 expected_event_types_resolver=expected_event_types,
             )
+            # --- Automated Trace Learning (Innovation #3) ---
+            try:
+                from api.services.agent.memory.trace_learner import TraceLearner
+                _trace_learner = TraceLearner()
+                _trace_steps = []
+                for _exec_step in getattr(state, "executed_steps", []):
+                    _step_dict = {
+                        "tool_id": getattr(_exec_step, "tool_id", str(_exec_step.get("tool_id", "") if isinstance(_exec_step, dict) else "")),
+                        "outcome_status": getattr(_exec_step, "outcome_status", str(_exec_step.get("outcome_status", "") if isinstance(_exec_step, dict) else "")),
+                        "error_message": getattr(_exec_step, "error_message", str(_exec_step.get("error_message", "") if isinstance(_exec_step, dict) else "")),
+                        "evidence_summary": getattr(_exec_step, "evidence_summary", str(_exec_step.get("evidence_summary", "") if isinstance(_exec_step, dict) else "")),
+                        "step_index": getattr(_exec_step, "step_index", _exec_step.get("step_index", 0) if isinstance(_exec_step, dict) else 0),
+                    }
+                    _trace_steps.append(_step_dict)
+                if _trace_steps:
+                    _patterns = _trace_learner.analyze_run_trace(run_id, _trace_steps)
+                    if _patterns:
+                        _trace_learner.persist_patterns(
+                            agent_id=user_id,
+                            tenant_id=access_context.tenant_id,
+                            patterns=_patterns,
+                        )
+            except Exception as _trace_exc:
+                import logging as _tl_logging
+                _tl_logging.getLogger(__name__).debug(
+                    "trace_learner.analyze_run_trace failed: %s", _trace_exc,
+                )
+
+            # --- Knowledge Graph from evidence (Innovation #5) ---
+            try:
+                from api.services.agent.reasoning.knowledge_graph import KnowledgeGraphBuilder
+                _kg_evidence = list(
+                    getattr(_brain.state, "evidence_pool", [])
+                )[:20]
+                if _kg_evidence:
+                    _kg_builder = KnowledgeGraphBuilder()
+                    _kg = _kg_builder.build_graph(_kg_evidence)
+                    _kg_contradictions = _kg_builder.detect_contradictions(_kg)
+                    # Store knowledge graph summary in run metadata
+                    settings["__knowledge_graph_summary"] = _kg.summary()
+                    state.execution_context.settings["__knowledge_graph_summary"] = _kg.summary()
+                    if _kg.entity_count() > 0:
+                        kg_event = activity_event_factory(
+                            event_type="knowledge_graph_built",
+                            title=f"Knowledge graph: {_kg.entity_count()} entities, {_kg.relationship_count()} relationships",
+                            detail=(
+                                f"{len(_kg.clusters)} cluster(s) detected"
+                                + (f", {len(_kg_contradictions)} contradiction(s) flagged" if _kg_contradictions else "")
+                            ),
+                            metadata=_kg.summary(),
+                        )
+                        yield stream.emit(kg_event)
+                    if _kg_contradictions:
+                        contradiction_event = activity_event_factory(
+                            event_type="knowledge_graph_contradictions",
+                            title=f"{len(_kg_contradictions)} evidence contradiction(s) detected",
+                            detail="; ".join(
+                                f"{c.get('source', '?')} vs {c.get('target', '?')}"
+                                for c in _kg_contradictions[:3]
+                            ),
+                            metadata={"contradictions": _kg_contradictions[:5]},
+                        )
+                        yield stream.emit(contradiction_event)
+            except Exception as _kg_exc:
+                import logging as _kg_logging
+                _kg_logging.getLogger(__name__).debug(
+                    "knowledge_graph build failed: %s", _kg_exc,
+                )
+
             finalization_completed_checkpoint = append_execution_checkpoint(
                 settings=state.execution_context.settings,
                 name="finalization_completed",

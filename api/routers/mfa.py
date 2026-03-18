@@ -42,7 +42,20 @@ def enroll(user: Annotated[User, Depends(get_current_user)]) -> dict:
             status_code=status.HTTP_409_CONFLICT,
             detail="MFA is already active. Disable it first to re-enrol.",
         )
-    return enroll_mfa(user.id)
+    result = enroll_mfa(user.id)
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=user.tenant_id or "",
+            user_id=user.id,
+            action="mfa.enrolled",
+            resource_type="mfa",
+            resource_id=user.id,
+            detail=f"MFA enrollment initiated for {user.email}",
+        )
+    except Exception:
+        pass
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +73,18 @@ def activate(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid code or no pending enrolment.",
         )
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=user.tenant_id or "",
+            user_id=user.id,
+            action="mfa.activated",
+            resource_type="mfa",
+            resource_id=user.id,
+            detail=f"MFA activated for {user.email}",
+        )
+    except Exception:
+        pass
     return {"activated": True}
 
 
@@ -93,6 +118,18 @@ def disable(user: Annotated[User, Depends(get_current_user)]) -> dict:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No MFA enrolment found.",
         )
+    try:
+        from api.services.audit.trail import record_event
+        record_event(
+            tenant_id=user.tenant_id or "",
+            user_id=user.id,
+            action="mfa.disabled",
+            resource_type="mfa",
+            resource_id=user.id,
+            detail=f"MFA disabled for {user.email}",
+        )
+    except Exception:
+        pass
     return {"disabled": True}
 
 

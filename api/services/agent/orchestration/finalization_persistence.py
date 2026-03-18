@@ -99,3 +99,43 @@ def persist_completed_run(
         needs_human_review=result.needs_human_review,
         reward_score=None,
     )
+
+    # ── Record structured telemetry + cost ────────────────────────────────
+    try:
+        from api.services.observability.telemetry import record_run_start, record_run_end
+        from api.services.observability.cost_tracker import record_token_cost
+
+        obs = get_agent_observability()
+        total_tokens_in = sum(obs._llm_prompt_tokens_by_model.values())
+        total_tokens_out = sum(obs._llm_completion_tokens_by_model.values())
+
+        tool_calls_data = [
+            {"tool_id": tid, "status": status, "count": count}
+            for (tid, status), count in obs._tool_calls.items()
+        ]
+
+        # Ensure run exists in telemetry (idempotent — may already be started)
+        try:
+            record_run_start(
+                run_id, access_context.tenant_id, access_context.tenant_id,
+                trigger_type="manual",
+            )
+        except Exception:
+            pass
+
+        record_run_end(
+            run_id,
+            status="completed",
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            tool_calls=tool_calls_data,
+        )
+
+        record_token_cost(
+            tenant_id=access_context.tenant_id,
+            agent_id="orchestration",
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+        )
+    except Exception:
+        pass

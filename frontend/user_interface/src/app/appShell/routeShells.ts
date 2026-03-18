@@ -119,6 +119,20 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
       path: "/operations",
     };
   }
+  if (normalized === "/run-timeline") {
+    return {
+      kind: "page",
+      key: "operations",
+      path: "/operations",
+    };
+  }
+  if (normalized === "/insights") {
+    return {
+      kind: "page",
+      key: "operations",
+      path: "/operations",
+    };
+  }
   if (normalized === "/workflow-builder") {
     return {
       kind: "page",
