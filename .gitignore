@@ -258,6 +258,7 @@ htmlcov/
 .tox/
 .nox/
 .coverage
+.tmp_live_runs/
 .coverage.*
 .cache
 nosetests.xml
