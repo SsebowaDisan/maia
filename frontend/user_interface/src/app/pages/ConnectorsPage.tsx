@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Shield } from "lucide-react";
+import { PlugZap, RefreshCw, Search, Shield } from "lucide-react";
 
 import {
   getConnectorBinding,
@@ -13,16 +13,14 @@ import {
   type ConnectorCredentialRecord,
   type ConnectorPluginManifest,
 } from "../../api/client";
-import { ConnectorCatalogFilters } from "../components/connectors/ConnectorCatalogFilters";
+import { ConnectorBrandIcon } from "../components/connectors/ConnectorBrandIcon";
 import { ConnectorDetailPanel } from "../components/connectors/ConnectorDetailPanel";
 import { ConnectorGoogleAdvancedSettings } from "../components/connectors/ConnectorGoogleAdvancedSettings";
 import { ConnectorPermissionsModal } from "../components/connectors/ConnectorPermissionsModal";
-import { ConnectorSuiteSection } from "../components/connectors/ConnectorSuiteSection";
+import { SlackIntegrationCard } from "../components/connectors/SlackIntegrationCard";
 import {
   buildConnectorStats,
   buildConnectorSummaries,
-  buildFilteredSections,
-  buildSuiteCounts,
   findChangedConnectorId,
   isBindingMissingError,
   isNotFoundError,
@@ -30,7 +28,6 @@ import {
   type ConnectorCatalogRow,
   type ConnectorHealthEntry,
   type ConnectorListFilter,
-  type ConnectorSuiteFilter,
 } from "../components/connectors/catalogModel";
 import {
   MANUAL_CONNECTOR_DEFINITIONS,
@@ -60,9 +57,7 @@ export function ConnectorsPage() {
   const [savingPermissionFor, setSavingPermissionFor] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState("");
   const [activeFilter, setActiveFilter] =
-    useState<ConnectorListFilter>("needs_setup");
-  const [activeSuite, setActiveSuite] =
-    useState<ConnectorSuiteFilter>("all");
+    useState<ConnectorListFilter>("all");
   const [permissionsOpen, setPermissionsOpen] = useState(false);
 
   const googleEnabledServiceIds = useMemo(
@@ -304,21 +299,6 @@ export function ConnectorsPage() {
     [activeFilter, cards],
   );
 
-  const suiteCounts = useMemo(
-    () => buildSuiteCounts(filteredCards),
-    [filteredCards],
-  );
-
-  const filteredSections = useMemo(
-    () =>
-      buildFilteredSections({
-        cards,
-        activeFilter,
-        activeSuite,
-      }),
-    [activeFilter, activeSuite, cards],
-  );
-
   const matrixAgents = useMemo(
     () =>
       agents.map((agent) => ({
@@ -378,90 +358,131 @@ export function ConnectorsPage() {
     />
   );
 
-  return (
-    <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
-      <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4">
-        <section className="rounded-[20px] border border-black/[0.06] bg-white px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">
-                Integrations
-              </p>
-              <h1 className="mt-1 text-[26px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">
-                Connectors
-              </h1>
-              <div className="mt-3 flex items-center gap-4 text-[12px] text-[#86868b]">
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-[#22c55e]" />
-                  {stats.connected} connected
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-[#d4d4d8]" />
-                  {stats.needsSetup} needs setup
-                </span>
-                {stats.attention > 0 ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-[#f59e0b]" />
-                    {stats.attention} attention
-                  </span>
-                ) : null}
-                <span className="text-[#c7c7cc]">{stats.total} total</span>
-              </div>
-            </div>
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchedCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return filteredCards;
+    return filteredCards.filter((c) =>
+      `${c.name} ${c.description} ${c.category}`.toLowerCase().includes(q),
+    );
+  }, [filteredCards, searchQuery]);
 
-            <div className="shrink-0 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPermissionsOpen(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-3.5 py-2 text-[13px] font-medium text-[#1d1d1f] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all hover:bg-[#f5f3ff] hover:border-[#c4b5fd] hover:text-[#7c3aed]"
-              >
-                <Shield size={14} />
-                Permissions
-              </button>
-              <button
-                type="button"
-                onClick={() => void refresh()}
-                disabled={loading}
-                className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-3.5 py-2 text-[13px] font-medium text-[#1d1d1f] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all hover:bg-[#f5f5f7] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-                Refresh
-              </button>
-            </div>
+  return (
+    <div className="h-full overflow-y-auto p-6">
+      <div className="mx-auto w-full max-w-[960px]">
+        {/* Header */}
+        <div className="mb-6 flex items-start gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#f5f3ff]">
+            <PlugZap size={22} className="text-[#7c3aed]" />
           </div>
-        </section>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[18px] font-semibold text-[#1d1d1f]">Which connector would you like to use?</h1>
+            <p className="mt-1 text-[13px] text-[#86868b]">
+              Connectors enhance your access to user data, app usage insights, and discoverability metrics.
+            </p>
+          </div>
+        </div>
+
+        {/* Search */}
+        <div className="relative mb-5">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#aeaeb2]" />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search"
+            className="w-full rounded-xl border border-black/[0.08] bg-white py-2.5 pl-10 pr-4 text-[14px] text-[#1d1d1f] outline-none placeholder:text-[#aeaeb2] focus:border-[#7c3aed]/40 focus:ring-2 focus:ring-[#7c3aed]/10"
+          />
+        </div>
+
+        <div className="mb-5">
+          <SlackIntegrationCard
+            onOpenConnector={() => {
+              openConnectorDetail("slack");
+            }}
+          />
+        </div>
 
         {error ? (
-          <div className="rounded-2xl border border-[#fecaca] bg-[#fff5f5] px-4 py-3 text-[13px] text-[#9f1239]">
+          <div className="mb-4 rounded-lg border border-[#fecaca] bg-[#fff5f5] px-3 py-2 text-[12px] text-[#9f1239]">
             {error}
           </div>
         ) : null}
 
-        <ConnectorCatalogFilters
-          activeFilter={activeFilter}
-          activeSuite={activeSuite}
-          filteredCount={filteredCards.length}
-          suiteCounts={suiteCounts}
-          onFilterChange={setActiveFilter}
-          onSuiteChange={setActiveSuite}
-        />
+        {/* Connector icon grid — reference design */}
+        <div className="rounded-2xl border border-black/[0.06] bg-white">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4">
+            {searchedCards.map((card, idx) => {
+              const isConnected = card.status === "Connected";
+              const needsAttention = card.status === "Expired" || card.status === "Needs permission";
+              const isLastRow = idx >= searchedCards.length - (searchedCards.length % 4 || 4);
+              const isLastInRow = (idx + 1) % 4 === 0;
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => openConnectorDetail(card.id)}
+                  className={`group flex flex-col items-center gap-3 px-4 py-5 text-center transition-colors hover:bg-[#f8f8fa] ${
+                    !isLastInRow ? "border-r border-black/[0.04]" : ""
+                  } ${!isLastRow ? "border-b border-black/[0.04]" : ""}`}
+                >
+                  {/* Brand icon */}
+                  <div className="transition-transform group-hover:scale-105">
+                    <ConnectorBrandIcon
+                      connectorId={card.id}
+                      brandSlug={card.brandSlug || card.id}
+                      label={card.name}
+                      size={44}
+                    />
+                  </div>
 
-        <section className="space-y-4">
-          {filteredSections.map((section) => (
-            <ConnectorSuiteSection
-              key={section.key}
-              section={section}
-              activeSuite={activeSuite}
-              onOpenConnector={openConnectorDetail}
-            />
-          ))}
-        </section>
+                  {/* Name */}
+                  <p className="text-[13px] font-semibold text-[#1d1d1f]">{card.name}</p>
 
-        {filteredCards.length === 0 ? (
-          <section className="rounded-2xl border border-black/[0.06] bg-white p-6 text-center text-[13px] text-[#86868b]">
-            No connectors match this filter.
-          </section>
+                  {/* Action */}
+                  <span className={`text-[12px] font-medium ${
+                    isConnected
+                      ? "text-[#059669]"
+                      : needsAttention
+                        ? "text-[#d97706]"
+                        : "text-[#7c3aed]"
+                  }`}>
+                    {isConnected ? "Connected" : needsAttention ? "Reconnect" : "Select"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {searchedCards.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-12 text-center">
+            <p className="text-[14px] font-medium text-[#344054]">No connectors found</p>
+            <button type="button" onClick={() => { setSearchQuery(""); setActiveFilter("all"); }} className="text-[12px] font-medium text-[#7c3aed] hover:underline">
+              Clear search
+            </button>
+          </div>
         ) : null}
+
+        {/* Footer actions */}
+        <div className="mt-4 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setPermissionsOpen(true)}
+            className="text-[12px] font-medium text-[#86868b] transition hover:text-[#1d1d1f]"
+          >
+            <Shield size={12} className="mr-1 inline" />
+            Manage permissions
+          </button>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="text-[12px] font-medium text-[#86868b] transition hover:text-[#1d1d1f] disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={`mr-1 inline ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <ConnectorPermissionsModal

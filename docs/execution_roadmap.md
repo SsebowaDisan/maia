@@ -1,83 +1,115 @@
-# Maia Frontend Execution Roadmap
-Updated: 2026-03-17  
-Scope: Marketplace install UX and connector readiness flows
+# Maia Execution Roadmap (7-Day Fix Order)
+Updated: 2026-03-19
+Scope: Stabilize launch-critical flows, harden quality gates, then optimize UX/performance.
 
-## Analysis Summary
-1. The install flow can skip modal friction when preflight confirms immediate install.
-2. Post-install state should be updated from install response payloads to remove redundant list refetches.
-3. Connector readiness needs to be visible earlier (cards/detail) and clearer at confirmation time.
-4. Installed/version state should drive `Installed` vs `Update` calls-to-action directly from preflight/install responses.
-5. Audit/debug and workflow validation UX should expose connector-related history/warnings without hard-blocking save.
+## Goal
+Ship a reliable, non-technical-user-friendly baseline where install -> setup -> run -> theatre works consistently.
 
-## Active Tasks
+## Rules
+1. No new feature expansion until Day 4.
+2. Every day ends with a runnable validation checklist.
+3. Keep files under 500 LOC when touching code.
+4. No merge without smoke checks passing.
 
-### P0 - Critical (pairs with B0/B3)
+## Day 1 - Baseline and Guardrails (In Progress)
+Owner A:
+- Publish this roadmap and execution checklist.
+- Add release smoke script for API/UI health + critical endpoints.
+- Add LOC report script and regenerate `docs/files_over_500_loc.md`.
 
-#### F1 - One-click install button driven by preflight
-- Description: On marketplace detail page, call `POST /api/marketplace/agents/{id}/install/preflight` on load. If `can_install_immediately: true`, show one-click `Install` (direct install call, no modal). If false, keep modal flow for connector setup.
-- Files:
-  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
-  - `src/app/components/marketplace/AgentInstallModal.tsx`
+Owner B:
+- Freeze API contract for connector status + theatre metadata fields.
+- Ensure all newly added routes are included in app startup and OpenAPI.
 
-#### F2 - Update local agent state from install response (no refetch)
-- Description: Use `installed_agent` returned from install success to merge directly into agent list store instead of calling `GET /api/agents` again.
-- Files:
-  - `src/app/api/client/marketplace.ts`
-  - `src/app/components/marketplace/AgentInstallModal.tsx`
+Acceptance:
+- `scripts/smoke_release_gate.ps1` exists and passes locally.
+- `docs/files_over_500_loc.md` is regenerated from code.
+- Contract fields are documented and stable for frontend consumption.
 
-#### F3 - Show auto-mapped connectors in confirmation UI
-- Description: If install response includes `auto_mapped_connectors`, render inline "Connected automatically" chips under the success message (example: `brave_search -> tenant_brave_01`).
-- Files:
-  - `src/app/components/marketplace/AgentInstallModal.tsx`
+## Day 2 - Critical Runtime Reliability
+Owner A:
+- Add front-end smoke checks for: workflow step Done -> node appears, install success CTA path, connector drawer open/close.
+- Fix non-technical UX labels in step config defaults (hide raw developer fields behind expand/collapse).
 
-### P1 - High Value (pairs with B1/B6)
+Owner B:
+- Harden API error model for install/setup/run endpoints (typed errors, no ambiguous plain strings).
+- Add server-side regression tests for install preflight/install/handoff/memory APIs.
 
-#### F4 - Connector status pills on marketplace cards and detail page
-- Description: Use `connector_status` from `GET /api/marketplace/agents` to show status pills per required connector:
-  - `Connected` (green)
-  - `Missing` (amber)
-  - `Not required` (grey)
-- List page shows compact summary; detail page shows full per-connector breakdown.
-- Files:
-  - `src/app/pages/MarketplacePage.tsx`
-  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
-  - `src/app/components/marketplace/ConnectorStatusPill.tsx` (new)
+Acceptance:
+- Reproducible pass on critical flow checklist.
+- No blocker bug in Done button or node creation path.
 
-#### F5 - Collapse install modal to a single connector-setup sheet
-- Description: When `can_install_immediately: false` and exactly one item in `missing_connectors`, skip wizard and show inline sheet (`This agent needs <connector> -> Connect`). On OAuth success, auto-install. Keep 4-step wizard for 2+ missing connectors or explicit `Customise`.
-- Files:
-  - `src/app/components/marketplace/AgentInstallModal.tsx`
+## Day 3 - Connector Reliability and Setup Consistency
+Owner A:
+- Enforce one setup UX entry: popup/drawer from all surfaces.
+- Add connector status chips and setup state messaging consistency.
 
-#### F6 - Already-installed badge and update flow
-- Description: If `already_installed: true` from preflight/install, replace `Install` call-to-action with an `Installed` badge. If marketplace version is newer than installed version, show `Update available` and re-use install endpoint for upgrade/upsert flow.
-- Files:
-  - `src/app/pages/MarketplaceAgentDetailPage.tsx`
-  - `src/app/api/client/marketplace.ts`
+Owner B:
+- Stabilize setup status computation (`connected`, `needs_setup`, `needs_permission`, `expired`) across connectors.
+- Ensure internal/runtime connectors remain hidden from user catalog.
 
-### P2 - Polish (pairs with B8)
+Acceptance:
+- Setup feels identical from Workspace, Marketplace, and Connectors.
+- No user-facing internal connectors.
 
-#### F7 - Install history drawer on AgentDetailPage
-- Description: Add a `History` tab on Agent detail that calls `GET /api/agents/{id}/install-history` and renders timeline entries for timestamp, installed version, user, and mapped connectors.
-- Files:
-  - `src/app/pages/AgentDetailPage.tsx`
-  - `src/app/components/agents/InstallHistoryTab.tsx` (new)
+## Day 4 - Theatre and Computer Observability
+Owner A:
+- Improve theatre labels for connector-aware scenes (email/sheet/doc/chat/api).
+- Ensure transitions and handoffs are readable for non-technical users.
 
-#### F8 - Workflow canvas connector warning indicators
-- Description: When `POST /api/workflows/validate` warnings mention missing connectors, highlight affected nodes with an amber border and tooltip (`Missing connector: <name> - configure in Settings`). Warning-only behavior: saving is still allowed.
-- Files:
-  - `src/app/components/workflowCanvas/WorkflowNode.tsx`
-  - `src/app/components/workflowCanvas/WorkflowCanvas.tsx`
+Owner B:
+- Guarantee theatre events include `connector_id`, `brand_slug`, `scene_family`, `operation_label`.
+- Verify computer-use stream events are emitted end-to-end.
 
-## Suggested Implementation Order
-1. F1 -> F2 -> F3
-2. F4 -> F5 -> F6
-3. F7 -> F8
+Acceptance:
+- Every critical workflow step is visible and interpretable in theatre.
+- No fallback to unclear generic event labels in core flows.
 
-## Completion Criteria
-1. Immediate-install agents can be installed from detail page with one click and no modal.
-2. Post-install UI state updates without `GET /api/agents` refetch.
-3. Auto-mapped connectors appear in success confirmation.
-4. Connector readiness is visible on marketplace cards and detail page.
-5. Installed vs Update controls render correctly from response data.
-6. Agent detail exposes an install history timeline.
-7. Workflow validation warnings visually mark affected nodes while preserving save behavior.
+## Day 5 - Security and Tenant Hardening
+Owner A:
+- Surface permission errors with user-safe copy and recovery CTAs.
+
+Owner B:
+- Audit auth/tenant checks on new routes (`creators`, `explore`, `dashboard`, `triggers`, `memory`, `og`).
+- Add abuse/rate-limit protections on publish/review-like endpoints.
+
+Acceptance:
+- No cross-tenant leakage in API checks.
+- Permission failures are explicit and recoverable.
+
+## Day 6 - Performance and File Structure
+Owner A:
+- Split oversized frontend files touched this week to <500 LOC.
+- Add route-level code splitting for heavy hub pages.
+
+Owner B:
+- Split oversized backend routers/services touched this week to <500 LOC.
+- Profile slow startup paths and remove obvious boot-time bottlenecks.
+
+Acceptance:
+- Updated LOC report shows downward trend with concrete splits.
+- Frontend bundle warning reduced from current baseline.
+
+## Day 7 - Launch Readiness Gate
+Owner A + B:
+- Run full smoke suite.
+- Run manual launch checklist (install, connect, run, theatre, chat redirect).
+- Produce go/no-go report with blockers and rollback plan.
+
+Acceptance:
+- All P0 checks pass.
+- Remaining issues are non-blocking and documented.
+
+## P0 Launch Checklist
+1. API and UI both healthy.
+2. Connector setup works from every entry point without full-page redirect.
+3. Workflow step Done creates/updates node correctly.
+4. Install -> add to workflow -> run in theatre is stable.
+5. Computer-use and API steps are both observable in theatre.
+6. No user-facing internal connectors.
+7. No critical auth/tenant leak.
+
+## Current Start State (2026-03-19)
+- Frontend build passes.
+- Multiple large source files exceed 500 LOC and need decomposition.
+- Large uncommitted worktree requires disciplined merge validation.

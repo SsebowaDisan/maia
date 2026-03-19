@@ -156,6 +156,78 @@ def get_agent_run_events(
     return events if events else rows
 
 
+@router.get("/runs/{run_id}/collaboration")
+def get_agent_run_collaboration(
+    run_id: str,
+    _user_id: str = Depends(get_current_user_id),
+) -> list[dict[str, Any]]:
+    """Return inter-agent collaboration log entries for a run.
+
+    Primary source is the collaboration log service. If empty, fall back to
+    activity events so historical runs still expose a conversation thread.
+    """
+    try:
+        from api.services.agent.collaboration_logs import get_collaboration_service
+
+        entries = get_collaboration_service().get_log(run_id)
+        if entries:
+            return entries
+    except Exception:
+        _logger.debug("Collaboration service unavailable for run %s", run_id, exc_info=True)
+
+    rows = get_activity_store().load_events(run_id)
+    if not rows:
+        return []
+
+    fallback_entries: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("type") != "event":
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        event_type = str(payload.get("event_type") or "").strip().lower()
+        if event_type not in {"agent_collaboration", "agent_handoff", "agent.handoff"}:
+            continue
+
+        data = payload.get("data")
+        data_map = data if isinstance(data, dict) else {}
+        from_agent = str(
+            data_map.get("from_agent")
+            or data_map.get("source_agent")
+            or payload.get("agent_id")
+            or "agent"
+        ).strip()
+        to_agent = str(
+            data_map.get("to_agent")
+            or data_map.get("target_agent")
+            or data_map.get("next_agent")
+            or "agent"
+        ).strip()
+        message = str(
+            data_map.get("message")
+            or data_map.get("summary")
+            or payload.get("detail")
+            or payload.get("title")
+            or ""
+        ).strip()
+        timestamp = data_map.get("timestamp") or payload.get("timestamp") or payload.get("ts")
+
+        fallback_entries.append(
+            {
+                "run_id": run_id,
+                "from_agent": from_agent or "agent",
+                "to_agent": to_agent or "agent",
+                "message": message or "Agent handoff",
+                "entry_type": "handoff" if "handoff" in event_type else "message",
+                "timestamp": timestamp,
+                "metadata": data_map,
+            }
+        )
+
+    return fallback_entries
+
+
 @router.get("/runs/{run_id}/graph-snapshots")
 def get_agent_run_graph_snapshots(
     run_id: str,

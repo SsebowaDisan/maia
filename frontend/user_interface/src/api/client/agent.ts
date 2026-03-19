@@ -109,10 +109,12 @@ type ConnectorBindingRecord = {
 
 type GatePendingRecord = {
   gate_id: string;
-  run_id: string;
+  run_id?: string;
   tool_id: string;
-  status: string;
-  params_preview: string;
+  status?: string;
+  action_label?: string;
+  params_preview: string | Record<string, unknown>;
+  preview?: Record<string, unknown> | null;
   cost_estimate?: number | null;
 };
 

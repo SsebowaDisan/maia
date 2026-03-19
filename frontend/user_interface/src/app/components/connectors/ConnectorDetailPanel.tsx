@@ -20,6 +20,7 @@ import { ConnectorDetailShell } from "./ConnectorDetailShell";
 import { ConnectorSetupPanel } from "./ConnectorSetupPanel";
 import { GoogleSuitePanel } from "./GoogleSuitePanel";
 import { MicrosoftSuitePanel } from "./MicrosoftSuitePanel";
+import { SlackIntegrationCard } from "./SlackIntegrationCard";
 import { WebhookManager } from "./WebhookManager";
 
 type ConnectorDetailPanelProps = {
@@ -270,6 +271,8 @@ export function ConnectorDetailPanel({
           {connector.statusMessage}
         </div>
       ) : null}
+
+      {connector.id === "slack" ? <SlackIntegrationCard compact /> : null}
 
       {panelContent}
 

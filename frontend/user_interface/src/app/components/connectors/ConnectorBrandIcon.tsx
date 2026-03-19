@@ -2,6 +2,7 @@ import { Globe2 } from "lucide-react";
 
 type ConnectorBrandKey =
   | "google"
+  | "google_cloud"
   | "gmail"
   | "google_calendar"
   | "google_drive"
@@ -30,6 +31,9 @@ type ConnectorBrandKey =
   | "bing"
   | "brave"
   | "playwright"
+  | "browser"
+  | "http"
+  | "page_monitor"
   | "invoice"
   | "email_validation"
   | "sec_edgar"
@@ -43,225 +47,172 @@ type BrandStyle = {
   background: string;
   color: string;
   borderColor: string;
+  iconUrl?: string;
 };
+
+// Google products: official product marks from gstatic.
+// Third-party brands: official favicon/logo URLs from brand-owned domains.
+const _GOOGLE_PRODUCT = "https://www.gstatic.com/images/branding/product/1x/";
 
 const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   google: {
-    text: "G",
-    background:
-      "conic-gradient(from 220deg at 50% 50%, #4285f4 0deg 95deg, #34a853 95deg 185deg, #fbbc05 185deg 275deg, #ea4335 275deg 360deg)",
-    color: "#ffffff",
-    borderColor: "#d0d5dd",
+    text: "G", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: "https://workspace.google.com/favicon.ico",
+  },
+  google_cloud: {
+    text: "GC", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}cloud_48dp.png`,
   },
   gmail: {
-    text: "M",
-    background: "linear-gradient(135deg, #ea4335 0%, #fbbc05 50%, #34a853 100%)",
-    color: "#ffffff",
-    borderColor: "#fecaca",
+    text: "M", background: "#ffffff", color: "#ea4335", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}gmail_48dp.png`,
   },
   google_calendar: {
-    text: "31",
-    background: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "31", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}calendar_48dp.png`,
   },
   google_drive: {
-    text: "Dr",
-    background: "linear-gradient(135deg, #0f9d58 0%, #34a853 100%)",
-    color: "#ffffff",
-    borderColor: "#bbf7d0",
+    text: "Dr", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}drive_48dp.png`,
   },
   google_docs: {
-    text: "Doc",
-    background: "linear-gradient(135deg, #2563eb 0%, #60a5fa 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "Doc", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}docs_48dp.png`,
   },
   google_sheets: {
-    text: "Sh",
-    background: "linear-gradient(135deg, #16a34a 0%, #4ade80 100%)",
-    color: "#14532d",
-    borderColor: "#bbf7d0",
+    text: "Sh", background: "#ffffff", color: "#0f9d58", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}sheets_48dp.png`,
   },
   google_analytics: {
-    text: "GA",
-    background: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)",
-    color: "#78350f",
-    borderColor: "#fde68a",
+    text: "GA", background: "#ffffff", color: "#e37400", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}analytics_48dp.png`,
   },
   google_ads: {
-    text: "Ads",
-    background: "linear-gradient(135deg, #2563eb 0%, #22c55e 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "Ads", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}ads_48dp.png`,
   },
   google_maps: {
-    text: "Map",
-    background: "linear-gradient(135deg, #22c55e 0%, #3b82f6 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "Map", background: "#ffffff", color: "#ea4335", borderColor: "#e5e7eb",
+    iconUrl: `${_GOOGLE_PRODUCT}maps_48dp.png`,
   },
   microsoft: {
-    text: "MS",
-    background: "linear-gradient(135deg, #f25022 0%, #00a4ef 35%, #7fba00 70%, #ffb900 100%)",
-    color: "#ffffff",
-    borderColor: "#d0d5dd",
+    text: "MS", background: "#ffffff", color: "#5E5E5E", borderColor: "#e5e7eb",
+    iconUrl: "https://www.microsoft.com/favicon.ico",
   },
   outlook: {
-    text: "O",
-    background: "linear-gradient(135deg, #0a66c2 0%, #2563eb 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "O", background: "#ffffff", color: "#0078d4", borderColor: "#e5e7eb",
+    iconUrl: "https://outlook.live.com/favicon.ico",
   },
   microsoft_calendar: {
-    text: "Cal",
-    background: "linear-gradient(135deg, #0f766e 0%, #2dd4bf 100%)",
-    color: "#f0fdfa",
-    borderColor: "#99f6e4",
+    text: "Cal", background: "#ffffff", color: "#0078d4", borderColor: "#e5e7eb",
+    iconUrl: "https://outlook.live.com/favicon.ico",
   },
   onedrive: {
-    text: "1D",
-    background: "linear-gradient(135deg, #2563eb 0%, #38bdf8 100%)",
-    color: "#ffffff",
-    borderColor: "#bae6fd",
+    text: "1D", background: "#ffffff", color: "#0078d4", borderColor: "#e5e7eb",
+    iconUrl: "https://www.onedrive.com/favicon.ico",
   },
   excel: {
-    text: "X",
-    background: "linear-gradient(135deg, #166534 0%, #22c55e 100%)",
-    color: "#ffffff",
-    borderColor: "#bbf7d0",
+    text: "X", background: "#ffffff", color: "#217346", borderColor: "#e5e7eb",
+    iconUrl: "https://www.office.com/favicon.ico",
   },
   word: {
-    text: "W",
-    background: "linear-gradient(135deg, #1d4ed8 0%, #60a5fa 100%)",
-    color: "#ffffff",
-    borderColor: "#bfdbfe",
+    text: "W", background: "#ffffff", color: "#2b579a", borderColor: "#e5e7eb",
+    iconUrl: "https://www.office.com/favicon.ico",
   },
   teams: {
-    text: "T",
-    background: "linear-gradient(135deg, #4f46e5 0%, #a78bfa 100%)",
-    color: "#ffffff",
-    borderColor: "#ddd6fe",
+    text: "T", background: "#ffffff", color: "#6264a7", borderColor: "#e5e7eb",
+    iconUrl: "https://teams.microsoft.com/favicon.ico",
   },
   slack: {
-    text: "S",
-    background: "linear-gradient(135deg, #36c5f0 0%, #2eb67d 33%, #ecb22e 66%, #e01e5a 100%)",
-    color: "#ffffff",
-    borderColor: "#d0d5dd",
+    text: "S", background: "#ffffff", color: "#4a154b", borderColor: "#e5e7eb",
+    iconUrl: "https://slack.com/favicon.ico",
   },
   notion: {
-    text: "N",
-    background: "linear-gradient(135deg, #111827 0%, #374151 100%)",
-    color: "#ffffff",
-    borderColor: "#d1d5db",
+    text: "N", background: "#ffffff", color: "#000000", borderColor: "#e5e7eb",
+    iconUrl: "https://www.notion.so/images/favicon.ico",
   },
   hubspot: {
-    text: "H",
-    background: "linear-gradient(135deg, #f97316 0%, #fb923c 100%)",
-    color: "#7c2d12",
-    borderColor: "#fdba74",
+    text: "H", background: "#ffffff", color: "#ff7a59", borderColor: "#e5e7eb",
+    iconUrl: "https://www.hubspot.com/favicon.ico",
   },
   salesforce: {
-    text: "SF",
-    background: "linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%)",
-    color: "#082f49",
-    borderColor: "#bae6fd",
+    text: "SF", background: "#ffffff", color: "#00a1e0", borderColor: "#e5e7eb",
+    iconUrl: "https://www.salesforce.com/favicon.ico",
   },
   jira: {
-    text: "J",
-    background: "linear-gradient(135deg, #2563eb 0%, #818cf8 100%)",
-    color: "#ffffff",
-    borderColor: "#c7d2fe",
+    text: "J", background: "#ffffff", color: "#0052cc", borderColor: "#e5e7eb",
+    iconUrl: "https://www.atlassian.com/favicon.ico",
   },
   airtable: {
-    text: "AT",
-    background: "linear-gradient(135deg, #ef4444 0%, #f59e0b 50%, #22c55e 100%)",
-    color: "#ffffff",
-    borderColor: "#fed7aa",
+    text: "AT", background: "#ffffff", color: "#18bfff", borderColor: "#e5e7eb",
+    iconUrl: "https://airtable.com/favicon.ico",
   },
   zendesk: {
-    text: "Z",
-    background: "linear-gradient(135deg, #14532d 0%, #16a34a 100%)",
-    color: "#ffffff",
-    borderColor: "#bbf7d0",
+    text: "Z", background: "#ffffff", color: "#03363d", borderColor: "#e5e7eb",
+    iconUrl: "https://www.zendesk.com/favicon.ico",
   },
   stripe: {
-    text: "St",
-    background: "linear-gradient(135deg, #635bff 0%, #8b5cf6 100%)",
-    color: "#ffffff",
-    borderColor: "#ddd6fe",
+    text: "St", background: "#ffffff", color: "#635bff", borderColor: "#e5e7eb",
+    iconUrl: "https://stripe.com/favicon.ico",
   },
   shopify: {
-    text: "Sh",
-    background: "linear-gradient(135deg, #4ade80 0%, #16a34a 100%)",
-    color: "#14532d",
-    borderColor: "#bbf7d0",
+    text: "Sh", background: "#ffffff", color: "#7ab55c", borderColor: "#e5e7eb",
+    iconUrl: "https://www.shopify.com/favicon.ico",
   },
   sap: {
-    text: "SAP",
-    background: "linear-gradient(135deg, #0092d1 0%, #38bdf8 100%)",
-    color: "#f8fafc",
-    borderColor: "#bae6fd",
+    text: "SAP", background: "#ffffff", color: "#0faaff", borderColor: "#e5e7eb",
+    iconUrl: "https://help.sap.com/favicon.ico",
   },
   bing: {
-    text: "B",
-    background: "linear-gradient(135deg, #008373 0%, #5eead4 100%)",
-    color: "#083344",
-    borderColor: "#99f6e4",
+    text: "B", background: "#ffffff", color: "#008373", borderColor: "#e5e7eb",
+    iconUrl: "https://www.bing.com/favicon.ico",
   },
   brave: {
-    text: "Br",
-    background: "linear-gradient(135deg, #fb923c 0%, #f97316 100%)",
-    color: "#7c2d12",
-    borderColor: "#fdba74",
+    text: "Br", background: "#ffffff", color: "#fb542b", borderColor: "#e5e7eb",
+    iconUrl: "https://brave.com/favicon.ico",
   },
   playwright: {
-    text: "PW",
-    background: "linear-gradient(135deg, #16a34a 0%, #86efac 100%)",
-    color: "#14532d",
-    borderColor: "#bbf7d0",
+    text: "PW", background: "#ffffff", color: "#2eab6f", borderColor: "#e5e7eb",
+    iconUrl: "https://playwright.dev/img/playwright-logo.svg",
+  },
+  browser: {
+    text: "WB", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    iconUrl: "https://www.google.com/chrome/static/images/favicons/favicon-96x96.png",
+  },
+  http: {
+    text: "HTTP", background: "#ffffff", color: "#2563eb", borderColor: "#e5e7eb",
+    iconUrl: "https://httpbin.org/static/favicon.ico",
+  },
+  page_monitor: {
+    text: "PM", background: "#ffffff", color: "#2563eb", borderColor: "#e5e7eb",
+    iconUrl: "/maia-icon.svg",
   },
   invoice: {
-    text: "INV",
-    background: "linear-gradient(135deg, #a78bfa 0%, #c4b5fd 100%)",
-    color: "#4c1d95",
-    borderColor: "#ddd6fe",
+    text: "INV", background: "#ffffff", color: "#7c3aed", borderColor: "#e5e7eb",
+    iconUrl: "https://www.xero.com/favicon.ico",
   },
   email_validation: {
-    text: "EV",
-    background: "linear-gradient(135deg, #a78bfa 0%, #c4b5fd 100%)",
-    color: "#4c1d95",
-    borderColor: "#c4b5fd",
+    text: "EV", background: "#ffffff", color: "#7c3aed", borderColor: "#e5e7eb",
+    iconUrl: "https://www.zerobounce.net/favicon.ico",
   },
   sec_edgar: {
-    text: "SEC",
-    background: "linear-gradient(135deg, #94a3b8 0%, #e2e8f0 100%)",
-    color: "#1e293b",
-    borderColor: "#cbd5e1",
+    text: "SEC", background: "#ffffff", color: "#1e293b", borderColor: "#e5e7eb",
+    iconUrl: "https://www.sec.gov/favicon.ico",
   },
   newsapi: {
-    text: "N",
-    background: "linear-gradient(135deg, #f87171 0%, #fca5a5 100%)",
-    color: "#7f1d1d",
-    borderColor: "#fecaca",
+    text: "N", background: "#ffffff", color: "#ef4444", borderColor: "#e5e7eb",
+    iconUrl: "https://newsapi.org/favicon.ico",
   },
   reddit: {
-    text: "R",
-    background: "linear-gradient(135deg, #fb923c 0%, #f97316 100%)",
-    color: "#7c2d12",
-    borderColor: "#fdba74",
+    text: "R", background: "#ffffff", color: "#ff4500", borderColor: "#e5e7eb",
+    iconUrl: "https://www.reddit.com/favicon.ico",
   },
   arxiv: {
-    text: "arX",
-    background: "linear-gradient(135deg, #6ee7b7 0%, #34d399 100%)",
-    color: "#064e3b",
-    borderColor: "#a7f3d0",
+    text: "arX", background: "#ffffff", color: "#b31b1b", borderColor: "#e5e7eb",
+    iconUrl: "https://arxiv.org/favicon.ico",
   },
   generic: {
-    text: "?",
-    background: "linear-gradient(135deg, #e2e8f0 0%, #f8fafc 100%)",
-    color: "#334155",
-    borderColor: "#d0d5dd",
+    text: "?", background: "#ffffff", color: "#6b7280", borderColor: "#e5e7eb",
   },
 };
 
@@ -277,14 +228,17 @@ const CONNECTOR_BRAND_ALIAS_MAP: Record<string, ConnectorBrandKey> = {
   computer_use_browser: "browser",
   google_ads: "google_ads",
   google_analytics: "google_analytics",
-  google_api_hub: "google",
+  google_api_hub: "google_cloud",
   google_calendar: "google_calendar",
+  google_cloud: "google_cloud",
   google_docs: "google_docs",
   google_drive: "google_drive",
   google_maps: "google_maps",
   google_sheets: "google_sheets",
   google_workspace: "google",
   hubspot: "hubspot",
+  http: "http",
+  http_request: "http",
   invoice: "invoice",
   jira: "jira",
   m365: "microsoft",
@@ -295,6 +249,7 @@ const CONNECTOR_BRAND_ALIAS_MAP: Record<string, ConnectorBrandKey> = {
   notion: "notion",
   onedrive: "onedrive",
   outlook: "outlook",
+  page_monitor: "page_monitor",
   playwright_browser: "browser",  // deprecated — redirects to computer_use_browser
   playwright_contact_form: "browser",  // deprecated — redirects to computer_use_browser
   reddit: "reddit",
@@ -309,10 +264,13 @@ const CONNECTOR_BRAND_ALIAS_MAP: Record<string, ConnectorBrandKey> = {
   zendesk: "zendesk",
 };
 
-function resolveBrandKey(value: string): ConnectorBrandKey {
+function _resolveSingleBrandKey(value: string): ConnectorBrandKey | null {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    return "generic";
+    return null;
+  }
+  if (CONNECTOR_BRAND_ALIAS_MAP[normalized]) {
+    return CONNECTOR_BRAND_ALIAS_MAP[normalized];
   }
   if (normalized.startsWith("google_")) {
     return "google";
@@ -320,7 +278,19 @@ function resolveBrandKey(value: string): ConnectorBrandKey {
   if (normalized.startsWith("microsoft_")) {
     return "microsoft";
   }
-  return CONNECTOR_BRAND_ALIAS_MAP[normalized] || "generic";
+  return null;
+}
+
+function resolveBrandKey(connectorId: string, brandSlug: string): ConnectorBrandKey {
+  const fromConnectorId = _resolveSingleBrandKey(connectorId);
+  if (fromConnectorId) {
+    return fromConnectorId;
+  }
+  const fromBrandSlug = _resolveSingleBrandKey(brandSlug);
+  if (fromBrandSlug) {
+    return fromBrandSlug;
+  }
+  return "generic";
 }
 
 function fallbackGlyph(label: string): string {
@@ -353,12 +323,53 @@ export function ConnectorBrandIcon({
   size = 18,
   className = "",
 }: ConnectorBrandIconProps) {
-  const brandKey = resolveBrandKey(brandSlug || connectorId);
+  const brandKey = resolveBrandKey(connectorId, brandSlug);
   const style = BRAND_STYLE_MAP[brandKey];
   const text = style.text === "?" ? fallbackGlyph(label) : style.text;
   if (brandKey === "generic") {
     return <Globe2 size={Math.max(12, size - 2)} className={`text-[#344054] ${className}`} />;
   }
+
+  // Use official logo image when available
+  if (style.iconUrl) {
+    return (
+      <span
+        className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] border ${className}`}
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          background: "#ffffff",
+          borderColor: style.borderColor,
+        }}
+        aria-hidden="true"
+        title={label || connectorId}
+      >
+        <img
+          src={style.iconUrl}
+          alt=""
+          width={Math.round(size * 0.65)}
+          height={Math.round(size * 0.65)}
+          loading="lazy"
+          className="object-contain"
+          onError={(e) => {
+            // Fallback to letter glyph if image fails to load
+            const target = e.currentTarget;
+            target.style.display = "none";
+            const parent = target.parentElement;
+            if (parent) {
+              parent.style.background = style.background;
+              parent.style.color = style.color;
+              parent.textContent = text;
+              parent.style.fontSize = `${Math.max(9, size * 0.32)}px`;
+              parent.style.fontWeight = "700";
+            }
+          }}
+        />
+      </span>
+    );
+  }
+
+  // Fallback to letter glyph
   return (
     <span
       className={`inline-flex shrink-0 items-center justify-center rounded-[8px] border font-semibold leading-none tracking-[-0.01em] ${glyphClassBySize(

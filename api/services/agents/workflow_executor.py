@@ -286,6 +286,8 @@ def _execute_step(
         return
     with outputs_lock:
         step_inputs = _resolve_inputs(step.input_mapping, outputs, ctx)
+        # Inject handoff context from predecessor step
+        _inject_handoff_context(workflow, step, step_inputs, outputs, run_id)
     timeout = step.timeout_s or step_timeout_s
     _emit(on_event, {
         "event_type": "workflow_step_started",
@@ -525,6 +527,17 @@ def _dispatch_step(
     on_event: Optional[Callable] = None,
 ) -> Any:
     """Route to the correct handler based on step_type."""
+    # Check approval gates for sensitive actions
+    try:
+        from api.services.agent.approval_workflows import get_approval_service
+        service = get_approval_service()
+        tool_ids = [t for t in (step.step_config.get("tool_ids") or []) if service.requires_approval(t, tenant_id)]
+        if tool_ids:
+            gate = service.create_gate(run_id="", tool_id=tool_ids[0], params=step_inputs, connector_id=step.step_config.get("connector_id", ""))
+            logger.info("Approval gate created for step %s: %s", step.step_id, gate.gate_id)
+    except Exception:
+        pass
+
     if step.step_type == "agent" or not step.step_type:
         return _run_agent_step(step.agent_id, step_inputs, tenant_id, on_event)
 
@@ -553,6 +566,11 @@ def _run_agent_step(
     # Inject evolution store lessons as prompt overlay
     system_prompt = schema.system_prompt or ""
     system_prompt = _inject_evolution_overlay(tenant_id, agent_id, system_prompt)
+
+    # Inject handoff context from previous agent if available
+    handoff_context = step_inputs.pop("__handoff_context", None)
+    if handoff_context and isinstance(handoff_context, str):
+        system_prompt = f"{system_prompt}\n\n{handoff_context}" if system_prompt else handoff_context
 
     task = step_inputs.get("message") or step_inputs.get("task") or (
         f"Execute your task with the following context:\n{_format_inputs(step_inputs)}"
@@ -625,6 +643,43 @@ def _verify_and_clean_citations(text: str, tenant_id: str) -> str:
     except Exception:
         pass
     return text
+
+
+def _inject_handoff_context(
+    workflow: Any,
+    step: Any,
+    step_inputs: dict[str, Any],
+    outputs: dict[str, Any],
+    run_id: str,
+) -> None:
+    """Build and inject handoff context from the predecessor agent."""
+    if step.step_type not in ("agent", ""):
+        return
+    try:
+        from api.services.agent.handoff_manager import build_handoff_context
+        # Find predecessor step(s)
+        incoming_edges = [e for e in workflow.edges if e.to_step == step.step_id]
+        if not incoming_edges:
+            return
+        prev_step_id = incoming_edges[0].from_step
+        prev_step = workflow.get_step(prev_step_id)
+        if not prev_step:
+            return
+        prev_output = str(outputs.get(prev_step.output_key, ""))
+        if not prev_output:
+            return
+        context = build_handoff_context(
+            from_agent=prev_step.agent_id or prev_step_id,
+            to_agent=step.agent_id or step.step_id,
+            from_step_id=prev_step_id,
+            to_step_id=step.step_id,
+            previous_output=prev_output,
+            step_description=step.description,
+            run_id=run_id,
+        )
+        step_inputs["__handoff_context"] = context.to_prompt_context()
+    except Exception:
+        pass
 
 
 def _resolve_inputs(

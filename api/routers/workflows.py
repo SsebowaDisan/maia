@@ -16,6 +16,7 @@ Routes:
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -27,6 +28,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.auth import get_current_user_id
+from api.services.marketplace.abuse_prevention import DailyQuotaExceededError
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -207,6 +209,16 @@ def validate_workflow(
 def list_templates() -> list[dict[str, Any]]:
     """Return curated starter workflow templates."""
     return _TEMPLATES
+
+
+@router.get("/templates/{template_id}/preview")
+def get_template_preview(template_id: str) -> dict[str, Any]:
+    """Get or generate a sample output preview for a template."""
+    template = next((t for t in _TEMPLATES if t.get("template_id") == template_id), None)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+    from api.services.workflows.template_preview import generate_preview
+    return generate_preview(template_id, template.get("definition", {}))
 
 
 @router.get("/team-archetypes")
@@ -611,6 +623,61 @@ def get_run(
 class ReplayRequest(BaseModel):
     from_step_id: str
     initial_inputs: dict[str, Any] = {}
+
+
+@router.post("/{workflow_id}/share")
+def share_workflow(
+    workflow_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """Publish (or update) a workflow in the public marketplace and return share URL."""
+    workflow = _db_get(workflow_id, user_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found.")
+    payload = _db_to_dict(workflow)
+    definition = payload.get("definition") or {}
+    published = None
+    try:
+        from api.services.marketplace.workflow_publisher import publish_workflow
+
+        published = publish_workflow(
+            creator_id=user_id,
+            source_workflow_id=workflow_id,
+            name=str(payload.get("name") or definition.get("name") or "Untitled team"),
+            description=str(payload.get("description") or definition.get("description") or ""),
+            readme_md=str(definition.get("readme_md") or definition.get("readme") or ""),
+            definition=definition if isinstance(definition, dict) else {},
+            category=str(definition.get("category") or "other"),
+            tags=[str(tag).strip() for tag in (definition.get("tags") or []) if str(tag).strip()],
+            screenshots=[
+                str(item).strip()
+                for item in (definition.get("screenshots") or [])
+                if str(item).strip()
+            ],
+        )
+    except DailyQuotaExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to share workflow: {exc}") from exc
+
+    slug = str((published or {}).get("slug") or "").strip()
+    if not slug:
+        raise HTTPException(status_code=500, detail="Failed to generate share slug.")
+    public_path = f"/marketplace/teams/{slug}"
+    public_base = str(os.getenv("MAIA_PUBLIC_APP_URL") or "").strip().rstrip("/")
+    public_url = f"{public_base}{public_path}" if public_base else public_path
+    og_url = (
+        f"{public_base}/api/og/image/teams/{slug}.svg"
+        if public_base
+        else f"/api/og/image/teams/{slug}.svg"
+    )
+    return {
+        "workflow_id": workflow_id,
+        "slug": slug,
+        "public_path": public_path,
+        "public_url": public_url,
+        "og_image_url": og_url,
+    }
 
 
 @router.post("/{workflow_id}/runs/{run_id}/replay")

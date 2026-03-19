@@ -1,16 +1,43 @@
-import { useEffect, useState } from "react";
-import { Brain, Trash2, RefreshCw, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Brain, RefreshCw, Trash2, X } from "lucide-react";
+
+import { clearAgentMemory, deleteAgentMemory, listAgentMemory } from "../../../api/client";
 
 type MemoryEntry = {
   id: string;
   content: string;
   tags: string[];
-  recorded_at: number;
+  category: string;
+  source: string;
+  recordedAt: number;
 };
 
 type AgentMemoryTabProps = {
   agentId: string;
 };
+
+function toTimestamp(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+  const parsed = new Date(String(value || "")).getTime();
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function normalizeEntry(row: Record<string, unknown>): MemoryEntry {
+  const category = String(row.category || "general").trim() || "general";
+  const tags = Array.isArray(row.tags)
+    ? row.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+    : [category];
+  return {
+    id: String(row.id || "").trim(),
+    content: String(row.content || row.text || "").trim(),
+    tags,
+    category,
+    source: String(row.source || "memory").trim() || "memory",
+    recordedAt: toTimestamp(row.recorded_at || row.created_at),
+  };
+}
 
 export function AgentMemoryTab({ agentId }: AgentMemoryTabProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
@@ -18,14 +45,18 @@ export function AgentMemoryTab({ agentId }: AgentMemoryTabProps) {
   const [clearing, setClearing] = useState(false);
 
   const load = async () => {
-    if (!agentId) return;
+    if (!agentId) {
+      setEntries([]);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await fetch(`/api/agents/${agentId}/memory`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json() as MemoryEntry[];
-        setEntries(data);
-      }
+      const rows = await listAgentMemory({ agentId });
+      const normalized = (Array.isArray(rows) ? rows : [])
+        .map((row) => normalizeEntry((row || {}) as Record<string, unknown>))
+        .filter((row) => Boolean(row.id) && Boolean(row.content))
+        .sort((left, right) => right.recordedAt - left.recordedAt);
+      setEntries(normalized);
     } finally {
       setLoading(false);
     }
@@ -36,108 +67,131 @@ export function AgentMemoryTab({ agentId }: AgentMemoryTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
-  const handleDelete = async (memoryId: string) => {
-    await fetch(`/api/agents/${agentId}/memory/${memoryId}`, {
-      method: "DELETE",
-      credentials: "include",
-    });
-    setEntries((prev) => prev.filter((e) => e.id !== memoryId));
-  };
+  const sourceCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of entries) {
+      counts.set(entry.source, (counts.get(entry.source) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort(([a], [b]) => a.localeCompare(b));
+  }, [entries]);
 
-  const handleClear = async () => {
-    if (!confirm("Delete all memories for this agent?")) return;
-    setClearing(true);
+  const handleDelete = async (memoryId: string) => {
     try {
-      await fetch(`/api/agents/${agentId}/memory`, {
+      await deleteAgentMemory(memoryId);
+    } catch {
+      // Legacy fallback for older memory ids still tied to agent-specific routes.
+      await fetch(`/api/agents/${encodeURIComponent(agentId)}/memory/${encodeURIComponent(memoryId)}`, {
         method: "DELETE",
         credentials: "include",
       });
-      setEntries([]);
+    }
+    setEntries((prev) => prev.filter((entry) => entry.id !== memoryId));
+  };
+
+  const handleClear = async () => {
+    if (!confirm("Delete all memories for this agent?")) {
+      return;
+    }
+    setClearing(true);
+    try {
+      await clearAgentMemory();
+      await load();
     } finally {
       setClearing(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-border/50 px-4 py-3">
         <div className="flex items-center gap-2">
           <Brain size={14} className="text-muted-foreground" />
-          <span className="text-sm font-medium">Long-term Memory</span>
-          {entries.length > 0 && (
+          <span className="text-sm font-medium">Memory</span>
+          {entries.length > 0 ? (
             <span className="text-xs text-muted-foreground">({entries.length})</span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-1">
           <button
             onClick={() => void load()}
             disabled={loading}
-            className="p-1.5 rounded hover:bg-accent text-muted-foreground transition-colors disabled:opacity-40"
+            className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent disabled:opacity-40"
             title="Refresh"
           >
             <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
           </button>
-          {entries.length > 0 && (
+          {entries.length > 0 ? (
             <button
               onClick={() => void handleClear()}
               disabled={clearing}
-              className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
+              className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive disabled:opacity-40"
               title="Clear all memories"
             >
               <Trash2 size={12} />
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto">
-        {loading && entries.length === 0 && (
-          <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-            Loading…
-          </div>
-        )}
+      {sourceCounts.length > 0 ? (
+        <div className="flex flex-wrap gap-1 border-b border-border/30 px-4 py-2">
+          {sourceCounts.map(([source, count]) => (
+            <span
+              key={source}
+              className="rounded-full border border-black/[0.08] bg-[#f8fafc] px-2 py-0.5 text-[10px] font-medium text-[#475467]"
+            >
+              {source}: {count}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
-        {!loading && entries.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 gap-2 text-muted-foreground">
+      <div className="flex-1 overflow-y-auto">
+        {loading && entries.length === 0 ? (
+          <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+            Loading...
+          </div>
+        ) : null}
+
+        {!loading && entries.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
             <Brain size={24} className="opacity-30" />
             <span className="text-sm">No memories stored yet</span>
-            <span className="text-xs opacity-60 text-center px-6">
+            <span className="px-6 text-center text-xs opacity-60">
               Memories are saved automatically when the agent stores observations during runs.
             </span>
           </div>
-        )}
+        ) : null}
 
         {entries.map((entry) => (
           <div
             key={entry.id}
-            className="px-4 py-3 border-b border-border/30 hover:bg-accent/20 transition-colors group"
+            className="group border-b border-border/30 px-4 py-3 transition-colors hover:bg-accent/20"
           >
             <div className="flex items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <p className="text-xs text-foreground leading-relaxed">{entry.content}</p>
-                <div className="flex items-center gap-2 mt-1.5">
-                  {entry.tags.length > 0 && (
+              <div className="min-w-0 flex-1">
+                <p className="text-xs leading-relaxed text-foreground">{entry.content}</p>
+                <div className="mt-1.5 flex items-center gap-2">
+                  {entry.tags.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {entry.tags.map((tag) => (
                         <span
-                          key={tag}
-                          className="inline-block px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px]"
+                          key={`${entry.id}-${tag}`}
+                          className="inline-block rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
                         >
                           {tag}
                         </span>
                       ))}
                     </div>
-                  )}
-                  <span className="text-[10px] text-muted-foreground/50 ml-auto">
-                    {new Date(entry.recorded_at * 1000).toLocaleString()}
+                  ) : null}
+                  <span className="ml-auto text-[10px] text-muted-foreground/50">
+                    {new Date(entry.recordedAt).toLocaleString()}
                   </span>
                 </div>
               </div>
               <button
                 onClick={() => void handleDelete(entry.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent text-muted-foreground hover:text-destructive shrink-0"
+                className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-destructive group-hover:opacity-100"
                 title="Delete memory"
               >
                 <X size={11} />

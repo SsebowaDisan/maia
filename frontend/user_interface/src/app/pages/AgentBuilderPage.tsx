@@ -14,13 +14,14 @@ import {
   type AgentSummaryRecord,
 } from "../../api/client";
 import { GateConfig, type ToolGate } from "../components/agentBuilder/GateConfig";
+import { AgentTriggersTab } from "../components/agentBuilder/AgentTriggersTab";
 import { SystemPromptEditor } from "../components/agentBuilder/SystemPromptEditor";
 import { ToolSelector } from "../components/agentBuilder/ToolSelector";
 import { AgentMemoryTab } from "../components/agentActivityPanel/AgentMemoryTab";
 import { SimulationPanel } from "../components/agentActivityPanel/SimulationPanel";
 import type { ConnectorSummary } from "../types/connectorSummary";
 
-type BuilderMode = "visual" | "yaml" | "memory" | "test_run";
+type BuilderMode = "visual" | "yaml" | "memory" | "triggers" | "test_run";
 
 type TriggerDraft = {
   type: "conversational" | "schedule" | "event";
@@ -590,6 +591,7 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
               { key: "visual", label: "Visual" },
               { key: "yaml", label: "YAML" },
               { key: "memory", label: "Memory" },
+              { key: "triggers", label: "Triggers" },
               { key: "test_run", label: "Test Run" },
             ] as const).map((entry) => (
               <button
@@ -849,6 +851,16 @@ export function AgentBuilderPage({ initialAgentId = "" }: AgentBuilderPageProps)
             ) : (
               <div className="px-5 py-8 text-[13px] text-[#667085]">
                 Save this draft first to create an `agent_id`, then memory entries can be viewed and managed here.
+              </div>
+            )}
+          </section>
+        ) : mode === "triggers" ? (
+          <section className="rounded-2xl border border-black/[0.08] bg-white p-4">
+            {selectedAgentId ? (
+              <AgentTriggersTab agentId={selectedAgentId} />
+            ) : (
+              <div className="px-5 py-8 text-[13px] text-[#667085]">
+                Save this draft first to create an <code>agent_id</code>, then configure event triggers here.
               </div>
             )}
           </section>

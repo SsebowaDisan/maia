@@ -29,6 +29,7 @@ import { useLayoutState } from "./useLayoutState";
 import { useProjectState } from "./useProjectState";
 import { RoutePlaceholderPage } from "./RoutePlaceholderPage";
 import { resolveAppRouteShell } from "./routeShells";
+import { HubShell } from "./HubShell";
 import { AgentBuilderPage } from "../pages/AgentBuilderPage";
 import { AgentDetailPage } from "../pages/AgentDetailPage";
 import { AdminReviewQueuePage } from "../pages/AdminReviewQueuePage";
@@ -46,6 +47,15 @@ import {
 import { OperationsDashboardPage } from "../pages/OperationsDashboardPage";
 import { WorkflowBuilderPage } from "../pages/WorkflowBuilderPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
+import { CreatorProfilePage } from "../pages/hub/CreatorProfilePage";
+import { CreatorDashboardPage } from "../pages/hub/CreatorDashboardPage";
+import { EditProfilePage } from "../pages/hub/EditProfilePage";
+import { ExplorePage } from "../pages/hub/ExplorePage";
+import { FeedPage } from "../pages/hub/FeedPage";
+import { HubAgentDetailPage } from "../pages/hub/HubAgentDetailPage";
+import { MarketplaceBrowsePage } from "../pages/hub/MarketplaceBrowsePage";
+import { SearchResultsPage } from "../pages/hub/SearchResultsPage";
+import { TeamDetailPage } from "../pages/hub/TeamDetailPage";
 import { WorkflowHeaderFields } from "../components/workflowCanvas/WorkflowHeaderFields";
 import { useCanvasStore } from "../stores/canvasStore";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
@@ -107,12 +117,6 @@ const SIDEBAR_OVERLAY_BY_PATH: Record<string, SidebarOverlayConfig> = {
     title: "My Agents",
     subtitle: "Review installed agents, statuses, and jump to chat-ready actions.",
   },
-  "/marketplace": {
-    key: "marketplace",
-    path: "/marketplace",
-    title: "Marketplace",
-    subtitle: "Browse and install production-ready agents in a focused overlay.",
-  },
   "/workflow-builder": {
     key: "workflow_builder",
     path: "/workflow-builder",
@@ -156,6 +160,7 @@ function WorkflowBuilderHeaderActions() {
 
 export default function App() {
   const [pathname, setPathname] = useState(() => window.location.pathname || "/");
+  const [locationSearch, setLocationSearch] = useState(() => window.location.search || "");
   const deepLinkHandledRef = useRef(false);
   const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
@@ -176,11 +181,15 @@ export default function App() {
   const upsertCanvasDocuments = useCanvasStore((state) => state.upsertDocuments);
   const navigateToPath = (nextPath: string) => {
     const normalizedNext = String(nextPath || "/").trim() || "/";
-    if (window.location.pathname === normalizedNext) {
+    const nextUrl = new URL(normalizedNext, window.location.origin);
+    const nextPathname = String(nextUrl.pathname || "/");
+    const nextSearch = String(nextUrl.search || "");
+    if (window.location.pathname === nextPathname && window.location.search === nextSearch) {
       return;
     }
-    window.history.pushState({}, "", normalizedNext);
-    setPathname(normalizedNext);
+    window.history.pushState({}, "", `${nextPathname}${nextSearch}`);
+    setPathname(nextPathname);
+    setLocationSearch(nextSearch);
   };
   const handleSidebarAppRoute = (nextPath: string) => {
     const normalizedNext = String(nextPath || "/").trim().toLowerCase();
@@ -215,6 +224,10 @@ export default function App() {
       if (layout.activeTab !== "Chat") {
         layout.setActiveTab("Chat");
       }
+      // Set clean URL for the overlay — no query param leaks
+      window.history.replaceState({}, "", overlay.path);
+      setPathname(overlay.path);
+      setLocationSearch("");
       return;
     }
     setSidebarOverlay(null);
@@ -497,6 +510,7 @@ export default function App() {
     if (activeOverlayPath && pathname === activeOverlayPath) {
       window.history.replaceState({}, "", "/");
       setPathname("/");
+      setLocationSearch("");
     }
   };
 
@@ -516,7 +530,10 @@ export default function App() {
   const liveWorkspaceModalTab = workspaceModalTab || (isWorkspaceModalTab(layout.activeTab) ? layout.activeTab : null);
 
   useEffect(() => {
-    const handleNavigation = () => setPathname(window.location.pathname || "/");
+    const handleNavigation = () => {
+      setPathname(window.location.pathname || "/");
+      setLocationSearch(window.location.search || "");
+    };
     window.addEventListener("popstate", handleNavigation);
     return () => window.removeEventListener("popstate", handleNavigation);
   }, []);
@@ -580,6 +597,71 @@ export default function App() {
   };
 
   if (routeShell.kind === "page" && !resolveSidebarOverlayForPath(pathname)) {
+    if (routeShell.key === "hub_marketplace") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <MarketplaceBrowsePage onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_marketplace_agent") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <HubAgentDetailPage slug={String(routeShell.params?.slug || "")} onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_marketplace_team") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <TeamDetailPage slug={String(routeShell.params?.slug || "")} onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_creator_profile") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <CreatorProfilePage
+            username={String(routeShell.params?.username || "")}
+            onNavigate={navigateToPath}
+          />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_creator_edit") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <EditProfilePage onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_creator_dashboard") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <CreatorDashboardPage onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_explore") {
+      const params = new URLSearchParams(locationSearch || "");
+      const query = String(params.get("q") || "").trim();
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          {query ? (
+            <SearchResultsPage query={query} onNavigate={navigateToPath} />
+          ) : (
+            <ExplorePage onNavigate={navigateToPath} />
+          )}
+        </HubShell>
+      );
+    }
+    if (routeShell.key === "hub_feed") {
+      return (
+        <HubShell currentPath={pathname || "/"} onNavigate={navigateToPath}>
+          <FeedPage onNavigate={navigateToPath} />
+        </HubShell>
+      );
+    }
     if (routeShell.key === "admin_review") {
       return <AdminReviewQueuePage />;
     }

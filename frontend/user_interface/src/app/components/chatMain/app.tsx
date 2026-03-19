@@ -36,6 +36,30 @@ import { useChatMainInteractions } from "./useChatMainInteractions";
 const SCROLL_ICON_SETTLE_MS = 1600;
 const SCROLL_TO_LATEST_THRESHOLD_PX = 140;
 
+type PendingGateView = {
+  runId: string;
+  gateId: string;
+  toolId: string;
+  paramsPreview: string;
+  actionLabel?: string;
+  preview?: Record<string, unknown> | null;
+  costEstimateUsd: number | null;
+};
+
+function toPreviewText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value || "").trim();
+}
+
 function ChatMain({
   chatTurns,
   selectedTurnIndex,
@@ -76,13 +100,7 @@ function ChatMain({
   const [composerCollapsed, setComposerCollapsed] = useState(false);
   const [composerHovering, setComposerHovering] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
-  const [pendingGateFromApi, setPendingGateFromApi] = useState<{
-    runId: string;
-    gateId: string;
-    toolId: string;
-    paramsPreview: string;
-    costEstimateUsd: number | null;
-  } | null>(null);
+  const [pendingGateFromApi, setPendingGateFromApi] = useState<PendingGateView | null>(null);
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
   const hydrateRunSnapshot = useAgentRunStore((state) => state.hydrateFromActivityEvent);
   const clearRunSnapshot = useAgentRunStore((state) => state.clear);
@@ -100,15 +118,7 @@ function ChatMain({
     if (!orderedEvents.length) {
       return null;
     }
-    let latestPending:
-      | {
-          runId: string;
-          gateId: string;
-          toolId: string;
-          paramsPreview: string;
-          costEstimateUsd: number | null;
-        }
-      | null = null;
+    let latestPending: PendingGateView | null = null;
     const resolvedGates = new Set<string>();
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
       const event = orderedEvents[index];
@@ -116,27 +126,36 @@ function ChatMain({
       const data = (event?.data || {}) as Record<string, unknown>;
       const metadata = (event?.metadata || {}) as Record<string, unknown>;
       const gateId = String(data.gate_id || metadata.gate_id || "").trim();
-      if (!gateId) {
-        continue;
-      }
       if (eventType === "gate_approved" || eventType === "gate_rejected" || eventType === "gate_resolved") {
-        resolvedGates.add(gateId);
+        if (gateId) {
+          resolvedGates.add(gateId);
+        }
         continue;
       }
-      if (eventType !== "gate_pending" || resolvedGates.has(gateId)) {
+      const isApprovalEvent = eventType === "gate_pending" || eventType === "approval_required";
+      if (!isApprovalEvent || (gateId && resolvedGates.has(gateId))) {
         continue;
       }
       const runId = String(event?.run_id || data.run_id || metadata.run_id || "").trim();
       const toolId = String(data.tool_id || metadata.tool_id || event.title || "tool").trim();
-      const paramsPreview = String(
-        data.params_preview || metadata.params_preview || event.detail || "Review tool call parameters before continuing.",
-      ).trim();
+      const previewPayload = ((data.preview || metadata.preview) ?? null) as
+        | Record<string, unknown>
+        | null;
+      const paramsPreview = toPreviewText(
+        data.params_preview ||
+          metadata.params_preview ||
+          previewPayload ||
+          event.detail ||
+          "Review tool call parameters before continuing.",
+      );
       const numericCost = Number(data.cost_estimate ?? metadata.cost_estimate ?? Number.NaN);
       latestPending = {
         runId: runId || activeRunId || "",
         gateId,
         toolId: toolId || "tool",
         paramsPreview: paramsPreview || "Review tool call parameters before continuing.",
+        actionLabel: String(data.action_label || metadata.action_label || "").trim() || undefined,
+        preview: previewPayload,
         costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
       };
       break;
@@ -287,11 +306,20 @@ function ChatMain({
         }
         const gate = rows[0];
         const numericCost = Number(gate.cost_estimate ?? Number.NaN);
+        const previewPayload =
+          gate.preview && typeof gate.preview === "object"
+            ? (gate.preview as Record<string, unknown>)
+            : null;
+        const paramsPreview = toPreviewText(
+          gate.params_preview || previewPayload || "Review tool call parameters before continuing.",
+        );
         setPendingGateFromApi({
           runId: String(gate.run_id || activeRunId),
           gateId: String(gate.gate_id || ""),
           toolId: String(gate.tool_id || "tool"),
-          paramsPreview: String(gate.params_preview || "Review tool call parameters before continuing."),
+          paramsPreview,
+          actionLabel: String(gate.action_label || "").trim() || undefined,
+          preview: previewPayload,
           costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
         });
       } catch {
@@ -492,6 +520,8 @@ function ChatMain({
                 gateId={pendingGate.gateId}
                 toolId={pendingGate.toolId}
                 paramsPreview={pendingGate.paramsPreview}
+                actionLabel={pendingGate.actionLabel}
+                preview={pendingGate.preview}
                 costEstimateUsd={pendingGate.costEstimateUsd}
                 onApprove={async (runId, gateId) => {
                   await approveAgentRunGate(runId, gateId);

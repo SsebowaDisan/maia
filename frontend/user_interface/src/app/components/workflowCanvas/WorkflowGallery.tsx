@@ -9,9 +9,11 @@ import {
   Search,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { getWorkflowTemplatePreview, type WorkflowTemplatePreview } from "../../../api/client";
 import {
   getWorkflowRecord,
   listWorkflowRecords,
@@ -72,6 +74,10 @@ export function WorkflowGallery({
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewTemplate, setPreviewTemplate] = useState<WorkflowTemplatePreview | null>(null);
+  const [previewTemplateName, setPreviewTemplateName] = useState("");
 
   const refresh = async () => {
     setLoading(true);
@@ -108,6 +114,21 @@ export function WorkflowGallery({
       onSelectWorkflow(full);
     } catch {
       onSelectWorkflow(record);
+    }
+  };
+
+  const handlePreviewTemplate = async (template: WorkflowTemplate) => {
+    setPreviewTemplate(null);
+    setPreviewTemplateName(template.name);
+    setPreviewError("");
+    setPreviewLoading(true);
+    try {
+      const preview = await getWorkflowTemplatePreview(template.template_id);
+      setPreviewTemplate(preview);
+    } catch (error) {
+      setPreviewError(String(error || "Failed to load template preview."));
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -181,10 +202,8 @@ export function WorkflowGallery({
                   const tags = Array.isArray(template.tags) ? template.tags.slice(0, 2) : [];
 
                   return (
-                    <button
+                    <article
                       key={template.template_id}
-                      type="button"
-                      onClick={() => onSelectTemplate(template)}
                       className={`group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-black/[0.06] bg-white p-4 text-left shadow-sm transition hover:shadow-md ${color.hover}`}
                     >
                       {/* Gradient accent bar */}
@@ -223,7 +242,26 @@ export function WorkflowGallery({
                           className="text-[#aeaeb2] opacity-0 transition group-hover:opacity-100"
                         />
                       </div>
-                    </button>
+
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handlePreviewTemplate(template);
+                          }}
+                          className="rounded-full border border-black/[0.12] bg-white px-3 py-1 text-[11px] font-semibold text-[#475467] hover:bg-[#f8fafc]"
+                        >
+                          Preview output
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSelectTemplate(template)}
+                          className="rounded-full bg-[#1d1d1f] px-3 py-1 text-[11px] font-semibold text-white hover:bg-black"
+                        >
+                          Use template
+                        </button>
+                      </div>
+                    </article>
                   );
                 })}
               </div>
@@ -380,6 +418,55 @@ export function WorkflowGallery({
           </div>
         )}
       </div>
+
+      {(previewLoading || previewTemplate || previewError) ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/30 px-4">
+          <div className="w-full max-w-[760px] rounded-2xl border border-black/[0.08] bg-white p-4 shadow-2xl">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#667085]">
+                  Template preview
+                </p>
+                <p className="mt-0.5 text-[15px] font-semibold text-[#111827]">
+                  {previewTemplate?.name || previewTemplateName || "Template output"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewTemplate(null);
+                  setPreviewTemplateName("");
+                  setPreviewError("");
+                  setPreviewLoading(false);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-black/[0.1] text-[#475467] hover:bg-[#f8fafc]"
+                aria-label="Close template preview"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {previewLoading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[12px] text-[#475467]">
+                <Loader2 size={13} className="animate-spin" />
+                Generating sample output...
+              </div>
+            ) : null}
+
+            {previewError ? (
+              <p className="rounded-xl border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#b42318]">
+                {previewError}
+              </p>
+            ) : null}
+
+            {previewTemplate?.sample_output ? (
+              <pre className="mt-2 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3 text-[12px] leading-[1.55] text-[#111827]">
+                {previewTemplate.sample_output}
+              </pre>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

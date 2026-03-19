@@ -11,6 +11,7 @@ import {
   type CostSummaryResponse,
 } from "../../api/client";
 import { InsightsFeedPanel } from "../components/agentActivityPanel/InsightsFeedPanel";
+import { DashboardWidgetsTab } from "../components/operations/DashboardWidgetsTab";
 import { ScheduledReviewsPanel } from "../components/agentActivityPanel/ScheduledReviewsPanel";
 import { ROIDashboard } from "../components/canvas/ROIDashboard";
 import { LiveRunMonitor, type LiveRunMonitorRecord } from "../components/observability/LiveRunMonitor";
@@ -24,7 +25,7 @@ type OperationsRunRecord = LiveRunMonitorRecord &
     llmCostUsd: number;
   };
 
-type OperationsTab = "overview" | "reviews" | "roi" | "insights" | "timeline";
+type OperationsTab = "overview" | "dashboard" | "reviews" | "roi" | "insights" | "timeline";
 
 function deriveDurationMs(startedAt: string, endedAt?: string | null, fallback?: number | null): number {
   if (typeof fallback === "number" && Number.isFinite(fallback) && fallback >= 0) {
@@ -64,7 +65,14 @@ export function OperationsDashboardPage() {
       return "overview";
     }
     const tab = new URLSearchParams(window.location.search).get("tab");
-    if (tab === "reviews" || tab === "roi" || tab === "overview" || tab === "insights" || tab === "timeline") {
+    if (
+      tab === "reviews" ||
+      tab === "roi" ||
+      tab === "overview" ||
+      tab === "dashboard" ||
+      tab === "insights" ||
+      tab === "timeline"
+    ) {
       return tab;
     }
     return "overview";
@@ -140,6 +148,7 @@ export function OperationsDashboardPage() {
           <div className="mt-4 flex items-center gap-2">
             {([
               { key: "overview", label: "Overview" },
+              { key: "dashboard", label: "Dashboard" },
               { key: "insights", label: "Insights" },
               { key: "timeline", label: "Timeline" },
               { key: "reviews", label: "Business Reviews" },
@@ -252,6 +261,10 @@ export function OperationsDashboardPage() {
               <InsightsFeedPanel className="h-full" />
             </div>
           </section>
+        ) : null}
+
+        {activeTab === "dashboard" ? (
+          <DashboardWidgetsTab agents={agents} />
         ) : null}
 
         {activeTab === "timeline" ? (

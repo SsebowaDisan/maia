@@ -8,6 +8,7 @@ import {
   FileText,
   Library,
   Plug,
+  Store,
 } from "lucide-react";
 import { type ConversationSummary } from "../../api/client";
 import {
@@ -402,11 +403,11 @@ export function ChatSidebar({
           {workspaceMenuOpen ? (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setWorkspaceMenuOpen(false)} />
-              <div className="absolute bottom-11 left-0 right-0 z-20 rounded-2xl border border-black/[0.06] bg-white/95 backdrop-blur-xl shadow-[0_12px_40px_-8px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)] overflow-hidden">
+              <div className="absolute bottom-11 left-0 right-0 z-20 max-h-[70vh] overflow-y-auto rounded-2xl border border-black/[0.06] bg-white/95 backdrop-blur-xl shadow-[0_12px_40px_-8px_rgba(0,0,0,0.16),0_4px_12px_-4px_rgba(0,0,0,0.06)]">
                 <div className="p-1.5">
                   {[
-                    { id: "Files", icon: FileText, label: "Files", hint: "Documents & uploads" },
-                    { id: "Resources", icon: Library, label: "Resources", hint: "Knowledge sources" },
+                    { id: "Files", icon: FileText, label: "Files", hint: "Documents & uploads", bg: "bg-[#eff6ff]", bgHover: "group-hover:bg-[#dbeafe]", iconColor: "text-[#2563eb]" },
+                    { id: "Resources", icon: Library, label: "Resources", hint: "Knowledge sources", bg: "bg-[#f5f3ff]", bgHover: "group-hover:bg-[#ede9fe]", iconColor: "text-[#7c3aed]" },
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -416,8 +417,8 @@ export function ChatSidebar({
                       }}
                       className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
                     >
-                      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#f5f3ff] transition-colors group-hover:bg-[#ede9fe]">
-                        <item.icon className="w-3.5 h-3.5 text-[#7c3aed]" />
+                      <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${item.bg} transition-colors ${item.bgHover}`}>
+                        <item.icon className={`w-3.5 h-3.5 ${item.iconColor}`} />
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">{item.label}</p>
@@ -461,6 +462,21 @@ export function ChatSidebar({
                 </div>
                 <div className="mx-3 h-px bg-black/[0.06]" />
                 <div className="p-1.5">
+                  <a
+                    href="/marketplace"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setWorkspaceMenuOpen(false)}
+                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
+                  >
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#fdf2f8] transition-colors group-hover:bg-[#fce7f3]">
+                      <Store className="w-3.5 h-3.5 text-[#db2777]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Marketplace</p>
+                      <p className="text-[11px] text-[#86868b] leading-tight">Discover agents & teams</p>
+                    </div>
+                  </a>
                   <button
                     onClick={() => {
                       setWorkspaceMenuOpen(false);

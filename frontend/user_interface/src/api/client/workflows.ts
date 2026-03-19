@@ -15,6 +15,14 @@ type SaveWorkflowPayload = {
   definition: WorkflowDefinition;
 };
 
+type ShareWorkflowResponse = {
+  workflow_id: string;
+  slug: string;
+  public_path: string;
+  public_url: string;
+  og_image_url?: string;
+};
+
 type RunWorkflowStreamOptions = {
   initialInputs?: Record<string, unknown>;
   onEvent?: (event: WorkflowRunEvent) => void;
@@ -354,6 +362,12 @@ function getWorkflowRunRecord(workflowId: string, runId: string) {
   );
 }
 
+function shareWorkflowRecord(workflowId: string) {
+  return request<ShareWorkflowResponse>(`/api/workflows/${encodeURIComponent(workflowId)}/share`, {
+    method: "POST",
+  });
+}
+
 async function streamGenerateWorkflowFromDescription(
   description: string,
   options?: GenerateWorkflowStreamOptions,
@@ -382,6 +396,7 @@ export {
   generateWorkflowFromDescription,
   getWorkflowRecord,
   getWorkflowRunRecord,
+  shareWorkflowRecord,
   listWorkflowRecords,
   listWorkflowRunHistory,
   listWorkflowTemplates,

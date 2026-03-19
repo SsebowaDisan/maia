@@ -51,6 +51,7 @@ from api.routers.secrets import router as secrets_router
 from api.routers.mfa import router as mfa_router
 from api.routers.roles import router as roles_router
 from api.routers.mcp import router as mcp_router
+from api.routers.og_meta import router as og_meta_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -216,6 +217,24 @@ app.include_router(observability_router)
 app.include_router(canvas_router)
 app.include_router(page_monitor_router)
 
+# Agent Hub — creator profiles, team marketplace, explore, feed
+from api.routers.creators import router as creators_router
+from api.routers.marketplace_teams import router as marketplace_teams_router
+from api.routers.explore import router as explore_router
+app.include_router(creators_router)
+app.include_router(marketplace_teams_router)
+app.include_router(explore_router)
+
+# Features — memory, triggers, dashboard, slack, template previews
+from api.routers.agent_memory import router as agent_memory_router
+from api.routers.webhook_triggers import router as webhook_triggers_router
+from api.routers.dashboard import router as dashboard_router
+from api.routers.slack_inbound import router as slack_inbound_router
+app.include_router(agent_memory_router)
+app.include_router(webhook_triggers_router)
+app.include_router(dashboard_router)
+app.include_router(slack_inbound_router)
+
 # Enterprise routers
 app.include_router(sso_router)
 app.include_router(audit_router)
@@ -224,8 +243,10 @@ app.include_router(secrets_router)
 app.include_router(mfa_router)
 app.include_router(roles_router)
 app.include_router(mcp_router)
+app.include_router(og_meta_router)
 
 
+@app.get("/health", response_model=HealthResponse, include_in_schema=False)
 @app.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")

@@ -1,6 +1,14 @@
 export type AppPageRouteKey =
   | "admin_review"
   | "marketplace"
+  | "hub_marketplace"
+  | "hub_marketplace_agent"
+  | "hub_marketplace_team"
+  | "hub_creator_profile"
+  | "hub_creator_edit"
+  | "hub_creator_dashboard"
+  | "hub_explore"
+  | "hub_feed"
   | "my_agents"
   | "workspace"
   | "connectors"
@@ -17,6 +25,8 @@ export type AppPageRouteKey =
 
 type AppRouteParams = {
   agentId?: string;
+  slug?: string;
+  username?: string;
 };
 
 export type AppRouteShell =
@@ -49,11 +59,39 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
   if (normalized === "/" || normalized === "/chat") {
     return { kind: "main" };
   }
-  if (normalized === "/marketplace") {
+  if (normalized === "/marketplace" || normalized === "/marketplace/teams") {
     return {
       kind: "page",
-      key: "marketplace",
-      path: "/marketplace",
+      key: "hub_marketplace",
+      path: normalized,
+    };
+  }
+  if (normalized === "/explore") {
+    return {
+      kind: "page",
+      key: "hub_explore",
+      path: "/explore",
+    };
+  }
+  if (normalized === "/feed") {
+    return {
+      kind: "page",
+      key: "hub_feed",
+      path: "/feed",
+    };
+  }
+  if (normalized === "/creators/me/edit") {
+    return {
+      kind: "page",
+      key: "hub_creator_edit",
+      path: "/creators/me/edit",
+    };
+  }
+  if (normalized === "/creators/me/dashboard") {
+    return {
+      kind: "page",
+      key: "hub_creator_dashboard",
+      path: "/creators/me/dashboard",
     };
   }
   if (normalized === "/admin/review") {
@@ -148,13 +186,35 @@ export function resolveAppRouteShell(pathname: string): AppRouteShell {
     };
   }
   if (normalized.startsWith("/marketplace/agents/")) {
-    const agentId = decodeURIComponent(rawPath.slice("/marketplace/agents/".length)).trim();
+    const slug = decodeURIComponent(rawPath.slice("/marketplace/agents/".length)).trim();
     return {
       kind: "page",
-      key: "marketplace_agent_detail",
+      key: "hub_marketplace_agent",
       path: pathname || "/marketplace/agents/:agentId",
       params: {
-        agentId: agentId || undefined,
+        slug: slug || undefined,
+      },
+    };
+  }
+  if (normalized.startsWith("/marketplace/teams/")) {
+    const slug = decodeURIComponent(rawPath.slice("/marketplace/teams/".length)).trim();
+    return {
+      kind: "page",
+      key: "hub_marketplace_team",
+      path: pathname || "/marketplace/teams/:slug",
+      params: {
+        slug: slug || undefined,
+      },
+    };
+  }
+  if (normalized.startsWith("/creators/")) {
+    const username = decodeURIComponent(rawPath.slice("/creators/".length)).trim();
+    return {
+      kind: "page",
+      key: "hub_creator_profile",
+      path: pathname || "/creators/:username",
+      params: {
+        username: username || undefined,
       },
     };
   }

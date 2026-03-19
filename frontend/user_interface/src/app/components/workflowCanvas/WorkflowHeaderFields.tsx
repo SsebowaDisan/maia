@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Calendar, ChevronDown, ChevronRight, Clock, Settings } from "lucide-react";
 import { toast } from "sonner";
 
+import { shareWorkflowRecord } from "../../../api/client";
 import { useWorkflowStore } from "../../stores/workflowStore";
 
 type WorkflowHeaderFieldsProps = {
@@ -61,6 +62,7 @@ export function WorkflowHeaderFields({ onBackToGallery }: WorkflowHeaderFieldsPr
   const [scheduleFreq, setScheduleFreq] = useState("weekly");
   const [scheduleDay, setScheduleDay] = useState("1");
   const [scheduleHour, setScheduleHour] = useState("9");
+  const [sharing, setSharing] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -135,6 +137,28 @@ export function WorkflowHeaderFields({ onBackToGallery }: WorkflowHeaderFieldsPr
     }
   };
 
+  const handleShareWorkflow = async () => {
+    const workflowId = useWorkflowStore.getState().workflowId;
+    if (!workflowId) {
+      toast.error("Save the workflow first before sharing.");
+      return;
+    }
+    setSharing(true);
+    try {
+      const response = await shareWorkflowRecord(workflowId);
+      const publicUrl = String(response.public_url || response.public_path || "").trim();
+      if (!publicUrl) {
+        throw new Error("Share URL missing from API response.");
+      }
+      await navigator.clipboard.writeText(publicUrl);
+      toast.success("Share link copied to clipboard.");
+    } catch (error) {
+      toast.error(`Failed to share workflow: ${String(error)}`);
+    } finally {
+      setSharing(false);
+    }
+  };
+
   return (
     <div ref={rootRef} className="relative inline-flex items-center">
       {/* Breadcrumb pill */}
@@ -203,6 +227,24 @@ export function WorkflowHeaderFields({ onBackToGallery }: WorkflowHeaderFieldsPr
                 className="w-full rounded-lg border border-black/[0.08] bg-[#f8fafc] px-2.5 py-1.5 text-[13px] text-[#1d1d1f] outline-none focus:border-[#7c3aed]"
               />
             </label>
+
+            {/* Divider */}
+            <div className="border-t border-black/[0.06]" />
+
+            <div className="space-y-1">
+              <span className="text-[11px] font-semibold text-[#344054]">Share</span>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleShareWorkflow();
+                  setSettingsOpen(false);
+                }}
+                disabled={sharing}
+                className="w-full rounded-lg border border-[#d0d5dd] bg-white py-1.5 text-[12px] font-semibold text-[#344054] transition-colors hover:bg-[#f8fafc] disabled:opacity-60"
+              >
+                {sharing ? "Sharing..." : "Share workflow link"}
+              </button>
+            </div>
 
             {/* Divider */}
             <div className="border-t border-black/[0.06]" />

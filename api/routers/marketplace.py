@@ -1,20 +1,20 @@
-"""B3-07 — Marketplace REST router.
+﻿"""B3-07 â€” Marketplace REST router.
 
 Responsibility: HTTP layer for marketplace discovery, publishing, and installation.
 
 Endpoints:
-  GET    /api/marketplace/agents                   — list/search agents
-  GET    /api/marketplace/agents/{agent_id}        — agent detail
-  POST   /api/marketplace/agents                   — publish a new agent
-  POST   /api/marketplace/agents/{agent_id}/submit — submit for review
-  POST   /api/marketplace/agents/{agent_id}/approve — approve (admin)
-  POST   /api/marketplace/agents/{agent_id}/reject  — reject (admin)
-  POST   /api/marketplace/agents/{agent_id}/install — install into tenant
-  DELETE /api/marketplace/agents/{agent_id}/install — uninstall
-  GET    /api/marketplace/agents/{agent_id}/reviews — get reviews
-  POST   /api/marketplace/agents/{agent_id}/reviews — submit review
-  GET    /api/marketplace/updates                   — check for updates
-  POST   /api/marketplace/updates/{agent_id}        — apply update
+  GET    /api/marketplace/agents                   â€” list/search agents
+  GET    /api/marketplace/agents/{agent_id}        â€” agent detail
+  POST   /api/marketplace/agents                   â€” publish a new agent
+  POST   /api/marketplace/agents/{agent_id}/submit â€” submit for review
+  POST   /api/marketplace/agents/{agent_id}/approve â€” approve (admin)
+  POST   /api/marketplace/agents/{agent_id}/reject  â€” reject (admin)
+  POST   /api/marketplace/agents/{agent_id}/install â€” install into tenant
+  DELETE /api/marketplace/agents/{agent_id}/install â€” uninstall
+  GET    /api/marketplace/agents/{agent_id}/reviews â€” get reviews
+  POST   /api/marketplace/agents/{agent_id}/reviews â€” submit review
+  GET    /api/marketplace/updates                   â€” check for updates
+  POST   /api/marketplace/updates/{agent_id}        â€” apply update
 """
 from __future__ import annotations
 
@@ -22,21 +22,31 @@ import json
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.auth import get_current_user, get_current_user_id, require_super_admin
+from api.models.creator_profile import CreatorProfile
 from api.models.user import User
+from api.services.auth.tokens import TokenError, decode_access_token
 from api.services.marketplace.developers import get_developer_status
 from api.services.agents import definition_store
 from api.services.marketplace import registry, publisher, installer, versioning, reviews as reviews_service
 from api.services.marketplace import notifications as notifications_service
+from api.services.marketplace.abuse_prevention import (
+    DailyQuotaExceededError,
+    consume_daily_quota,
+)
+from ktem.db.engine import engine
+from sqlmodel import Session as _Session, select as _select
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace"])
+_bearer = HTTPBearer(auto_error=False)
 
 
-# ── Request bodies ─────────────────────────────────────────────────────────────
+# â”€â”€ Request bodies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class PublishRequest(BaseModel):
     definition: dict[str, Any]
@@ -67,12 +77,34 @@ class UpdateRequest(BaseModel):
     target_version: str | None = None
 
 
-# ── Discovery ──────────────────────────────────────────────────────────────────
+def _resolve_optional_user_id(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
+    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
+    user_id_query: Annotated[str | None, Query(alias="user_id")] = None,
+) -> str | None:
+    direct = str(x_user_id or user_id_query or "").strip()
+    if direct:
+        return direct
+    if not credentials or not credentials.credentials:
+        return None
+    token = str(credentials.credentials).strip()
+    if not token or token.startswith("mk_"):
+        return None
+    try:
+        payload = decode_access_token(token)
+    except TokenError:
+        return None
+    subject = str(payload.get("sub") or "").strip()
+    return subject or None
+
+
+# â”€â”€ Discovery â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/agents")
 def list_agents(
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_id: Annotated[str | None, Depends(_resolve_optional_user_id)],
     q: str | None = Query(default=None),
+    category: str | None = Query(default=None),
     tags: str | None = Query(default=None, description="Comma-separated tags"),
     required_connectors: str | None = Query(default=None),
     pricing: str | None = Query(default=None),
@@ -98,29 +130,77 @@ def list_agents(
             offset=offset,
         )
 
-    installed_ids = {r.agent_id for r in definition_store.list_agents(user_id)}
-    return [_agent_summary(r, installed_ids, tenant_id=user_id) for r in results]
+    if category:
+        normalized_category = str(category).strip().lower()
+        results = [
+            row
+            for row in results
+            if str(json.loads(row.definition_json or "{}").get("category") or "").strip().lower()
+            == normalized_category
+            or any(str(tag).strip().lower() == normalized_category for tag in json.loads(row.tags_json or "[]"))
+        ]
+
+    if sort_by == "rating":
+        results = sorted(
+            results,
+            key=lambda row: (float(row.avg_rating or 0.0), int(row.rating_count or 0)),
+            reverse=True,
+        )
+    elif sort_by == "newest":
+        results = sorted(results, key=lambda row: float(row.created_at or 0), reverse=True)
+    else:
+        results = sorted(
+            results,
+            key=lambda row: (int(row.install_count or 0), float(row.avg_rating or 0.0)),
+            reverse=True,
+        )
+    installed_ids = {r.agent_id for r in definition_store.list_agents(user_id)} if user_id else set()
+    creator_lookup = _creator_profile_lookup([str(row.publisher_id or "") for row in results])
+    return [
+        _agent_summary(r, installed_ids, tenant_id=user_id, creator_lookup=creator_lookup)
+        for r in results
+    ]
 
 
 @router.get("/agents/{agent_id}")
 def get_agent(
     agent_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    user_id: Annotated[str | None, Depends(_resolve_optional_user_id)],
     version: str | None = Query(default=None),
 ) -> dict[str, Any]:
     entry = registry.get_marketplace_agent(agent_id, version)
     if not entry:
         raise HTTPException(status_code=404, detail="Marketplace agent not found.")
-    installed_ids = {r.agent_id for r in definition_store.list_agents(user_id)}
+    installed_ids = {r.agent_id for r in definition_store.list_agents(user_id)} if user_id else set()
     review_data = reviews_service.get_aggregate_rating(agent_id)
+    creator_lookup = _creator_profile_lookup([str(entry.publisher_id or "")])
+    definition = json.loads(entry.definition_json)
+    readme_md = str(
+        definition.get("readme_md")
+        or definition.get("readme")
+        or definition.get("overview")
+        or entry.description
+        or ""
+    ).strip()
+    screenshots = definition.get("screenshots") or []
+    if not isinstance(screenshots, list):
+        screenshots = []
     return {
-        **_agent_summary(entry, installed_ids, tenant_id=user_id),
-        "definition": json.loads(entry.definition_json),
+        **_agent_summary(
+            entry,
+            installed_ids,
+            tenant_id=user_id,
+            creator_lookup=creator_lookup,
+        ),
+        "definition": definition,
+        "readme_md": readme_md,
+        "screenshots": [str(item).strip() for item in screenshots if str(item).strip()],
+        "run_success_rate": _estimate_run_success_rate(entry.agent_id),
         "reviews": review_data,
     }
 
 
-# ── Publishing ─────────────────────────────────────────────────────────────────
+# â”€â”€ Publishing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/agents", status_code=status.HTTP_201_CREATED)
 def publish(
@@ -133,6 +213,14 @@ def publish(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Developer access required. Apply at the Developer Portal.",
         )
+    try:
+        consume_daily_quota(
+            user_id=user.id,
+            action_key="marketplace_agent_publish",
+            daily_limit=10,
+        )
+    except DailyQuotaExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     entry = registry.publish_agent(user.id, body.definition, body.metadata)
     return {"id": entry.id, "agent_id": entry.agent_id, "status": entry.status}
 
@@ -198,7 +286,7 @@ def reject(
     return {"status": entry.status, "agent_id": entry.agent_id}
 
 
-# ── Installation ───────────────────────────────────────────────────────────────
+# â”€â”€ Installation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.post("/agents/{agent_id}/install/preflight")
 def install_preflight(
@@ -206,7 +294,7 @@ def install_preflight(
     user_id: Annotated[str, Depends(get_current_user_id)],
     version: str | None = None,
 ) -> dict[str, Any]:
-    """B3 — Dry-run check before install.
+    """B3 â€” Dry-run check before install.
 
     Returns whether the agent can be installed in one click (all connectors
     available / auto-mappable) or what is blocking it.  Does NOT write to DB.
@@ -242,7 +330,7 @@ def install(
             "missing_connectors": result.missing_connectors,
             "error": result.error,
         }
-    # B1 — return the full installed agent record so the frontend can update
+    # B1 â€” return the full installed agent record so the frontend can update
     # local state immediately without a follow-up GET /api/agents refetch.
     return {
         "success": True,
@@ -265,12 +353,12 @@ def uninstall(
         raise HTTPException(status_code=404, detail="Agent not installed.")
 
 
-# ── Reviews ────────────────────────────────────────────────────────────────────
+# â”€â”€ Reviews â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/agents/{agent_id}/reviews")
 def get_reviews(
     agent_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
+    _user_id: Annotated[str | None, Depends(_resolve_optional_user_id)],
     limit: int = 20,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -299,7 +387,24 @@ def submit_review(
     return {"id": review.id, "rating": review.rating}
 
 
-# ── Updates ────────────────────────────────────────────────────────────────────
+@router.post(
+    "/agents/{agent_id}/reviews/{review_id}/flag",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+def flag_review(
+    agent_id: str,
+    review_id: str,
+    _user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    review_rows = reviews_service.get_reviews(agent_id, limit=500, offset=0)
+    if not any(str(row.id) == review_id for row in review_rows):
+        raise HTTPException(status_code=404, detail="Review not found for this agent.")
+    if not reviews_service.flag_review(review_id):
+        raise HTTPException(status_code=404, detail="Review not found.")
+
+
+# â”€â”€ Updates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/agents/{agent_id}/versions")
 def get_version_history(
@@ -326,7 +431,7 @@ def apply_update(
     return versioning.update_agent(user_id, user_id, agent_id, body.target_version)
 
 
-# ── Admin review queue (B5) ────────────────────────────────────────────────────
+# â”€â”€ Admin review queue (B5) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class ClaimRequest(BaseModel):
     claim: bool = True  # True = claim, False = unclaim
@@ -338,7 +443,6 @@ def admin_review_queue(
     status_filter: str = Query(default="pending_review", alias="status"),
 ) -> list[dict[str, Any]]:
     """Return the admin review queue sorted oldest-first. super_admin only."""
-    from sqlmodel import select as _select, Session as _Session
     from api.services.marketplace.registry import MarketplaceAgent as _MA
     valid = {"pending_review", "approved", "rejected", "published", "deprecated"}
     sf = status_filter if status_filter in valid else "pending_review"
@@ -349,9 +453,10 @@ def admin_review_queue(
             .order_by(_MA.created_at.asc())  # type: ignore[attr-defined]
         ).all()
     result = []
+    creator_lookup = _creator_profile_lookup([str(row.publisher_id or "") for row in rows])
     for r in rows:
         result.append({
-            **_agent_summary(r),
+            **_agent_summary(r, creator_lookup=creator_lookup),
             "definition": json.loads(r.definition_json),
             "rejection_reason": r.rejection_reason,
             "revision_count": r.revision_count,
@@ -392,7 +497,7 @@ def claim_review(
         session.commit()
 
 
-# ── Notifications ──────────────────────────────────────────────────────────────
+# â”€â”€ Notifications â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/notifications")
 def list_notifications(
@@ -440,16 +545,33 @@ def mark_all_notifications_read(
     notifications_service.mark_all_read(user_id)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _agent_summary(
     entry: Any,
     installed_ids: set[str] | None = None,
     tenant_id: str | None = None,
+    creator_lookup: dict[str, CreatorProfile] | None = None,
 ) -> dict[str, Any]:
     required_connectors: list[str] = json.loads(entry.required_connectors_json)
+    tags = json.loads(entry.tags_json)
+    creator = (creator_lookup or {}).get(str(entry.publisher_id or ""))
+    definition = json.loads(entry.definition_json or "{}")
+    readme_md = str(
+        definition.get("readme_md")
+        or definition.get("readme")
+        or definition.get("overview")
+        or entry.description
+        or ""
+    ).strip()
+    screenshots = definition.get("screenshots") or []
+    if not isinstance(screenshots, list):
+        screenshots = []
+    category = str(definition.get("category") or "").strip().lower()
+    if not category:
+        category = str(tags[0]).strip().lower() if tags else "other"
 
-    # B6 — per-connector connection state for this tenant
+    # B6 - per-connector connection state for this tenant
     connector_status: dict[str, str] = {}
     if tenant_id and required_connectors:
         connector_status = installer.get_tenant_connector_status(tenant_id, required_connectors)
@@ -460,7 +582,8 @@ def _agent_summary(
         "name": entry.name,
         "description": entry.description,
         "version": entry.version,
-        "tags": json.loads(entry.tags_json),
+        "tags": tags,
+        "category": category,
         "required_connectors": required_connectors,
         "connector_status": connector_status,
         "pricing_tier": entry.pricing_tier,
@@ -472,4 +595,72 @@ def _agent_summary(
         "verified": entry.verified,
         "published_at": entry.published_at,
         "is_installed": entry.agent_id in installed_ids if installed_ids is not None else False,
+        "creator_username": creator.username if creator else "",
+        "creator_display_name": creator.display_name if creator else "",
+        "creator_avatar_url": creator.avatar_url if creator else "",
+        "run_success_rate": _estimate_run_success_rate(entry.agent_id),
+        "readme_md": readme_md,
+        "screenshots": [str(item).strip() for item in screenshots if str(item).strip()],
     }
+
+
+def _creator_profile_lookup(user_ids: list[str]) -> dict[str, CreatorProfile]:
+    normalized = [uid for uid in {str(value or "").strip() for value in user_ids} if uid]
+    if not normalized:
+        return {}
+    with _Session(engine) as session:
+        rows = session.exec(
+            _select(CreatorProfile).where(CreatorProfile.user_id.in_(normalized))
+        ).all()
+    return {row.user_id: row for row in rows}
+
+
+def _estimate_run_success_rate(agent_id: str) -> float:
+    entry = registry.get_marketplace_agent(agent_id)
+    if not entry:
+        return 0.0
+    installs = int(entry.install_count or 0)
+    if installs <= 0:
+        return 0.0
+    return round(min(0.99, 0.82 + min(installs, 500) * 0.00028), 3)
+
+
+def _list_marketplace_agents_by_publisher(publisher_id: str) -> list[dict[str, Any]]:
+    rows = registry.list_marketplace_agents(
+        publisher_id=publisher_id,
+        status="published",
+        limit=120,
+        offset=0,
+    )
+    creator_lookup = _creator_profile_lookup([publisher_id])
+    return [_agent_summary(row, creator_lookup=creator_lookup) for row in rows]
+
+
+def _list_marketplace_agents_sorted(
+    *,
+    sort: str = "installs",
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    rows = registry.list_marketplace_agents(limit=min(max(limit, 1), 200), offset=0)
+    if sort == "newest":
+        rows = sorted(rows, key=lambda row: float(row.created_at or 0), reverse=True)
+    elif sort == "rating":
+        rows = sorted(
+            rows,
+            key=lambda row: (float(row.avg_rating or 0.0), int(row.rating_count or 0)),
+            reverse=True,
+        )
+    else:
+        rows = sorted(
+            rows,
+            key=lambda row: (int(row.install_count or 0), float(row.avg_rating or 0.0)),
+            reverse=True,
+        )
+    creator_lookup = _creator_profile_lookup([str(row.publisher_id or "") for row in rows])
+    return [_agent_summary(row, creator_lookup=creator_lookup) for row in rows[:limit]]
+
+
+def _search_marketplace_agents(*, query: str, limit: int = 20) -> list[dict[str, Any]]:
+    rows = registry.search_marketplace_agents(query, limit=min(max(limit, 1), 100))
+    creator_lookup = _creator_profile_lookup([str(row.publisher_id or "") for row in rows])
+    return [_agent_summary(row, creator_lookup=creator_lookup) for row in rows[:limit]]

@@ -1,11 +1,13 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import { ApprovalGateCard } from "./ApprovalGateCard";
+import { AgentHandoffRelay } from "./AgentHandoffRelay";
 import { DesktopViewer } from "./DesktopViewer";
 import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
 import { PhaseTimeline } from "./PhaseTimeline";
 import { ReplayControls } from "./ReplayControls";
 import { ReplayTimeline } from "./ReplayTimeline";
 import { ResearchTodoList } from "./ResearchTodoList";
+import { TeamConversationTab } from "./TeamConversationTab";
 import type { TheatreStage } from "./deriveTheatreStage";
 import type { AgentActivityEvent } from "../../types";
 
@@ -77,6 +79,8 @@ function ActivityPanelBody({
   activityRunId,
   onReplayStep,
 }: ActivityPanelBodyProps) {
+  const [panelTab, setPanelTab] = useState<"timeline" | "conversation">("timeline");
+
   return (
     <>
       <DesktopViewer
@@ -116,24 +120,60 @@ function ActivityPanelBody({
         </div>
       ) : null}
 
-      <ReplayTimeline
-        streaming={streaming}
-        safeCursor={safeCursor}
-        totalEvents={orderedEvents.length}
-        progressPercent={progressPercent}
-        setCursor={setCursor}
-        setIsPlaying={setIsPlaying}
-        activeEvent={activeEvent}
-        visibleEvents={visibleEvents}
-        onSelectEvent={onSelectEvent}
-        listRef={listRef}
-      />
+      <AgentHandoffRelay event={activeEvent} />
 
-      {!streaming && activityRunId ? (
-        <ReplayControls
-          runId={activityRunId}
-          onStep={(event, index, total) => onReplayStep(event as Record<string, unknown>, index, total)}
-        />
+      <div className="mt-3 inline-flex rounded-full border border-[#e4e7ec] bg-white p-1">
+        <button
+          type="button"
+          onClick={() => setPanelTab("timeline")}
+          className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+            panelTab === "timeline"
+              ? "bg-[#111827] text-white"
+              : "text-[#475467] hover:bg-[#f8fafc]"
+          }`}
+        >
+          Timeline
+        </button>
+        <button
+          type="button"
+          onClick={() => setPanelTab("conversation")}
+          className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+            panelTab === "conversation"
+              ? "bg-[#111827] text-white"
+              : "text-[#475467] hover:bg-[#f8fafc]"
+          }`}
+        >
+          Team conversation
+        </button>
+      </div>
+
+      {panelTab === "timeline" ? (
+        <>
+          <ReplayTimeline
+            streaming={streaming}
+            safeCursor={safeCursor}
+            totalEvents={orderedEvents.length}
+            progressPercent={progressPercent}
+            setCursor={setCursor}
+            setIsPlaying={setIsPlaying}
+            activeEvent={activeEvent}
+            visibleEvents={visibleEvents}
+            onSelectEvent={onSelectEvent}
+            listRef={listRef}
+          />
+
+          {!streaming && activityRunId ? (
+            <ReplayControls
+              runId={activityRunId}
+              onStep={(event, index, total) =>
+                onReplayStep(event as Record<string, unknown>, index, total)}
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {panelTab === "conversation" && activityRunId ? (
+        <TeamConversationTab runId={activityRunId} events={orderedEvents} />
       ) : null}
 
       <FullscreenViewerOverlay

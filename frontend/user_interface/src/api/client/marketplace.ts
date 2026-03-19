@@ -16,12 +16,21 @@ type MarketplaceAgentSummary = {
   has_computer_use: boolean;
   verified: boolean;
   published_at?: string | null;
+  category?: string;
+  creator_username?: string;
+  creator_display_name?: string;
+  creator_avatar_url?: string;
+  run_success_rate?: number;
+  readme_md?: string;
+  screenshots?: string[];
   connector_status?: Record<string, "connected" | "missing" | "not_required" | string>;
   is_installed?: boolean;
 };
 
 type MarketplaceAgentDetail = MarketplaceAgentSummary & {
   definition: Record<string, unknown>;
+  readme_md?: string;
+  screenshots?: string[];
   reviews: {
     avg: number;
     count: number;

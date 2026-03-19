@@ -19,6 +19,7 @@ import type { AgentCommandSelection, WorkflowCommandSelection } from "./composer
 import { useComposerCommandPalette } from "./composer/commandPalette";
 import { FilePreviewModal } from "./shared/FilePreviewModal";
 import type { ComposerAttachment } from "./types";
+import { openConnectorOverlay } from "../../utils/connectorOverlay";
 
 const MAX_TEXTAREA_HEIGHT_PX = 168;
 
@@ -37,7 +38,11 @@ type ComposerPanelProps = {
   activeAgent?: { agent_id: string; name: string } | null;
   onAgentSelect?: (agent: AgentCommandSelection | null) => void;
   onSelectWorkflow?: (workflow: WorkflowCommandSelection) => void;
-  activeWorkflow?: { workflow_id: string; name: string } | null;
+  activeWorkflow?: {
+    workflow_id: string;
+    name: string;
+    missing_connectors?: string[];
+  } | null;
   onClearWorkflow?: () => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   isSending: boolean;
@@ -99,6 +104,11 @@ function ComposerPanel({
   const sendDisabled = !canSubmit;
   const [previewAttachment, setPreviewAttachment] = useState<ComposerAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const missingConnectors = Array.isArray(activeWorkflow?.missing_connectors)
+    ? activeWorkflow.missing_connectors
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    : [];
 
   const resizeComposerTextarea = useCallback(() => {
     const element = textareaRef.current;
@@ -201,6 +211,24 @@ function ComposerPanel({
       }}
     >
       <div className="mx-auto w-full max-w-[1460px] px-3 pt-2 pb-0">
+        {activeWorkflow && missingConnectors.length ? (
+          <div className="mb-2 rounded-xl border border-[#fde68a] bg-[#fffbeb] px-3 py-2">
+            <p className="text-[12px] font-semibold text-[#92400e]">
+              This workflow needs {missingConnectors.join(", ")}. Connect now to run successfully.
+            </p>
+            <button
+              type="button"
+              onClick={() =>
+                openConnectorOverlay(missingConnectors[0], {
+                  fromPath: window.location.pathname || "/",
+                })
+              }
+              className="mt-1 text-[12px] font-semibold text-[#7c2d12] underline-offset-2 hover:underline"
+            >
+              Connect now
+            </button>
+          </div>
+        ) : null}
         {activeWorkflow ? (
           <div className="mb-1.5 flex items-center gap-1.5">
             <span className="inline-flex max-w-[280px] items-center gap-1.5 rounded-full border border-[#c4b5fd] bg-[#f5f3ff] px-2.5 py-1 text-[11px] font-semibold text-[#7c3aed]">

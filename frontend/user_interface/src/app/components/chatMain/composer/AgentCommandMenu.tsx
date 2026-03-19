@@ -266,13 +266,23 @@ function AgentCommandMenu({ open, onClose, onSelectWorkflow, onOpenWorkflow, onS
       ) : null}
 
       <div className="flex items-center justify-between border-t border-black/[0.06] bg-[#fcfcfd] px-3 py-2">
-        <a
-          href="/workflow-builder"
-          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7c3aed] hover:text-[#6d28d9]"
-        >
-          <GitBranch className="h-3 w-3" />
-          Create new workflow
-        </a>
+        <div className="flex items-center gap-3">
+          <a
+            href="/workflow-builder"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#7c3aed] hover:text-[#6d28d9]"
+          >
+            <GitBranch className="h-3 w-3" />
+            New workflow
+          </a>
+          <a
+            href="/marketplace"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#667085] hover:text-[#1d1d1f]"
+          >
+            Browse marketplace ↗
+          </a>
+        </div>
         <button
           type="button"
           onClick={onClose}

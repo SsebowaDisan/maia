@@ -8,10 +8,8 @@ import {
   FolderPlus,
   LayoutGrid,
   LineChart,
-  PlugZap,
   PencilLine,
   Route,
-  Store,
   Trash2,
   X,
 } from "lucide-react";
@@ -116,8 +114,6 @@ export function ProjectsPane({
   const quickLinks = [
     { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
-    { id: "connectors", label: "Connectors", icon: PlugZap, path: "/connectors" },
-    { id: "marketplace", label: "Marketplace", icon: Store, path: "/marketplace" },
   ] as const;
   const normalizedPath = String(currentPath || "/").toLowerCase();
 
