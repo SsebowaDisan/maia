@@ -488,3 +488,10 @@ ktem_app_data/
 gradio_tmp/
 frontend/user_interface/node_modules/
 frontend/user_interface/dist/
+
+# Local debug payloads / scratch artifacts
+.tmp_*.json
+
+# Node modules (root and nested workspaces)
+node_modules/
+**/node_modules/
