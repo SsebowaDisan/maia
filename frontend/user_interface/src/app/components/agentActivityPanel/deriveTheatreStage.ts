@@ -1,15 +1,6 @@
 import type { PreviewTab } from "../agentActivityMeta";
 import type { SurfaceCommit } from "./surfaceCommitDerivation";
 
-type ActivityPhase =
-  | "understanding"
-  | "contract"
-  | "clarification"
-  | "planning"
-  | "execution"
-  | "verification"
-  | "delivery";
-
 type TheatreStage =
   | "idle"
   | "understand"
@@ -27,7 +18,10 @@ type TheatreStage =
 function deriveTheatreStage({
   streaming,
   hasEvents,
-  activePhase,
+  activeStageSignal,
+  activeEventType,
+  activeEventStatus,
+  activeEventTitle,
   surfaceCommit,
   needsHumanReview,
   hasApprovalGate,
@@ -37,7 +31,10 @@ function deriveTheatreStage({
 }: {
   streaming: boolean;
   hasEvents: boolean;
-  activePhase: ActivityPhase | null;
+  activeStageSignal: string | null;
+  activeEventType: string | null;
+  activeEventStatus: string | null;
+  activeEventTitle: string | null;
   surfaceCommit: SurfaceCommit | null;
   needsHumanReview: boolean;
   hasApprovalGate: boolean;
@@ -64,33 +61,68 @@ function deriveTheatreStage({
     return "review";
   }
 
-  const phase = activePhase;
-  if (!phase) {
-    if (!streaming) {
-      return surfaceCommit ? "done" : "idle";
-    }
-    return surfaceCommit ? "surface" : "understand";
-  }
+  const signal = [
+    String(activeStageSignal || "").trim().toLowerCase(),
+    String(activeEventType || "").trim().toLowerCase(),
+    String(activeEventStatus || "").trim().toLowerCase(),
+    String(activeEventTitle || "").trim().toLowerCase(),
+  ]
+    .filter(Boolean)
+    .join(" ");
 
-  if (phase === "understanding" || phase === "contract" || phase === "clarification") {
+  if (
+    signal.includes("understand") ||
+    signal.includes("contract") ||
+    signal.includes("clarif") ||
+    signal.includes("preflight") ||
+    signal.includes("intake")
+  ) {
     return "understand";
   }
-  if (phase === "planning") {
+  if (
+    signal.includes("plan") ||
+    signal.includes("assembly") ||
+    signal.includes("decompose") ||
+    signal.includes("breakdown")
+  ) {
     return "breakdown";
   }
-  if (phase === "execution") {
-    return surfaceCommit ? "execute" : "analyze";
-  }
-  if (phase === "verification") {
+  if (
+    signal.includes("review") ||
+    signal.includes("verify") ||
+    signal.includes("verif") ||
+    signal.includes("approval") ||
+    signal.includes("qa")
+  ) {
     return "review";
   }
-  if (phase === "delivery") {
+  if (
+    signal.includes("execute") ||
+    signal.includes("tool_") ||
+    signal.includes("dialogue") ||
+    signal.includes("handoff") ||
+    signal.includes("workflow") ||
+    signal.includes("run")
+  ) {
+    return surfaceCommit ? "execute" : "analyze";
+  }
+  if (
+    signal.includes("deliver") ||
+    signal.includes("publish") ||
+    signal.includes("final") ||
+    signal.includes("email_sent") ||
+    signal.includes("workflow_completed") ||
+    signal.includes("execution_complete")
+  ) {
     if (streaming) {
       return hasApprovalGate ? "confirm" : (surfaceCommit ? "execute" : "analyze");
     }
     return "done";
   }
-  return "idle";
+  if (!streaming) {
+    return surfaceCommit ? "done" : "idle";
+  }
+  return surfaceCommit ? "execute" : "analyze";
 }
 
 function desiredPreviewTabForStage({
@@ -108,6 +140,9 @@ function desiredPreviewTabForStage({
 }): PreviewTab {
   if (manualOverride) {
     return fallbackPreviewTab;
+  }
+  if (stage === "analyze" && sceneTab !== "system") {
+    return sceneTab;
   }
   if (stage === "surface" || stage === "execute" || stage === "done") {
     if (surfaceCommit?.tab) {

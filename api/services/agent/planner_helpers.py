@@ -11,7 +11,6 @@ from api.services.agent.llm_intent import (
     detect_web_routing_mode,
     enrich_task_intelligence,
 )
-from api.services.agent.llm_runtime import env_bool
 
 # Greedily match URLs but strip common trailing punctuation (.,;:)>'"]) via negative lookbehind.
 URL_RE = re.compile(r"https?://[^\s]+(?<![.,;:)\]>\"'])", re.IGNORECASE)
@@ -113,7 +112,6 @@ def _infer_intent_signals_cached(
     combined = f"{message_text} {goal_text}".strip()
     url = extract_url(combined)
     recipient = extract_email(combined)
-
     heuristic: dict[str, object] = {
         "url": url,
         "target_url": url,
@@ -184,8 +182,6 @@ def _infer_intent_signals_cached(
     if routing_mode not in ALLOWED_WEB_ROUTING_MODES:
         if url:
             routing_mode = "url_scrape"
-        elif bool(heuristic.get("requires_web_inspection")) or "web_research" in tag_set:
-            routing_mode = "online_research"
         else:
             routing_mode = "none"
 
@@ -262,9 +258,9 @@ def infer_intent_signals_from_text(
     inferred = _infer_intent_signals_cached(
         str(message or ""),
         str(agent_goal or ""),
-        env_bool("MAIA_AGENT_LLM_INTENT_ENABLED", default=True),
-        env_bool("MAIA_AGENT_LLM_INTENT_TAGS_ENABLED", default=True),
-        env_bool("MAIA_AGENT_LLM_WEB_ROUTING_ENABLED", default=True),
+        True,
+        True,
+        True,
     )
     return dict(inferred)
 

@@ -638,13 +638,14 @@ function listPendingGates(runId: string) {
   );
 }
 
-function approveAgentRunGate(runId: string, gateId: string) {
+function approveAgentRunGate(runId: string, gateId: string, editedParams?: Record<string, unknown>) {
+  const body = editedParams && Object.keys(editedParams).length > 0 ? editedParams : {};
   return request<{ status: string; run_id: string; gate_id: string }>(
     `/api/agents/runs/${encodeURIComponent(runId)}/gates/${encodeURIComponent(gateId)}/approve`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(body),
     },
   );
 }

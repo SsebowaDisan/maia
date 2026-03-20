@@ -85,14 +85,59 @@ class CollaborationLogService:
     def record_handoff(self, *, run_id: str, from_agent: str, to_agent: str, task: str, context: str = "") -> dict[str, Any]:
         return self.record(run_id=run_id, from_agent=from_agent, to_agent=to_agent, message=f"Handing off: {task}", entry_type="handoff", metadata={"task": task, "context": context})
 
-    def record_question(self, *, run_id: str, from_agent: str, to_agent: str, question: str) -> dict[str, Any]:
-        return self.record(run_id=run_id, from_agent=from_agent, to_agent=to_agent, message=question, entry_type="question")
+    def record_question(
+        self,
+        *,
+        run_id: str,
+        from_agent: str,
+        to_agent: str,
+        question: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.record(
+            run_id=run_id,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            message=question,
+            entry_type="question",
+            metadata=metadata,
+        )
 
-    def record_response(self, *, run_id: str, from_agent: str, to_agent: str, response: str) -> dict[str, Any]:
-        return self.record(run_id=run_id, from_agent=from_agent, to_agent=to_agent, message=response, entry_type="response")
+    def record_response(
+        self,
+        *,
+        run_id: str,
+        from_agent: str,
+        to_agent: str,
+        response: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.record(
+            run_id=run_id,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            message=response,
+            entry_type="response",
+            metadata=metadata,
+        )
 
-    def record_disagreement(self, *, run_id: str, from_agent: str, to_agent: str, point: str) -> dict[str, Any]:
-        return self.record(run_id=run_id, from_agent=from_agent, to_agent=to_agent, message=point, entry_type="disagreement")
+    def record_disagreement(
+        self,
+        *,
+        run_id: str,
+        from_agent: str,
+        to_agent: str,
+        point: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.record(
+            run_id=run_id,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            message=point,
+            entry_type="disagreement",
+            metadata=metadata,
+        )
 
     def get_log(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:

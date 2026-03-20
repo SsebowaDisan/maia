@@ -14,7 +14,8 @@ export function DeveloperApplicationForm({ onSuccess }: DeveloperApplicationForm
   const [agreed, setAgreed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = motivation.trim().length >= 20 && agreed && !submitting;
+  const motivationLength = motivation.trim().length;
+  const canSubmit = motivationLength >= 10 && agreed && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -58,7 +59,7 @@ export function DeveloperApplicationForm({ onSuccess }: DeveloperApplicationForm
           <textarea
             value={motivation}
             onChange={(e) => setMotivation(e.target.value)}
-            placeholder="Describe your use case, expertise, and what kind of agents you plan to build (min 20 characters)"
+            placeholder="Describe your use case, expertise, and what kind of agents you plan to build (min 10 characters)"
             rows={4}
             className="w-full rounded-xl border border-black/[0.08] bg-white px-3 py-2.5 text-[13px] text-[#1d1d1f] outline-none transition placeholder:text-[#c7c7cc] focus:border-[#7c3aed]/40 focus:ring-2 focus:ring-[#7c3aed]/10"
           />
@@ -95,11 +96,20 @@ export function DeveloperApplicationForm({ onSuccess }: DeveloperApplicationForm
         </label>
       </div>
 
+      {!canSubmit && !submitting ? (
+        <p className="mt-4 text-center text-[11px] text-[#98a2b3]">
+          {!agreed ? "Accept the guidelines to continue" : motivationLength < 10 ? `${10 - motivationLength} more characters needed` : ""}
+        </p>
+      ) : null}
       <button
         type="button"
         disabled={!canSubmit}
-        onClick={handleSubmit}
-        className="mt-6 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#7c3aed] text-[13px] font-semibold text-white shadow-[0_2px_8px_-2px_rgba(124,58,237,0.4)] transition hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={() => { void handleSubmit(); }}
+        className={`mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition ${
+          canSubmit
+            ? "bg-[#7c3aed] text-white shadow-[0_2px_8px_-2px_rgba(124,58,237,0.4)] hover:bg-[#6d28d9]"
+            : "bg-[#e5e7eb] text-[#9ca3af] cursor-not-allowed"
+        }`}
       >
         <Send className="h-3.5 w-3.5" />
         {submitting ? "Submitting…" : "Submit Application"}

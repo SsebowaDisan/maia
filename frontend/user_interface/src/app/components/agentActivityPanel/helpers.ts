@@ -136,6 +136,8 @@ function mergeLiveSceneData(
       "tool_id",
       "path",
       "scene_surface",
+      "scene_family",
+      "operation_label",
       "pdf_path",
       "provider",
       "provider_requested",

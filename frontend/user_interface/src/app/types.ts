@@ -45,7 +45,7 @@ export type ResearchTreeBranch = {
   result_count?: number;
 };
 
-export type ChatTurnMode = "ask" | "company_agent" | "deep_search" | "web_search";
+export type ChatTurnMode = "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
 
 export type ChatTurnModeStatus = {
   state: "committed" | "downgraded";

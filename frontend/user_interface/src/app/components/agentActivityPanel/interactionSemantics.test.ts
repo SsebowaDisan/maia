@@ -32,6 +32,12 @@ describe("interactionSemantics", () => {
     expect(eventTab(event)).toBe("document");
   });
 
+  it("routes tab from scene_family when scene_surface is absent", () => {
+    const event = makeEvent({ scene_family: "email" });
+    expect(sceneSurfaceFromEvent(event)).toBe("email");
+    expect(eventTab(event)).toBe("email");
+  });
+
   it("resolves role label from event owner role", () => {
     const event = makeEvent({ owner_role: "research" });
     const key = roleKeyFromEvent(event);

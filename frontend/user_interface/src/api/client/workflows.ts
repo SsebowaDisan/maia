@@ -37,6 +37,12 @@ type GenerateWorkflowStreamOptions = {
   onError?: (error: Error) => void;
 };
 
+type AssembleAndRunWorkflowStreamOptions = {
+  onEvent?: (event: WorkflowRunEvent) => void;
+  onDone?: () => void;
+  onError?: (error: Error) => void;
+};
+
 type LegacyWorkflowSummary = {
   workflow_id?: string;
   name?: string;
@@ -56,20 +62,42 @@ function parseSseBlock<TEvent extends { event_type: string }>(block: string): TE
   if (!lines.length) {
     return null;
   }
+  let eventName = "";
   const dataLines: string[] = [];
   for (const line of lines) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+      continue;
+    }
     if (line.startsWith("data:")) {
       dataLines.push(line.slice(5).trim());
     }
   }
   const dataText = dataLines.join("\n");
-  if (!dataText || dataText === "[DONE]") {
+  if (!dataText) {
+    return null;
+  }
+  if (dataText === "[DONE]") {
     return { event_type: "done" } as TEvent;
   }
   try {
-    return JSON.parse(dataText) as TEvent;
+    const parsed = JSON.parse(dataText);
+    if (parsed && typeof parsed === "object") {
+      const normalized = parsed as Record<string, unknown>;
+      if (typeof normalized.event_type !== "string" || !normalized.event_type.trim()) {
+        normalized.event_type = eventName || "event";
+      }
+      return normalized as TEvent;
+    }
+    return {
+      event_type: eventName || "message",
+      detail: String(parsed),
+    } as TEvent;
   } catch {
-    return { event_type: "message", detail: dataText } as TEvent;
+    return {
+      event_type: eventName || "message",
+      detail: dataText,
+    } as TEvent;
   }
 }
 
@@ -333,6 +361,28 @@ async function runWorkflowWithStream(workflowId: string, options?: RunWorkflowSt
   });
 }
 
+async function assembleAndRunWorkflowWithStream(
+  description: string,
+  options?: AssembleAndRunWorkflowStreamOptions,
+) {
+  const response = await fetchApi("/api/workflows/assemble-and-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      description: String(description || "").trim(),
+    }),
+  });
+  if (!response.ok) {
+    const detail = normalizeErrorDetail(await response.text(), response.status, "Workflow assemble-and-run failed");
+    throw new Error(detail);
+  }
+  return consumeSseStream<WorkflowRunEvent>(response, {
+    onEvent: options?.onEvent,
+    onDone: options?.onDone,
+    onError: options?.onError,
+  });
+}
+
 function listWorkflowRunHistory(
   workflowId: string,
   options?: { limit?: number; offset?: number },
@@ -392,6 +442,7 @@ async function streamGenerateWorkflowFromDescription(
 }
 
 export {
+  assembleAndRunWorkflowWithStream,
   createWorkflowRecord,
   generateWorkflowFromDescription,
   getWorkflowRecord,
@@ -407,4 +458,9 @@ export {
   validateWorkflowDefinition,
 };
 
-export type { GenerateWorkflowStreamOptions, RunWorkflowStreamOptions, SaveWorkflowPayload };
+export type {
+  AssembleAndRunWorkflowStreamOptions,
+  GenerateWorkflowStreamOptions,
+  RunWorkflowStreamOptions,
+  SaveWorkflowPayload,
+};

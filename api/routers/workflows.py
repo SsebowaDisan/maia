@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.auth import get_current_user_id
 from api.services.marketplace.abuse_prevention import DailyQuotaExceededError
@@ -88,6 +88,148 @@ def _sse(event_type: str, data: dict[str, Any]) -> str:
     """Format a single SSE message."""
     payload = json.dumps({"event_type": event_type, **data}, ensure_ascii=False)
     return f"event: {event_type}\ndata: {payload}\n\n"
+
+
+# ── Assemble and run (Brain builds + executes in one stream) ──────────────────
+
+class AssembleAndRunRequest(BaseModel):
+    description: str = Field(min_length=5, max_length=2000)
+
+
+@router.post("/assemble-and-run")
+def assemble_and_run(
+    body: AssembleAndRunRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> StreamingResponse:
+    """Brain assembles a workflow from description, saves it, and runs it — all streamed live."""
+    import queue
+    import threading
+    from api.services.agent.brain.workflow_assembly import assemble_workflow
+
+    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    pipeline_started_at = time.monotonic()
+    pipeline_last_emit_at = pipeline_started_at
+
+    def _emit_live(event: dict[str, Any]) -> None:
+        nonlocal pipeline_last_emit_at
+        pipeline_last_emit_at = time.monotonic()
+        event_queue.put(event)
+
+    def _run_pipeline() -> None:
+        try:
+            # Phase 1: Assembly (events stream live via _emit_live)
+            result = assemble_workflow(
+                description=body.description,
+                tenant_id=user_id,
+                on_event=_emit_live,
+            )
+            definition = result.get("definition")
+            if not definition:
+                if not result.get("error"):
+                    _emit_live({"event_type": "assembly_error", "detail": "Assembly failed"})
+                return
+
+            # Save the workflow
+            try:
+                record = _db_create(
+                    tenant_id=user_id,
+                    name=definition.get("name", "Untitled"),
+                    description=definition.get("description", ""),
+                    definition=definition,
+                    created_by=user_id,
+                )
+                workflow_id = str(record.id)
+                _emit_live({"event_type": "workflow_saved", "data": {"workflow_id": workflow_id, "name": definition.get("name", "")}})
+            except Exception as exc:
+                _emit_live({"event_type": "assembly_error", "detail": f"Failed to save: {exc}"})
+                return
+
+            # Create schedule if detected
+            schedule = result.get("schedule")
+            if schedule and schedule.get("detected"):
+                try:
+                    from api.services.agent.report_scheduler import get_report_scheduler
+                    get_report_scheduler().create(
+                        user_id=user_id,
+                        name=f"{definition.get('name', 'Workflow')} — {schedule.get('description', '')}",
+                        prompt=f"Run workflow {workflow_id}",
+                        frequency=schedule.get("cron", "0 9 * * 1"),
+                    )
+                    _emit_live({"event_type": "schedule_created", "data": schedule})
+                except Exception:
+                    pass
+
+            # Phase 2: Execute (events also stream live via _emit_live)
+            _emit_live({"event_type": "execution_starting", "data": {"workflow_id": workflow_id}})
+            try:
+                from api.services.agents.workflow_executor import execute_workflow
+                from api.schemas.workflow_definition import WorkflowDefinitionSchema
+
+                wf = WorkflowDefinitionSchema.model_validate(definition)
+                outputs = execute_workflow(wf, tenant_id=user_id, on_event=_emit_live)
+                _emit_live({"event_type": "execution_complete", "data": {
+                    "workflow_id": workflow_id,
+                    "outputs": {k: str(v)[:500] for k, v in outputs.items()},
+                }})
+            except Exception as exc:
+                _emit_live({"event_type": "execution_error", "detail": str(exc)[:500]})
+        except Exception as exc:
+            _emit_live({"event_type": "assembly_error", "detail": f"Pipeline crashed: {str(exc)[:500]}"})
+        finally:
+            event_queue.put(None)  # Signal end of stream
+
+    # Run pipeline in background thread so events stream immediately
+    pipeline_thread = threading.Thread(target=_run_pipeline, daemon=True)
+    pipeline_thread.start()
+    _emit_live({
+        "event_type": "assembly_started",
+        "title": "Brain started assembling the workflow",
+        "detail": "Planning team roles and dependencies...",
+    })
+
+    def _stream():
+        heartbeat_interval_seconds = 10.0
+        max_pipeline_seconds = float(os.getenv("MAIA_ASSEMBLE_RUN_MAX_SECONDS", "1800"))
+        if max_pipeline_seconds < 60:
+            max_pipeline_seconds = 60.0
+        while True:
+            elapsed = time.monotonic() - pipeline_started_at
+            if elapsed > max_pipeline_seconds:
+                yield _sse(
+                    "assembly_error",
+                    {"detail": f"Pipeline exceeded max runtime of {int(max_pipeline_seconds)}s and was stopped."},
+                )
+                yield "data: [DONE]\n\n"
+                break
+            try:
+                event = event_queue.get(timeout=heartbeat_interval_seconds)
+            except queue.Empty:
+                # Keep connection alive while background pipeline is still running.
+                # This prevents false timeout errors during long execution phases.
+                if not pipeline_thread.is_alive() and event_queue.empty():
+                    yield "data: [DONE]\n\n"
+                    break
+                idle_seconds = int(time.monotonic() - pipeline_last_emit_at)
+                if idle_seconds >= 30 and (idle_seconds % 30 == 0):
+                    yield _sse(
+                        "execution_progress",
+                        {
+                            "title": "Workflow still running",
+                            "detail": f"Waiting for next event... ({idle_seconds}s since last update)",
+                        },
+                    )
+                yield ": heartbeat\n\n"
+                continue
+            if event is None:
+                yield "data: [DONE]\n\n"
+                break
+            yield _sse(event.get("event_type", "event"), event)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Static / collection routes (must be before /{workflow_id}) ─────────────────

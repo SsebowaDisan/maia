@@ -13,6 +13,7 @@ from api.services.agent.tools.base import (
     ToolTraceEvent,
     ToolMetadata,
 )
+from api.services.agent.tools.business_workflow_helpers import email_from_text
 from api.services.agent.tools.theater_cursor import with_scene
 
 
@@ -49,7 +50,14 @@ class EmailDraftTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> ToolExecutionResult:
-        recipient = str(params.get("to") or "team@company.com")
+        recipient = str(
+            params.get("to")
+            or context.settings.get("__latest_delivery_email_to")
+            or email_from_text(prompt)
+            or ""
+        ).strip()
+        if not recipient:
+            raise ToolExecutionError("Email recipient is required (`to`).")
         subject = str(params.get("subject") or "Update")
         objective = str(params.get("objective") or prompt).strip() or "Share update"
 

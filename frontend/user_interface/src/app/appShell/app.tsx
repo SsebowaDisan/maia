@@ -164,6 +164,7 @@ export default function App() {
   const deepLinkHandledRef = useRef(false);
   const mindmapLinkHandledRef = useRef(false);
   const lastAutoOpenCitationKeyRef = useRef("");
+  const lastAutoOpenActivityKeyRef = useRef("");
   const [sharedMindmap, setSharedMindmap] = useState<Record<string, unknown> | null>(null);
   const [workspaceModalTab, setWorkspaceModalTab] = useState<WorkspaceModalTab | null>(null);
   const [sidebarOverlay, setSidebarOverlay] = useState<SidebarOverlayConfig | null>(() =>
@@ -414,6 +415,37 @@ export default function App() {
     layout.setIsInfoPanelOpen,
   ]);
 
+  useEffect(() => {
+    const latestEventRunId = String(
+      chatState.activityEvents[chatState.activityEvents.length - 1]?.run_id || "",
+    ).trim();
+    const hasActivitySignal =
+      Boolean(latestEventRunId) ||
+      chatState.isActivityStreaming ||
+      chatState.activityEvents.length > 0;
+    if (!hasActivitySignal) {
+      return;
+    }
+    const nextKey = latestEventRunId || `activity_stream_${chatState.activityEvents.length}`;
+    if (!nextKey || nextKey === lastAutoOpenActivityKeyRef.current) {
+      return;
+    }
+    lastAutoOpenActivityKeyRef.current = nextKey;
+    if (layout.activeTab !== "Chat") {
+      layout.setActiveTab("Chat");
+    }
+    if (!layout.isInfoPanelOpen) {
+      layout.setIsInfoPanelOpen(true);
+    }
+  }, [
+    chatState.activityEvents,
+    chatState.isActivityStreaming,
+    layout.activeTab,
+    layout.isInfoPanelOpen,
+    layout.setActiveTab,
+    layout.setIsInfoPanelOpen,
+  ]);
+
   const selectedSidebarConversationId =
     chatState.selectedConversationId &&
     chatState.visibleConversations.some(
@@ -449,8 +481,15 @@ export default function App() {
     /(?:href=['"]https?:\/\/|https?:\/\/)/i.test(String(activeTurn?.info || "")) ||
     /https?:\/\//i.test(String(activeTurn?.user || ""));
   const hasEvidenceHtml = String(activeTurn?.info || "").replace(/<[^>]+>/g, " ").trim().length > 0;
+  const hasActivityConversationContent =
+    Boolean(activeTurn?.activityRunId) ||
+    (Array.isArray(chatState.activityEvents) && chatState.activityEvents.length > 0);
   const hasInfoPanelContent =
-    Boolean(chatState.citationFocus) || hasMindmapPayload || hasSourceUrl || hasEvidenceHtml;
+    Boolean(chatState.citationFocus) ||
+    hasMindmapPayload ||
+    hasSourceUrl ||
+    hasEvidenceHtml ||
+    hasActivityConversationContent;
   const isInfoPanelVisible = layout.isInfoPanelOpen && hasInfoPanelContent;
   const toggleInfoPanel = () => {
     if (!hasInfoPanelContent) {

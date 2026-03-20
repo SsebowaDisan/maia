@@ -1,4 +1,11 @@
-import { sendChat, sendChatStream } from "../../../api/client";
+import {
+  assembleAndRunWorkflowWithStream,
+  createConversation,
+  sendChat,
+  sendChatStream,
+  type ChatResponse,
+  type WorkflowRunEvent,
+} from "../../../api/client";
 import { fallbackAssistantBlocks, normalizeCanvasDocuments, normalizeMessageBlocks } from "../../messageBlocks";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { DEFAULT_PROJECT_ID } from "../constants";
@@ -69,6 +76,183 @@ function deriveModeStatus({
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function deriveWorkflowEventData(row: Record<string, unknown>, data: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...data };
+  const fallbackKeys = [
+    "url",
+    "source_url",
+    "target_url",
+    "page_url",
+    "final_url",
+    "link",
+    "tool_id",
+    "scene_surface",
+    "scene_family",
+    "brand_slug",
+    "connector_id",
+    "connector_label",
+    "from_agent",
+    "to_agent",
+    "from_role",
+    "to_role",
+    "next_role",
+    "agent_id",
+    "agent_role",
+    "owner_role",
+    "step_id",
+    "message",
+    "question",
+    "answer",
+    "summary",
+    "progress",
+    "run_id",
+  ] as const;
+  for (const key of fallbackKeys) {
+    if (merged[key] !== undefined) {
+      continue;
+    }
+    if (row[key] !== undefined) {
+      merged[key] = row[key];
+    }
+  }
+  return merged;
+}
+
+function workflowEventTitle(eventType: string): string {
+  const normalized = String(eventType || "")
+    .trim()
+    .replace(/[._-]+/g, " ")
+    .toLowerCase();
+  if (!normalized) {
+    return "Activity";
+  }
+  return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function toActivityEventFromWorkflowEvent(
+  event: WorkflowRunEvent,
+  options: {
+    fallbackRunId: string;
+    index: number;
+  },
+): AgentActivityEvent | null {
+  const { fallbackRunId, index } = options;
+  const row = asRecord(event);
+  const data = asRecord(row.data);
+  const metadata = asRecord(row.metadata);
+  const resolvedData = deriveWorkflowEventData(row, data);
+  const explicitEventType = normalizeModeValue(row.event_type, "").toLowerCase();
+  const fallbackEventType = normalizeModeValue(
+    row.type || data.type || metadata.type || metadata.event_type,
+    "",
+  ).toLowerCase();
+  const eventType =
+    explicitEventType && explicitEventType !== "event"
+      ? explicitEventType
+      : fallbackEventType || explicitEventType;
+  if (!eventType || eventType === "done") {
+    return null;
+  }
+  const runId = String(row.run_id || resolvedData.run_id || data.run_id || fallbackRunId).trim();
+  if (!runId) {
+    return null;
+  }
+  const title = String(row.title || "").trim() || workflowEventTitle(eventType);
+  const detail = String(
+    row.detail ||
+      row.error ||
+      row.message ||
+      row.text ||
+      row.delta ||
+      data.detail ||
+      data.error ||
+      data.message ||
+      data.text ||
+      data.delta ||
+      "",
+  ).trim();
+  const eventId = String(row.event_id || "").trim() || `${runId}-${eventType}-${index}`;
+  const eventFamily =
+    eventType.startsWith("assembly_") ||
+    eventType.startsWith("brain_") ||
+    eventType.startsWith("agent_dialogue")
+      ? "plan"
+      : eventType.startsWith("workflow_") || eventType.startsWith("execution_")
+      ? "workflow"
+      : undefined;
+  return {
+    event_id: eventId,
+    run_id: runId,
+    event_type: eventType,
+    title,
+    detail,
+    timestamp: new Date().toISOString(),
+    stage: eventFamily === "plan" ? "plan" : "execute",
+    status: eventType.includes("error") || eventType.includes("failed") ? "failed" : "info",
+    data: resolvedData,
+    metadata,
+    event_family: eventFamily,
+    event_render_mode: eventFamily === "plan" ? "animate_live" : undefined,
+  };
+}
+
+function summarizeBrainRun(events: AgentActivityEvent[]): string {
+  const latestError = [...events]
+    .reverse()
+    .find((event) =>
+      ["assembly_error", "execution_error", "workflow_failed", "error"].includes(
+        String(event.event_type || "").trim().toLowerCase(),
+      ),
+    );
+  if (latestError) {
+    return latestError.detail
+      ? `Brain run failed: ${latestError.detail}`
+      : `Brain run failed at ${latestError.title}.`;
+  }
+
+  const executionComplete = [...events].reverse().find((event) => {
+    const type = String(event.event_type || "").trim().toLowerCase();
+    return type === "execution_complete" || type === "workflow_completed";
+  });
+  const outputRecord = asRecord(executionComplete?.data?.outputs);
+  const outputLines = Object.entries(outputRecord)
+    .slice(0, 4)
+    .map(([key, value]) => {
+      const preview = String(value || "").replace(/\s+/g, " ").trim();
+      if (!preview) {
+        return null;
+      }
+      return `- ${key}: ${preview.slice(0, 220)}${preview.length > 220 ? "..." : ""}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const workflowSaved = [...events]
+    .reverse()
+    .find((event) => String(event.event_type || "").trim().toLowerCase() === "workflow_saved");
+  const workflowId = String(workflowSaved?.data?.workflow_id || "").trim();
+
+  if (outputLines.length) {
+    return [
+      "Brain assembled and executed the workflow successfully.",
+      "",
+      "Results:",
+      ...outputLines,
+      workflowId ? "" : "",
+      workflowId ? `Workflow ID: ${workflowId}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (workflowId) {
+    return `Brain assembled and executed the workflow successfully (workflow ${workflowId}).`;
+  }
+  return "Brain assembled and executed the workflow successfully.";
+}
+
 function isAgentActivityPayload(payload: unknown): payload is AgentActivityEvent {
   if (!payload || typeof payload !== "object") {
     return false;
@@ -100,7 +284,7 @@ type SendConversationMessageParams = {
   selectedConversationId: string | null;
   selectedProjectId: string;
   refreshConversations: () => Promise<void>;
-  setCitationFocus: (value: CitationFocus) => void;
+  setCitationFocus: (value: CitationFocus | null) => void;
   setIsSending: (value: boolean) => void;
   setIsActivityStreaming: (value: boolean) => void;
   setClarificationPrompt: (
@@ -169,10 +353,11 @@ async function sendConversationMessage({
   }
 
   const effectiveMode = options?.agentMode ?? composerMode;
+  const backendMode: AgentMode = effectiveMode === "brain" ? "company_agent" : effectiveMode;
   const effectiveAccessMode = options?.accessMode ?? accessMode;
-  const orchestratorMode = effectiveMode === "company_agent" || effectiveMode === "deep_search";
+  const orchestratorMode = backendMode === "company_agent" || backendMode === "deep_search";
   const webOnlyResearchRequested =
-    effectiveMode === "deep_search" && Boolean(options?.settingOverrides?.["__research_web_only"]);
+    backendMode === "deep_search" && Boolean(options?.settingOverrides?.["__research_web_only"]);
   const requestedTurnMode: ChatTurn["mode"] =
     effectiveMode === "deep_search" && webOnlyResearchRequested ? "web_search" : effectiveMode;
   const isFirstTurn = chatTurnsLength === 0;
@@ -188,7 +373,9 @@ async function sendConversationMessage({
         }
       : null;
   const delayedPendingAssistantMessage = orchestratorMode
-    ? effectiveMode === "deep_search"
+    ? effectiveMode === "brain"
+      ? "Brain is assembling your team and running the workflow..."
+      : backendMode === "deep_search"
       ? webOnlyResearchRequested
         ? "Running web search..."
         : "Running deep search..."
@@ -209,17 +396,16 @@ async function sendConversationMessage({
     .filter((item): item is string => Boolean(item));
 
   const pendingTurnIndex = chatTurnsLength;
-  const mergedSettingOverrides: Record<string, unknown> =
-    effectiveMode === "deep_search"
-      ? {
-          ...DEEP_SEARCH_SETTING_OVERRIDES,
-          ...(options?.settingOverrides || {}),
-        }
-      : (options?.settingOverrides || {});
+  const mergedSettingOverrides: Record<string, unknown> = {
+    ...(backendMode === "deep_search" ? DEEP_SEARCH_SETTING_OVERRIDES : {}),
+    ...(options?.settingOverrides || {}),
+    ...(effectiveMode === "brain" ? { __brain_mode_enabled: true } : {}),
+  };
 
   setIsSending(true);
   setIsActivityStreaming(orchestratorMode);
   setClarificationPrompt(null);
+  setCitationFocus(null);
   setInfoText("");
   setActivityEvents([]);
   setSelectedTurnIndex(pendingTurnIndex);
@@ -289,12 +475,12 @@ async function sendConversationMessage({
       },
       mindmapFocus: options?.mindmapFocus ?? {},
       settingOverrides: mergedSettingOverrides,
-      agentMode: effectiveMode,
+      agentMode: backendMode,
       agentId: options?.agentId,
       accessMode: effectiveAccessMode,
     };
 
-    let response;
+    let response: ChatResponse;
     if (orchestratorMode) {
       let streamedInfo = "";
       const streamedEvents: AgentActivityEvent[] = [];
@@ -305,192 +491,280 @@ async function sendConversationMessage({
       let streamedHaltReason: string | null = null;
       let streamedHaltMessage: string | null = null;
       try {
-        response = await sendChatStream(message, selectedConversationId, {
-          ...sharedPayload,
-          agentGoal: message,
-          idleTimeoutMs: 60000,
-          onEvent: (event) => {
-            if (!event || typeof event !== "object") {
-              return;
-            }
-            if (event.type === "chat_delta") {
-              setChatTurns((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                next[next.length - 1] = {
-                  ...(last || {}),
-                  user: message,
-                  assistant: String(event.text || ""),
-                  blocks: fallbackAssistantBlocks(String(event.text || "")),
-                };
-                return next;
+        if (effectiveMode === "brain") {
+          let brainEventIndex = 0;
+          const fallbackRunId = `brain_${Date.now()}`;
+          await assembleAndRunWorkflowWithStream(message, {
+            onEvent: (workflowEvent) => {
+              const normalized = toActivityEventFromWorkflowEvent(workflowEvent, {
+                fallbackRunId: streamedRunId || fallbackRunId,
+                index: ++brainEventIndex,
               });
-              return;
-            }
-            if (event.type === "info_delta") {
-              streamedInfo += String(event.delta || "");
-              setInfoText(streamedInfo);
-              return;
-            }
-            if (event.type === "plot") {
-              const plotPayload =
-                event.plot && typeof event.plot === "object"
-                  ? (event.plot as Record<string, unknown>)
-                  : null;
-              setChatTurns((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                next[next.length - 1] = {
-                  ...(last || {}),
-                  plot: plotPayload,
-                };
-                return next;
-              });
-              return;
-            }
-            if (event.type === "mode_committed") {
-              const committedMode = normalizeModeValue(event.mode, streamedModeRequested || "ask");
-              streamedModeRequested = committedMode;
-              streamedModeActual = committedMode;
-              streamedModeStatus = {
-                state: "committed",
-                requestedMode: committedMode,
-                actualMode: committedMode,
-                scopeStatement:
-                  String(event.scope_statement || "").trim() ||
-                  MODE_SCOPE_STATEMENTS[committedMode] ||
-                  null,
-                message: String(event.message || "").trim() || null,
-              };
-              setChatTurns((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                next[next.length - 1] = {
-                  ...(last || {}),
-                  modeRequested: streamedModeRequested,
-                  modeActuallyUsed: streamedModeActual,
-                  modeStatus: streamedModeStatus,
-                };
-                return next;
-              });
-              return;
-            }
-            if (event.type === "mode_downgraded") {
-              streamedModeRequested = normalizeModeValue(
-                event.requested_mode,
-                streamedModeRequested || initialRequestedMode,
-              );
-              streamedModeActual = normalizeModeValue(
-                event.actual_mode,
-                streamedModeActual || streamedModeRequested || "ask",
-              );
-              streamedModeStatus = {
-                state: "downgraded",
-                requestedMode: streamedModeRequested,
-                actualMode: streamedModeActual,
-                scopeStatement: streamedModeStatus?.scopeStatement || null,
-                message:
-                  String(event.message || "").trim() ||
-                  `Mode changed from ${streamedModeRequested} to ${streamedModeActual}.`,
-              };
-              setChatTurns((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                next[next.length - 1] = {
-                  ...(last || {}),
-                  modeRequested: streamedModeRequested,
-                  modeActuallyUsed: streamedModeActual,
-                  modeStatus: streamedModeStatus,
-                };
-                return next;
-              });
-              return;
-            }
-            if (event.type === "halt") {
-              streamedHaltReason = String(event.reason || "").trim() || null;
-              streamedHaltMessage = String(event.message || "").trim() || null;
-              setChatTurns((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                next[next.length - 1] = {
-                  ...(last || {}),
-                  haltReason: streamedHaltReason,
-                  haltMessage: streamedHaltMessage,
-                };
-                return next;
-              });
-              return;
-            }
-            if (event.type === "activity" && event.event) {
-              if (!isAgentActivityPayload(event.event)) {
+              if (!normalized) {
                 return;
               }
-              const payload = event.event;
-              const createdCanvasDocument = extractCanvasDocumentFromToolEvent(payload);
-              if (createdCanvasDocument) {
-                const canvasStore = useCanvasStore.getState();
-                canvasStore.upsertDocuments([createdCanvasDocument]);
-                canvasStore.openDocument(createdCanvasDocument.id);
-              }
-              const payloadRunId = String(payload.run_id || "").trim();
+              const payloadRunId = String(normalized.run_id || "").trim();
               if (payloadRunId) {
-                if (!streamedRunId) {
-                  streamedRunId = payloadRunId;
-                } else if (payloadRunId !== streamedRunId) {
-                  return;
-                }
+                streamedRunId = payloadRunId;
               }
-              const detectedPrompt = clarificationPromptFromEvent({
-                event: payload,
-                originalRequest: message,
-                agentMode: effectiveMode,
-                accessMode: effectiveAccessMode,
-              });
-              if (detectedPrompt) {
-                setClarificationPrompt((previous: ClarificationPrompt | null) => {
-                  if (previous?.runId && previous.runId === detectedPrompt.runId) {
-                    return previous;
-                  }
-                  return detectedPrompt;
-                });
-              }
-              streamedEvents.push(payload);
+              streamedEvents.push(normalized);
               streamedEventsLocal = [...streamedEvents];
               setActivityEvents([...streamedEvents]);
+              const liveAssistant = normalized.detail
+                ? `${normalized.title}\n${normalized.detail}`
+                : normalized.title;
               setChatTurns((prev) => {
                 const next = [...prev];
                 const last = next[next.length - 1];
                 next[next.length - 1] = {
                   ...(last || {}),
-                  assistant:
-                    last && String(last.assistant || "").trim() === delayedPendingAssistantMessage
-                      ? ""
-                      : String(last?.assistant || ""),
+                  assistant: liveAssistant || String(last?.assistant || ""),
+                  blocks: fallbackAssistantBlocks(liveAssistant || String(last?.assistant || "")),
                   activityEvents: [...streamedEvents],
                 };
                 return next;
               });
+            },
+          });
+          let ensuredConversationId = String(selectedConversationId || "").trim();
+          if (!ensuredConversationId) {
+            try {
+              const created = await createConversation();
+              ensuredConversationId = String(created.id || "").trim();
+            } catch {
+              throw new Error("Unable to create a conversation for Brain mode.");
             }
-          },
-        });
-        streamedModeRequested = normalizeModeValue(
-          response.mode_requested,
-          streamedModeRequested || initialRequestedMode,
-        );
-        streamedModeActual = normalizeModeValue(
-          response.mode_actually_used || response.mode,
-          streamedModeActual || streamedModeRequested || "ask",
-        );
-        streamedHaltReason = String(response.halt_reason || streamedHaltReason || "").trim() || null;
-        streamedHaltMessage = String(response.halt_message || streamedHaltMessage || "").trim() || null;
-        streamedModeStatus = deriveModeStatus({
-          isFirstTurn,
-          requestedMode: streamedModeRequested,
-          actualMode: streamedModeActual,
-          existingStatus: streamedModeStatus,
-          message: streamedModeStatus?.message || streamedHaltMessage || null,
-        });
+          }
+          if (!ensuredConversationId) {
+            throw new Error("Unable to resolve a conversation for Brain mode.");
+          }
+          const answer = summarizeBrainRun(streamedEvents);
+          streamedModeRequested = "brain";
+          streamedModeActual = "brain";
+          streamedModeStatus = deriveModeStatus({
+            isFirstTurn,
+            requestedMode: "brain",
+            actualMode: "brain",
+            existingStatus: streamedModeStatus,
+            message: null,
+          });
+          response = {
+            conversation_id: ensuredConversationId,
+            conversation_name: "Brain run",
+            message,
+            answer,
+            blocks: fallbackAssistantBlocks(answer),
+            documents: [],
+            info: "",
+            plot: null,
+            state: {},
+            mode: "company_agent",
+            actions_taken: [],
+            sources_used: [],
+            source_usage: [],
+            next_recommended_steps: [],
+            needs_human_review: false,
+            human_review_notes: null,
+            web_summary: {},
+            info_panel: {},
+            activity_run_id: streamedRunId || fallbackRunId,
+            mindmap: {},
+            halt_reason: null,
+            halt_message: null,
+            mode_requested: "brain",
+            mode_actually_used: "brain",
+          };
+        } else {
+          response = await sendChatStream(message, selectedConversationId, {
+            ...sharedPayload,
+            agentGoal: message,
+            idleTimeoutMs: 60000,
+            onEvent: (event) => {
+              if (!event || typeof event !== "object") {
+                return;
+              }
+              if (event.type === "chat_delta") {
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    user: message,
+                    assistant: String(event.text || ""),
+                    blocks: fallbackAssistantBlocks(String(event.text || "")),
+                  };
+                  return next;
+                });
+                return;
+              }
+              if (event.type === "info_delta") {
+                streamedInfo += String(event.delta || "");
+                setInfoText(streamedInfo);
+                return;
+              }
+              if (event.type === "plot") {
+                const plotPayload =
+                  event.plot && typeof event.plot === "object"
+                    ? (event.plot as Record<string, unknown>)
+                    : null;
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    plot: plotPayload,
+                  };
+                  return next;
+                });
+                return;
+              }
+              if (event.type === "mode_committed") {
+                const committedMode = normalizeModeValue(event.mode, streamedModeRequested || "ask");
+                streamedModeRequested = committedMode;
+                streamedModeActual = committedMode;
+                streamedModeStatus = {
+                  state: "committed",
+                  requestedMode: committedMode,
+                  actualMode: committedMode,
+                  scopeStatement:
+                    String(event.scope_statement || "").trim() ||
+                    MODE_SCOPE_STATEMENTS[committedMode] ||
+                    null,
+                  message: String(event.message || "").trim() || null,
+                };
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    modeRequested: streamedModeRequested,
+                    modeActuallyUsed: streamedModeActual,
+                    modeStatus: streamedModeStatus,
+                  };
+                  return next;
+                });
+                return;
+              }
+              if (event.type === "mode_downgraded") {
+                streamedModeRequested = normalizeModeValue(
+                  event.requested_mode,
+                  streamedModeRequested || initialRequestedMode,
+                );
+                streamedModeActual = normalizeModeValue(
+                  event.actual_mode,
+                  streamedModeActual || streamedModeRequested || "ask",
+                );
+                streamedModeStatus = {
+                  state: "downgraded",
+                  requestedMode: streamedModeRequested,
+                  actualMode: streamedModeActual,
+                  scopeStatement: streamedModeStatus?.scopeStatement || null,
+                  message:
+                    String(event.message || "").trim() ||
+                    `Mode changed from ${streamedModeRequested} to ${streamedModeActual}.`,
+                };
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    modeRequested: streamedModeRequested,
+                    modeActuallyUsed: streamedModeActual,
+                    modeStatus: streamedModeStatus,
+                  };
+                  return next;
+                });
+                return;
+              }
+              if (event.type === "halt") {
+                streamedHaltReason = String(event.reason || "").trim() || null;
+                streamedHaltMessage = String(event.message || "").trim() || null;
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    haltReason: streamedHaltReason,
+                    haltMessage: streamedHaltMessage,
+                  };
+                  return next;
+                });
+                return;
+              }
+              if (event.type === "activity" && event.event) {
+                if (!isAgentActivityPayload(event.event)) {
+                  return;
+                }
+                const payload = event.event;
+                const createdCanvasDocument = extractCanvasDocumentFromToolEvent(payload);
+                if (createdCanvasDocument) {
+                  const canvasStore = useCanvasStore.getState();
+                  canvasStore.upsertDocuments([createdCanvasDocument]);
+                  canvasStore.openDocument(createdCanvasDocument.id);
+                }
+                const payloadRunId = String(payload.run_id || "").trim();
+                if (payloadRunId) {
+                  if (!streamedRunId) {
+                    streamedRunId = payloadRunId;
+                  } else if (payloadRunId !== streamedRunId) {
+                    return;
+                  }
+                }
+                const detectedPrompt = clarificationPromptFromEvent({
+                  event: payload,
+                  originalRequest: message,
+                  agentMode: effectiveMode,
+                  accessMode: effectiveAccessMode,
+                });
+                if (detectedPrompt) {
+                  setClarificationPrompt((previous: ClarificationPrompt | null) => {
+                    if (previous?.runId && previous.runId === detectedPrompt.runId) {
+                      return previous;
+                    }
+                    return detectedPrompt;
+                  });
+                }
+                streamedEvents.push(payload);
+                streamedEventsLocal = [...streamedEvents];
+                setActivityEvents([...streamedEvents]);
+                setChatTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  next[next.length - 1] = {
+                    ...(last || {}),
+                    assistant:
+                      last && String(last.assistant || "").trim() === delayedPendingAssistantMessage
+                        ? ""
+                        : String(last?.assistant || ""),
+                    activityEvents: [...streamedEvents],
+                  };
+                  return next;
+                });
+              }
+            },
+          });
+          streamedModeRequested = normalizeModeValue(
+            response.mode_requested,
+            streamedModeRequested || initialRequestedMode,
+          );
+          streamedModeActual = normalizeModeValue(
+            response.mode_actually_used || response.mode,
+            streamedModeActual || streamedModeRequested || "ask",
+          );
+          streamedHaltReason = String(response.halt_reason || streamedHaltReason || "").trim() || null;
+          streamedHaltMessage = String(response.halt_message || streamedHaltMessage || "").trim() || null;
+          streamedModeStatus = deriveModeStatus({
+            isFirstTurn,
+            requestedMode: streamedModeRequested,
+            actualMode: streamedModeActual,
+            existingStatus: streamedModeStatus,
+            message: streamedModeStatus?.message || streamedHaltMessage || null,
+          });
+        }
       } catch (streamError) {
+        if (effectiveMode === "brain") {
+          throw streamError;
+        }
         response = await sendChat(message, selectedConversationId, {
           ...sharedPayload,
           agentGoal: message,
@@ -537,20 +811,25 @@ async function sendConversationMessage({
     setChatTurns((prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
-      const effectiveReturnedMode = (response.mode as AgentMode | undefined) || effectiveMode;
+      const effectiveReturnedMode = (response.mode as AgentMode | undefined) || backendMode;
       const resolvedTurnMode: ChatTurn["mode"] =
-        effectiveReturnedMode === "deep_search" && webOnlyResearchRequested
+        effectiveMode === "brain"
+          ? "brain"
+          : effectiveReturnedMode === "deep_search" && webOnlyResearchRequested
           ? "web_search"
           : effectiveReturnedMode;
       const backendModeMismatch = orchestratorMode && effectiveReturnedMode === "ask";
-      const responseModeRequested = normalizeModeValue(
-        response.mode_requested,
-        initialRequestedMode,
-      );
-      const responseModeActual = normalizeModeValue(
-        response.mode_actually_used || effectiveReturnedMode,
-        responseModeRequested,
-      );
+      const responseModeRequested =
+        effectiveMode === "brain"
+          ? "brain"
+          : normalizeModeValue(response.mode_requested, initialRequestedMode);
+      const responseModeActual =
+        effectiveMode === "brain"
+          ? "brain"
+          : normalizeModeValue(
+              response.mode_actually_used || effectiveReturnedMode,
+              responseModeRequested,
+            );
       const haltReason = String(response.halt_reason || "").trim() || null;
       const haltMessage = String(response.halt_message || "").trim() || null;
       const modeStatus = deriveModeStatus({

@@ -186,6 +186,21 @@ export function AgentActivityPanel({
   const approvalEventId = String(approvalEvent?.event_id || "");
   const hasApprovalGate = Boolean(approvalEventId && approvalDismissed !== approvalEventId);
   const activeEventType = String(activeEvent?.event_type || "").toLowerCase();
+  const activeStageSignal = String(
+    activeEvent?.stage ??
+      activeEvent?.data?.["stage"] ??
+      activeEvent?.metadata?.["stage"] ??
+      activeEvent?.data?.["action_phase"] ??
+      activeEvent?.metadata?.["action_phase"] ??
+      activeEvent?.event_family ??
+      activeEvent?.data?.["event_family"] ??
+      activeEvent?.metadata?.["event_family"] ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  const activeEventStatus = String(activeEvent?.status || "").trim().toLowerCase();
+  const activeEventTitle = String(activeEvent?.title || "").trim().toLowerCase();
   const blockedReason = String(
     activeEvent?.data?.["blocked_reason"] ?? activeEvent?.metadata?.["blocked_reason"] ?? "",
   ).trim();
@@ -203,7 +218,10 @@ export function AgentActivityPanel({
       deriveTheatreStage({
         streaming,
         hasEvents: orderedEvents.length > 0,
-        activePhase,
+        activeStageSignal,
+        activeEventType,
+        activeEventStatus,
+        activeEventTitle,
         surfaceCommit,
         needsHumanReview: Boolean(needsHumanReview),
         hasApprovalGate,
@@ -212,7 +230,10 @@ export function AgentActivityPanel({
         hasError,
       }),
     [
-      activePhase,
+      activeEventStatus,
+      activeEventTitle,
+      activeStageSignal,
+      activeEventType,
       hasApprovalGate,
       hasError,
       isBlocked,

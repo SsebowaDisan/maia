@@ -1,10 +1,25 @@
 import type { PreviewTab } from "./types";
 import {
+  EVT_AGENT_DIALOGUE_RESOLVED,
+  EVT_AGENT_DIALOGUE_STARTED,
+  EVT_AGENT_DIALOGUE_TURN,
   EVT_AGENT_HANDOFF,
   EVT_AGENT_WAITING,
   EVT_APPROVAL_GRANTED,
   EVT_APPROVAL_REQUIRED,
+  EVT_ASSEMBLY_COMPLETED,
+  EVT_ASSEMBLY_COMPLETE,
+  EVT_ASSEMBLY_EDGE_ADDED,
+  EVT_ASSEMBLY_ERROR,
+  EVT_ASSEMBLY_STARTED,
+  EVT_ASSEMBLY_STEP_ADDED,
+  EVT_BRAIN_ANSWER_RECEIVED,
+  EVT_BRAIN_QUESTION,
+  EVT_BRAIN_REVIEW_DECISION,
+  EVT_BRAIN_REVIEW_STARTED,
+  EVT_BRAIN_REVISION_REQUESTED,
   EVT_EVENT_COVERAGE,
+  EVT_EXECUTION_STARTING,
   EVT_HANDOFF_PAUSED,
   EVT_HANDOFF_RESUMED,
   EVT_POLICY_BLOCKED,
@@ -30,7 +45,22 @@ function tabForEventType(eventType: string): PreviewTab {
     normalized === EVT_HANDOFF_RESUMED ||
     normalized === EVT_AGENT_WAITING ||
     normalized === EVT_AGENT_HANDOFF ||
-    normalized === EVT_EVENT_COVERAGE
+    normalized === EVT_EVENT_COVERAGE ||
+    normalized === EVT_BRAIN_REVIEW_STARTED ||
+    normalized === EVT_BRAIN_REVIEW_DECISION ||
+    normalized === EVT_BRAIN_REVISION_REQUESTED ||
+    normalized === EVT_BRAIN_QUESTION ||
+    normalized === EVT_BRAIN_ANSWER_RECEIVED ||
+    normalized === EVT_AGENT_DIALOGUE_TURN ||
+    normalized === EVT_AGENT_DIALOGUE_STARTED ||
+    normalized === EVT_AGENT_DIALOGUE_RESOLVED ||
+    normalized === EVT_ASSEMBLY_STARTED ||
+    normalized === EVT_ASSEMBLY_STEP_ADDED ||
+    normalized === EVT_ASSEMBLY_EDGE_ADDED ||
+    normalized === EVT_ASSEMBLY_COMPLETE ||
+    normalized === EVT_ASSEMBLY_COMPLETED ||
+    normalized === EVT_ASSEMBLY_ERROR ||
+    normalized === EVT_EXECUTION_STARTING
   ) {
     return "system";
   }

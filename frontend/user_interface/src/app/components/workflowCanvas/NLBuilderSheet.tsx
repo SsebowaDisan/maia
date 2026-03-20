@@ -8,6 +8,7 @@ type NLBuilderSheetProps = {
   error: string;
   onClose: () => void;
   onGenerate: (description: string, maxSteps: number) => Promise<void>;
+  onAssembleAndRun?: (description: string, maxSteps: number) => Promise<boolean>;
 };
 
 function NLBuilderSheet({
@@ -17,6 +18,7 @@ function NLBuilderSheet({
   error,
   onClose,
   onGenerate,
+  onAssembleAndRun,
 }: NLBuilderSheetProps) {
   const [description, setDescription] = useState("");
   const [maxSteps, setMaxSteps] = useState(8);
@@ -98,6 +100,19 @@ function NLBuilderSheet({
                 {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 Generate workflow
               </button>
+              {onAssembleAndRun ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onAssembleAndRun(description, maxSteps);
+                  }}
+                  disabled={isGenerating || !description.trim()}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-[#7c3aed]/30 bg-white px-4 py-2 text-[12px] font-semibold text-[#6d28d9] hover:bg-[#f5f3ff] disabled:opacity-60"
+                >
+                  {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  Assemble and run
+                </button>
+              ) : null}
             </div>
             {error ? <p className="text-[12px] font-medium text-[#b42318]">{error}</p> : null}
           </div>

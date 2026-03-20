@@ -11,7 +11,7 @@ Ship a reliable, non-technical-user-friendly baseline where install -> setup -> 
 3. Keep files under 500 LOC when touching code.
 4. No merge without smoke checks passing.
 
-## Day 1 - Baseline and Guardrails (In Progress)
+## Day 1 - Baseline and Guardrails (Completed)
 Owner A:
 - Publish this roadmap and execution checklist.
 - Add release smoke script for API/UI health + critical endpoints.
@@ -38,6 +38,12 @@ Owner B:
 Acceptance:
 - Reproducible pass on critical flow checklist.
 - No blocker bug in Done button or node creation path.
+
+Status update (2026-03-19):
+- Smoke release gate implemented and passing.
+- LOC reporting script implemented and report regenerated.
+- Release QA matrix added.
+- Day 2 is now the active implementation focus.
 
 ## Day 3 - Connector Reliability and Setup Consistency
 Owner A:

@@ -64,6 +64,60 @@ class SubAgentDelegateTool(AgentTool):
         else:
             return self._execute_delegate(context=context, prompt=prompt, params=params)
 
+    @staticmethod
+    def _resolve_child_agent_id(*, context: ToolExecutionContext, task: str) -> str:
+        try:
+            from api.services.agents.definition_store import list_agents
+        except Exception:
+            return ""
+
+        try:
+            rows = list_agents(context.tenant_id)
+        except Exception:
+            return ""
+
+        task_text = str(task or "").strip().lower()
+        if not isinstance(rows, list) or not rows:
+            return ""
+
+        def _score(label: str) -> int:
+            lowered = str(label or "").strip().lower()
+            if not lowered:
+                return 0
+            score = 0
+            hints: dict[str, tuple[str, ...]] = {
+                "researcher": ("research", "source", "fact", "finding", "search", "web"),
+                "analyst": ("analysis", "analy", "insight", "compare", "statistic"),
+                "writer": ("write", "draft", "report", "summary"),
+                "deliverer": ("deliver", "send", "email", "publish"),
+                "browser": ("browser", "navigate", "extract", "website"),
+            }
+            for role, keywords in hints.items():
+                if role in lowered:
+                    score += 4
+                if any(keyword in task_text for keyword in keywords) and role in lowered:
+                    score += 6
+            if lowered and lowered in task_text:
+                score += 2
+            return score
+
+        best_id = ""
+        best_score = -1
+        for row in rows:
+            candidate_id = str(getattr(row, "agent_id", None) or getattr(row, "id", None) or "").strip()
+            candidate_name = str(getattr(row, "name", None) or "").strip()
+            if not candidate_id:
+                continue
+            candidate_score = max(_score(candidate_id), _score(candidate_name))
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_id = candidate_id
+
+        if best_id:
+            return best_id
+        first = rows[0]
+        return str(getattr(first, "agent_id", None) or getattr(first, "id", None) or "").strip()
+
     # ── mode="delegate" (original behaviour) ──────────────────────────────
 
     def _execute_delegate(
@@ -80,7 +134,9 @@ class SubAgentDelegateTool(AgentTool):
         extra_context: dict[str, Any] = dict(params.get("context") or {})
 
         if not child_agent_id:
-            raise ToolExecutionError("`child_agent_id` is required.")
+            child_agent_id = self._resolve_child_agent_id(context=context, task=task)
+        if not child_agent_id:
+            raise ToolExecutionError("`child_agent_id` is required and could not be auto-resolved.")
         if not task:
             raise ToolExecutionError("`task` is required.")
 

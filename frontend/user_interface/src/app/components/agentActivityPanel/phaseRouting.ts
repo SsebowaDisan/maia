@@ -1,20 +1,4 @@
 import type { AgentActivityEvent } from "../../types";
-import {
-  EVENT_PREFIX_PREFLIGHT,
-  EVT_AGENT_HANDOFF,
-  EVT_AGENT_RESUME,
-  EVT_AGENT_WAITING,
-  EVT_APPROVAL_GRANTED,
-  EVT_APPROVAL_REQUIRED,
-  EVT_EVENT_COVERAGE,
-  EVT_HANDOFF_PAUSED,
-  EVT_HANDOFF_RESUMED,
-  EVT_INTERACTION_SUGGESTION,
-  EVT_POLICY_BLOCKED,
-  EVT_VERIFICATION_CHECK,
-  EVT_VERIFICATION_COMPLETED,
-  EVT_VERIFICATION_STARTED,
-} from "../../constants/eventTypes";
 
 const PHASE_ORDER = [
   "understanding",
@@ -38,100 +22,139 @@ type ActivityPhaseRow = {
 };
 
 const PHASE_LABELS: Record<ActivityPhaseKey, string> = {
-  understanding: "Understanding",
-  contract: "Contract",
-  clarification: "Clarification",
-  planning: "Planning",
-  execution: "Execution",
-  verification: "Verification",
-  delivery: "Delivery",
+  understanding: "Understanding your request",
+  contract: "Confirming scope",
+  clarification: "Waiting for your input",
+  planning: "Planning the approach",
+  execution: "Doing the work",
+  verification: "Checking quality",
+  delivery: "Delivering result",
 };
+
+function normalizeToken(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w.-]+/g, "_");
+}
+
+function humanizeEventLabel(event: AgentActivityEvent | null): string {
+  if (!event) {
+    return "";
+  }
+  const rawType = String(event.event_type || event.type || "").trim();
+  const rawTitle = String(event.title || "").trim();
+  const primary = rawTitle || rawType;
+  if (!primary) {
+    return "";
+  }
+  let text = primary;
+  const normalizedTitle = normalizeToken(rawTitle);
+  const normalizedType = normalizeToken(rawType);
+  if (!rawTitle || (normalizedTitle && normalizedTitle === normalizedType)) {
+    text = rawType;
+  }
+
+  text = text
+    .replace(/[._-]+/g, " ")
+    .replace(/\bllm\b/gi, "Brain")
+    .replace(/\bassembly\b/gi, "team setup")
+    .replace(/\bpreflight\b/gi, "readiness check")
+    .replace(/\bworkflow\b/gi, "workflow")
+    .replace(/\bverification\b/gi, "quality review")
+    .replace(/\bstarted\b/gi, "started")
+    .replace(/\bcompleted\b/gi, "completed")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function mapStageTokenToPhase(token: string): ActivityPhaseKey | null {
+  if (!token) {
+    return null;
+  }
+  const normalized = normalizeToken(token);
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.includes("understand") || normalized.includes("preflight")) {
+    return "understanding";
+  }
+  if (normalized.includes("contract")) {
+    return "contract";
+  }
+  if (normalized.includes("clarif")) {
+    return "clarification";
+  }
+  if (normalized.includes("plan") || normalized.includes("assembly")) {
+    return "planning";
+  }
+  if (normalized.includes("exec") || normalized.includes("run") || normalized.includes("work")) {
+    return "execution";
+  }
+  if (
+    normalized.includes("verif") ||
+    normalized.includes("review") ||
+    normalized.includes("approve") ||
+    normalized.includes("qa")
+  ) {
+    return "verification";
+  }
+  if (normalized.includes("deliver") || normalized.includes("final") || normalized.includes("publish")) {
+    return "delivery";
+  }
+  if (normalized === "plan") {
+    return "planning";
+  }
+  if (normalized === "workflow") {
+    return "execution";
+  }
+  return null;
+}
+
+function extractPhaseCandidates(event: AgentActivityEvent): string[] {
+  const data = event.data && typeof event.data === "object" ? (event.data as Record<string, unknown>) : {};
+  const metadata =
+    event.metadata && typeof event.metadata === "object"
+      ? (event.metadata as Record<string, unknown>)
+      : {};
+  return [
+    event.stage,
+    data["stage"],
+    metadata["stage"],
+    data["action_phase"],
+    metadata["action_phase"],
+    event.event_family,
+    data["event_family"],
+    metadata["event_family"],
+    event.event_type,
+    event.type,
+    event.title,
+  ]
+    .map((value) => normalizeToken(value))
+    .filter(Boolean);
+}
 
 function phaseForEvent(event: AgentActivityEvent | null): ActivityPhaseKey | null {
   if (!event) {
     return null;
   }
-  const type = String(event.event_type || "").toLowerCase();
-  const title = String(event.title || "").toLowerCase();
-
-  if (type === EVT_INTERACTION_SUGGESTION) {
+  const eventType = normalizeToken(event.event_type || event.type);
+  if (eventType === "interaction_suggestion") {
     return null;
   }
 
-  if (type.startsWith(EVENT_PREFIX_PREFLIGHT)) {
-    return "understanding";
-  }
-
-  if (
-    type === "task_understanding_started" ||
-    type === "task_understanding_ready" ||
-    type === "llm.context_summary" ||
-    type === "llm.intent_tags" ||
-    type === "llm.task_rewrite_started" ||
-    type === "llm.task_rewrite_completed"
-  ) {
-    return "understanding";
-  }
-  if (type === "llm.task_contract_started" || type === "llm.task_contract_completed") {
-    return "contract";
-  }
-  if (type === "llm.clarification_requested" || type === "llm.clarification_resolved") {
-    return "clarification";
-  }
-  if (type === EVT_POLICY_BLOCKED && title.includes("clarification")) {
-    return "clarification";
-  }
-  if (
-    type === "planning_started" ||
-    type.startsWith("plan_") ||
-    type === "llm.plan_decompose_started" ||
-    type === "llm.plan_decompose_completed" ||
-    type === "llm.web_routing_decision" ||
-    type === "llm.plan_step" ||
-    type === "llm.plan_fact_coverage"
-  ) {
-    return "planning";
-  }
-  if (
-    type.startsWith("tool_") ||
-    type.startsWith("web_") ||
-    type.startsWith("browser_") ||
-    type.startsWith("document_") ||
-    type.startsWith("pdf_") ||
-    type.startsWith("doc_") ||
-    type.startsWith("docs.") ||
-    type.startsWith("sheet_") ||
-    type.startsWith("sheets.") ||
-    type.startsWith("drive.") ||
-    type === "action_prepared"
-  ) {
-    return "execution";
-  }
-  if (
-    type === EVT_VERIFICATION_STARTED ||
-    type === EVT_VERIFICATION_CHECK ||
-    type === EVT_VERIFICATION_COMPLETED ||
-    type === EVT_APPROVAL_REQUIRED ||
-    type === EVT_APPROVAL_GRANTED ||
-    type === EVT_HANDOFF_PAUSED ||
-    type === EVT_HANDOFF_RESUMED ||
-    type === EVT_AGENT_WAITING ||
-    type === EVT_AGENT_HANDOFF ||
-    type === EVT_AGENT_RESUME ||
-    type === EVT_EVENT_COVERAGE ||
-    type === EVT_POLICY_BLOCKED
-  ) {
-    return "verification";
-  }
-  if (
-    type === "llm.delivery_check_started" ||
-    type === "llm.delivery_check_completed" ||
-    type === "llm.delivery_check_failed" ||
-    type === "email_sent" ||
-    type === "browser_contact_submit" ||
-    type === "browser_contact_confirmation"
-  ) {
-    return "delivery";
+  const candidates = extractPhaseCandidates(event);
+  for (const candidate of candidates) {
+    const phase = mapStageTokenToPhase(candidate);
+    if (phase) {
+      return phase;
+    }
   }
   return null;
 }
@@ -196,7 +219,7 @@ function derivePhaseTimeline(
       label: PHASE_LABELS[phase],
       state,
       latestEventId: String(latest?.event_id || ""),
-      latestEventTitle: String(latest?.title || ""),
+      latestEventTitle: humanizeEventLabel(latest),
     };
   });
 }

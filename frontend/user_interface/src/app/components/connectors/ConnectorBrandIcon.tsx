@@ -1,4 +1,5 @@
 import { Globe2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 type ConnectorBrandKey =
   | "google"
@@ -47,6 +48,7 @@ type BrandStyle = {
   background: string;
   color: string;
   borderColor: string;
+  localIconUrl?: string;
   iconUrl?: string;
 };
 
@@ -57,6 +59,7 @@ const _GOOGLE_PRODUCT = "https://www.gstatic.com/images/branding/product/1x/";
 const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   google: {
     text: "G", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-workspace.svg",
     iconUrl: "https://workspace.google.com/favicon.ico",
   },
   google_cloud: {
@@ -69,30 +72,37 @@ const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   google_calendar: {
     text: "31", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-calendar.svg",
     iconUrl: `${_GOOGLE_PRODUCT}calendar_48dp.png`,
   },
   google_drive: {
     text: "Dr", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-drive.svg",
     iconUrl: `${_GOOGLE_PRODUCT}drive_48dp.png`,
   },
   google_docs: {
     text: "Doc", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-docs.svg",
     iconUrl: `${_GOOGLE_PRODUCT}docs_48dp.png`,
   },
   google_sheets: {
     text: "Sh", background: "#ffffff", color: "#0f9d58", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-sheets.svg",
     iconUrl: `${_GOOGLE_PRODUCT}sheets_48dp.png`,
   },
   google_analytics: {
     text: "GA", background: "#ffffff", color: "#e37400", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-analytics.svg",
     iconUrl: `${_GOOGLE_PRODUCT}analytics_48dp.png`,
   },
   google_ads: {
     text: "Ads", background: "#ffffff", color: "#4285f4", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-ads.svg",
     iconUrl: `${_GOOGLE_PRODUCT}ads_48dp.png`,
   },
   google_maps: {
     text: "Map", background: "#ffffff", color: "#ea4335", borderColor: "#e5e7eb",
+    localIconUrl: "/icons/connectors/google-maps.svg",
     iconUrl: `${_GOOGLE_PRODUCT}maps_48dp.png`,
   },
   microsoft: {
@@ -316,6 +326,40 @@ type ConnectorBrandIconProps = {
   className?: string;
 };
 
+type ConnectorLogoImageProps = {
+  sources: string[];
+  size: number;
+  onExhausted: () => void;
+};
+
+function ConnectorLogoImage({ sources, size, onExhausted }: ConnectorLogoImageProps) {
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const activeSource = sources[sourceIndex];
+
+  if (!activeSource) {
+    return null;
+  }
+
+  return (
+    <img
+      src={activeSource}
+      alt=""
+      width={Math.round(size * 0.65)}
+      height={Math.round(size * 0.65)}
+      loading="lazy"
+      className="object-contain"
+      onError={() => {
+        const nextIndex = sourceIndex + 1;
+        if (nextIndex < sources.length) {
+          setSourceIndex(nextIndex);
+          return;
+        }
+        onExhausted();
+      }}
+    />
+  );
+}
+
 export function ConnectorBrandIcon({
   connectorId,
   brandSlug = "",
@@ -326,12 +370,19 @@ export function ConnectorBrandIcon({
   const brandKey = resolveBrandKey(connectorId, brandSlug);
   const style = BRAND_STYLE_MAP[brandKey];
   const text = style.text === "?" ? fallbackGlyph(label) : style.text;
+  const [showGlyphFallback, setShowGlyphFallback] = useState(false);
+  const iconSources = useMemo(
+    () => [style.localIconUrl, style.iconUrl].filter((value): value is string => Boolean(value)),
+    [style.localIconUrl, style.iconUrl],
+  );
+  useEffect(() => {
+    setShowGlyphFallback(false);
+  }, [brandKey, iconSources.length, label, connectorId]);
   if (brandKey === "generic") {
     return <Globe2 size={Math.max(12, size - 2)} className={`text-[#344054] ${className}`} />;
   }
 
-  // Use official logo image when available
-  if (style.iconUrl) {
+  if (iconSources.length > 0) {
     return (
       <span
         className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] border ${className}`}
@@ -344,27 +395,23 @@ export function ConnectorBrandIcon({
         aria-hidden="true"
         title={label || connectorId}
       >
-        <img
-          src={style.iconUrl}
-          alt=""
-          width={Math.round(size * 0.65)}
-          height={Math.round(size * 0.65)}
-          loading="lazy"
-          className="object-contain"
-          onError={(e) => {
-            // Fallback to letter glyph if image fails to load
-            const target = e.currentTarget;
-            target.style.display = "none";
-            const parent = target.parentElement;
-            if (parent) {
-              parent.style.background = style.background;
-              parent.style.color = style.color;
-              parent.textContent = text;
-              parent.style.fontSize = `${Math.max(9, size * 0.32)}px`;
-              parent.style.fontWeight = "700";
-            }
-          }}
-        />
+        {showGlyphFallback ? (
+          <span
+            style={{
+              color: style.color,
+              fontSize: `${Math.max(9, size * 0.32)}px`,
+              fontWeight: 700,
+            }}
+          >
+            {text}
+          </span>
+        ) : (
+          <ConnectorLogoImage
+            sources={iconSources}
+            size={size}
+            onExhausted={() => setShowGlyphFallback(true)}
+          />
+        )}
       </span>
     );
   }

@@ -7,6 +7,9 @@ describe("tabForEventType", () => {
     expect(tabForEventType("approval_granted")).toBe("system");
     expect(tabForEventType("handoff_paused")).toBe("system");
     expect(tabForEventType("handoff_resumed")).toBe("system");
+    expect(tabForEventType("brain_review_decision")).toBe("system");
+    expect(tabForEventType("agent_dialogue_turn")).toBe("system");
+    expect(tabForEventType("assembly_step_added")).toBe("system");
   });
 
   it("keeps browser/document routing unchanged", () => {

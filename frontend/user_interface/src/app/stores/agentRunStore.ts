@@ -15,24 +15,12 @@ type AgentRunStoreState = AgentRunSnapshot & {
   hydrateFromActivityEvent: (event: Record<string, unknown> | null | undefined) => void;
 };
 
-function normalizeStage(eventType: string): string {
-  const normalized = String(eventType || "").trim().toLowerCase();
+function normalizeStage(value: unknown): string {
+  const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    return "execution";
+    return "";
   }
-  if (normalized.includes("plan") || normalized.includes("preflight")) {
-    return "planning";
-  }
-  if (normalized.includes("verify") || normalized.includes("approval") || normalized.includes("handoff")) {
-    return "verification";
-  }
-  if (normalized.includes("deliver") || normalized.includes("completed")) {
-    return "delivery";
-  }
-  if (normalized.includes("error") || normalized.includes("failed")) {
-    return "error";
-  }
-  return "execution";
+  return normalized.replace(/[^\w-]+/g, "_");
 }
 
 const emptySnapshot: AgentRunSnapshot = {
@@ -58,6 +46,9 @@ const useAgentRunStore = create<AgentRunStoreState>()((set) => ({
     const data = (row["data"] as Record<string, unknown> | undefined) || {};
     const metadata = (row["metadata"] as Record<string, unknown> | undefined) || {};
     const eventType = String(row["event_type"] || row["type"] || "").trim();
+    const explicitStage = normalizeStage(
+      row["stage"] || data["stage"] || metadata["stage"] || row["event_family"] || data["event_family"],
+    );
     const runId = String(
       row["run_id"] || data["run_id"] || metadata["run_id"] || "",
     ).trim();
@@ -72,7 +63,7 @@ const useAgentRunStore = create<AgentRunStoreState>()((set) => ({
       runId: runId || state.runId,
       agentId: agentId || state.agentId,
       toolId: toolId || state.toolId,
-      stage: normalizeStage(eventType),
+      stage: explicitStage || (String(eventType || "").toLowerCase().includes("error") ? "error" : "execution"),
       eventType: eventType || state.eventType,
       updatedAt: Date.now(),
     }));
@@ -81,4 +72,3 @@ const useAgentRunStore = create<AgentRunStoreState>()((set) => ({
 
 export { useAgentRunStore };
 export type { AgentRunSnapshot };
-

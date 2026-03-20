@@ -32,6 +32,13 @@ class ConnectorCategory(str, Enum):
     project_management = "project_management"
     commerce = "commerce"
     support = "support"
+    marketing = "marketing"
+    social = "social"
+    design = "design"
+    cloud = "cloud"
+    database = "database"
+    accounting = "accounting"
+    scheduling = "scheduling"
     other = "other"
 
 
@@ -48,7 +55,8 @@ ConnectorSetupMode = Literal[
 ]
 
 ConnectorSceneFamily = Literal[
-    "email", "sheet", "document", "api", "browser", "chat", "crm", "support", "commerce"
+    "email", "sheet", "document", "api", "browser", "chat", "crm", "support",
+    "commerce", "social", "design", "cloud", "database", "scheduling", "marketing",
 ]
 
 ConnectorSetupStatus = Literal[

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { listAgents, listMarketplaceAgents } from "../../api/client";
 
 import {
+  assembleAndRunWorkflowWithStream,
   createWorkflowRecord,
   generateWorkflowFromDescription,
   listWorkflowRunHistory,
@@ -13,6 +14,14 @@ import {
   type SaveWorkflowPayload,
 } from "../../api/client/workflows";
 import type { WorkflowDefinition, WorkflowRecord, WorkflowRunRecord, WorkflowTemplate } from "../../api/client/types";
+import {
+  applyAssembleRunEventToStore,
+  formatAssembleRunLogLine,
+  readDefinitionFromAssembleRunEvent,
+  readRunId,
+  readWorkflowIdFromAssembleRunEvent,
+  type RunStoreStreamActions,
+} from "./workflowBuilder/assembleRunStream";
 import { WorkflowCanvas } from "../components/workflowCanvas/WorkflowCanvas";
 import { WorkflowGallery } from "../components/workflowCanvas/WorkflowGallery";
 import { WorkflowQuickSwitcher } from "../components/workflowCanvas/WorkflowQuickSwitcher";
@@ -116,7 +125,11 @@ export function WorkflowBuilderPage() {
   const clearRun = useWorkflowStore((state) => state.clearRun);
   const startRun = useWorkflowStore((state) => state.startRun);
   const setRunStatus = useWorkflowStore((state) => state.setRunStatus);
+  const setRunDetail = useWorkflowStore((state) => state.setRunDetail);
+  const setActiveStep = useWorkflowStore((state) => state.setActiveStep);
   const setNodeRunState = useWorkflowStore((state) => state.setNodeRunState);
+  const appendStepOutput = useWorkflowStore((state) => state.appendStepOutput);
+  const setStepResult = useWorkflowStore((state) => state.setStepResult);
   const hydrateRunOutputs = useWorkflowStore((state) => state.hydrateRunOutputs);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
 
@@ -461,6 +474,100 @@ export function WorkflowBuilderPage() {
     runInChat(message);
   };
 
+  const appendNlLogLine = useCallback((line: string) => {
+    const nextLine = String(line || "").trim();
+    if (!nextLine) {
+      return;
+    }
+    setNlStreamLog((previous) => (previous ? `${previous}\n${nextLine}` : nextLine));
+  }, []);
+
+  const assembleAndRunFromDescription = async (description: string, _maxSteps: number): Promise<boolean> => {
+    const normalizedDescription = String(description || "").trim();
+    if (!normalizedDescription) {
+      setNlError("Description is required.");
+      return false;
+    }
+
+    setView("canvas");
+    setNlGenerating(true);
+    setRunning(true);
+    setNlError("");
+    setNlStreamLog("");
+    setValidationWarningsByNodeId({});
+    clearRun();
+
+    const runActions: RunStoreStreamActions = {
+      startRun,
+      setRunStatus,
+      setRunDetail,
+      setActiveStep,
+      setNodeRunState,
+      appendStepOutput,
+      setStepResult,
+    };
+
+    let assembledDefinition: WorkflowDefinition | null = null;
+    let persistedWorkflowId = "";
+
+    try {
+      await assembleAndRunWorkflowWithStream(normalizedDescription, {
+        onEvent: (event) => {
+          appendNlLogLine(formatAssembleRunLogLine(event));
+
+          const nextWorkflowId = readWorkflowIdFromAssembleRunEvent(event);
+          if (nextWorkflowId) {
+            persistedWorkflowId = nextWorkflowId;
+          }
+
+          const nextDefinition = readDefinitionFromAssembleRunEvent(event);
+          if (nextDefinition) {
+            assembledDefinition = nextDefinition;
+            loadDefinition(nextDefinition, {
+              workflowId: persistedWorkflowId || null,
+              activeTemplateId: null,
+            });
+            setMetadata({
+              workflowId: persistedWorkflowId || null,
+              workflowName: clampWorkflowName(nextDefinition.name || "Generated workflow"),
+              workflowDescription: String(nextDefinition.description || normalizedDescription),
+              activeTemplateId: null,
+            });
+            markSaved();
+          }
+
+          if (!persistedWorkflowId) {
+            const fallbackWorkflowId = String(readRunId(event) || "").trim();
+            if (fallbackWorkflowId.startsWith("wf_")) {
+              persistedWorkflowId = fallbackWorkflowId;
+            }
+          }
+
+          applyAssembleRunEventToStore(event, runActions);
+        },
+      });
+
+      if (!assembledDefinition) {
+        throw new Error("Assemble-and-run finished without a workflow definition.");
+      }
+
+      if (persistedWorkflowId) {
+        await refreshRunHistory(persistedWorkflowId);
+      }
+
+      toast.success("Workflow assembled and executed.");
+      return true;
+    } catch (error) {
+      const message = String(error || "Assemble-and-run failed.");
+      setNlError(message);
+      toast.error(message);
+      return false;
+    } finally {
+      setNlGenerating(false);
+      setRunning(false);
+    }
+  };
+
   const generateFromDescription = async (description: string, maxSteps: number): Promise<boolean> => {
     const normalizedDescription = String(description || "").trim();
     if (!normalizedDescription) {
@@ -616,6 +723,7 @@ export function WorkflowBuilderPage() {
                 void refreshRunHistory(undefined, { append: true });
               }}
               onGenerateFromDescription={generateFromDescription}
+              onAssembleAndRunFromDescription={assembleAndRunFromDescription}
               onSelectTemplate={applyTemplate}
               onLoadRunOutputs={loadRunOutputs}
               initialAgentHintId={openPickerFromRouteHint ? initialAgentHintId : null}
@@ -716,4 +824,3 @@ export function WorkflowBuilderPage() {
     </div>
   );
 }
-

@@ -382,6 +382,14 @@ function useChatMainInteractions({
     showActionStatus("Web search mode enabled (target: 200 online sources).");
   };
 
+  const enableBrainMode = () => {
+    setAgentControlsVisible(false);
+    setDeepSearchProfile("default");
+    setActiveAgent(null);
+    onAgentModeChange("brain");
+    showActionStatus("Maia Brain mode — describe what you want and the Brain will assemble a team.");
+  };
+
   const composerMode: ComposerMode =
     agentMode === "deep_search" && deepSearchProfile === "web_search" ? "web_search" : agentMode;
 
@@ -620,6 +628,7 @@ function useChatMainInteractions({
     editingTurnIndex,
     enableAskMode,
     enableAgentMode,
+    enableBrainMode,
     enableDeepResearch,
     enableWebSearch,
     fileInputRef,

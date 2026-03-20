@@ -136,4 +136,24 @@ describe("roadmapDerivation", () => {
     expect(result.plannedRoadmapSteps[0].title.toLowerCase()).toContain("research");
     expect(result.roadmapActiveIndex).toBe(0);
   });
+
+  it("derives roadmap from assembly_step_added events", () => {
+    const events = [
+      makeEvent("assembly_step_added", {}, {
+        step_id: "step_1",
+        agent_role: "researcher",
+        description: "Gather reputable machine-learning sources.",
+      }),
+      makeEvent("assembly_step_added", {}, {
+        step_id: "step_2",
+        agent_role: "writer",
+        description: "Draft a clear email-ready report.",
+      }),
+    ];
+    const result = derivePlannedRoadmap(events);
+    expect(result.plannedRoadmapSteps).toHaveLength(2);
+    expect(result.plannedRoadmapSteps[0].toolId).toBe("step_1");
+    expect(result.plannedRoadmapSteps[0].title.toLowerCase()).toContain("researcher");
+    expect(result.plannedRoadmapSteps[1].title.toLowerCase()).toContain("writer");
+  });
 });

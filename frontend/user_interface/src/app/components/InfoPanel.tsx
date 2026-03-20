@@ -6,6 +6,7 @@ import { parseEvidence } from "../utils/infoInsights";
 import type { EvidenceCard } from "../utils/infoInsights";
 import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { MindmapArtifactDialog } from "./MindmapArtifactDialog";
+import { TeamConversationTab } from "./agentActivityPanel/TeamConversationTab";
 import { getMindmapPayload } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
 import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
@@ -69,6 +70,7 @@ export function InfoPanel({
   infoPanel = {},
   mindmap = {},
   activityEvents = [],
+  activityRunId = null,
   sourcesUsed = [],
   sourceUsage = [],
   indexId = null,
@@ -212,6 +214,21 @@ export function InfoPanel({
     () => toMindmapPayload(workspaceGraphPayload as Record<string, unknown>),
     [workspaceGraphPayload],
   );
+  const conversationRunId = useMemo(() => {
+    const explicit = String(activityRunId || "").trim();
+    if (explicit) {
+      return explicit;
+    }
+    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
+      const runId = String(activityEvents[index]?.run_id || "").trim();
+      if (runId) {
+        return runId;
+      }
+    }
+    return "";
+  }, [activityEvents, activityRunId]);
+  const showTeamConversation = Boolean(conversationRunId) || activityEvents.length > 0;
+  const showEvidenceSurfaces = Boolean(citationFocus);
   const mindmapSummary = useMemo(
     () => buildMindmapArtifactSummary(typedMindmapPayload),
     [typedMindmapPayload],
@@ -372,14 +389,23 @@ export function InfoPanel({
     >
       <div className="border-b border-black/[0.06] px-5 py-4">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">Evidence</p>
-          <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Sources</h3>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+            {showEvidenceSurfaces ? "Evidence" : "Dialogue"}
+          </p>
+          <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">
+            {showEvidenceSurfaces ? "Sources" : "Conversation"}
+          </h3>
         </div>
       </div>
 
       <div className="relative min-h-0 flex-1">
         <div ref={contentViewportRef} className="h-full space-y-4 overflow-y-auto overscroll-none px-5 pb-10 pt-5">
-          <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-4 shadow-sm">
+          {showTeamConversation ? (
+            <TeamConversationTab runId={conversationRunId} events={activityEvents} />
+          ) : null}
+
+          {showEvidenceSurfaces ? (
+            <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
@@ -446,10 +472,15 @@ export function InfoPanel({
                 No mindmap artifact was produced for this answer yet. Research-heavy or comparative questions will populate this surface when the backend emits a structured map.
               </div>
             )}
-          </section>
+            </section>
+          ) : (
+            <section className="rounded-2xl border border-[#e4e7ec] bg-white px-4 py-3 text-[12px] text-[#667085]">
+              Click a citation in the assistant answer to open source evidence in this panel.
+            </section>
+          )}
 
           {/* Citation page preview */}
-          {activeCitation ? (
+          {showEvidenceSurfaces && activeCitation ? (
             <div ref={citationPanelRef}>
               <CitationPreviewPanel
                 citationFocus={activeCitation}
@@ -491,7 +522,7 @@ export function InfoPanel({
                 renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
               />
             </div>
-          ) : sources.length > 0 ? (
+          ) : showEvidenceSurfaces && sources.length > 0 ? (
             <div className="rounded-xl border border-black/[0.06] bg-white p-4 text-center text-[12px] text-[#6e6e73]">
               Click any citation in the answer to preview the source page here.
             </div>
@@ -504,9 +535,13 @@ export function InfoPanel({
       <div className="shrink-0 border-t border-black/[0.06] bg-[#f6f6f7] px-3 py-3">
         <div className="flex h-9 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] text-[#6e6e73]">
           <span className="truncate">
-            {sources.length > 0
-              ? `${sources.length} source${sources.length !== 1 ? "s" : ""}`
-              : "No sources"}
+            {showEvidenceSurfaces
+              ? sources.length > 0
+                ? `${sources.length} source${sources.length !== 1 ? "s" : ""}`
+                : "No sources"
+              : showTeamConversation
+                ? "Team conversation live"
+                : "No conversation yet"}
           </span>
         </div>
       </div>

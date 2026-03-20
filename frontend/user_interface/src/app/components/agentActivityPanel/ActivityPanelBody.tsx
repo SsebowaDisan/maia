@@ -1,6 +1,12 @@
 import { useState, type RefObject } from "react";
+import { toast } from "sonner";
+
+import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
+import { readEventPayload } from "../../utils/eventPayload";
 import { ApprovalGateCard } from "./ApprovalGateCard";
 import { AgentHandoffRelay } from "./AgentHandoffRelay";
+import { AssemblyProgressPanel } from "./AssemblyProgressPanel";
+import { BrainReviewPanel } from "./BrainReviewPanel";
 import { DesktopViewer } from "./DesktopViewer";
 import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
 import { PhaseTimeline } from "./PhaseTimeline";
@@ -80,6 +86,8 @@ function ActivityPanelBody({
   onReplayStep,
 }: ActivityPanelBodyProps) {
   const [panelTab, setPanelTab] = useState<"timeline" | "conversation">("timeline");
+  const conversationRunId =
+    String(activityRunId || "").trim() || String(orderedEvents[orderedEvents.length - 1]?.run_id || "").trim();
 
   return (
     <>
@@ -101,6 +109,10 @@ function ActivityPanelBody({
         roadmapActiveIndex={roadmapActiveIndex}
         streaming={streaming}
       />
+
+      <AssemblyProgressPanel events={orderedEvents} activeEvent={activeEvent} />
+
+      <BrainReviewPanel events={orderedEvents} />
 
       {(theatreStage === "review" || theatreStage === "confirm") ? (
         <div className="mt-3 rounded-2xl border border-[#e3e5e8] bg-white px-4 py-3">
@@ -172,8 +184,8 @@ function ActivityPanelBody({
         </>
       ) : null}
 
-      {panelTab === "conversation" && activityRunId ? (
-        <TeamConversationTab runId={activityRunId} events={orderedEvents} />
+      {panelTab === "conversation" ? (
+        <TeamConversationTab runId={conversationRunId} events={orderedEvents} />
       ) : null}
 
       <FullscreenViewerOverlay
@@ -200,17 +212,53 @@ function ActivityPanelBody({
         if (!streaming || !approvalEvent) return null;
         const eventId = String(approvalEvent.event_id || "");
         if (approvalDismissed === eventId) return null;
-        const payload = ((approvalEvent.data ?? approvalEvent.metadata) ?? {}) as Record<string, unknown>;
+        const payload = readEventPayload(approvalEvent);
         const rawGate = String(payload.gate_color ?? payload.trust_gate_color ?? "amber").trim();
         const gateColor: "amber" | "red" = rawGate === "red" ? "red" : "amber";
         const trustScore = Number(payload.trust_score ?? 0.5);
         const reason = String(payload.reason ?? payload.message ?? "").trim();
+        const runId = String(
+          approvalEvent.run_id || payload.run_id || payload.active_run_id || payload.session_run_id || "",
+        ).trim();
+        const gateId = String(payload.gate_id || payload.pending_gate_id || payload.id || eventId).trim();
+        const actionLabel = String(
+          payload.action_label || payload.tool_label || payload.tool_id || approvalEvent.title || "Pending action",
+        ).trim();
+        const paramsPreview = String(
+          payload.params_preview || payload.preview_text || payload.detail || approvalEvent.detail || "",
+        ).trim();
+        const preview = payload.preview && typeof payload.preview === "object"
+          ? (payload.preview as Record<string, unknown>)
+          : null;
+
         return (
           <ApprovalGateCard
             trustScore={trustScore}
             gateColor={gateColor}
             reason={reason}
-            onApprove={() => setApprovalDismissed(eventId)}
+            actionLabel={actionLabel}
+            paramsPreview={paramsPreview}
+            preview={preview}
+            onApprove={async (editedPreviewText) => {
+              if (runId && gateId) {
+                await approveAgentRunGate(
+                  runId,
+                  gateId,
+                  editedPreviewText
+                    ? { edited_preview: String(editedPreviewText || "").trim() }
+                    : undefined,
+                );
+                toast.success("Approval submitted.");
+              }
+              setApprovalDismissed(eventId);
+            }}
+            onReject={async () => {
+              if (runId && gateId) {
+                await rejectAgentRunGate(runId, gateId);
+                toast.success("Action rejected.");
+              }
+              setApprovalDismissed(eventId);
+            }}
             onCancel={() => setApprovalDismissed(eventId)}
           />
         );

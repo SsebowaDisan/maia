@@ -233,6 +233,14 @@ from api.routers.slack_inbound import router as slack_inbound_router
 app.include_router(agent_memory_router)
 app.include_router(webhook_triggers_router)
 app.include_router(dashboard_router)
+
+
+@app.post("/api/admin/seed-marketplace", tags=["admin"])
+def seed_marketplace(count: int = 10000):
+    """Seed the marketplace with generated agent definitions. Admin only."""
+    from api.services.marketplace.seed_agents import seed_marketplace as _seed
+    created = _seed(count=min(count, 10000))
+    return {"created": created, "requested": count}
 app.include_router(slack_inbound_router)
 
 # Enterprise routers

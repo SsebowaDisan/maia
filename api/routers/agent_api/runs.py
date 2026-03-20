@@ -187,7 +187,19 @@ def get_agent_run_collaboration(
         if not isinstance(payload, dict):
             continue
         event_type = str(payload.get("event_type") or "").strip().lower()
-        if event_type not in {"agent_collaboration", "agent_handoff", "agent.handoff"}:
+        if event_type not in {
+            "agent_collaboration",
+            "agent_handoff",
+            "agent.handoff",
+            "agent_dialogue_started",
+            "agent_dialogue_turn",
+            "agent_dialogue_resolved",
+            "brain_review_started",
+            "brain_review_decision",
+            "brain_revision_requested",
+            "brain_question",
+            "brain_answer_received",
+        }:
             continue
 
         data = payload.get("data")
@@ -206,12 +218,37 @@ def get_agent_run_collaboration(
         ).strip()
         message = str(
             data_map.get("message")
+            or data_map.get("question")
+            or data_map.get("answer")
+            or data_map.get("reasoning")
+            or data_map.get("feedback")
             or data_map.get("summary")
             or payload.get("detail")
             or payload.get("title")
             or ""
         ).strip()
         timestamp = data_map.get("timestamp") or payload.get("timestamp") or payload.get("ts")
+        turn_type = str(data_map.get("turn_type") or "").strip().lower()
+        turn_role = str(data_map.get("turn_role") or "").strip().lower()
+        if event_type == "agent_dialogue_turn":
+            if turn_role in {"request", "response", "integration", "review", "handoff", "message"}:
+                entry_type = turn_role
+            elif turn_type.endswith("_response") or turn_type.endswith("_answer") or turn_type == "answer":
+                entry_type = "response"
+            elif turn_type.endswith("_request") or turn_type.endswith("_question") or turn_type == "question":
+                entry_type = "question"
+            else:
+                entry_type = turn_type or "message"
+        elif event_type == "brain_question":
+            entry_type = "question"
+        elif event_type == "brain_answer_received":
+            entry_type = "response"
+        elif event_type == "brain_revision_requested":
+            entry_type = "disagreement"
+        elif "handoff" in event_type:
+            entry_type = "handoff"
+        else:
+            entry_type = "message"
 
         fallback_entries.append(
             {
@@ -219,9 +256,14 @@ def get_agent_run_collaboration(
                 "from_agent": from_agent or "agent",
                 "to_agent": to_agent or "agent",
                 "message": message or "Agent handoff",
-                "entry_type": "handoff" if "handoff" in event_type else "message",
+                "entry_type": entry_type,
                 "timestamp": timestamp,
-                "metadata": data_map,
+                "metadata": {
+                    **data_map,
+                    "turn_role": turn_role,
+                    "turn_type": turn_type,
+                    "interaction_label": str(data_map.get("interaction_label") or "").strip(),
+                },
             }
         )
 

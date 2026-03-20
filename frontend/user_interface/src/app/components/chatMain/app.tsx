@@ -29,6 +29,7 @@ import {
   resolveCitationFocusFromAnchor,
   shouldOpenCitationSourceUrlForPointerEvent,
 } from "./citationFocus";
+import { readEventPayload } from "../../utils/eventPayload";
 import type { ChatMainProps } from "./types";
 import { TurnsPanel } from "./TurnsPanel";
 import { useChatMainInteractions } from "./useChatMainInteractions";
@@ -123,9 +124,8 @@ function ChatMain({
     for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
       const event = orderedEvents[index];
       const eventType = String(event?.event_type || event?.type || "").trim().toLowerCase();
-      const data = (event?.data || {}) as Record<string, unknown>;
-      const metadata = (event?.metadata || {}) as Record<string, unknown>;
-      const gateId = String(data.gate_id || metadata.gate_id || "").trim();
+      const payload = readEventPayload(event);
+      const gateId = String(payload.gate_id || "").trim();
       if (eventType === "gate_approved" || eventType === "gate_rejected" || eventType === "gate_resolved") {
         if (gateId) {
           resolvedGates.add(gateId);
@@ -136,25 +136,24 @@ function ChatMain({
       if (!isApprovalEvent || (gateId && resolvedGates.has(gateId))) {
         continue;
       }
-      const runId = String(event?.run_id || data.run_id || metadata.run_id || "").trim();
-      const toolId = String(data.tool_id || metadata.tool_id || event.title || "tool").trim();
-      const previewPayload = ((data.preview || metadata.preview) ?? null) as
+      const runId = String(event?.run_id || payload.run_id || "").trim();
+      const toolId = String(payload.tool_id || payload.action_label || event.title || "tool").trim();
+      const previewPayload = (payload.preview ?? null) as
         | Record<string, unknown>
         | null;
       const paramsPreview = toPreviewText(
-        data.params_preview ||
-          metadata.params_preview ||
+        payload.params_preview ||
           previewPayload ||
           event.detail ||
           "Review tool call parameters before continuing.",
       );
-      const numericCost = Number(data.cost_estimate ?? metadata.cost_estimate ?? Number.NaN);
+      const numericCost = Number(payload.cost_estimate ?? Number.NaN);
       latestPending = {
         runId: runId || activeRunId || "",
         gateId,
         toolId: toolId || "tool",
         paramsPreview: paramsPreview || "Review tool call parameters before continuing.",
-        actionLabel: String(data.action_label || metadata.action_label || "").trim() || undefined,
+        actionLabel: String(payload.action_label || "").trim() || undefined,
         preview: previewPayload,
         costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
       };
@@ -473,7 +472,11 @@ function ChatMain({
     return () => window.clearTimeout(timer);
   }, [chatTurns.length]);
 
-  const composerVisible = !composerCollapsed || composerHovering || composerFocused;
+  // Hide composer when Brain is actively working — show on hover
+  const isBrainActive = interactions.composerMode === "brain" && isActivityStreaming;
+  const composerVisible = isBrainActive
+    ? composerHovering || composerFocused
+    : !composerCollapsed || composerHovering || composerFocused;
 
   const handleSelectWorkflow = useCallback(
     (workflow: WorkflowCommandSelection) => {
@@ -523,8 +526,8 @@ function ChatMain({
                 actionLabel={pendingGate.actionLabel}
                 preview={pendingGate.preview}
                 costEstimateUsd={pendingGate.costEstimateUsd}
-                onApprove={async (runId, gateId) => {
-                  await approveAgentRunGate(runId, gateId);
+                onApprove={async (runId, gateId, editedParams) => {
+                  await approveAgentRunGate(runId, gateId, editedParams);
                 }}
                 onReject={async (runId, gateId) => {
                   await rejectAgentRunGate(runId, gateId);
@@ -578,8 +581,13 @@ function ChatMain({
         onMouseEnter={() => setComposerHovering(true)}
         onMouseLeave={() => setComposerHovering(false)}
       >
+        {!composerVisible && isBrainActive ? (
+          <div className="flex justify-center py-1.5">
+            <div className="h-1 w-10 rounded-full bg-black/[0.08]" />
+          </div>
+        ) : null}
         {composerVisible ? (
-          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-3 pt-2">
+          <div className={`border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-3 pt-2 ${isBrainActive ? "transition-opacity duration-200" : ""}`}>
             <ComposerPanel
               accessMode={accessMode}
               agentControlsVisible={interactions.agentControlsVisible}
@@ -590,6 +598,7 @@ function ChatMain({
               removeAttachment={interactions.removeAttachment}
               enableAskMode={interactions.enableAskMode}
               enableAgentMode={interactions.enableAgentMode}
+              enableBrainMode={interactions.enableBrainMode}
               enableWebSearch={interactions.enableWebSearch}
               enableDeepResearch={interactions.enableDeepResearch}
               activeAgent={interactions.activeAgent}

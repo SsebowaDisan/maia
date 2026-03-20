@@ -238,11 +238,26 @@ function sceneSurfaceFromEvent(event: AgentActivityEvent | null): string {
   if (!event) {
     return "";
   }
-  return (
+  const explicitSurface =
     eventMetadataString(event, "scene_surface") ||
     readStringField(event.data?.["scene_surface"]) ||
-    ""
-  );
+    "";
+  if (explicitSurface) {
+    return explicitSurface;
+  }
+  const sceneFamily =
+    eventMetadataString(event, "scene_family") ||
+    readStringField(event.data?.["scene_family"]) ||
+    "";
+  const family = normalizeToken(sceneFamily);
+  if (family === "email") return "email";
+  if (family === "sheet") return "google_sheets";
+  if (family === "document") return "google_docs";
+  if (family === "browser") return "website";
+  if (family === "api" || family === "chat" || family === "crm" || family === "support" || family === "commerce") {
+    return "api";
+  }
+  return "";
 }
 
 function cursorFromEvent(event: AgentActivityEvent | null): { x: number; y: number } | null {

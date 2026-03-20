@@ -65,7 +65,7 @@ def execute_workflow(
     try:
         from api.services.workflows.per_worker_cost import WorkflowCostTracker
         cost_tracker = WorkflowCostTracker(run_id=effective_run_id)
-        ctx.set("__cost_tracker", cost_tracker)
+        ctx.write("__cost_tracker", cost_tracker)
     except Exception:
         pass
 
@@ -73,6 +73,25 @@ def execute_workflow(
         ordered_ids = workflow.topological_order()
     except ValueError as exc:
         raise WorkflowExecutionError(str(exc)) from exc
+
+    # Store workflow agent IDs/roster in context for real cross-agent collaboration.
+    workflow_agent_ids = list({s.agent_id for s in workflow.steps if s.agent_id})
+    workflow_agent_roster: list[dict[str, str]] = []
+    seen_agent_ids: set[str] = set()
+    for step in workflow.steps:
+        agent_id = str(step.agent_id or "").strip()
+        if not agent_id or agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        workflow_agent_roster.append(
+            {
+                "agent_id": agent_id,
+                "step_id": str(step.step_id or "").strip(),
+                "step_description": str(step.description or "").strip(),
+            }
+        )
+    ctx.write("__workflow_agent_ids", workflow_agent_ids)
+    ctx.write("__workflow_agent_roster", workflow_agent_roster)
 
     # Dynamic dependency tracking for runtime unblocking visibility
     task_dag = None
@@ -442,7 +461,415 @@ def _run_quality_gate(
         pass
 
 
+# ── Brain review — reviews agent output between workflow steps ─────────────────
+
+def _run_brain_review(
+    step: WorkflowStep,
+    result: Any,
+    step_inputs: dict[str, Any],
+    tenant_id: str,
+    run_id: str,
+    on_event: Optional[Callable],
+) -> Any:
+    """Run Brain review loop on agent step output. Returns potentially revised output."""
+    if step.step_type not in ("agent", ""):
+        return result
+    text_result = str(result or "")
+    if len(text_result) < 50:
+        return result
+    try:
+        import os
+        if os.getenv("MAIA_BRAIN_REVIEW_ENABLED", "true").strip().lower() in ("false", "0", "no"):
+            return result
+
+        from api.services.agent.brain.review_loop import brain_review_loop
+
+        original_task = str(step_inputs.get("message") or step_inputs.get("task") or step.description or "")
+
+        def _run_agent_as(target_agent: str, prompt: str) -> str:
+            agent_id = str(target_agent or "").strip() or str(step.agent_id or step.step_id).strip()
+            if not agent_id:
+                return ""
+            agent_output = _run_agent_step(
+                agent_id,
+                {"message": prompt},
+                tenant_id,
+                on_event,
+            )
+            return str(agent_output or "")
+
+        def _rerun_agent(prompt: str) -> str:
+            # Re-run with the same agent profile rather than a generic LLM call.
+            current_agent_id = str(step.agent_id or step.step_id).strip()
+            return _run_agent_as(current_agent_id, prompt)
+
+        reviewed_output, review_history = brain_review_loop(
+            agent_id=step.agent_id or step.step_id,
+            step_id=step.step_id,
+            step_description=step.description,
+            original_task=original_task,
+            initial_output=text_result,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            on_event=on_event,
+            run_agent_fn=_rerun_agent,
+        )
+        # Record review stats for the run summary
+        if review_history:
+            revisions = sum(1 for r in review_history if r.get("decision") == "revise")
+            questions = sum(1 for r in review_history if r.get("decision") == "question")
+            if revisions or questions:
+                _emit(on_event, {
+                    "event_type": "brain_review_summary",
+                    "step_id": step.step_id,
+                    "data": {"revisions": revisions, "questions": questions, "rounds": len(review_history)},
+                })
+
+        # Dialogue detection — check if agent needs input from a teammate
+        reviewed_output = _run_dialogue_detection(
+            step,
+            reviewed_output,
+            tenant_id,
+            run_id,
+            on_event,
+            run_agent_for_agent_fn=_run_agent_as,
+        )
+
+        return reviewed_output
+    except Exception as exc:
+        logger.debug("Brain review skipped: %s", exc)
+        return result
+
+
+# ── Dialogue detection — check if agents should talk to each other ─────────────
+
+def _run_dialogue_detection(
+    step: WorkflowStep,
+    output: str,
+    tenant_id: str,
+    run_id: str,
+    on_event: Optional[Callable],
+    run_agent_for_agent_fn: Optional[Callable[[str, str], str]] = None,
+) -> str:
+    """Detect if the agent needs input from a teammate and facilitate the dialogue."""
+    try:
+        import os
+        if os.getenv("MAIA_DIALOGUE_ENABLED", "true").strip().lower() in ("false", "0", "no"):
+            return output
+
+        from api.services.agent.brain.dialogue_detector import (
+            detect_dialogue_needs,
+            evaluate_dialogue_follow_up,
+        )
+        from api.services.agent.dialogue_turns import get_dialogue_service
+
+        # Get available agent roles from the workflow run context
+        try:
+            from api.services.agents.workflow_context import WorkflowRunContext
+            run_ctx = WorkflowRunContext(run_id) if run_id else None
+            available_agents = run_ctx.read("__workflow_agent_ids") if run_ctx else []
+            available_roster = run_ctx.read("__workflow_agent_roster") if run_ctx else []
+        except Exception:
+            available_agents = []
+            available_roster = []
+        if not isinstance(available_agents, list):
+            available_agents = []
+        if not available_agents:
+            return output
+        if not isinstance(available_roster, list):
+            available_roster = []
+
+        needs = detect_dialogue_needs(
+            agent_output=output,
+            current_agent=step.agent_id or step.step_id,
+            available_agents=available_agents,
+            agent_roster=available_roster,
+            step_description=step.description,
+            tenant_id=tenant_id,
+        )
+        if not needs:
+            return output
+
+        dialogue_svc = get_dialogue_service()
+        source_agent = str(step.agent_id or step.step_id or "agent").strip() or "agent"
+        enrichments: list[str] = []
+
+        for need in needs:
+            target = need.get("target_agent", "")
+            question = need.get("question", "")
+            if not target or not question:
+                continue
+            interaction_type = _normalize_dialogue_turn_type(need.get("interaction_type", "question"))
+            interaction_label = str(need.get("interaction_label", "")).strip() or _default_interaction_label(interaction_type)
+            scene_family = _normalize_dialogue_scene_family(need.get("scene_family"))
+            scene_surface = _normalize_dialogue_scene_surface(need.get("scene_surface"), scene_family=scene_family)
+            operation_label = str(need.get("operation_label", "")).strip()[:160]
+            action = _dialogue_action_for_surface(scene_surface=scene_surface, scene_family=scene_family)
+            reason = str(need.get("reason", "")).strip()
+            request_text = question
+            if reason:
+                request_text = f"{question}\n\nWhy this matters: {reason}"
+            prompt_preamble = _build_dialogue_prompt_preamble(
+                interaction_label=interaction_label,
+                reason=reason,
+            )
+            response_turn_type = _derive_response_turn_type(interaction_type)
+
+            _emit(on_event, {
+                "event_type": "agent_dialogue_started",
+                "title": f"{source_agent} needs input from {target}",
+                "detail": request_text[:200],
+                "data": {
+                    "from_agent": source_agent,
+                    "to_agent": target,
+                    "run_id": run_id,
+                    "turn_role": "request",
+                    "turn_type": interaction_type,
+                    "interaction_type": interaction_type,
+                    "interaction_label": interaction_label,
+                    "scene_family": scene_family,
+                    "scene_surface": scene_surface,
+                    "operation_label": operation_label or interaction_label,
+                    "action": action,
+                    "action_phase": "active",
+                    "action_status": "in_progress",
+                },
+            })
+
+            answer = dialogue_svc.ask(
+                run_id=run_id,
+                from_agent=source_agent,
+                to_agent=target,
+                question=request_text,
+                tenant_id=tenant_id,
+                on_event=on_event,
+                answer_fn=run_agent_for_agent_fn,
+                ask_turn_type=interaction_type,
+                answer_turn_type=response_turn_type,
+                ask_turn_role="request",
+                answer_turn_role="response",
+                interaction_label=interaction_label,
+                scene_family=scene_family,
+                scene_surface=scene_surface,
+                operation_label=operation_label,
+                action=action,
+                action_phase="active",
+                action_status="in_progress",
+                prompt_preamble=prompt_preamble,
+            )
+
+            follow_up = evaluate_dialogue_follow_up(
+                source_agent=source_agent,
+                target_agent=target,
+                interaction_type=interaction_type,
+                initial_request=request_text,
+                teammate_response=str(answer or ""),
+                source_output=str(output or ""),
+                tenant_id=tenant_id,
+            )
+            if follow_up.get("requires_follow_up") and run_agent_for_agent_fn:
+                follow_up_prompt = str(follow_up.get("follow_up_prompt", "")).strip()
+                follow_up_type = _normalize_dialogue_turn_type(
+                    follow_up.get("follow_up_type", interaction_type),
+                )
+                follow_up_label = (
+                    str(follow_up.get("follow_up_label", "")).strip()
+                    or str(follow_up.get("reason", "")).strip()
+                    or interaction_label
+                )
+                follow_up_scene_family = scene_family
+                follow_up_scene_surface = scene_surface
+                follow_up_operation_label = operation_label
+                follow_up_action = action
+                if follow_up_prompt:
+                    answer = dialogue_svc.ask(
+                        run_id=run_id,
+                        from_agent=source_agent,
+                        to_agent=target,
+                        question=follow_up_prompt,
+                        tenant_id=tenant_id,
+                        on_event=on_event,
+                        answer_fn=run_agent_for_agent_fn,
+                        ask_turn_type=follow_up_type,
+                        answer_turn_type=_derive_response_turn_type(follow_up_type),
+                        ask_turn_role="request",
+                        answer_turn_role="response",
+                        interaction_label=follow_up_label,
+                        scene_family=follow_up_scene_family,
+                        scene_surface=follow_up_scene_surface,
+                        operation_label=follow_up_operation_label,
+                        action=follow_up_action,
+                        action_phase="active",
+                        action_status="in_progress",
+                        prompt_preamble=_build_dialogue_prompt_preamble(
+                            interaction_label=follow_up_label,
+                            reason=str(follow_up.get("reason", "")).strip(),
+                        ),
+                    )
+
+            integrated = False
+            if run_agent_for_agent_fn:
+                try:
+                    integration_prompt = (
+                        f"You are {source_agent}. You asked teammate {target}: {question}\n\n"
+                        f"Teammate answer:\n{answer}\n\n"
+                        f"Your current step output:\n{output[:3500]}\n\n"
+                        "Revise your output to integrate valid teammate insights. "
+                        "If you disagree with a point, state why with evidence."
+                    )
+                    revised_output = run_agent_for_agent_fn(source_agent, integration_prompt)
+                    revised_text = str(revised_output or "").strip()
+                    if revised_text:
+                        output = revised_text
+                        integrated = True
+                        _emit(on_event, {
+                            "event_type": "agent_dialogue_turn",
+                            "title": f"{source_agent} integrated teammate input",
+                            "detail": revised_text[:300],
+                            "stage": "execute",
+                            "status": "info",
+                            "data": {
+                                "run_id": run_id,
+                                "from_agent": source_agent,
+                                "to_agent": "team",
+                                "turn_type": "integration",
+                                "turn_role": "integration",
+                                "interaction_label": "integrated teammate feedback",
+                                "scene_family": scene_family,
+                                "scene_surface": scene_surface,
+                                "operation_label": operation_label or "Integrate teammate feedback",
+                                "action": action,
+                                "action_phase": "completed",
+                                "action_status": "ok",
+                                "message": revised_text[:1000],
+                            },
+                        })
+                except Exception as exc:
+                    logger.debug("Dialogue integration skipped: %s", exc)
+
+            if not integrated:
+                enrichments.append(f"[From {target}]: {answer}")
+
+            _emit(on_event, {
+                "event_type": "agent_dialogue_resolved",
+                "title": f"Dialogue resolved: {source_agent} ← {target}",
+                "detail": answer[:200],
+                "data": {
+                    "from_agent": target,
+                    "to_agent": source_agent,
+                    "run_id": run_id,
+                    "turn_role": "response",
+                    "scene_family": scene_family,
+                    "scene_surface": scene_surface,
+                    "operation_label": operation_label or interaction_label,
+                    "action": action,
+                    "action_phase": "completed",
+                    "action_status": "ok",
+                },
+            })
+
+        if enrichments:
+            output = f"{output}\n\n--- Additional context from team dialogue ---\n" + "\n".join(enrichments)
+
+        return output
+    except Exception as exc:
+        logger.debug("Dialogue detection skipped: %s", exc)
+        return output
+
+
 # ── Evolution store — record lessons from failures ────────────────────────────
+
+def _normalize_dialogue_turn_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "question"
+    return "_".join(part for part in raw.replace("-", "_").split("_") if part) or "question"
+
+
+def _derive_response_turn_type(request_turn_type: str) -> str:
+    normalized = _normalize_dialogue_turn_type(request_turn_type)
+    if normalized.endswith("_request"):
+        return f"{normalized[:-8]}_response".strip("_")
+    if normalized.endswith("_question"):
+        return f"{normalized[:-9]}_response".strip("_")
+    if normalized.endswith("_response") or normalized.endswith("_answer"):
+        return normalized
+    if normalized in {"question", "request"}:
+        return "response"
+    return f"{normalized}_response"
+
+
+def _default_interaction_label(turn_type: str) -> str:
+    normalized = _normalize_dialogue_turn_type(turn_type)
+    if normalized.endswith("_request"):
+        normalized = normalized[:-8]
+    return normalized.replace("_", " ").strip() or "teammate input"
+
+
+def _normalize_dialogue_scene_family(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    allowed = {
+        "email",
+        "sheet",
+        "document",
+        "api",
+        "browser",
+        "chat",
+        "crm",
+        "support",
+        "commerce",
+    }
+    return normalized if normalized in allowed else ""
+
+
+def _normalize_dialogue_scene_surface(value: Any, *, scene_family: str = "") -> str:
+    normalized = str(value or "").strip().lower()
+    allowed = {"email", "google_sheets", "google_docs", "api", "website", "system"}
+    if normalized in allowed:
+        return normalized
+
+    family = _normalize_dialogue_scene_family(scene_family)
+    if family == "email":
+        return "email"
+    if family == "sheet":
+        return "google_sheets"
+    if family == "document":
+        return "google_docs"
+    if family == "browser":
+        return "website"
+    if family in {"api", "chat", "crm", "support", "commerce"}:
+        return "api"
+    return ""
+
+
+def _dialogue_action_for_surface(*, scene_surface: str, scene_family: str) -> str:
+    surface = str(scene_surface or "").strip().lower()
+    family = _normalize_dialogue_scene_family(scene_family)
+    if surface == "email" or family == "email":
+        return "type"
+    if surface in {"google_docs", "google_sheets"} or family in {"document", "sheet"}:
+        return "type"
+    if surface == "website" or family == "browser":
+        return "navigate"
+    if surface == "api" or family in {"api", "chat", "crm", "support", "commerce"}:
+        return "verify"
+    return "other"
+
+
+def _build_dialogue_prompt_preamble(*, interaction_label: str, reason: str) -> str:
+    label = str(interaction_label or "").strip()
+    reason_text = str(reason or "").strip()
+    if label and reason_text:
+        return (
+            f"Collaboration style: {label}. "
+            f"Respond with the evidence, correction, or revision needed. Context: {reason_text}"
+        )
+    if label:
+        return f"Collaboration style: {label}. Respond clearly with concrete supporting detail."
+    if reason_text:
+        return f"Respond with concise, actionable input. Context: {reason_text}"
+    return "Respond with concise, actionable teammate input."
+
 
 def _record_failure_lesson(tenant_id: str, step: WorkflowStep, error: str, run_id: str) -> None:
     """Record a lesson when a step fails, for cross-run learning."""
@@ -477,6 +904,8 @@ def _run_step_with_retry(
             # Validate output contract + quality gate
             _validate_stage_contract(step, "output", result if isinstance(result, dict) else {}, workflow_id, on_event)
             _run_quality_gate(step, result, workflow_id, on_event)
+            # Brain review for agent steps
+            result = _run_brain_review(step, result, step_inputs, tenant_id, run_id, on_event)
             return result
         except Exception as exc:
             last_exc = exc
@@ -539,7 +968,13 @@ def _dispatch_step(
         pass
 
     if step.step_type == "agent" or not step.step_type:
-        return _run_agent_step(step.agent_id, step_inputs, tenant_id, on_event)
+        return _run_agent_step(
+            step.agent_id,
+            step_inputs,
+            tenant_id,
+            on_event,
+            step=step,
+        )
 
     from api.services.workflows.nodes import get_handler
     handler = get_handler(step.step_type)
@@ -553,6 +988,7 @@ def _run_agent_step(
     step_inputs: dict[str, Any],
     tenant_id: str,
     on_event: Optional[Callable] = None,
+    step: WorkflowStep | None = None,
 ) -> Any:
     from api.services.agents.definition_store import get_agent, load_schema
     from api.services.agents.runner import run_agent_task
@@ -575,7 +1011,31 @@ def _run_agent_step(
     task = step_inputs.get("message") or step_inputs.get("task") or (
         f"Execute your task with the following context:\n{_format_inputs(step_inputs)}"
     )
-    allowed_tool_ids = list(schema.tools) if getattr(schema, "tools", None) else None
+    schema_tool_ids = (
+        [str(tool_id).strip() for tool_id in list(getattr(schema, "tools", []) or []) if str(tool_id).strip()]
+        if getattr(schema, "tools", None) is not None
+        else []
+    )
+    step_tool_ids: list[str] | None = None
+    if step is not None and isinstance(step.step_config, dict) and "tool_ids" in step.step_config:
+        raw_step_tools = step.step_config.get("tool_ids")
+        if isinstance(raw_step_tools, list):
+            step_tool_ids = [
+                str(tool_id).strip()
+                for tool_id in raw_step_tools
+                if str(tool_id).strip()
+            ]
+        else:
+            step_tool_ids = []
+
+    if step_tool_ids is not None:
+        if schema_tool_ids:
+            allowed_tool_ids = [tool_id for tool_id in step_tool_ids if tool_id in set(schema_tool_ids)]
+        else:
+            allowed_tool_ids = list(step_tool_ids)
+    else:
+        allowed_tool_ids = list(schema_tool_ids) if schema_tool_ids else None
+
     max_tool_calls = getattr(schema, "max_tool_calls_per_run", None)
     result_parts: list[str] = []
     for chunk in run_agent_task(
@@ -585,11 +1045,21 @@ def _run_agent_step(
         allowed_tool_ids=allowed_tool_ids,
         max_tool_calls=max_tool_calls,
     ):
-        text = chunk.get("text") or chunk.get("content") or ""
+        text = chunk.get("text") or chunk.get("content") or chunk.get("delta") or ""
         if text:
             result_parts.append(str(text))
         if on_event:
-            on_event({**chunk, "step_agent_id": agent_id})
+            # run_agent_task proxies AgentOrchestrator.run_stream(), which emits
+            # {type:"activity", event:{...}} records. Unwrap activity payloads so
+            # workflow SSE receives real event_type entries instead of generic "event".
+            if (
+                isinstance(chunk, dict)
+                and str(chunk.get("type") or "").strip().lower() == "activity"
+                and isinstance(chunk.get("event"), dict)
+            ):
+                on_event({**chunk["event"], "step_agent_id": agent_id})
+            elif isinstance(chunk, dict) and str(chunk.get("event_type") or "").strip():
+                on_event({**chunk, "step_agent_id": agent_id})
 
     raw_result = "".join(result_parts)
 

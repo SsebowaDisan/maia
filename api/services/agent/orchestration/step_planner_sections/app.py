@@ -70,9 +70,12 @@ def _filter_steps_by_available_tools(
     *,
     steps: list[PlannedStep],
     available_tool_ids: set[str],
+    allowlist_provided: bool = False,
 ) -> list[PlannedStep]:
-    if not available_tool_ids:
+    if not available_tool_ids and not allowlist_provided:
         return list(steps)
+    if allowlist_provided and not available_tool_ids:
+        return []
     return [step for step in steps if step.tool_id in available_tool_ids]
 
 
@@ -93,7 +96,8 @@ def build_execution_steps(
     # marketplace agent (e.g. ga4-analytics-reporter) can only plan steps using
     # the tools it declared — not the full global registry.
     _allowed = settings.get("__allowed_tool_ids")
-    if isinstance(_allowed, list) and _allowed:
+    allowlist_provided = isinstance(_allowed, list)
+    if allowlist_provided:
         _allowed_set = {str(t).strip() for t in _allowed if str(t).strip()}
         available_tool_ids = available_tool_ids & _allowed_set
 
@@ -203,6 +207,7 @@ def build_execution_steps(
     steps = _filter_steps_by_available_tools(
         steps=steps,
         available_tool_ids=available_tool_ids,
+        allowlist_provided=allowlist_provided,
     )
     yield emit_event(
         plan_decompose_completed_event(
@@ -300,6 +305,15 @@ def build_execution_steps(
             planned_search_terms=research_plan.planned_search_terms,
             planned_keywords=research_plan.planned_keywords,
         )
+
+    # Final allowlist enforcement:
+    # downstream enrichment can append helper steps, so run a second strict
+    # filter before we emit/execute the final plan.
+    steps = _filter_steps_by_available_tools(
+        steps=steps,
+        available_tool_ids=available_tool_ids,
+        allowlist_provided=allowlist_provided,
+    )
 
     role_owned_step_models = build_role_owned_steps(steps=steps)
     role_owned_steps = role_owned_steps_to_payload(steps=role_owned_step_models)

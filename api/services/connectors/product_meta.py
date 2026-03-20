@@ -181,7 +181,7 @@ PRODUCT_META: dict[str, dict] = {
         "setup_mode": "manual_credentials",
         "scene_family": "api",
     },
-    # ── First-wave standalone (metadata-first, no tools yet) ──────────────────
+    # ── Productivity & Docs ─────────────────────────────────────────────────────
     "notion": {
         "brand_slug": "notion",
         "visibility": "user_facing",
@@ -189,6 +189,7 @@ PRODUCT_META: dict[str, dict] = {
         "setup_mode": "manual_credentials",
         "scene_family": "document",
     },
+    # ── CRM ────────────────────────────────────────────────────────────────────
     "hubspot": {
         "brand_slug": "hubspot",
         "visibility": "user_facing",
@@ -199,10 +200,11 @@ PRODUCT_META: dict[str, dict] = {
     "salesforce": {
         "brand_slug": "salesforce",
         "visibility": "user_facing",
-        "auth_kind": "bearer",
-        "setup_mode": "manual_credentials",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
         "scene_family": "crm",
     },
+    # ── Project Management ────────────────────────────────────────────────────
     "jira": {
         "brand_slug": "jira",
         "visibility": "user_facing",
@@ -210,6 +212,35 @@ PRODUCT_META: dict[str, dict] = {
         "setup_mode": "manual_credentials",
         "scene_family": "api",
     },
+    "linear": {
+        "brand_slug": "linear",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    "asana": {
+        "brand_slug": "asana",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    "monday": {
+        "brand_slug": "monday",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    "trello": {
+        "brand_slug": "trello",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    # ── Spreadsheet / No-Code ─────────────────────────────────────────────────
     "airtable": {
         "brand_slug": "airtable",
         "visibility": "user_facing",
@@ -217,6 +248,7 @@ PRODUCT_META: dict[str, dict] = {
         "setup_mode": "manual_credentials",
         "scene_family": "sheet",
     },
+    # ── Support ───────────────────────────────────────────────────────────────
     "zendesk": {
         "brand_slug": "zendesk",
         "visibility": "user_facing",
@@ -224,6 +256,14 @@ PRODUCT_META: dict[str, dict] = {
         "setup_mode": "manual_credentials",
         "scene_family": "support",
     },
+    "intercom": {
+        "brand_slug": "intercom",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "support",
+    },
+    # ── Commerce ──────────────────────────────────────────────────────────────
     "stripe": {
         "brand_slug": "stripe",
         "visibility": "user_facing",
@@ -237,6 +277,224 @@ PRODUCT_META: dict[str, dict] = {
         "auth_kind": "bearer",
         "setup_mode": "manual_credentials",
         "scene_family": "commerce",
+    },
+    # ── Communication ─────────────────────────────────────────────────────────
+    "discord": {
+        "brand_slug": "discord",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "chat",
+    },
+    "microsoft_teams": {
+        "brand_slug": "microsoft_teams",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "chat",
+        "suite_id": "microsoft",
+        "suite_label": "Microsoft 365",
+        "service_order": 10,
+    },
+    "twilio": {
+        "brand_slug": "twilio",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "chat",
+    },
+    # ── Marketing ─────────────────────────────────────────────────────────────
+    "mailchimp": {
+        "brand_slug": "mailchimp",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "marketing",
+    },
+    "webflow": {
+        "brand_slug": "webflow",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "marketing",
+    },
+    # ── Scheduling ────────────────────────────────────────────────────────────
+    "calendly": {
+        "brand_slug": "calendly",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "scheduling",
+    },
+    # ── E-Signatures ──────────────────────────────────────────────────────────
+    "docusign": {
+        "brand_slug": "docusign",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "document",
+    },
+    # ── Cloud Storage ─────────────────────────────────────────────────────────
+    "dropbox": {
+        "brand_slug": "dropbox",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "document",
+    },
+    "box": {
+        "brand_slug": "box",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "document",
+    },
+    # ── Wiki / Knowledge Base ─────────────────────────────────────────────────
+    "confluence": {
+        "brand_slug": "confluence",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "document",
+    },
+    # ── Design ────────────────────────────────────────────────────────────────
+    "figma": {
+        "brand_slug": "figma",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "design",
+    },
+    # ── Database ──────────────────────────────────────────────────────────────
+    "supabase": {
+        "brand_slug": "supabase",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "database",
+    },
+    "postgresql": {
+        "brand_slug": "postgresql",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "database",
+    },
+    "bigquery": {
+        "brand_slug": "bigquery",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "database",
+        "suite_id": "google",
+        "suite_label": "Google",
+        "service_order": 50,
+    },
+    # ── Accounting ────────────────────────────────────────────────────────────
+    "quickbooks": {
+        "brand_slug": "quickbooks",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "commerce",
+    },
+    "xero": {
+        "brand_slug": "xero",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "commerce",
+    },
+    # ── Automation Bridges ────────────────────────────────────────────────────
+    "zapier_webhooks": {
+        "brand_slug": "zapier",
+        "visibility": "user_facing",
+        "auth_kind": "none",
+        "setup_mode": "none",
+        "scene_family": "api",
+    },
+    "make": {
+        "brand_slug": "make",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    # ── Cloud / Infrastructure ────────────────────────────────────────────────
+    "aws": {
+        "brand_slug": "aws",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "cloud",
+    },
+    "cloudflare": {
+        "brand_slug": "cloudflare",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "cloud",
+    },
+    "vercel": {
+        "brand_slug": "vercel",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "cloud",
+    },
+    # ── Social ────────────────────────────────────────────────────────────────
+    "twitter": {
+        "brand_slug": "twitter",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "social",
+    },
+    "linkedin": {
+        "brand_slug": "linkedin",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "social",
+    },
+    "youtube": {
+        "brand_slug": "youtube",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "social",
+        "suite_id": "google",
+        "suite_label": "Google",
+        "service_order": 60,
+    },
+    "spotify": {
+        "brand_slug": "spotify",
+        "visibility": "user_facing",
+        "auth_kind": "oauth2",
+        "setup_mode": "oauth_popup",
+        "scene_family": "api",
+    },
+    # ── Developer Tools ───────────────────────────────────────────────────────
+    "github": {
+        "brand_slug": "github",
+        "visibility": "user_facing",
+        "auth_kind": "bearer",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    "openai": {
+        "brand_slug": "openai",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "api",
+    },
+    "pinecone": {
+        "brand_slug": "pinecone",
+        "visibility": "user_facing",
+        "auth_kind": "api_key",
+        "setup_mode": "manual_credentials",
+        "scene_family": "database",
     },
 }
 
@@ -299,6 +557,18 @@ GOOGLE_SUB_SERVICES: list[ConnectorSubService] = [
         description="Geocode addresses and search for nearby places.",
         brand_slug="google_maps", scene_family="api",
         required_scopes=[],
+    ),
+    ConnectorSubService(
+        id="bigquery", label="BigQuery",
+        description="Run SQL queries against BigQuery data warehouses.",
+        brand_slug="bigquery", scene_family="database",
+        required_scopes=["https://www.googleapis.com/auth/bigquery.readonly"],
+    ),
+    ConnectorSubService(
+        id="youtube", label="YouTube",
+        description="Search videos, channel analytics, and playlist management.",
+        brand_slug="youtube", scene_family="social",
+        required_scopes=["https://www.googleapis.com/auth/youtube.readonly"],
     ),
 ]
 

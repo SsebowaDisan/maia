@@ -1,6 +1,6 @@
 import type { ChatAttachment } from "../../types";
 
-type AgentMode = "ask" | "company_agent" | "deep_search";
+type AgentMode = "ask" | "company_agent" | "deep_search" | "brain";
 type AccessMode = "restricted" | "full_access";
 type MindmapMapType = "structure" | "evidence" | "work_graph" | "context_mindmap";
 

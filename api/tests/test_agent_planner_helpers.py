@@ -124,3 +124,29 @@ def test_sanitize_search_query_strips_planning_context_labels() -> None:
     assert "contract objective:" not in lowered
     assert "success checks:" not in lowered
     assert "conversation context:" not in lowered
+
+
+def test_infer_intent_signals_does_not_force_web_research_without_llm_routing(monkeypatch) -> None:
+    helpers_module._infer_intent_signals_cached.cache_clear()
+    monkeypatch.setattr(
+        helpers_module,
+        "enrich_task_intelligence",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "detect_web_routing_mode",
+        lambda **kwargs: {"routing_mode": "none", "reasoning": "llm_unavailable"},
+    )
+    monkeypatch.setattr(
+        helpers_module,
+        "classify_intent_tags",
+        lambda **kwargs: [],
+    )
+
+    signals = infer_intent_signals_from_text(
+        message="Research reliable sources and gather key findings on machine learning.",
+        agent_goal="",
+    )
+
+    assert signals["explicit_web_discovery"] is False

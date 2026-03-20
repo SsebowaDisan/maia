@@ -780,6 +780,7 @@ function AgentDesktopScene({
         activeDetail={activeDetail}
         activeTitle={activeTitle}
         sceneText={sceneText}
+        activeSceneData={activeSceneData}
       />
     );
   }

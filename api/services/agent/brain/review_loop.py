@@ -62,22 +62,35 @@ def brain_review(
         quality_score=quality_score,
     )
 
-    # Call the LLM for the review decision
+    # Call the LLM for the review decision (with timeout — don't hang the workflow)
     try:
+        import concurrent.futures
         from api.services.agents.runner import run_agent_task
-        parts: list[str] = []
-        for chunk in run_agent_task(
-            prompt["user"],
-            tenant_id=tenant_id,
-            system_prompt=prompt["system"],
-            max_tool_calls=0,
-        ):
-            text = chunk.get("text") or chunk.get("content") or ""
-            if text:
-                parts.append(str(text))
-        raw_response = "".join(parts)
+
+        def _review_call() -> str:
+            result_parts: list[str] = []
+            for chunk in run_agent_task(
+                prompt["user"],
+                tenant_id=tenant_id,
+                system_prompt=prompt["system"],
+                max_tool_calls=0,
+            ):
+                text = chunk.get("text") or chunk.get("content") or ""
+                if text:
+                    result_parts.append(str(text))
+            return "".join(result_parts)
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_review_call)
+        try:
+            raw_response = future.result(timeout=30)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
     except Exception as exc:
-        logger.warning("Brain review LLM call failed: %s", exc)
+        logger.warning("Brain review LLM call failed or timed out: %s", exc)
         raw_response = '{"decision": "proceed", "reasoning": "Review unavailable", "confidence": 0.5}'
 
     decision = parse_review_response(raw_response)

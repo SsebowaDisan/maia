@@ -16,7 +16,7 @@ const WEB_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
   __deep_search_max_source_ids: 200,
 };
 
-type ComposerMode = "ask" | "company_agent" | "deep_search" | "web_search";
+type ComposerMode = "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
 
 export {
   CHAT_MAX_FILE_SIZE_BYTES,

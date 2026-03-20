@@ -131,6 +131,13 @@ function useAgentActivityDerived({
     if (!activeEvent) {
       return null;
     }
+    const hasDirectSceneSignal =
+      Boolean(String(activeEvent.data?.["scene_surface"] ?? activeEvent.metadata?.["scene_surface"] ?? "").trim()) ||
+      Boolean(String(activeEvent.data?.["scene_family"] ?? activeEvent.metadata?.["scene_family"] ?? "").trim()) ||
+      Boolean(String(activeEvent.data?.["ui_target"] ?? activeEvent.metadata?.["ui_target"] ?? "").trim());
+    if (hasDirectSceneSignal) {
+      return activeEvent;
+    }
     const activeEventTab = eventTab(activeEvent);
     if (activeEventTab !== "system" || isApiRuntimeEvent(activeEvent)) {
       return activeEvent;

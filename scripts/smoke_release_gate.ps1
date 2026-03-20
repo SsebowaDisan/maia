@@ -105,6 +105,32 @@ Invoke-StatusCheck -Name "API marketplace workflows" -Url "$ApiBase/api/marketpl
 Invoke-StatusCheck -Name "API explore" -Url "$ApiBase/api/explore"
 Invoke-StatusCheck -Name "UI root" -Url $UiBase
 
+$uiRoutes = @(
+    "/",
+    "/marketplace",
+    "/connectors",
+    "/workflows",
+    "/operations",
+    "/explore"
+)
+foreach ($route in $uiRoutes) {
+    Invoke-StatusCheck -Name "UI route $route" -Url "$UiBase$route"
+}
+
+$localIconAssets = @(
+    "/icons/connectors/google-workspace.svg",
+    "/icons/connectors/google-calendar.svg",
+    "/icons/connectors/google-drive.svg",
+    "/icons/connectors/google-docs.svg",
+    "/icons/connectors/google-sheets.svg",
+    "/icons/connectors/google-analytics.svg",
+    "/icons/connectors/google-ads.svg",
+    "/icons/connectors/google-maps.svg"
+)
+foreach ($asset in $localIconAssets) {
+    Invoke-StatusCheck -Name "UI asset $asset" -Url "$UiBase$asset"
+}
+
 $pythonExe = Join-Path $repoRoot ".venv311\Scripts\python.exe"
 if (Test-Path $pythonExe) {
     Invoke-CommandCheck -Name "Python compileall api" -Command ".\.venv311\Scripts\python.exe -m compileall -q api" -WorkingDirectory $repoRoot

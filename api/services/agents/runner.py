@@ -100,7 +100,7 @@ def run_agent_task(
     )
 
     settings: dict[str, Any] = {}
-    if allowed_tool_ids:
+    if allowed_tool_ids is not None:
         settings["__allowed_tool_ids"] = list(allowed_tool_ids)
     if max_tool_calls is not None:
         settings["__max_tool_calls"] = max_tool_calls

@@ -27,11 +27,11 @@ function PhaseTimeline({ phases, streaming, eventCount }: PhaseTimelineProps) {
   return (
     <div className="mb-3 rounded-2xl border border-black/[0.06] bg-white/85 px-3 py-2">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-[11px] tracking-[0.04em] text-[#6e6e73]">Execution flow</p>
+        <p className="text-[11px] tracking-[0.04em] text-[#6e6e73]">How Maia is working</p>
         {eventCount != null && eventCount > 0 && streaming ? (
           <span className="inline-flex items-center gap-1 text-[10px] text-[#86868b]">
             <span className="h-1 w-1 animate-pulse rounded-full bg-[#34c759]" />
-            <span>Live</span>
+            <span>Live now</span>
           </span>
         ) : null}
       </div>
@@ -42,7 +42,7 @@ function PhaseTimeline({ phases, streaming, eventCount }: PhaseTimelineProps) {
           <div key={`phase-${phase.key}`} className="inline-flex items-center">
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.04em] ${phaseStateClass[phase.state]}`}
-              title={phase.latestEventTitle || `${phase.label} phase`}
+              title={phase.latestEventTitle || phase.label}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${phaseDotClass[phase.state]}`} />
               <span>{phase.label}</span>

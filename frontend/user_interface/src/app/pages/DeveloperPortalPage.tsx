@@ -274,22 +274,17 @@ export function DeveloperPortalPage() {
   if (devStatus === "none" || devStatus === "rejected") {
     return (
       <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
-        <div className="mx-auto max-w-[1240px]">
-          <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Developer portal</p>
-            <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">Publish agents</h1>
-          </section>
+        <div className="mx-auto max-w-[600px]">
           {devStatus === "rejected" && rejectionReason ? (
-            <div className="mt-4 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4">
-              <ShieldX className="mt-0.5 h-5 w-5 shrink-0 text-red-500" />
+            <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+              <ShieldX className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
               <div>
                 <p className="text-[13px] font-semibold text-red-800">Application rejected</p>
                 <p className="mt-1 text-[12px] text-red-700">{rejectionReason}</p>
-                <p className="mt-1 text-[12px] text-red-600">You can re-apply below with updated information.</p>
               </div>
             </div>
           ) : null}
-          <div className="mt-4 rounded-2xl border border-black/[0.08] bg-white p-4">
+          <div className="rounded-2xl border border-black/[0.06] bg-white p-5">
             <DeveloperApplicationForm onSuccess={fetchDevStatus} />
           </div>
         </div>
@@ -299,21 +294,35 @@ export function DeveloperPortalPage() {
 
   if (devStatus === "pending") {
     return (
-      <div className="h-full overflow-y-auto bg-[#f6f6f7] p-5">
-        <div className="mx-auto max-w-[1240px]">
-          <section className="rounded-[28px] border border-black/[0.08] bg-white px-6 py-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7c3aed]">Developer portal</p>
-            <h1 className="mt-1 text-[28px] font-semibold tracking-[-0.02em] text-[#1d1d1f]">Publish agents</h1>
-          </section>
-          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-6">
-            <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-            <div>
-              <p className="text-[15px] font-semibold text-amber-900">Application under review</p>
-              <p className="mt-1 text-[13px] text-amber-700">
-                Your developer application is being reviewed. You&apos;ll be notified once a decision is made.
-              </p>
+      <div className="flex h-full items-center justify-center bg-[#f6f6f7] p-5">
+        <div className="mx-auto w-full max-w-[480px] text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#fef3c7]">
+            <Clock className="h-7 w-7 text-[#d97706]" />
+          </div>
+          <h2 className="mt-5 text-[20px] font-semibold text-[#1d1d1f]">Application under review</h2>
+          <p className="mt-2 text-[14px] leading-relaxed text-[#667085]">
+            Your developer application has been submitted and is being reviewed by our team. This usually takes 1-2 business days.
+          </p>
+          <div className="mt-6 rounded-xl border border-black/[0.06] bg-white p-4">
+            <p className="text-[12px] font-semibold text-[#344054]">While you wait, you can:</p>
+            <div className="mt-3 space-y-2 text-left">
+              <div className="flex items-center gap-2.5 text-[13px] text-[#475569]">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f5f3ff] text-[10px] font-bold text-[#7c3aed]">1</span>
+                Build and test agents in your workspace
+              </div>
+              <div className="flex items-center gap-2.5 text-[13px] text-[#475569]">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f5f3ff] text-[10px] font-bold text-[#7c3aed]">2</span>
+                Set up your connectors (Google, Slack, etc.)
+              </div>
+              <div className="flex items-center gap-2.5 text-[13px] text-[#475569]">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f5f3ff] text-[10px] font-bold text-[#7c3aed]">3</span>
+                Browse the marketplace for inspiration
+              </div>
             </div>
           </div>
+          <p className="mt-4 text-[12px] text-[#98a2b3]">
+            You&apos;ll be notified by email once a decision is made.
+          </p>
         </div>
       </div>
     );

@@ -45,6 +45,9 @@ function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
 }
 
 function resolveTurnModeLabel(mode: ChatTurn["mode"]): string {
+  if (mode === "brain") {
+    return "Maia Brain";
+  }
   if (mode === "web_search") {
     return "Web Search";
   }
@@ -94,7 +97,10 @@ function TurnListItem({
   onOpenPreviewAttachment,
 }: TurnListItemProps) {
   const turnActivityEvents =
-    turn.mode === "company_agent" || turn.mode === "deep_search" || turn.mode === "web_search"
+    turn.mode === "company_agent" ||
+    turn.mode === "deep_search" ||
+    turn.mode === "web_search" ||
+    turn.mode === "brain"
       ? isLatestTurn && activityEvents.length > 0
         ? activityEvents
         : turn.activityEvents || []

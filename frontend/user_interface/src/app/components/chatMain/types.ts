@@ -69,8 +69,8 @@ type ChatMainProps = {
   onMindmapMapTypeChange: (mapType: "structure" | "evidence" | "work_graph" | "context_mindmap") => void;
   onCitationClick: (citation: CitationFocus) => void;
   citationFocus?: CitationFocus | null;
-  agentMode: "ask" | "company_agent" | "deep_search";
-  onAgentModeChange: (mode: "ask" | "company_agent" | "deep_search") => void;
+  agentMode: "ask" | "company_agent" | "deep_search" | "brain";
+  onAgentModeChange: (mode: "ask" | "company_agent" | "deep_search" | "brain") => void;
   accessMode: "restricted" | "full_access";
   onAccessModeChange: (mode: "restricted" | "full_access") => void;
   activityEvents: AgentActivityEvent[];

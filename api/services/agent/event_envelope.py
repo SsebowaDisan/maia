@@ -165,6 +165,25 @@ _FAMILY_EXACT: dict[str, EventFamily] = {
     "web_kpi_summary": "verify",
     "web_evidence_summary": "verify",
     "web_release_gate": "verify",
+    # Brain review events
+    "brain_review_started": "plan",
+    "brain_review_decision": "plan",
+    "brain_revision_requested": "plan",
+    "brain_question": "plan",
+    "brain_answer_received": "plan",
+    "brain_review_summary": "plan",
+    # Agent dialogue events
+    "agent_dialogue_turn": "plan",
+    "agent_dialogue_started": "plan",
+    "agent_dialogue_resolved": "plan",
+    # Assembly events
+    "assembly_brain_thinking": "plan",
+    "assembly_step_added": "plan",
+    "assembly_edge_added": "plan",
+    "assembly_narration": "plan",
+    "assembly_connector_needed": "plan",
+    "assembly_schedule_detected": "plan",
+    "assembly_complete": "plan",
 }
 
 _CRITICAL_EVENTS: set[str] = {
@@ -316,7 +335,7 @@ def infer_render_mode(
         return "compress"
     if priority == "internal":
         return "replay_later"
-    if event_family in {"browser", "pdf", "doc", "sheet", "email", "scene"}:
+    if event_family in {"browser", "pdf", "doc", "sheet", "email", "scene", "plan"}:
         return "animate_live"
     return "summarize"
 

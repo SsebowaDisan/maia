@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentActivityEvent } from "../../types";
 import { deriveTheatreStage, desiredPreviewTabForStage } from "./deriveTheatreStage";
-import { phaseForEvent } from "./helpers";
 import { deriveSurfaceCommit } from "./surfaceCommitDerivation";
 
 let eventCounter = 0;
@@ -29,10 +28,26 @@ function makeEvent({
 
 function stageFrom(events: AgentActivityEvent[], streaming: boolean, hasApprovalGate = false): string {
   const activeEvent = events[events.length - 1] || null;
+  const activeStageSignal = String(
+    activeEvent?.stage ??
+      activeEvent?.data?.["stage"] ??
+      activeEvent?.metadata?.["stage"] ??
+      activeEvent?.data?.["action_phase"] ??
+      activeEvent?.metadata?.["action_phase"] ??
+      activeEvent?.event_family ??
+      activeEvent?.data?.["event_family"] ??
+      activeEvent?.metadata?.["event_family"] ??
+      "",
+  )
+    .trim()
+    .toLowerCase();
   return deriveTheatreStage({
     streaming,
     hasEvents: events.length > 0,
-    activePhase: phaseForEvent(activeEvent),
+    activeStageSignal,
+    activeEventType: String(activeEvent?.event_type || "").toLowerCase(),
+    activeEventStatus: String(activeEvent?.status || "").toLowerCase(),
+    activeEventTitle: String(activeEvent?.title || "").toLowerCase(),
     surfaceCommit: deriveSurfaceCommit(events),
     needsHumanReview: false,
     hasApprovalGate,
@@ -49,10 +64,10 @@ describe("theatre flow integration", () => {
     events.push(makeEvent({ eventType: "task_understanding_started" }));
     expect(stageFrom(events, true)).toBe("understand");
 
-    events.push(makeEvent({ eventType: "plan_ready" }));
+    events.push(makeEvent({ eventType: "plan_ready", data: { action_phase: "planning" } }));
     expect(stageFrom(events, true)).toBe("breakdown");
 
-    events.push(makeEvent({ eventType: "tool_started" }));
+    events.push(makeEvent({ eventType: "tool_started", data: { action_phase: "execution" } }));
     expect(stageFrom(events, true)).toBe("analyze");
 
     events.push(
@@ -63,7 +78,7 @@ describe("theatre flow integration", () => {
     );
     expect(stageFrom(events, true)).toBe("execute");
 
-    events.push(makeEvent({ eventType: "verification_completed" }));
+    events.push(makeEvent({ eventType: "verification_completed", data: { action_phase: "verification" } }));
     expect(stageFrom(events, true)).toBe("review");
 
     events.push(makeEvent({ eventType: "approval_required" }));

@@ -63,6 +63,7 @@ type WorkflowCanvasProps = {
   onRefreshRunHistory: () => void;
   onLoadMoreRunHistory: () => void;
   onGenerateFromDescription: (description: string, maxSteps: number) => Promise<boolean>;
+  onAssembleAndRunFromDescription?: (description: string, maxSteps: number) => Promise<boolean>;
   onSelectTemplate: (template: WorkflowTemplate) => void;
   onLoadRunOutputs: (run: WorkflowRunRecord) => void;
   initialAgentHintId?: string | null;
@@ -337,10 +338,12 @@ function WorkflowCanvasInner({
   onRun,
   onStop,
   onSave,
+  onSchedule,
   onRefreshTemplates,
   onRefreshRunHistory,
   onLoadMoreRunHistory,
   onGenerateFromDescription,
+  onAssembleAndRunFromDescription,
   onSelectTemplate,
   onLoadRunOutputs,
   initialAgentHintId = null,
@@ -863,6 +866,17 @@ function WorkflowCanvasInner({
             setNlBuilderOpen(false);
           }
         }}
+        onAssembleAndRun={
+          onAssembleAndRunFromDescription
+            ? async (description, maxSteps) => {
+                const success = await onAssembleAndRunFromDescription(description, maxSteps);
+                if (success) {
+                  setNlBuilderOpen(false);
+                }
+                return success;
+              }
+            : undefined
+        }
       />
 
       {/* Agent picker renders as a fixed modal — placed outside the stacking container */}
@@ -927,4 +941,3 @@ function WorkflowCanvas(props: WorkflowCanvasProps) {
 
 export { WorkflowCanvas };
 export type { WorkflowCanvasProps };
-

@@ -161,6 +161,45 @@ function roadmapMatchesRequest(roadmapSteps: RoadmapStep[], requestText: string)
 }
 
 function parsePlanStepsFromEvents(visibleEvents: AgentActivityEvent[]): RoadmapStep[] {
+  const assemblyRows = visibleEvents
+    .filter((event) => String(event.event_type || "").toLowerCase() === "assembly_step_added")
+    .map((event, rowIndex) => {
+      const payload = eventPayload(event);
+      const stepId = normalizeWhitespace(payload.step_id || `assembly_step_${rowIndex + 1}`);
+      const role = sentenceCase(normalizeWhitespace(payload.agent_role || ""));
+      const description =
+        sentenceCase(normalizeWhitespace(payload.description || event.detail || event.title)) ||
+        `Workflow step ${rowIndex + 1}`;
+      const title = role ? `${role}: ${description}` : description;
+      if (!title) {
+        return null;
+      }
+      return {
+        toolId: stepId || `assembly_step_${rowIndex + 1}`,
+        title,
+        whyThisStep: sentenceCase(normalizeWhitespace(event.detail)) || "Added by Brain assembly.",
+        stepOrder: rowIndex + 1,
+      };
+    })
+    .filter(
+      (
+        row,
+      ): row is {
+        toolId: string;
+        title: string;
+        whyThisStep: string;
+        stepOrder: number;
+      } => Boolean(row),
+    )
+    .sort((left, right) => left.stepOrder - right.stepOrder);
+  if (assemblyRows.length) {
+    return assemblyRows.map(({ toolId, title, whyThisStep }) => ({
+      toolId,
+      title,
+      whyThisStep,
+    }));
+  }
+
   for (let i = visibleEvents.length - 1; i >= 0; i -= 1) {
     const event = visibleEvents[i];
     const eventType = String(event.event_type || "").toLowerCase();

@@ -27,12 +27,13 @@ type ComposerPanelProps = {
   accessMode: "restricted" | "full_access";
   agentControlsVisible: boolean;
   agentMode: "ask" | "company_agent" | "deep_search";
-  composerMode: "ask" | "company_agent" | "deep_search" | "web_search";
+  composerMode: "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
   attachments: ComposerAttachment[];
   clearAttachments: () => void;
   removeAttachment: (attachmentId: string) => void;
   enableAskMode: () => void;
   enableAgentMode: () => void;
+  enableBrainMode: () => void;
   enableWebSearch: () => void;
   enableDeepResearch: () => void;
   activeAgent?: { agent_id: string; name: string } | null;
@@ -74,6 +75,7 @@ function ComposerPanel({
   removeAttachment,
   enableAskMode,
   enableAgentMode,
+  enableBrainMode,
   enableWebSearch,
   enableDeepResearch,
   activeAgent = null,
@@ -274,7 +276,17 @@ function ComposerPanel({
                 value={message}
                 onChange={handleMessageChange}
                 onInput={resizeComposerTextarea}
-                placeholder="What would you like to do next?"
+                placeholder={
+                  composerMode === "brain"
+                    ? "Describe what you want — the Brain will assemble a team and run it..."
+                    : composerMode === "deep_search"
+                      ? "What would you like to research in depth?"
+                      : composerMode === "web_search"
+                        ? "Search the web for..."
+                        : composerMode === "company_agent"
+                          ? "What would you like the workflow to do?"
+                          : "What would you like to do next?"
+                }
                 aria-label="Message"
                 className="assistantComposerInput min-w-0 flex-1 resize-none border-0 bg-transparent focus:outline-none"
                 onKeyDown={handleComposerKeyDown}
@@ -310,6 +322,10 @@ function ComposerPanel({
                 onChange={(value) => {
                   if (value === "ask") {
                     enableAskMode();
+                    return;
+                  }
+                  if (value === "brain") {
+                    enableBrainMode();
                     return;
                   }
                   if (value === "company_agent") {

@@ -41,6 +41,30 @@ function eventTone(eventType: MultiAgentEvent["type"]): string {
   return "border-black/[0.06] bg-white text-[#344054]";
 }
 
+function initials(name: string): string {
+  const tokens = String(name || "")
+    .trim()
+    .split(/[\s_\-.]+/)
+    .filter(Boolean);
+  if (!tokens.length) {
+    return "A";
+  }
+  if (tokens.length === 1) {
+    return tokens[0].slice(0, 2).toUpperCase();
+  }
+  return `${tokens[0][0] || ""}${tokens[1][0] || ""}`.toUpperCase();
+}
+
+function avatarColor(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 70% 92%)`;
+}
+
 export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
   const eventListRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -62,11 +86,19 @@ export function MultiAgentTheatre({ columns }: MultiAgentTheatreProps) {
         {columns.map((column, index) => (
           <section key={column.agentId} className="w-[300px] rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h3 className="truncate text-[14px] font-semibold text-[#111827]">{column.agentName}</h3>
-                {column.skillName || column.skillId ? (
-                  <p className="mt-0.5 truncate text-[11px] text-[#667085]">{column.skillName || column.skillId}</p>
-                ) : null}
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/80 text-[10px] font-semibold text-[#1f2937]"
+                  style={{ backgroundColor: avatarColor(column.agentId || column.agentName) }}
+                >
+                  {initials(column.agentName || column.agentId)}
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-[14px] font-semibold text-[#111827]">{column.agentName}</h3>
+                  {column.skillName || column.skillId ? (
+                    <p className="mt-0.5 truncate text-[11px] text-[#667085]">{column.skillName || column.skillId}</p>
+                  ) : null}
+                </div>
               </div>
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeClass(column.status)}`}>
                 {column.status}

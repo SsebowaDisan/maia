@@ -105,7 +105,8 @@ function TurnsPanel({
   const latestTurnUsesTheatre =
     latestTurnMode === "company_agent" ||
     latestTurnMode === "deep_search" ||
-    latestTurnMode === "web_search";
+    latestTurnMode === "web_search" ||
+    latestTurnMode === "brain";
 
   const queueTheatreCenter = (turnIndex: number) => {
     pendingTheatreCenterTurnRef.current = turnIndex;

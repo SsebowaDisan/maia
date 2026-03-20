@@ -52,6 +52,11 @@ class ChartGenerateTool(AgentTool):
 
         used_matplotlib = False
         try:
+            import matplotlib
+
+            # Force non-GUI backend for worker/thread execution to avoid
+            # Tkinter thread crashes that can terminate the API process.
+            matplotlib.use("Agg", force=True)
             import matplotlib.pyplot as plt
 
             plt.figure(figsize=(10, 5))
@@ -60,7 +65,7 @@ class ChartGenerateTool(AgentTool):
             plt.xticks(rotation=35, ha="right")
             plt.tight_layout()
             plt.savefig(out_file, dpi=140)
-            plt.close()
+            plt.close("all")
             used_matplotlib = True
         except Exception:
             # Keep deterministic fallback output text if matplotlib is unavailable.
