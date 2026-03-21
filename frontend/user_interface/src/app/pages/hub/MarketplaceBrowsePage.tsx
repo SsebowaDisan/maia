@@ -8,6 +8,7 @@ import {
   type MarketplaceWorkflowRecord,
 } from "../../../api/client";
 import { ConnectorBrandIcon } from "../../components/connectors/ConnectorBrandIcon";
+import { resolveAgentIconConnectorId } from "../../utils/agentIconResolver";
 
 type MarketplaceBrowsePageProps = {
   onNavigate: (path: string) => void;
@@ -124,13 +125,24 @@ export function MarketplaceBrowsePage({ onNavigate }: MarketplaceBrowsePageProps
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {filteredAgents.slice(0, 12).map((agent) => {
               const rating = ratingDisplay(agent.avg_rating, agent.rating_count);
+              const iconConnectorId = resolveAgentIconConnectorId({
+                required_connectors: agent.required_connectors,
+                connector_status: agent.connector_status,
+                has_computer_use: agent.has_computer_use,
+                category: agent.category,
+                tags: agent.tags,
+              });
               return (
                 <button key={agent.agent_id} type="button"
                   onClick={() => onNavigate(`/marketplace/agents/${encodeURIComponent(agent.agent_id)}`)}
                   className="group rounded-2xl border border-black/[0.06] bg-white p-4 text-left transition hover:border-black/[0.12] hover:shadow-md"
                 >
                   <div className="flex items-start gap-3">
-                    <ConnectorBrandIcon connectorId={agent.agent_id} size={36} />
+                    <ConnectorBrandIcon
+                      connectorId={iconConnectorId}
+                      label={agent.name}
+                      size={36}
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[14px] font-semibold text-[#111827]">{agent.name}</p>
                       <p className="text-[11px] text-[#667085]">{agent.creator_display_name || agent.creator_username || "Community"}</p>

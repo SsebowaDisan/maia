@@ -8,6 +8,7 @@ import {
   type HubReviewRecord,
   type MarketplaceWorkflowRecord,
 } from "../../../api/client";
+import { ConnectorBrandIcon } from "../../components/connectors/ConnectorBrandIcon";
 
 type TeamDetailPageProps = {
   slug: string;
@@ -163,7 +164,11 @@ export function TeamDetailPage({ slug, onNavigate }: TeamDetailPageProps) {
           <div className="mt-2 flex flex-wrap gap-2">
             {(team.required_connectors || []).length ? (
               team.required_connectors.map((connectorId) => (
-                <span key={connectorId} className="rounded-full bg-[#eef2ff] px-3 py-1 text-[12px] font-semibold text-[#334155]">
+                <span
+                  key={connectorId}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-[#eef2ff] px-3 py-1 text-[12px] font-semibold text-[#334155]"
+                >
+                  <ConnectorBrandIcon connectorId={connectorId} label={connectorId} size={14} />
                   {connectorId}
                 </span>
               ))

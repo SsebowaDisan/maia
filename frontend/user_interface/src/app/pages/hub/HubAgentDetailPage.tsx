@@ -8,6 +8,7 @@ import {
   type MarketplaceAgentDetail,
 } from "../../../api/client";
 import { ConnectorBrandIcon } from "../../components/connectors/ConnectorBrandIcon";
+import { resolveAgentIconConnectorId } from "../../utils/agentIconResolver";
 
 type HubAgentDetailPageProps = {
   slug: string;
@@ -62,6 +63,24 @@ export function HubAgentDetailPage({ slug, onNavigate }: HubAgentDetailPageProps
     return map;
   }, [connectorCatalog]);
 
+  const headerIconConnectorId = useMemo(
+    () =>
+      resolveAgentIconConnectorId({
+        required_connectors: detail?.required_connectors,
+        connector_status: detail?.connector_status,
+        has_computer_use: detail?.has_computer_use,
+        category: detail?.category,
+        tags: detail?.tags,
+      }),
+    [
+      detail?.category,
+      detail?.connector_status,
+      detail?.has_computer_use,
+      detail?.required_connectors,
+      detail?.tags,
+    ],
+  );
+
   const installAgent = async () => {
     if (!detail?.agent_id) {
       return;
@@ -108,7 +127,7 @@ export function HubAgentDetailPage({ slug, onNavigate }: HubAgentDetailPageProps
           Back to Marketplace
         </button>
         <div className="mt-4 flex items-center gap-3">
-          <ConnectorBrandIcon connectorId={detail.agent_id} size={30} />
+          <ConnectorBrandIcon connectorId={headerIconConnectorId} label={detail.name} size={30} />
           <div>
             <h1 className="text-[28px] font-semibold tracking-[-0.03em] text-[#0f172a]">{detail.name}</h1>
             <button
@@ -176,8 +195,9 @@ export function HubAgentDetailPage({ slug, onNavigate }: HubAgentDetailPageProps
               detail.required_connectors.map((connectorId) => (
                 <div
                   key={connectorId}
-                  className="rounded-lg border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[12px] text-[#334155]"
+                  className="flex items-center gap-2 rounded-lg border border-black/[0.08] bg-[#f8fafc] px-3 py-2 text-[12px] text-[#334155]"
                 >
+                  <ConnectorBrandIcon connectorId={connectorId} label={connectorId} size={16} />
                   {connectorNameById.get(connectorId) || connectorId}
                 </div>
               ))

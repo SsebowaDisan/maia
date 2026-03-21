@@ -12,6 +12,7 @@ import {
   type MarketplaceWorkflowRecord,
 } from "../../../api/client";
 import { ConnectorBrandIcon } from "../../components/connectors/ConnectorBrandIcon";
+import { resolveAgentIconConnectorId } from "../../utils/agentIconResolver";
 
 type CreatorProfilePageProps = {
   username: string;
@@ -160,6 +161,13 @@ export function CreatorProfilePage({ username, onNavigate }: CreatorProfilePageP
               {agents.length ? (
                 agents.slice(0, 8).map((row) => {
                   const agentId = String(row.agent_id || row.id || "").trim();
+                  const iconConnectorId = resolveAgentIconConnectorId({
+                    required_connectors: row.required_connectors,
+                    connector_status: row.connector_status,
+                    has_computer_use: row.has_computer_use,
+                    category: row.category,
+                    tags: row.tags,
+                  });
                   return (
                     <button
                       key={agentId}
@@ -168,7 +176,11 @@ export function CreatorProfilePage({ username, onNavigate }: CreatorProfilePageP
                       className="rounded-xl border border-black/[0.08] bg-[#f8fafc] p-3 text-left transition hover:bg-[#eef2ff]"
                     >
                       <div className="flex items-center gap-2">
-                        <ConnectorBrandIcon connectorId={agentId} size={18} />
+                        <ConnectorBrandIcon
+                          connectorId={iconConnectorId}
+                          label={String(row.name || agentId)}
+                          size={18}
+                        />
                         <p className="text-[13px] font-semibold text-[#111827]">{String(row.name || agentId)}</p>
                       </div>
                       <p className="mt-1 line-clamp-2 text-[12px] text-[#667085]">{String(row.description || "")}</p>
