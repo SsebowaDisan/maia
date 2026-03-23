@@ -32,6 +32,7 @@ def _is_paddle_runtime_expected() -> bool:
     return _startup_helpers.is_paddle_runtime_expected_impl(
         reader_mode=UPLOAD_INDEX_READER_MODE,
         paddleocr_enabled=UPLOAD_PADDLEOCR_ENABLED,
+        paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
     )
 
 def _is_vlm_runtime_expected() -> bool:
@@ -64,6 +65,9 @@ def _run_paddle_startup_checks() -> list[str]:
         startup_warmup=UPLOAD_PADDLEOCR_STARTUP_WARMUP,
         reader_mode=UPLOAD_INDEX_READER_MODE,
         is_paddle_runtime_expected=_is_paddle_runtime_expected(),
+        paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
+        paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
+        paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
         get_paddle_ocr_engine_fn=_get_paddle_ocr_engine,
         logger_warning=logger.info,
     )
@@ -279,6 +283,14 @@ def _extract_pdf_text_with_paddleocr(
         vlm_extract_render_dpi=UPLOAD_PDF_VLM_EXTRACT_RENDER_DPI,
         vlm_extract_timeout_seconds=UPLOAD_PDF_VLM_EXTRACT_TIMEOUT_SECONDS,
         ollama_timeout_fn=_ollama_timeout,
+        paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
+        paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
+        paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
+        paddleocr_vl_api_timeout_seconds=UPLOAD_PADDLEOCR_VL_API_TIMEOUT_SECONDS,
+        paddleocr_vl_api_file_type=UPLOAD_PADDLEOCR_VL_API_FILE_TYPE,
+        paddleocr_vl_api_use_doc_orientation_classify=UPLOAD_PADDLEOCR_VL_API_USE_DOC_ORIENTATION_CLASSIFY,
+        paddleocr_vl_api_use_doc_unwarping=UPLOAD_PADDLEOCR_VL_API_USE_DOC_UNWARPING,
+        paddleocr_vl_api_use_chart_recognition=UPLOAD_PADDLEOCR_VL_API_USE_CHART_RECOGNITION,
     )
 
 def _build_target_uploaded_meta(
@@ -385,6 +397,9 @@ def _should_route_pdf_to_paddle(
     return _route_helpers.should_route_pdf_to_paddle_impl(
         configured_mode=configured_mode,
         classification=classification,
+        paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
+        paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
+        paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
     )
 
 
@@ -446,6 +461,9 @@ def index_files(
         apply_upload_scope_to_sources_fn=apply_upload_scope_to_sources,
         indexing_canceled_error_cls=IndexingCanceledError,
         upload_paddleocr_enabled=UPLOAD_PADDLEOCR_ENABLED,
+        upload_paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
+        upload_paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
+        upload_paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
         upload_index_reader_mode=UPLOAD_INDEX_READER_MODE,
     )
 

@@ -44,6 +44,15 @@ class _BraveMixedConnectorStub:
 
 
 class _BingConnectorStub:
+    def __init__(self, *, configured: bool = True) -> None:
+        self._configured = configured
+
+    def health_check(self):
+        class _Health:
+            def __init__(self, ok: bool) -> None:
+                self.ok = ok
+        return _Health(self._configured)
+
     def search_web(self, *, query: str, count: int = 8) -> dict[str, object]:
         del count
         return {
@@ -60,6 +69,11 @@ class _BingConnectorStub:
 
 
 class _FailingConnector:
+    def health_check(self):
+        class _Health:
+            ok = False
+        return _Health()
+
     def web_search(self, **kwargs):
         raise RuntimeError(f"connector unavailable {kwargs}")
 
@@ -155,6 +169,23 @@ class ResearchToolTests(unittest.TestCase):
         self.assertEqual(result.data.get("provider"), "brave_search")
         attempts = result.data.get("provider_attempted") or []
         self.assertEqual(attempts, ["brave_search"])
+
+    def test_brave_failure_skips_bing_when_bing_not_configured(self) -> None:
+        registry = _RegistryStub(brave=_FailingConnector(), bing=_BingConnectorStub(configured=False))
+        with patch("api.services.agent.tools.research_tools.get_connector_registry", return_value=registry):
+            result = WebResearchTool().execute(
+                context=self.context,
+                prompt="research axon group",
+                params={
+                    "query": "axon group",
+                    "provider": "brave_search",
+                    "allow_provider_fallback": True,
+                },
+            )
+        self.assertEqual(result.data.get("provider"), "brave_search")
+        attempts = result.data.get("provider_attempted") or []
+        self.assertEqual(attempts, ["brave_search"])
+        self.assertTrue(result.data.get("provider_fallback_skipped"))
 
     def test_search_budget_caps_total_requested_result_slots(self) -> None:
         brave = _BraveConnectorStub()

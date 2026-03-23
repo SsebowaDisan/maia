@@ -79,12 +79,34 @@ class BrowserSession:
 
     def screenshot_b64(self) -> str:
         """Return a full-page screenshot encoded as base64 PNG."""
-        raw: bytes = self._page.screenshot(type="png")
+        try:
+            raw: bytes = self._page.screenshot(type="png", timeout=5_000)
+        except Exception:
+            try:
+                raw = self._page.screenshot(
+                    type="png",
+                    timeout=2_000,
+                    animations="disabled",
+                    caret="hide",
+                )
+            except Exception:
+                return ""
         return base64.b64encode(raw).decode("ascii")
 
     def screenshot_bytes(self) -> bytes:
         """Return raw PNG bytes."""
-        return self._page.screenshot(type="png")
+        try:
+            return self._page.screenshot(type="png", timeout=5_000)
+        except Exception:
+            try:
+                return self._page.screenshot(
+                    type="png",
+                    timeout=2_000,
+                    animations="disabled",
+                    caret="hide",
+                )
+            except Exception:
+                return b""
 
     # ── Actions ────────────────────────────────────────────────────────────────
 

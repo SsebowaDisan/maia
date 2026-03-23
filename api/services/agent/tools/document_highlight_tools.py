@@ -42,8 +42,10 @@ class DocumentHighlightExtractTool(AgentTool):
         prompt: str,
         params: dict[str, Any],
     ) -> ToolExecutionResult:
-        selected_file_ids = _normalize_file_ids(context.settings.get("__selected_file_ids"))
-        index_id_raw = context.settings.get("__selected_index_id")
+        selected_file_ids = _normalize_file_ids(
+            params.get("file_ids") if isinstance(params.get("file_ids"), list) else context.settings.get("__selected_file_ids")
+        )
+        index_id_raw = params.get("index_id") if params.get("index_id") is not None else context.settings.get("__selected_index_id")
         index_id = int(index_id_raw) if isinstance(index_id_raw, int) or str(index_id_raw).isdigit() else None
         depth_tier = str(
             params.get("research_depth_tier")
@@ -81,6 +83,11 @@ class DocumentHighlightExtractTool(AgentTool):
             if params.get("prefer_pdf") is not None
             else context.settings.get("__file_research_prefer_pdf", True)
         )
+        allow_recent_index_fallback = bool(
+            params.get("allow_recent_index_fallback")
+            if params.get("allow_recent_index_fallback") is not None
+            else context.settings.get("__file_research_allow_recent_index_fallback", False)
+        )
 
         chunks = _load_source_chunks(
             user_id=context.user_id,
@@ -89,6 +96,7 @@ class DocumentHighlightExtractTool(AgentTool):
             max_sources=max_sources,
             max_chunks=max_chunks,
             prefer_pdf=prefer_pdf_only,
+            allow_recent_index_fallback=allow_recent_index_fallback,
         )
         if not chunks:
             return ToolExecutionResult(

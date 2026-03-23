@@ -55,6 +55,24 @@ interface UseAgentActivityDerivedParams {
   streaming: boolean;
 }
 
+function isConversationOnlySceneSignal(event: AgentActivityEvent | null): boolean {
+  if (!event) {
+    return false;
+  }
+  const normalizedType = String(event.event_type || "").trim().toLowerCase();
+  const sceneSurface = String(event.data?.["scene_surface"] ?? event.metadata?.["scene_surface"] ?? "")
+    .trim()
+    .toLowerCase();
+  const sceneFamily = String(event.data?.["scene_family"] ?? event.metadata?.["scene_family"] ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    normalizedType === "team_chat_message" ||
+    sceneSurface === "team_chat" ||
+    sceneFamily === "chat"
+  );
+}
+
 function useAgentActivityDerived({
   events,
   cursor,
@@ -131,19 +149,24 @@ function useAgentActivityDerived({
     if (!activeEvent) {
       return null;
     }
+    const activeIsConversationOnly = isConversationOnlySceneSignal(activeEvent);
     const hasDirectSceneSignal =
-      Boolean(String(activeEvent.data?.["scene_surface"] ?? activeEvent.metadata?.["scene_surface"] ?? "").trim()) ||
-      Boolean(String(activeEvent.data?.["scene_family"] ?? activeEvent.metadata?.["scene_family"] ?? "").trim()) ||
-      Boolean(String(activeEvent.data?.["ui_target"] ?? activeEvent.metadata?.["ui_target"] ?? "").trim());
+      !activeIsConversationOnly &&
+      (Boolean(String(activeEvent.data?.["scene_surface"] ?? activeEvent.metadata?.["scene_surface"] ?? "").trim()) ||
+        Boolean(String(activeEvent.data?.["scene_family"] ?? activeEvent.metadata?.["scene_family"] ?? "").trim()) ||
+        Boolean(String(activeEvent.data?.["ui_target"] ?? activeEvent.metadata?.["ui_target"] ?? "").trim()));
     if (hasDirectSceneSignal) {
       return activeEvent;
     }
     const activeEventTab = eventTab(activeEvent);
-    if (activeEventTab !== "system" || isApiRuntimeEvent(activeEvent)) {
+    if (!activeIsConversationOnly && (activeEventTab !== "system" || isApiRuntimeEvent(activeEvent))) {
       return activeEvent;
     }
     for (let idx = visibleEvents.length - 1; idx >= 0; idx -= 1) {
       const candidate = visibleEvents[idx];
+      if (isConversationOnlySceneSignal(candidate)) {
+        continue;
+      }
       if (eventTab(candidate) !== "system" || isApiRuntimeEvent(candidate)) {
         return candidate;
       }

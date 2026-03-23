@@ -11,6 +11,19 @@ PLACEHOLDER_SIGNATURE_RE = re.compile(
 INTERNAL_CONTEXT_LINE_RE = re.compile(
     r"(?im)^(?:working context:|active role:|role-scoped context:|role verification obligations:|unresolved slots:).*$"
 )
+EVOLUTION_OVERLAY_HEADER_RE = re.compile(
+    r"(?ims)^\s*based on previous runs, keep these lessons in mind:\s*(?:\n+\s*\d+\.\s.*?)*(?=\n{2,}|\Z)"
+)
+FAILED_TEAMMATE_LINE_RE = re.compile(
+    r"(?im)^\s*\[from [^\]\n]{1,80}\]:\s*\[failed to respond:.*$"
+)
+PLACEHOLDER_TOKEN_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]{0,64}\}")
+INTERNAL_FAILURE_LINE_RE = re.compile(
+    r"(?im)^\s*(?:agent ['\"].+?['\"] not found|failed to respond:|conversation_id input should be a valid string).*$"
+)
+SIMPLE_EXPLANATION_HEADING_RE = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?simple explanation \(for a 5-year-old\)\s*:?\s*$"
+)
 CITATION_ANCHOR_RE = re.compile(
     r"<a\b[^>]*class=['\"][^'\"]*\bcitation\b[^'\"]*['\"][^>]*>\s*\[(\d{1,4})\]\s*</a>",
     re.I,
@@ -34,8 +47,12 @@ def sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
     clean = strip_embedded_email_draft(body_text=body_text)
     if not clean:
         return ""
+    clean = EVOLUTION_OVERLAY_HEADER_RE.sub("", clean)
     clean = CITATION_ANCHOR_RE.sub(lambda match: f"[{match.group(1)}]", clean)
     clean = GENERIC_ANCHOR_RE.sub("", clean)
+    clean = FAILED_TEAMMATE_LINE_RE.sub("", clean)
+    clean = INTERNAL_FAILURE_LINE_RE.sub("", clean)
+    clean = PLACEHOLDER_TOKEN_RE.sub("", clean)
     recipient_text = " ".join(str(recipient or "").split()).strip()
     if recipient_text:
         clean = re.sub(re.escape(recipient_text), "the recipient", clean, flags=re.IGNORECASE)
@@ -43,6 +60,8 @@ def sanitize_delivery_body(*, body_text: str, recipient: str) -> str:
     clean = re.sub(r"(?im)^subject:\s*.+$", "", clean)
     clean = re.sub(r"(?im)^objective:\s*.+$", "", clean)
     clean = PLACEHOLDER_SIGNATURE_RE.sub("", clean)
+    if SIMPLE_EXPLANATION_HEADING_RE.search(clean):
+        clean = SIMPLE_EXPLANATION_HEADING_RE.split(clean, maxsplit=1)[0].strip()
     clean = re.sub(r"\n{3,}", "\n\n", clean)
     clean = DEAR_PLACEHOLDER_RE.sub("Hello,", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean)

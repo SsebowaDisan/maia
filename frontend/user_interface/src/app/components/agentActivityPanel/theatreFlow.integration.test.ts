@@ -131,4 +131,39 @@ describe("theatre flow integration", () => {
     });
     expect(tab).toBe("email");
   });
+
+  it("keeps browser theatre active when a later team chat message arrives", () => {
+    const events: AgentActivityEvent[] = [
+      makeEvent({
+        eventType: "browser_navigate",
+        data: {
+          scene_surface: "website",
+          url: "https://www.itransition.com/machine-learning/statistics",
+        },
+      }),
+      makeEvent({
+        eventType: "team_chat_message",
+        data: {
+          scene_surface: "team_chat",
+          scene_family: "chat",
+        },
+        metadata: {
+          scene_surface: "team_chat",
+          scene_family: "chat",
+        },
+      }),
+    ];
+
+    const commit = deriveSurfaceCommit(events);
+    expect(commit?.tab).toBe("browser");
+
+    const tab = desiredPreviewTabForStage({
+      stage: "execute",
+      sceneTab: "system",
+      surfaceCommit: commit,
+      fallbackPreviewTab: "system",
+      manualOverride: false,
+    });
+    expect(tab).toBe("browser");
+  });
 });

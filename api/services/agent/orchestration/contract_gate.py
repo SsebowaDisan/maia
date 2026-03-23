@@ -9,6 +9,11 @@ from api.services.agent.llm_contracts import verify_task_contract_fulfillment
 from api.services.agent.models import AgentAction, AgentActivityEvent, AgentSource
 from api.services.agent.planner import LLM_ALLOWED_TOOL_IDS, PlannedStep
 from api.services.agent.tools.base import ToolExecutionContext
+from api.services.agent.contract_verification_support import (
+    extract_source_evidence_lines,
+    infer_source_origin_label,
+    infer_source_scope_summary,
+)
 
 from .side_effect_status import EXTERNAL_ACTION_KEYS, side_effect_status_from_actions
 
@@ -30,12 +35,26 @@ def action_rows_for_contract_check(actions: list[AgentAction]) -> list[dict[str,
 def source_rows_for_contract_check(sources: list[AgentSource]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source in sources[:24]:
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        origin = infer_source_origin_label(
+            label=str(source.label or "").strip(),
+            url=str(source.url or "").strip(),
+            metadata=metadata,
+        )
+        scope = infer_source_scope_summary(
+            label=str(source.label or "").strip(),
+            url=str(source.url or "").strip(),
+            metadata=metadata,
+        )
         rows.append(
             {
                 "label": str(source.label or "").strip(),
                 "url": str(source.url or "").strip(),
                 "score": source.score,
-                "metadata": source.metadata if isinstance(source.metadata, dict) else {},
+                "origin": origin,
+                "scope_topic": scope,
+                "evidence_lines": extract_source_evidence_lines(metadata)[:3],
+                "metadata": metadata,
             }
         )
     return rows
@@ -200,6 +219,16 @@ def run_contract_check_live(
         if key not in side_effect_status:
             side_effect_status[key] = row
     execution_context.settings["__side_effect_status"] = side_effect_status
+    scoped_allowed_tool_ids = execution_context.settings.get("__allowed_tool_ids")
+    allowed_tool_ids = (
+        [
+            str(item).strip()
+            for item in scoped_allowed_tool_ids
+            if str(item).strip()
+        ]
+        if isinstance(scoped_allowed_tool_ids, list)
+        else sorted(list(LLM_ALLOWED_TOOL_IDS))
+    )
     check = verify_task_contract_fulfillment(
         contract=task_contract,
         request_message=request_message,
@@ -207,7 +236,7 @@ def run_contract_check_live(
         actions=action_rows_for_contract_check(actions),
         report_body=report_body,
         sources=source_rows_for_contract_check(scoped_sources),
-        allowed_tool_ids=sorted(list(LLM_ALLOWED_TOOL_IDS)),
+        allowed_tool_ids=allowed_tool_ids,
         pending_action_tool_id=pending_action_tool_id,
         side_effect_status=side_effect_status,
     )

@@ -36,6 +36,12 @@ const SCENE_FAMILY_LABELS: Record<string, string> = {
   commerce: "Commerce",
   browser: "Browser",
   api: "API",
+  database: "Database",
+  social: "Social",
+  marketing: "Marketing",
+  cloud: "Cloud",
+  scheduling: "Scheduling",
+  design: "Design",
 };
 
 function sceneFamilyLabel(family: string): string {

@@ -141,6 +141,14 @@ function desiredPreviewTabForStage({
   if (manualOverride) {
     return fallbackPreviewTab;
   }
+  if (stage === "breakdown") {
+    if (surfaceCommit?.tab === "browser") {
+      return "browser";
+    }
+    if (sceneTab === "browser") {
+      return "browser";
+    }
+  }
   if (stage === "analyze" && sceneTab !== "system") {
     return sceneTab;
   }

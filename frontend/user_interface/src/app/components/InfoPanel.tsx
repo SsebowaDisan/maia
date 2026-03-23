@@ -24,6 +24,7 @@ import {
 } from "./infoPanel/urlHelpers";
 import { buildMindmapArtifactSummary } from "./mindmapViewer/presentation";
 import { toMindmapPayload } from "./mindmapViewer/viewerHelpers";
+import { resolvePreferredRunId } from "../utils/runIdSelection";
 
 interface InfoPanelProps {
   citationFocus?: CitationFocus | null;
@@ -214,19 +215,10 @@ export function InfoPanel({
     () => toMindmapPayload(workspaceGraphPayload as Record<string, unknown>),
     [workspaceGraphPayload],
   );
-  const conversationRunId = useMemo(() => {
-    const explicit = String(activityRunId || "").trim();
-    if (explicit) {
-      return explicit;
-    }
-    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
-      const runId = String(activityEvents[index]?.run_id || "").trim();
-      if (runId) {
-        return runId;
-      }
-    }
-    return "";
-  }, [activityEvents, activityRunId]);
+  const conversationRunId = useMemo(
+    () => resolvePreferredRunId(activityRunId, activityEvents),
+    [activityEvents, activityRunId],
+  );
   const showTeamConversation = Boolean(conversationRunId) || activityEvents.length > 0;
   const showEvidenceSurfaces = Boolean(citationFocus);
   const mindmapSummary = useMemo(
@@ -390,18 +382,25 @@ export function InfoPanel({
       <div className="border-b border-black/[0.06] px-5 py-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
-            {showEvidenceSurfaces ? "Evidence" : "Dialogue"}
+            {showEvidenceSurfaces ? "Evidence" : showTeamConversation ? "Live Team Thread" : "Dialogue"}
           </p>
           <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">
-            {showEvidenceSurfaces ? "Sources" : "Conversation"}
+            {showEvidenceSurfaces ? "Sources" : showTeamConversation ? "Team Conversation" : "Conversation"}
           </h3>
         </div>
       </div>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={contentViewportRef} className="h-full space-y-4 overflow-y-auto overscroll-none px-5 pb-10 pt-5">
+        <div
+          ref={contentViewportRef}
+          className={`h-full overflow-y-auto overscroll-none px-5 ${
+            showEvidenceSurfaces ? "space-y-4 pb-10 pt-5" : "pb-4 pt-4"
+          }`}
+        >
           {showTeamConversation ? (
-            <TeamConversationTab runId={conversationRunId} events={activityEvents} />
+            <div className={showEvidenceSurfaces ? "" : "flex h-full min-h-0 flex-col"}>
+              <TeamConversationTab runId={conversationRunId} events={activityEvents} />
+            </div>
           ) : null}
 
           {showEvidenceSurfaces ? (
@@ -473,11 +472,11 @@ export function InfoPanel({
               </div>
             )}
             </section>
-          ) : (
+          ) : !showTeamConversation ? (
             <section className="rounded-2xl border border-[#e4e7ec] bg-white px-4 py-3 text-[12px] text-[#667085]">
               Click a citation in the assistant answer to open source evidence in this panel.
             </section>
-          )}
+          ) : null}
 
           {/* Citation page preview */}
           {showEvidenceSurfaces && activeCitation ? (
@@ -528,7 +527,9 @@ export function InfoPanel({
             </div>
           ) : null}
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
+        {showEvidenceSurfaces ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
+        ) : null}
       </div>
 
       {/* Footer — matches sidebar footer and composer pill height (60px) */}
@@ -540,7 +541,7 @@ export function InfoPanel({
                 ? `${sources.length} source${sources.length !== 1 ? "s" : ""}`
                 : "No sources"
               : showTeamConversation
-                ? "Team conversation live"
+                ? "Live teammate thread"
                 : "No conversation yet"}
           </span>
         </div>

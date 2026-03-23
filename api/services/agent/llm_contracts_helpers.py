@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from api.services.agent.llm_runtime import call_json_response, env_bool
@@ -160,6 +161,52 @@ def derive_required_actions(*, intent_tags: list[str], delivery_target: str) -> 
     return actions[:6]
 
 
+def suppress_send_email_for_draft_only_scope(
+    *,
+    required_actions: list[str],
+    message: str,
+    agent_goal: str,
+    rewritten_task: str,
+) -> list[str]:
+    cleaned_actions = clean_text_list(required_actions, limit=6, max_item_len=64)
+    if "send_email" not in cleaned_actions:
+        return cleaned_actions
+
+    scoped_text = " ".join(
+        str(part or "").strip().lower()
+        for part in (agent_goal, rewritten_task)
+        if str(part or "").strip()
+    ).strip()
+    if not scoped_text:
+        scoped_text = " ".join(str(message or "").split()).strip().lower()
+    if not scoped_text:
+        return cleaned_actions
+
+    if re.search(r"\bdo\s+not\s+(?:send|dispatch|deliver|mail)\b", scoped_text):
+        return [item for item in cleaned_actions if item != "send_email"]
+
+    draft_markers = (
+        r"\bemail\s+draft\b",
+        r"\bdraft\b",
+        r"\bcompose\b",
+        r"\brewrite\b",
+        r"\bsynthesize\b",
+        r"\bwrite\b",
+    )
+    send_markers = (
+        r"\bsend\b",
+        r"\bdeliver\b",
+        r"\bdispatch\b",
+        r"\bmail\b",
+        r"\boutbox\b",
+    )
+    has_draft_scope = any(re.search(pattern, scoped_text) for pattern in draft_markers)
+    has_send_scope = any(re.search(pattern, scoped_text) for pattern in send_markers)
+    if has_draft_scope and not has_send_scope:
+        return [item for item in cleaned_actions if item != "send_email"]
+    return cleaned_actions
+
+
 def align_required_actions_with_intent(
     *,
     required_actions: list[str],
@@ -252,8 +299,41 @@ def reconcile_required_actions_with_llm(
     llm_actions = [item for item in raw_actions if item in allowed_actions]
     if not llm_actions:
         return cleaned_actions
+    explicit_scope_text = " ".join(
+        [
+            str(message or "").strip().lower(),
+            str(agent_goal or "").strip().lower(),
+            str(rewritten_task or "").strip().lower(),
+        ]
+    ).strip()
+    if "post_message" in llm_actions:
+        explicit_chat_delivery = any(
+            marker in explicit_scope_text
+            for marker in (
+                "slack",
+                "teams channel",
+                "post message",
+                "post to channel",
+                "send to channel",
+                "channel update",
+                "chat channel",
+            )
+        )
+        if not explicit_chat_delivery:
+            llm_actions = [item for item in llm_actions if item != "post_message"]
+    if not llm_actions:
+        return [
+            item
+            for item in cleaned_actions
+            if item != "post_message"
+        ]
     merged = list(dict.fromkeys([*cleaned_actions, *llm_actions]))[:6]
-    return merged
+    return suppress_send_email_for_draft_only_scope(
+        required_actions=merged,
+        message=message,
+        agent_goal=agent_goal,
+        rewritten_task=rewritten_task,
+    )
 
 
 def filter_required_facts_for_execution(

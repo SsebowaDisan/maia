@@ -338,24 +338,35 @@ export function WorkflowBuilderPage() {
       const currentName = String(node.data.agentName || "").trim();
       const currentDescription = String(node.data.agentDescription || "").trim();
       const currentTags = Array.isArray(node.data.agentTags) ? node.data.agentTags : [];
-      const needsName = !currentName || currentName === agentId;
-      const needsDescription = !currentDescription;
-      const needsTags = currentTags.length === 0 && metadata.tags.length > 0;
+      const metadataName = String(metadata.name || "").trim();
+      const metadataDescription = String(metadata.description || "").trim();
+      const metadataTags = Array.isArray(metadata.tags)
+        ? metadata.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+        : [];
+      const canReplaceName = !currentName || currentName === agentId;
+      const needsName =
+        canReplaceName &&
+        Boolean(metadataName) &&
+        currentName !== metadataName;
+      const needsDescription =
+        !currentDescription && Boolean(metadataDescription);
+      const needsTags = currentTags.length === 0 && metadataTags.length > 0;
       if (!needsName && !needsDescription && !needsTags) {
         continue;
       }
+      const nextConfig = {
+        ...(node.data.config || {}),
+        ...(needsName ? { agent_name: metadataName } : {}),
+        ...(needsDescription ? { agent_description: metadataDescription } : {}),
+        ...(needsTags ? { agent_tags: metadataTags } : {}),
+      };
       updateNodeData(
         node.id,
         {
-          ...(needsName ? { agentName: metadata.name } : {}),
-          ...(needsDescription ? { agentDescription: metadata.description } : {}),
-          ...(needsTags ? { agentTags: metadata.tags } : {}),
-          config: {
-            ...(node.data.config || {}),
-            ...(needsName ? { agent_name: metadata.name } : {}),
-            ...(needsDescription ? { agent_description: metadata.description } : {}),
-            ...(needsTags ? { agent_tags: metadata.tags } : {}),
-          },
+          ...(needsName ? { agentName: metadataName } : {}),
+          ...(needsDescription ? { agentDescription: metadataDescription } : {}),
+          ...(needsTags ? { agentTags: metadataTags } : {}),
+          config: nextConfig,
         },
         { markDirty: false },
       );

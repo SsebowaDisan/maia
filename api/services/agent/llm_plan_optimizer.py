@@ -66,6 +66,8 @@ def optimize_plan_rows(
         "- Keep practical order and include only allowed_tool_ids.\n"
         "- Add missing critical steps, remove redundant steps.\n"
         "- Fill obvious params (recipient, url, title, summary) when present in request.\n"
+        "- NEVER invent, guess, or placeholder-fill URLs. Keep URL-based steps only when the URL was explicit in the request/context or produced by a prior step.\n"
+        "- Remove any browser.playwright.inspect, web.extract.structured, or web.dataset.adapter step that uses example.com/example.org/example.net or another placeholder URL.\n"
         "- If the user asks where a company is located/found, preserve or add location-evidence steps.\n"
         "- If the user asks to submit a website contact form, preserve or add `browser.contact_form.send`.\n"
         "- In company_agent mode, keep server-side delivery steps.\n"

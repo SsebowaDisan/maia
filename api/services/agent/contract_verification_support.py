@@ -39,6 +39,14 @@ ACTION_TOOL_IDS = {
 }
 
 
+def _pick_first_nonempty(*values: Any) -> str:
+    for value in values:
+        text = " ".join(str(value or "").split()).strip()
+        if text:
+            return text
+    return ""
+
+
 def clean_text_list(raw: Any, *, limit: int, max_item_len: int = 220) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -70,6 +78,86 @@ def host_from_url(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def infer_source_origin_label(
+    *,
+    label: str = "",
+    url: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    meta = metadata if isinstance(metadata, dict) else {}
+    direct_origin = _pick_first_nonempty(
+        meta.get("source_origin"),
+        meta.get("origin"),
+        meta.get("publisher"),
+        meta.get("source_author"),
+        meta.get("site_name"),
+    )
+    if direct_origin:
+        return direct_origin[:120]
+    label_text = _pick_first_nonempty(label, meta.get("title"))
+    if label_text:
+        return label_text[:120]
+    host = host_from_url(url)
+    if not host:
+        return ""
+    root = host.split(".")
+    if len(root) >= 2:
+        base = root[-2]
+    else:
+        base = host
+    return base.replace("-", " ").replace("_", " ").strip().title()[:120]
+
+
+def infer_source_scope_summary(
+    *,
+    label: str = "",
+    url: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    meta = metadata if isinstance(metadata, dict) else {}
+    return _pick_first_nonempty(
+        meta.get("scope_topic"),
+        meta.get("topic"),
+        meta.get("branch"),
+        meta.get("excerpt"),
+        meta.get("snippet"),
+        meta.get("text_excerpt"),
+        meta.get("description"),
+        meta.get("extract"),
+        meta.get("goal"),
+        meta.get("title"),
+        label,
+        url,
+    )[:260]
+
+
+def extract_source_evidence_lines(metadata: dict[str, Any] | None) -> list[str]:
+    meta = metadata if isinstance(metadata, dict) else {}
+    rows: list[str] = []
+    for key in ("excerpt", "snippet", "text_excerpt", "description", "extract"):
+        value = meta.get(key)
+        text = " ".join(str(value or "").split()).strip()
+        if text and text not in rows:
+            rows.append(text[:260])
+            if len(rows) >= 3:
+                return rows
+    raw_evidence = meta.get("evidence")
+    if isinstance(raw_evidence, list):
+        for item in raw_evidence[:6]:
+            if isinstance(item, dict):
+                field = " ".join(str(item.get("field") or "").split()).strip()
+                quote = " ".join(str(item.get("quote") or "").split()).strip()
+                text = ". ".join(part for part in [field, quote] if part).strip()
+            else:
+                text = " ".join(str(item or "").split()).strip()
+            if not text or text in rows:
+                continue
+            rows.append(text[:260])
+            if len(rows) >= 3:
+                return rows
+    return rows
 
 
 def tokenize(text: str) -> set[str]:
@@ -110,16 +198,21 @@ def collect_evidence_texts(
         label = " ".join(str(source.get("label") or "").split()).strip()
         url = " ".join(str(source.get("url") or "").split()).strip()
         metadata = source.get("metadata")
-        excerpt = ""
-        if isinstance(metadata, dict):
-            for key in ("excerpt", "snippet", "text_excerpt", "description"):
-                value = metadata.get(key)
-                if isinstance(value, str) and value.strip():
-                    excerpt = value.strip()
-                    break
+        excerpt = _pick_first_nonempty(
+            *(metadata.get(key) for key in ("excerpt", "snippet", "text_excerpt", "description"))
+        ) if isinstance(metadata, dict) else ""
+        origin = infer_source_origin_label(label=label, url=url, metadata=metadata if isinstance(metadata, dict) else None)
+        scope = infer_source_scope_summary(label=label, url=url, metadata=metadata if isinstance(metadata, dict) else None)
+        evidence_lines = extract_source_evidence_lines(metadata if isinstance(metadata, dict) else None)
         joined = " ".join(item for item in [label, url, excerpt] if item).strip()
         if joined:
             rows.append(joined[:900])
+        if origin:
+            rows.append(f"Source origin: {origin}. URL: {url or 'n/a'}")
+        if scope:
+            rows.append(f"Scope/topic coverage: {scope}")
+        for evidence_line in evidence_lines[:3]:
+            rows.append(f"Source evidence: {evidence_line}")
     deduped: list[str] = []
     seen: set[str] = set()
     for row in rows:

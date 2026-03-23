@@ -53,6 +53,7 @@ def run_agent_task(
     allowed_tool_ids: list[str] | None = None,
     agent_id: str | None = None,
     max_tool_calls: int | None = None,
+    settings_overrides: dict[str, Any] | None = None,
 ) -> Generator[dict[str, Any], None, None]:
     """Run an agent task through the existing AgentOrchestrator.
 
@@ -81,8 +82,14 @@ def run_agent_task(
 
     effective_conversation_id = conversation_id or run_id or str(uuid.uuid4())
 
-    # P7-04: prepend long-term memory context when an agent_id is known
-    memory_context = _prepare_memory_context(tenant_id, agent_id, task)
+    workflow_stage_scope = isinstance(allowed_tool_ids, list)
+
+    # P7-04: prepend long-term memory context when an agent_id is known.
+    # Explicit workflow-stage runs already carry scoped step inputs and should
+    # not inherit stale long-term memories unless explicitly re-enabled.
+    memory_context = ""
+    if not workflow_stage_scope:
+        memory_context = _prepare_memory_context(tenant_id, agent_id, task)
 
     effective_message = task
     parts: list[str] = []
@@ -104,6 +111,8 @@ def run_agent_task(
         settings["__allowed_tool_ids"] = list(allowed_tool_ids)
     if max_tool_calls is not None:
         settings["__max_tool_calls"] = max_tool_calls
+    if isinstance(settings_overrides, dict):
+        settings.update(settings_overrides)
 
     # CB06: track tool call count and enforce the cap in the event stream
     tool_call_count = 0
@@ -111,18 +120,37 @@ def run_agent_task(
 
     orchestrator = get_orchestrator()
     try:
-        for event in orchestrator.run_stream(
+        stream = orchestrator.run_stream(
             user_id=tenant_id,
             conversation_id=effective_conversation_id,
             request=request,
             settings=settings,
-        ):
+        )
+        while True:
+            try:
+                event = next(stream)
+            except StopIteration as stop:
+                result = stop.value
+                if isinstance(result, dict):
+                    answer = str(result.get("answer") or "").strip()
+                    if answer:
+                        yield {
+                            "event_type": "agent_run_result",
+                            "content": answer,
+                            "run_result": result,
+                        }
+                else:
+                    answer = str(getattr(result, "answer", "") or "").strip()
+                    if answer:
+                        yield {
+                            "event_type": "agent_run_result",
+                            "content": answer,
+                            "run_result": result.to_dict() if hasattr(result, "to_dict") else {},
+                        }
+                break
             if budget_exceeded:
                 break
-            # Count tool-call events
-            if max_tool_calls is not None and event.get("event_type") in (
-                "tool_call", "tool_use", "tool_result"
-            ):
+            if max_tool_calls is not None and _is_tool_related_event(event):
                 tool_call_count += 1
                 if tool_call_count >= max_tool_calls:
                     budget_exceeded = True
@@ -141,3 +169,20 @@ def run_agent_task(
     except Exception as exc:
         logger.error("run_agent_task failed (tenant=%s): %s", tenant_id, exc, exc_info=True)
         yield {"event_type": "error", "detail": str(exc)[:300]}
+
+
+def _is_tool_related_event(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("event_type") or "").strip().lower()
+    if event_type in {"tool_call", "tool_use", "tool_result", "tool_started", "tool_completed"}:
+        return True
+    if "tool" in event_type and event_type != "tool_catalog":
+        return True
+    if event.get("tool_id"):
+        return True
+    data = event.get("data")
+    if isinstance(data, dict) and data.get("tool_id"):
+        return True
+    payload = event.get("payload")
+    if isinstance(payload, dict) and payload.get("tool_id"):
+        return True
+    return False

@@ -155,6 +155,77 @@ class Brain:
                 logger.debug("brain.hypothesis_tracker_init failed: %s", exc)
                 self._hypothesis_tracker = None
 
+    def _allowed_tool_ids(self) -> set[str]:
+        raw = getattr(self.state, "_allowed_tool_ids", None)
+        if not isinstance(raw, (list, set, tuple)):
+            allowed: set[str] = set()
+        else:
+            allowed = {str(tool_id).strip() for tool_id in raw if str(tool_id).strip()}
+        if not self._suppress_live_inspection_expansion():
+            return allowed
+        return {
+            tool_id
+            for tool_id in allowed
+            if tool_id not in {"browser.playwright.inspect", "documents.highlight.extract"}
+        }
+
+    def _runtime_settings(self) -> dict[str, Any]:
+        ctx = getattr(self.state, "execution_context", None)
+        settings = getattr(ctx, "settings", None)
+        return settings if isinstance(settings, dict) else {}
+
+    def _truthy(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _suppress_live_inspection_expansion(self) -> bool:
+        settings = self._runtime_settings()
+        if not settings:
+            return False
+        depth_tier = " ".join(
+            str(settings.get("__research_depth_tier") or "").split()
+        ).strip().lower() or "standard"
+        if depth_tier != "standard":
+            return False
+        target_url = " ".join(
+            str(settings.get("__task_target_url") or "").split()
+        ).strip()
+        explicit_file_scope = any(
+            self._truthy(settings.get(key))
+            for key in (
+                "__deep_search_prompt_scoped_pdfs",
+                "__deep_search_user_selected_files",
+                "__selected_file_ids",
+            )
+        )
+        web_only = self._truthy(settings.get("__research_web_only"))
+        online_research = (
+            " ".join(str(settings.get("__web_routing_mode") or "").split()).strip().lower()
+            == "online_research"
+        )
+        return (web_only or online_research) and not target_url and not explicit_file_scope
+
+    def _filter_injected_steps(self, steps: list[Any]) -> list[Any]:
+        allowed = self._allowed_tool_ids()
+        suppress_live_inspection = self._suppress_live_inspection_expansion()
+        if not allowed and not suppress_live_inspection:
+            return list(steps)
+        filtered: list[Any] = []
+        for step in steps:
+            tool_id = ""
+            if isinstance(step, PlannedStep):
+                tool_id = str(step.tool_id or "").strip()
+            elif isinstance(step, dict):
+                tool_id = str(step.get("tool_id") or "").strip()
+            if suppress_live_inspection and tool_id in {"browser.playwright.inspect", "documents.highlight.extract"}:
+                continue
+            if tool_id and tool_id in allowed:
+                filtered.append(step)
+            elif not allowed and tool_id:
+                filtered.append(step)
+        return filtered
+
     # ------------------------------------------------------------------
     # Public helpers called by the orchestrator / step executor
     # ------------------------------------------------------------------
@@ -322,7 +393,7 @@ class Brain:
                         yield emit_event(pivot_event)
 
                         # Inject pivot steps into the plan
-                        for _ps in _pivot.new_steps[:3]:
+                        for _ps in self._filter_injected_steps(_pivot.new_steps[:3]):
                             if isinstance(_ps, dict) and _ps.get("tool_id"):
                                 steps.append(PlannedStep(
                                     tool_id=str(_ps.get("tool_id", "")),
@@ -606,6 +677,16 @@ class Brain:
                         except Exception:
                             pass
                         if _avail_tools:
+                            allowed = self._allowed_tool_ids()
+                            if allowed:
+                                _avail_tools = [tool_id for tool_id in _avail_tools if tool_id in allowed]
+                        if _avail_tools:
+                            if (
+                                self._suppress_live_inspection_expansion()
+                                and _next.tool_id in {"marketing.web_research", "web.extract.structured"}
+                            ):
+                                _avail_tools = []
+                        if _avail_tools:
                             _plan = composer.detect_composition_opportunity(
                                 step=_step_dict,
                                 available_tools=_avail_tools,
@@ -635,6 +716,7 @@ class Brain:
             new_steps = build_revision_steps(
                 state=self.state,
                 registry=self.registry,
+                allowed_tool_ids=self._allowed_tool_ids(),
             )
             if new_steps:
                 self.state.revision_count += 1

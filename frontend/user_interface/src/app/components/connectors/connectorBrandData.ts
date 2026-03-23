@@ -81,6 +81,83 @@ export type BrandStyle = {
   iconUrl?: string;
 };
 
+// Official brand domains used for runtime favicon fallback resolution.
+// This allows each connector to display an official favicon even when a
+// direct icon URL is blocked, moved, or temporarily unavailable.
+export const BRAND_OFFICIAL_DOMAIN_MAP: Partial<Record<ConnectorBrandKey, string>> = {
+  google: "workspace.google.com",
+  google_cloud: "cloud.google.com",
+  gmail: "mail.google.com",
+  google_calendar: "calendar.google.com",
+  google_drive: "drive.google.com",
+  google_docs: "docs.google.com",
+  google_sheets: "sheets.google.com",
+  google_analytics: "analytics.google.com",
+  google_ads: "ads.google.com",
+  google_maps: "maps.google.com",
+  microsoft: "microsoft.com",
+  outlook: "outlook.live.com",
+  microsoft_calendar: "outlook.live.com",
+  onedrive: "onedrive.live.com",
+  excel: "microsoft365.com",
+  word: "microsoft365.com",
+  teams: "teams.microsoft.com",
+  slack: "slack.com",
+  notion: "notion.so",
+  hubspot: "hubspot.com",
+  salesforce: "salesforce.com",
+  jira: "atlassian.com",
+  airtable: "airtable.com",
+  zendesk: "zendesk.com",
+  stripe: "stripe.com",
+  shopify: "shopify.com",
+  sap: "sap.com",
+  asana: "asana.com",
+  aws: "aws.amazon.com",
+  bigquery: "cloud.google.com",
+  bing: "bing.com",
+  box: "box.com",
+  brave: "brave.com",
+  calendly: "calendly.com",
+  cloudflare: "cloudflare.com",
+  confluence: "atlassian.com",
+  discord: "discord.com",
+  docusign: "docusign.com",
+  dropbox: "dropbox.com",
+  figma: "figma.com",
+  github: "github.com",
+  intercom: "intercom.com",
+  linear: "linear.app",
+  linkedin: "linkedin.com",
+  mailchimp: "mailchimp.com",
+  make: "make.com",
+  monday: "monday.com",
+  openai: "openai.com",
+  pinecone: "pinecone.io",
+  postgresql: "postgresql.org",
+  quickbooks: "quickbooks.intuit.com",
+  spotify: "spotify.com",
+  supabase: "supabase.com",
+  trello: "trello.com",
+  twilio: "twilio.com",
+  twitter: "x.com",
+  vercel: "vercel.com",
+  webflow: "webflow.com",
+  xero: "xero.com",
+  youtube: "youtube.com",
+  zapier: "zapier.com",
+  playwright: "playwright.dev",
+  browser: "google.com",
+  http: "httpbin.org",
+  page_monitor: "web.dev",
+  invoice: "quickbooks.intuit.com",
+  email_validation: "zerobounce.net",
+  sec_edgar: "sec.gov",
+  newsapi: "newsapi.org",
+  reddit: "reddit.com",
+  arxiv: "arxiv.org",
+};
+
 // Google products: official product marks from gstatic.
 // Third-party brands: official favicon/logo URLs from brand-owned domains.
 const _GOOGLE_PRODUCT = "https://www.gstatic.com/images/branding/product/1x/";
@@ -136,7 +213,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   microsoft: {
     text: "MS", background: "#ffffff", color: "#5E5E5E", borderColor: "#e5e7eb",
-    iconUrl: "https://www.microsoft.com/favicon.ico",
+    iconUrl: "https://res.cdn.office.net/officehub/images/content/images/favicon_copilot-4370172aa6.ico",
   },
   outlook: {
     text: "O", background: "#ffffff", color: "#0078d4", borderColor: "#e5e7eb",
@@ -240,7 +317,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   discord: {
     text: "D", background: "#ffffff", color: "#5865f2", borderColor: "#e5e7eb",
-    iconUrl: "https://discord.com/favicon.ico",
+    iconUrl: "https://cdn.prod.website-files.com/6257adef93867e50d84d30e2/62fddf0fde45a8baedcc7ee5_847541504914fd33810e70a0ea73177e%20(2)-1.png",
   },
   docusign: {
     text: "DS", background: "#ffffff", color: "#ffcc00", borderColor: "#e5e7eb",
@@ -248,11 +325,11 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   dropbox: {
     text: "DB", background: "#ffffff", color: "#0061ff", borderColor: "#e5e7eb",
-    iconUrl: "https://www.dropbox.com/favicon.ico",
+    iconUrl: "https://cfl.dropboxstatic.com/static/metaserver/static/images/favicon.ico",
   },
   figma: {
     text: "F", background: "#ffffff", color: "#a259ff", borderColor: "#e5e7eb",
-    iconUrl: "https://www.figma.com/favicon.ico",
+    iconUrl: "https://static.figma.com/app/icon/2/favicon.ico",
   },
   github: {
     text: "GH", background: "#ffffff", color: "#111827", borderColor: "#e5e7eb",
@@ -260,7 +337,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   intercom: {
     text: "I", background: "#ffffff", color: "#0ea5e9", borderColor: "#e5e7eb",
-    iconUrl: "https://www.intercom.com/favicon.ico",
+    iconUrl: "https://www.intercom.com/intercom-marketing-site/favicons/favicon.ico",
   },
   linear: {
     text: "L", background: "#ffffff", color: "#5e6ad2", borderColor: "#e5e7eb",
@@ -284,7 +361,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   openai: {
     text: "AI", background: "#ffffff", color: "#10a37f", borderColor: "#e5e7eb",
-    iconUrl: "https://openai.com/favicon.ico",
+    iconUrl: "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
   },
   pinecone: {
     text: "P", background: "#ffffff", color: "#00b894", borderColor: "#e5e7eb",
@@ -296,7 +373,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   quickbooks: {
     text: "QB", background: "#ffffff", color: "#2ca01c", borderColor: "#e5e7eb",
-    iconUrl: "https://quickbooks.intuit.com/favicon.ico",
+    iconUrl: "https://www.google.com/s2/favicons?domain=quickbooks.intuit.com&sz=128",
   },
   spotify: {
     text: "Sp", background: "#ffffff", color: "#1db954", borderColor: "#e5e7eb",
@@ -304,7 +381,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   supabase: {
     text: "SB", background: "#ffffff", color: "#3ecf8e", borderColor: "#e5e7eb",
-    iconUrl: "https://supabase.com/favicon.ico",
+    iconUrl: "https://supabase.com/favicon/favicon-96x96.png",
   },
   trello: {
     text: "Tr", background: "#ffffff", color: "#0079bf", borderColor: "#e5e7eb",
@@ -336,7 +413,7 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   zapier: {
     text: "Z", background: "#ffffff", color: "#ff4a00", borderColor: "#e5e7eb",
-    iconUrl: "https://zapier.com/favicon.ico",
+    iconUrl: "https://zapier.com/l/favicon-96.png",
   },
   playwright: {
     text: "PW", background: "#ffffff", color: "#2eab6f", borderColor: "#e5e7eb",
@@ -352,11 +429,11 @@ export const BRAND_STYLE_MAP: Record<ConnectorBrandKey, BrandStyle> = {
   },
   page_monitor: {
     text: "PM", background: "#ffffff", color: "#2563eb", borderColor: "#e5e7eb",
-    iconUrl: "/maia-icon.svg",
+    iconUrl: "https://www.gstatic.com/devrel-devsite/prod/v8b8ef181e1dc913802015af34f7ea88ee446e0cb5daec5c977ac4c46a7a372bd/web/images/favicon.png",
   },
   invoice: {
     text: "INV", background: "#ffffff", color: "#7c3aed", borderColor: "#e5e7eb",
-    iconUrl: "/maia-icon.svg",
+    iconUrl: "https://www.google.com/s2/favicons?domain=quickbooks.intuit.com&sz=128",
   },
   email_validation: {
     text: "EV", background: "#ffffff", color: "#7c3aed", borderColor: "#e5e7eb",

@@ -9,7 +9,7 @@ from api.services.agent.llm_runtime import call_json_response, env_bool, sanitiz
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
 PLACEHOLDER_KEYWORD_RE = re.compile(r"^([a-z][a-z0-9-]*)_([0-9]{1,3})$")
-MAX_SEARCH_TERMS = 24
+MAX_SEARCH_TERMS = 40
 
 
 def _extract_url(message: str, goal: str) -> str:
@@ -160,6 +160,8 @@ def _request_blueprint_with_llm(
         "{\n"
         '  "search_terms": ["term 1", "term 2"],\n'
         '  "keywords": ["keyword 1", "keyword 2"],\n'
+        '  "branching_mode": "overview|segmented",\n'
+        '  "query_variant_style": "focused|diverse",\n'
         '  "rationale": "one short sentence"\n'
         "}\n"
         "Rules:\n"
@@ -168,6 +170,9 @@ def _request_blueprint_with_llm(
         "- search_terms should be executable web queries.\n"
         "- No markdown.\n"
         "- Keep each keyword concise.\n\n"
+        "- For a general request like 'research about X' or 'research X and email/report it', choose branching_mode='overview' and query_variant_style='focused' unless the user explicitly asks for segmentation, comparisons, latest news, regulatory review, market sizing, or academic-only depth.\n"
+        "- Use branching_mode='segmented' only when the request genuinely needs separate angles such as market vs academic vs policy, competitor comparison, latest developments, or risk/regulation coverage.\n"
+        "- Use query_variant_style='diverse' only when broader retrieval coverage is necessary; otherwise prefer focused variants around the core topic.\n"
         "- Never fabricate placeholder keywords like 'term_4' or repeated numbering.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
@@ -254,7 +259,7 @@ def build_research_blueprint(
     llm_strict: bool = False,
 ) -> dict[str, Any]:
     target_min = max(10, int(min_keywords or 10))
-    target_search_terms = max(2, min(int(min_search_terms or 2), 20))
+    target_search_terms = max(2, min(int(min_search_terms or 2), MAX_SEARCH_TERMS))
     clean_message = str(message or "").strip()
     clean_goal = str(agent_goal or "").strip()
     target_url = _extract_url(clean_message, clean_goal)
@@ -262,6 +267,8 @@ def build_research_blueprint(
     if llm_only:
         keywords: list[str] = []
         search_terms: list[str] = []
+        branching_mode = "overview"
+        query_variant_style = "focused"
         rationale = "Generated from LLM research blueprint."
     else:
         keywords = _seed_keywords(
@@ -276,6 +283,8 @@ def build_research_blueprint(
             keywords,
             url=target_url,
         )
+        branching_mode = "overview"
+        query_variant_style = "focused"
         rationale = "Generated fallback research blueprint from request context."
 
     if env_bool("MAIA_AGENT_LLM_RESEARCH_BLUEPRINT_ENABLED", default=True):
@@ -291,11 +300,21 @@ def build_research_blueprint(
             if isinstance(normalized, dict):
                 candidate_keywords = _normalize_keywords(normalized.get("keywords"), min_keywords=target_min)
                 candidate_terms = _normalize_terms(normalized.get("search_terms"))
+                candidate_branching_mode = " ".join(
+                    str(normalized.get("branching_mode") or "").split()
+                ).strip().lower()
+                candidate_query_variant_style = " ".join(
+                    str(normalized.get("query_variant_style") or "").split()
+                ).strip().lower()
                 candidate_rationale = " ".join(str(normalized.get("rationale") or "").split()).strip()
                 if candidate_keywords:
                     keywords = candidate_keywords
                 if candidate_terms:
                     search_terms = candidate_terms
+                if candidate_branching_mode in {"overview", "segmented"}:
+                    branching_mode = candidate_branching_mode
+                if candidate_query_variant_style in {"focused", "diverse"}:
+                    query_variant_style = candidate_query_variant_style
                 if candidate_rationale:
                     rationale = candidate_rationale[:220]
         if len(search_terms) < target_search_terms:
@@ -318,6 +337,8 @@ def build_research_blueprint(
                 return {
                     "search_terms": search_terms[:MAX_SEARCH_TERMS],
                     "keywords": keywords[: max(target_min, 16)],
+                    "branching_mode": branching_mode,
+                    "query_variant_style": query_variant_style,
                     "rationale": rationale,
                     "target_url": target_url,
                 }
@@ -336,6 +357,8 @@ def build_research_blueprint(
                 return {
                     "search_terms": search_terms[:MAX_SEARCH_TERMS],
                     "keywords": keywords[: max(target_min, 16)],
+                    "branching_mode": branching_mode,
+                    "query_variant_style": query_variant_style,
                     "rationale": rationale,
                     "target_url": target_url,
                 }
@@ -379,6 +402,8 @@ def build_research_blueprint(
     return {
         "search_terms": search_terms[:MAX_SEARCH_TERMS],
         "keywords": keywords[: max(target_min, 16)],
+        "branching_mode": branching_mode,
+        "query_variant_style": query_variant_style,
         "rationale": rationale,
         "target_url": target_url,
     }

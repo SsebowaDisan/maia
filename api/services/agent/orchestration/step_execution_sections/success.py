@@ -5,6 +5,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+_DEEP_FOLLOWUP_TIERS = {"deep_analytics", "deep_research", "expert"}
+
+
 def _tool_surface_info(tool_id: str) -> tuple[str, str]:
     """Return (event_family, scene_surface) derived from the tool's namespace prefix."""
     tid = str(tool_id or "").lower().strip()
@@ -47,6 +50,115 @@ def _host_from_url(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    lowered = " ".join(str(value).split()).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _depth_tier_from_settings(settings: dict[str, Any]) -> str:
+    return (
+        " ".join(str(settings.get("__research_depth_tier") or "standard").split())
+        .strip()
+        .lower()
+        or "standard"
+    )
+
+
+def _branching_mode_from_settings(settings: dict[str, Any]) -> str:
+    return (
+        " ".join(str(settings.get("__research_branching_mode") or "segmented").split())
+        .strip()
+        .lower()
+        or "segmented"
+    )
+
+
+def _should_insert_live_source_followups(
+    *,
+    settings: dict[str, Any],
+    deep_research_mode: bool,
+) -> bool:
+    explicit_allowed_scope = bool(_allowed_tool_ids_from_settings(settings))
+    depth_tier = _depth_tier_from_settings(settings)
+    if deep_research_mode or depth_tier in _DEEP_FOLLOWUP_TIERS:
+        return True
+
+    explicit_file_scope = _truthy(settings.get("__deep_search_prompt_scoped_pdfs")) or _truthy(
+        settings.get("__deep_search_user_selected_files")
+    )
+    if explicit_file_scope:
+        return True
+
+    target_url = " ".join(str(settings.get("__task_target_url") or "").split()).strip()
+    if target_url:
+        return True
+
+    if explicit_allowed_scope:
+        # Explicit workflow step scopes should not silently fan out into
+        # browser-heavy follow-up inspection during standard research runs.
+        # Preserve only the clearly intentional cases above: deep tiers,
+        # file-scoped reviews, and explicit target URLs.
+        return False
+
+    return False
+
+
+def _should_retry_research_coverage(
+    *,
+    settings: dict[str, Any],
+    deep_research_mode: bool,
+) -> bool:
+    depth_tier = _depth_tier_from_settings(settings)
+    if deep_research_mode or depth_tier in _DEEP_FOLLOWUP_TIERS:
+        return True
+    explicit_file_scope = _truthy(settings.get("__deep_search_prompt_scoped_pdfs")) or _truthy(
+        settings.get("__deep_search_user_selected_files")
+    )
+    if explicit_file_scope:
+        return True
+    target_url = " ".join(str(settings.get("__task_target_url") or "").split()).strip()
+    return bool(target_url)
+
+
+def _allowed_tool_ids_from_settings(settings: dict[str, Any]) -> set[str]:
+    raw = settings.get("__allowed_tool_ids")
+    if not isinstance(raw, list):
+        return set()
+    return {str(tool_id).strip() for tool_id in raw if str(tool_id).strip()}
+
+
+def _primary_research_query_from_settings(settings: dict[str, Any], *, fallback: str = "") -> str:
+    topic = " ".join(str(settings.get("__workflow_stage_primary_topic") or "").split()).strip()
+    if topic:
+        return topic[:240]
+    raw_terms = settings.get("__research_search_terms")
+    if isinstance(raw_terms, list):
+        for item in raw_terms:
+            cleaned = " ".join(str(item or "").split()).strip()
+            if cleaned:
+                return cleaned[:240]
+    return " ".join(str(fallback or "").split()).strip()[:240]
+
+
+def _filter_inserted_steps_by_allowlist(
+    *,
+    steps: list[PlannedStep],
+    settings: dict[str, Any],
+) -> list[PlannedStep]:
+    allowed = _allowed_tool_ids_from_settings(settings)
+    if not allowed:
+        return list(steps)
+    return [step for step in steps if step.tool_id in allowed]
 
 
 def handle_step_success(
@@ -152,6 +264,10 @@ def handle_step_success(
     yield emit_event(completed_event)
 
     if step_status == "success" and step.tool_id == "marketing.web_research" and not state.dynamic_inspection_inserted:
+        allow_live_source_followups = _should_insert_live_source_followups(
+            settings=state.execution_context.settings,
+            deep_research_mode=deep_research_mode,
+        )
         configured_max_urls = state.execution_context.settings.get("__research_max_live_inspections")
         try:
             max_urls = int(configured_max_urls)
@@ -168,8 +284,23 @@ def handle_step_success(
 
         inserted_steps: list[PlannedStep] = []
         coverage_ok = bool(result.data.get("coverage_ok", True)) if isinstance(result.data, dict) else True
-        if not coverage_ok and not state.research_retry_inserted:
-            query = " ".join(str((result.data or {}).get("query") or execution_prompt).split()).strip()[:240]
+        if (
+            not coverage_ok
+            and not state.research_retry_inserted
+            and _should_retry_research_coverage(
+                settings=state.execution_context.settings,
+                deep_research_mode=deep_research_mode,
+            )
+        ):
+            result_query = (
+                " ".join(str((result.data or {}).get("query") or "").split()).strip()
+                if isinstance(result.data, dict)
+                else ""
+            )
+            query = _primary_research_query_from_settings(
+                state.execution_context.settings,
+                fallback=result_query or execution_prompt,
+            )
             max_query_variants = _safe_int_setting("__research_max_query_variants", 12)
             raw_variants = (result.data or {}).get("query_variants") if isinstance(result.data, dict) else []
             scoped_hosts_raw = (
@@ -199,12 +330,13 @@ def handle_step_success(
             )
             if scope_mode not in {"strict", "prefer", "off"}:
                 scope_mode = "strict" if scoped_hosts else "off"
+            query_variant_limit = max(2, max_query_variants)
             query_variants = (
                 [
                     " ".join(str(item).split()).strip()
                     for item in raw_variants
                     if " ".join(str(item).split()).strip()
-                ][: max(2, min(max_query_variants, 20))]
+                ][:query_variant_limit]
                 if isinstance(raw_variants, list)
                 else []
             )
@@ -215,7 +347,7 @@ def handle_step_success(
                         " ".join(str(item).split()).strip()
                         for item in planned_terms
                         if " ".join(str(item).split()).strip()
-                    ][: max(2, min(max_query_variants, 20))]
+                    ][:query_variant_limit]
             if query:
                 inserted_steps.append(
                     PlannedStep(
@@ -241,9 +373,21 @@ def handle_step_success(
                     )
                 )
                 state.research_retry_inserted = True
-        followup_steps = build_browser_followup_steps(
-            result.data,
-            max_urls=max_urls,
+        followup_steps = (
+            build_browser_followup_steps(
+                result.data,
+                max_urls=max_urls,
+            )
+            if allow_live_source_followups
+            else []
+        )
+        inserted_steps = _filter_inserted_steps_by_allowlist(
+            steps=inserted_steps,
+            settings=state.execution_context.settings,
+        )
+        followup_steps = _filter_inserted_steps_by_allowlist(
+            steps=followup_steps,
+            settings=state.execution_context.settings,
         )
         if followup_steps:
             state.dynamic_inspection_inserted = True
@@ -271,6 +415,7 @@ def handle_step_success(
                     "total_steps": len(steps),
                     "step_ids": [item.tool_id for item in steps],
                     "coverage_ok": coverage_ok,
+                    "live_source_followups_enabled": allow_live_source_followups,
                     "parallel_research_trace": batch_trace,
                 },
             )

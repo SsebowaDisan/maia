@@ -154,6 +154,16 @@ def test_document_highlight_extract_supports_large_pdf_group_budget(monkeypatch)
     assert int(result.data.get("source_count") or 0) >= 2
 
 
+def test_document_highlight_extract_does_not_fallback_to_recent_indexed_files() -> None:
+    result = DocumentHighlightExtractTool().execute(
+        context=_context(),
+        prompt="highlight key words",
+        params={},
+    )
+    assert "No readable file content available" in result.summary
+    assert result.data.get("highlighted_words") == []
+
+
 def test_invoice_create_tool_generates_pdf_artifact() -> None:
     result = InvoiceCreateTool().execute(
         context=_context(),

@@ -141,6 +141,9 @@ def index_files_impl(
     apply_upload_scope_to_sources_fn: Callable[..., None],
     indexing_canceled_error_cls: type[Exception],
     upload_paddleocr_enabled: bool,
+    upload_paddleocr_vl_api_enabled: bool,
+    upload_paddleocr_vl_api_url: str,
+    upload_paddleocr_vl_api_token: str,
     upload_index_reader_mode: str,
 ) -> dict[str, Any]:
     if not file_paths:
@@ -152,6 +155,11 @@ def index_files_impl(
     configured_reader_mode = str(
         base_settings.get(f"{prefix}reader_mode", upload_index_reader_mode)
     ).strip() or upload_index_reader_mode
+    remote_paddle_api_configured = bool(
+        upload_paddleocr_vl_api_enabled
+        and str(upload_paddleocr_vl_api_url or "").strip()
+        and str(upload_paddleocr_vl_api_token or "").strip()
+    )
     all_file_ids: list[str] = []
     all_errors: list[str] = []
     all_items: list[dict[str, Any]] = []
@@ -187,7 +195,7 @@ def index_files_impl(
         response: dict[str, Any]
         try:
             if route_to_paddle:
-                if not upload_paddleocr_enabled:
+                if not (upload_paddleocr_enabled or remote_paddle_api_configured):
                     raise RuntimeError("PaddleOCR routing is disabled by configuration.")
                 response = index_pdf_with_paddleocr_route_fn(
                     index=index,

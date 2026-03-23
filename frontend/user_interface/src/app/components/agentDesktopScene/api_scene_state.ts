@@ -1,3 +1,5 @@
+import { sanitizeComputerUseText } from "../../utils/userFacingComputerUse";
+
 type ApiFieldDiff = {
   field: string;
   fromValue: string;
@@ -25,6 +27,8 @@ type ApiSceneState = {
   approvalReason: string;
   fieldDiffs: ApiFieldDiff[];
   validations: ApiValidationCheck[];
+  /** Raw tool parameters from the connector execution — used by skins for rich display. */
+  toolParams: Record<string, unknown>;
 };
 
 function compact(value: unknown): string {
@@ -103,20 +107,32 @@ function parseApiSceneState(args: {
     eventType.startsWith("api_") ||
     eventType.startsWith("api.");
 
-  const connectorId = compact(sceneData["connector_id"] || sceneData["provider"] || sceneData["integration_id"]);
-  const connectorLabel = compact(sceneData["connector_label"] || sceneData["provider_label"] || connectorId);
+  const connectorId = sanitizeComputerUseText(
+    compact(sceneData["connector_id"] || sceneData["provider"] || sceneData["integration_id"]),
+  );
+  const connectorLabel = sanitizeComputerUseText(
+    compact(sceneData["connector_label"] || sceneData["provider_label"] || connectorId),
+  );
   const brandSlug = compact(sceneData["brand_slug"] || sceneData["plugin_brand_slug"] || connectorId);
   const sceneFamily = compact(sceneData["scene_family"] || sceneData["plugin_scene_family"]) || "api";
   const objectType = compact(sceneData["object_type"] || sceneData["resource_type"] || sceneData["entity_type"]);
   const objectId = compact(sceneData["object_id"] || sceneData["record_id"] || sceneData["resource_id"]);
-  const operationLabel =
+  const operationLabel = sanitizeComputerUseText(
     compact(sceneData["operation_label"] || sceneData["action_label"] || sceneData["operation"]) ||
-    compact(args.actionTargetLabel) ||
-    "API operation";
+      compact(args.actionTargetLabel) ||
+      "API operation",
+  );
   const statusLabel = compact(sceneData["action_status"] || args.actionStatus || sceneData["status"]);
   const approvalRequired = Boolean(sceneData["approval_required"] || sceneData["request_approval"]);
   const approvalReason = compact(sceneData["approval_reason"] || sceneData["blocked_reason"]);
-  const summaryText = compact(sceneData["summary"] || args.sceneText || args.activeDetail);
+  const summaryText = sanitizeComputerUseText(compact(sceneData["summary"] || args.sceneText || args.activeDetail));
+
+  // Extract tool_params for rich skin display
+  const rawParams = sceneData["tool_params"] || sceneData["params"] || {};
+  const toolParams: Record<string, unknown> =
+    rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
+      ? (rawParams as Record<string, unknown>)
+      : {};
 
   return {
     isApiScene,
@@ -133,6 +149,7 @@ function parseApiSceneState(args: {
     approvalReason,
     fieldDiffs: parseFieldDiffs(sceneData["field_diffs"] || sceneData["diffs"]),
     validations: parseValidations(sceneData["validations"] || sceneData["validation_checks"]),
+    toolParams,
   };
 }
 

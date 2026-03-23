@@ -10,6 +10,11 @@ from api.services.agent.models import AgentActivityEvent, utc_now
 from api.services.agent.observability import get_agent_observability
 from api.services.agent.planner import PlannedStep
 from api.services.agent.middleware.integration import build_step_context
+from api.services.agent.contract_verification_support import (
+    extract_source_evidence_lines,
+    infer_source_origin_label,
+    infer_source_scope_summary,
+)
 
 from api.services.agent.interaction_suggestion.emitter import maybe_emit_interaction_suggestion
 
@@ -65,13 +70,36 @@ def _extract_content_summary(result: Any) -> str:
         content = str(getattr(result, "content", "") or "")
         if content and content not in base:
             base = f"{base} | {content[:200]}"
-        return base[:600]
+        source_rows = []
+        raw_sources = getattr(result, "sources", None)
+        if isinstance(raw_sources, list):
+            for source in raw_sources[:3]:
+                metadata = getattr(source, "metadata", None)
+                metadata = metadata if isinstance(metadata, dict) else {}
+                label = str(getattr(source, "label", "") or "").strip()
+                url = str(getattr(source, "url", "") or "").strip()
+                origin = infer_source_origin_label(label=label, url=url, metadata=metadata)
+                scope = infer_source_scope_summary(label=label, url=url, metadata=metadata)
+                evidence_lines = extract_source_evidence_lines(metadata)
+                row = " | ".join(
+                    part for part in [
+                        f"origin={origin}" if origin else "",
+                        f"scope={scope[:140]}" if scope else "",
+                        f"url={url}" if url else "",
+                        f"evidence={evidence_lines[0][:140]}" if evidence_lines else "",
+                    ] if part
+                ).strip()
+                if row:
+                    source_rows.append(row)
+        if source_rows:
+            base = f"{base} | sources: {' || '.join(source_rows)}"
+        return base[:1200]
     if isinstance(result, dict):
         # Generic keys first
         for key in ("summary", "content", "text", "answer", "output"):
             val = result.get(key)
             if val:
-                return str(val)[:600]
+                return str(val)[:1200]
         # Workspace tool result keys — build a descriptive summary
         parts: list[str] = []
         if result.get("document_id") or result.get("doc_id"):
@@ -92,10 +120,10 @@ def _extract_content_summary(result: Any) -> str:
         if result.get("deleted"):
             parts.append(f"Deleted file: {result.get('deleted')}")
         if parts:
-            return " | ".join(parts)[:600]
+            return " | ".join(parts)[:1200]
         # Last resort: serialize non-empty dict keys
-        return str({k: v for k, v in result.items() if v and k != "events"})[:600]
-    return str(result)[:600]
+        return str({k: v for k, v in result.items() if v and k != "events"})[:1200]
+    return str(result)[:1200]
 
 
 def _make_brain_signal(
@@ -111,13 +139,25 @@ def _make_brain_signal(
     """Build a BrainSignal from step execution results (lazy import to avoid circulars)."""
     from api.services.agent.brain import BrainSignal, StepOutcome
     content_summary = _extract_content_summary(result)
+    evidence_count = 0
+    raw_sources = getattr(result, "sources", None)
+    if isinstance(raw_sources, list):
+        evidence_count += len(raw_sources)
+    result_data = getattr(result, "data", None)
+    if isinstance(result_data, dict):
+        raw_evidence = result_data.get("evidence")
+        if isinstance(raw_evidence, list):
+            evidence_count += len(raw_evidence)
+        raw_items = result_data.get("items")
+        if isinstance(raw_items, list):
+            evidence_count += min(len(raw_items), 8)
     outcome = StepOutcome(
         step_index=index,
         tool_id=step.tool_id,
         owner_role=owner_role,
         status=status,  # type: ignore[arg-type]
         content_summary=content_summary,
-        evidence_count=1 if content_summary else 0,
+        evidence_count=evidence_count or (1 if content_summary else 0),
         error_message=str(exc)[:200] if exc else "",
         duration_ms=int(elapsed * 1000),
     )
@@ -395,7 +435,11 @@ def execute_planned_steps(
         for _hint in _pre_hints:
             yield _hint
 
-        params = prepare_step_params(step=step, access_context=access_context)
+        params = prepare_step_params(
+            step=step,
+            access_context=access_context,
+            settings=state.execution_context.settings,
+        )
         guard_outcome = yield from run_guard_checks(
             run_id=run_id,
             request=request,

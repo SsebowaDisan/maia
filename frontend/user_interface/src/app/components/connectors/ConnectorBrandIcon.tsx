@@ -1,7 +1,11 @@
 import { Globe2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { BRAND_STYLE_MAP, resolveBrandKey } from "./connectorBrandData";
+import {
+  BRAND_OFFICIAL_DOMAIN_MAP,
+  BRAND_STYLE_MAP,
+  resolveBrandKey,
+} from "./connectorBrandData";
 import { LOCAL_ICON_URL_MAP } from "./connectorLocalIconMap";
 function fallbackGlyph(label: string): string {
   const firstLetter = String(label || "").trim().slice(0, 1).toUpperCase();
@@ -60,6 +64,14 @@ function ConnectorLogoImage({ sources, size, onExhausted }: ConnectorLogoImagePr
   );
 }
 
+function buildOfficialFaviconUrl(domain: string | undefined): string {
+  const cleanDomain = String(domain || "").trim().toLowerCase();
+  if (!cleanDomain) {
+    return "";
+  }
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(cleanDomain)}&sz=128`;
+}
+
 export function ConnectorBrandIcon({
   connectorId,
   brandSlug = "",
@@ -71,12 +83,16 @@ export function ConnectorBrandIcon({
   const style = BRAND_STYLE_MAP[brandKey];
   const text = style.text === "?" ? fallbackGlyph(label) : style.text;
   const [showGlyphFallback, setShowGlyphFallback] = useState(false);
+  const officialFaviconUrl = useMemo(
+    () => buildOfficialFaviconUrl(BRAND_OFFICIAL_DOMAIN_MAP[brandKey]),
+    [brandKey],
+  );
   const iconSources = useMemo(() => {
-    const ordered = [style.localIconUrl, LOCAL_ICON_URL_MAP[brandKey], style.iconUrl].filter(
+    const ordered = [style.localIconUrl, style.iconUrl, officialFaviconUrl, LOCAL_ICON_URL_MAP[brandKey]].filter(
       (value): value is string => Boolean(value),
     );
     return Array.from(new Set(ordered));
-  }, [brandKey, style.localIconUrl, style.iconUrl]);
+  }, [brandKey, officialFaviconUrl, style.localIconUrl, style.iconUrl]);
   useEffect(() => {
     setShowGlyphFallback(false);
   }, [brandKey, iconSources.length, label, connectorId]);

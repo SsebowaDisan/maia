@@ -85,7 +85,7 @@ def _first_note_text(payload: dict[str, Any]) -> str:
     return ""
 
 
-def _collect_citations(ctx: AnswerBuildContext) -> list[dict[str, str]]:
+def collect_evidence_citations(ctx: AnswerBuildContext) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
     include_operational = bool(ctx.runtime_settings.get("__include_operational_citations"))
@@ -159,7 +159,7 @@ def append_evidence_citations(lines: list[str], ctx: AnswerBuildContext) -> None
     lines.append("")
     lines.append("## Evidence Citations")
 
-    citations = _collect_citations(ctx)
+    citations = collect_evidence_citations(ctx)
     if not citations:
         lines.append(
             "- No external evidence sources were captured in this run; findings are based on internal execution traces."

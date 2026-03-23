@@ -104,7 +104,7 @@ def _check_fact(
         objective=state.objective(),
         required_fact=required_fact[:300],
         tool_id=outcome.tool_id,
-        content_summary=outcome.content_summary[:600],
+        content_summary=outcome.content_summary[:1400],
     )
     try:
         raw = call_json_response(
@@ -138,7 +138,7 @@ def _check_action(
         user_goal=state.user_message[:300],
         required_action=required_action[:200],
         tool_id=outcome.tool_id,
-        content_summary=outcome.content_summary[:600],
+        content_summary=outcome.content_summary[:1200],
     )
     try:
         raw = call_json_response(

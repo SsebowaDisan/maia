@@ -80,6 +80,7 @@ def _fallback_template_recommendation(
     *,
     focus_label: str,
     detail_target: str,
+    source_count: int,
 ) -> dict[str, Any]:
     sections: list[dict[str, str]] = [
         {"title": f"{focus_label}: Core Explanation", "purpose": "Answer the user question directly."},
@@ -102,24 +103,33 @@ def _fallback_template_recommendation(
     ]
     if detail_target != "detailed":
         sections = sections[:4]
+    min_chars, max_chars = _delivery_length_target(
+        detail_target=detail_target,
+        source_count=source_count,
+    )
     return {
         "template_name": "dynamic_research_brief",
         "rationale": "Balanced structure optimized for evidence-backed delivery.",
         "sections": sections,
         "detail_target": detail_target,
+        "length_target": {
+            "min_chars": min_chars,
+            "max_chars": max_chars,
+            "reason": "Fallback target based on evidence density and delivery depth.",
+        },
     }
 
 
 def _delivery_length_target(*, detail_target: str, source_count: int) -> tuple[int, int]:
     if detail_target == "detailed":
         if source_count >= 12:
-            return 4200, 9800
+            return 2600, 5200
         if source_count >= 6:
-            return 3200, 8600
-        return 2200, 7000
+            return 1800, 3600
+        return 1400, 2600
     if source_count >= 6:
-        return 1400, 3600
-    return 900, 2800
+        return 1200, 2200
+    return 1000, 1800
 
 
 def _recommend_delivery_template(
@@ -134,6 +144,7 @@ def _recommend_delivery_template(
     fallback = _fallback_template_recommendation(
         focus_label=focus_label,
         detail_target=detail_target,
+        source_count=len(list(sources or [])),
     )
     if not env_bool("MAIA_AGENT_LLM_DELIVERY_TEMPLATE_RECOMMENDER_ENABLED", default=True):
         return fallback
@@ -158,12 +169,13 @@ def _recommend_delivery_template(
         "Recommend the best report template structure for this exact request.\n"
         "Return JSON only in this schema:\n"
         '{ "template_name": "string", "rationale": "string", "sections": ['
-        '{"title":"string","purpose":"string"}], "detail_target": "standard|detailed" }\n'
+        '{"title":"string","purpose":"string"}], "detail_target": "standard|detailed", "length_target": {"min_chars": 1200, "max_chars": 1600, "reason": "string"} }\n'
         "Rules:\n"
         "- This recommendation is per prompt; do not use generic reusable section labels.\n"
         "- Section titles must reflect the user request topic.\n"
         "- Keep 4-6 sections maximum.\n"
-        "- Favor clarity and high signal, with a premium concise tone.\n\n"
+        "- Favor clarity and high signal, with a premium concise tone.\n"
+        "- For a standard research brief or research-plus-email request, prefer roughly 1000-1500 characters unless the evidence complexity requires more.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     response = call_json_response(
@@ -182,6 +194,7 @@ def _recommend_delivery_template(
     template_name = " ".join(str(response.get("template_name") or "").split()).strip()[:80]
     rationale = " ".join(str(response.get("rationale") or "").split()).strip()[:240]
     response_detail = " ".join(str(response.get("detail_target") or "").split()).strip().lower()
+    length_target_raw = response.get("length_target")
     sections_raw = response.get("sections")
     clean_sections: list[dict[str, str]] = []
     if isinstance(sections_raw, list):
@@ -194,12 +207,30 @@ def _recommend_delivery_template(
                 clean_sections.append({"title": title, "purpose": purpose})
     if not template_name or len(clean_sections) < 3:
         return fallback
+    length_target = fallback["length_target"]
+    if isinstance(length_target_raw, dict):
+        try:
+            min_chars = int(length_target_raw.get("min_chars") or 0)
+        except Exception:
+            min_chars = 0
+        try:
+            max_chars = int(length_target_raw.get("max_chars") or 0)
+        except Exception:
+            max_chars = 0
+        reason = " ".join(str(length_target_raw.get("reason") or "").split()).strip()[:200]
+        if 900 <= min_chars < max_chars <= 12000:
+            length_target = {
+                "min_chars": min_chars,
+                "max_chars": max_chars,
+                "reason": reason,
+            }
 
     return {
         "template_name": template_name,
         "rationale": rationale or fallback["rationale"],
         "sections": clean_sections,
         "detail_target": response_detail if response_detail in {"standard", "detailed"} else detail_target,
+        "length_target": length_target,
     }
 
 
@@ -230,13 +261,13 @@ def _fallback_delivery_draft(
         url = " ".join(str(source.get("url") or "").split()).strip()
         excerpt = _source_excerpt(source)
         if label and url and excerpt:
-            source_lines.append(f"- {label}: {url} | {excerpt}")
+            source_lines.append(f"- [{label}]({url}) | {excerpt}")
         elif label and url:
-            source_lines.append(f"- {label}: {url}")
+            source_lines.append(f"- [{label}]({url})")
         elif label:
             source_lines.append(f"- {label}")
         elif url:
-            source_lines.append(f"- {url}")
+            source_lines.append(f"- [{url}]({url})")
     source_lines = source_lines[:6]
 
     body_lines = [
@@ -248,7 +279,7 @@ def _fallback_delivery_draft(
         ),
         (
             "The objective was translated into concrete evidence collection, synthesis, and verification "
-            "before delivery to the recipient."
+            "before delivery to the recipient, with emphasis on clarity, evidence quality, and actionable takeaways."
         ),
         "",
         f"## {focus_label}: Evidence-Grounded Findings",
@@ -268,7 +299,7 @@ def _fallback_delivery_draft(
             ]
         )
     if source_lines:
-        body_lines.extend(["", "### Evidence Trail", "", *source_lines])
+        body_lines.extend(["", "### Sources", "", *source_lines])
     body_lines.extend(
         [
             "",
@@ -345,10 +376,6 @@ def draft_delivery_report_content(
         objective=objective,
         sources=sources,
     ) else "standard"
-    target_min_chars, target_max_chars = _delivery_length_target(
-        detail_target=detail_target,
-        source_count=len(normalized_sources),
-    )
     template_recommendation = _recommend_delivery_template(
         request_message=request_message,
         objective=objective,
@@ -356,6 +383,28 @@ def draft_delivery_report_content(
         detail_target=detail_target,
         sources=sources,
     )
+    length_target = (
+        template_recommendation.get("length_target")
+        if isinstance(template_recommendation, dict)
+        else None
+    )
+    if isinstance(length_target, dict):
+        try:
+            target_min_chars = int(length_target.get("min_chars") or 0)
+        except Exception:
+            target_min_chars = 0
+        try:
+            target_max_chars = int(length_target.get("max_chars") or 0)
+        except Exception:
+            target_max_chars = 0
+    else:
+        target_min_chars = 0
+        target_max_chars = 0
+    if not (900 <= target_min_chars < target_max_chars <= 12000):
+        target_min_chars, target_max_chars = _delivery_length_target(
+            detail_target=detail_target,
+            source_count=len(normalized_sources),
+        )
     payload = {
         "request_message": " ".join(str(request_message or "").split()).strip()[:700],
         "objective": " ".join(str(objective or "").split()).strip()[:600],
@@ -372,13 +421,16 @@ def draft_delivery_report_content(
         '{ "subject": "string", "body_text": "markdown string" }\n'
         "Rules:\n"
         "- Body must be clean markdown and directly answer the user's question.\n"
+        "- Open with a one-paragraph executive answer before any subheadings.\n"
         "- Do not use a fixed reusable template; structure the report for this specific request.\n"
         "- Use request-specific section titles instead of boilerplate labels.\n"
         "- Follow the recommended_template as the primary structure guide for this prompt.\n"
-        "- Keep 4-6 sections with clear hierarchy and premium readability.\n"
+        "- Keep 3-5 sections with clear hierarchy and premium readability unless the evidence genuinely needs more.\n"
         "- Include a clear explanation, key mechanisms, practical implications, and risks/limitations where relevant.\n"
         "- Explicitly connect findings to the provided execution steps and source evidence.\n"
-        "- Cite sources inline as markdown links whenever URLs are available.\n"
+        "- Write with Apple-style clarity: simple, precise, elegant, and free of filler.\n"
+        "- Cite sources inline as markdown links whenever URLs are available, immediately after the supported claim.\n"
+        "- End with a `### Sources` section containing 3-8 concise bullet citations with markdown links.\n"
         "- If evidence is limited, state the limitation clearly without inventing facts.\n"
         "- Keep language professional, clear, and premium in tone (Apple-style clarity: simple, precise, confident).\n"
         f"- Target approximately {target_min_chars}-{target_max_chars} characters for the body.\n"
@@ -448,6 +500,10 @@ def polish_email_content(
     target_rules = (
         "- Output must be a clean outbound email body for a busy business recipient.\n"
         "- Use concise prose and bullet points where helpful.\n"
+        "- Open with a direct 1-2 sentence summary of the answer.\n"
+        "- Preserve or improve source citations and markdown links; do not strip them out.\n"
+        "- Prefer a premium, Apple-style reading experience: calm, precise, visually clean, and structured.\n"
+        "- Use short labeled blocks such as 'Summary:', 'Key Findings:', and 'Sources:' when they improve scanability.\n"
         "- Do not output markdown headings (no lines starting with #).\n"
         "- Do not include any section named 'Email Draft'.\n"
         "- Never include placeholders such as [Your Name], [Your Position], or [Your Contact Information].\n"
@@ -466,6 +522,7 @@ def polish_email_content(
         "- Preserve factual content; do not invent claims.\n"
         "- Keep tone professional, complete, and premium in clarity.\n"
         "- Keep report depth intact; avoid over-compressing substantive content.\n"
+        "- Retain inline citations or source links when present; if evidence is cited in the draft, keep that evidence visible in the polished email.\n"
         "- Do not include recipient email addresses in the message body.\n"
         "- Do not add placeholder recipient tokens such as bracketed names.\n"
         f"{target_rules}\n"

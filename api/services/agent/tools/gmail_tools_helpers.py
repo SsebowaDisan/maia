@@ -9,6 +9,10 @@ from api.services.agent.tools.base import ToolExecutionError, ToolTraceEvent
 
 EMAIL_PATTERN = re.compile(r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 SUBJECT_PATTERN = re.compile(r"(?:subject[:=]|\bsubject\b)\s*['\"]?([^'\n\"]+)", re.IGNORECASE)
+UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]{0,64}\}")
+BROKEN_BODY_MARKER_RE = re.compile(
+    r"(?i)(based on previous runs, keep these lessons in mind:|failed to respond:|conversation_id input should be a valid string)"
+)
 
 
 def _extract_email(text: str) -> str:
@@ -66,6 +70,17 @@ def _compact_text(value: Any, *, limit: int = 280) -> str:
     if len(text) <= limit:
         return text
     return f"{text[: max(1, limit - 1)].rstrip()}..."
+
+
+def _is_invalid_email_body(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if UNRESOLVED_PLACEHOLDER_RE.search(text):
+        return True
+    if BROKEN_BODY_MARKER_RE.search(text):
+        return True
+    return False
 
 
 def _looks_like_path(value: str) -> bool:

@@ -104,7 +104,9 @@ def _redact_delivery_targets(text: str, *, targets: list[str]) -> str:
         if not target:
             continue
         clean = re.sub(re.escape(target), "", clean, flags=re.IGNORECASE)
-    clean = " ".join(clean.split())
+    clean = re.sub(r"[ \t]{2,}", " ", clean)
+    clean = re.sub(r"\n[ \t]+", "\n", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
     return clean.strip()
 
 

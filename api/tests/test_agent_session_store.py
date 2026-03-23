@@ -64,3 +64,28 @@ def test_session_store_retrieves_semantic_context_snippets(tmp_path: Path) -> No
     assert snippets
     assert any("machine learning" in row.lower() for row in snippets)
 
+
+def test_session_context_snippets_do_not_embed_prior_answer_bodies(tmp_path: Path) -> None:
+    store = SessionStore(root=tmp_path / ".maia_agent_test")
+    store.save_session_run(
+        {
+            "run_id": "run_gamma",
+            "user_id": "u1",
+            "conversation_id": "c1",
+            "message": "Research machine learning trends",
+            "agent_goal": "Find machine learning updates",
+            "answer": "This old generated answer should not be re-injected into future planning.",
+            "next_recommended_steps": ["Compare peer-reviewed and industry sources"],
+        }
+    )
+    snippets = store.retrieve_context_snippets(
+        query="machine learning updates",
+        user_id="u1",
+        conversation_id="c1",
+        limit=1,
+    )
+    assert snippets
+    assert "Research machine learning trends" in snippets[0]
+    assert "Compare peer-reviewed and industry sources" in snippets[0]
+    assert "old generated answer" not in snippets[0]
+

@@ -3,6 +3,7 @@
 import { Pause, Play } from "lucide-react";
 import { useRef, useState } from "react";
 import { DesktopViewer } from "./DesktopViewer";
+import { visibleTimelineEvents } from "./replayModePolicy";
 import { ResearchTodoList } from "./ResearchTodoList";
 import type { AgentActivityEvent } from "../../types";
 
@@ -99,6 +100,11 @@ function eventSurfaceLabel(ev: AgentActivityEvent): string {
   return titleFromToken(grouped);
 }
 
+function isAssemblyPlanningEvent(ev: AgentActivityEvent | null | undefined): boolean {
+  const type = cleanToken(ev?.event_type);
+  return type.startsWith("assembly_") || type === "workflow_saved";
+}
+
 function eventIcon(ev: AgentActivityEvent): string {
   const t = ev.event_type.toLowerCase();
   const surface = surfaceKeyForEvent(ev);
@@ -165,6 +171,7 @@ function CinemaOverlay({
   plannedRoadmapSteps = [],
   roadmapActiveIndex = 0,
 }: CinemaOverlayProps) {
+  const timelineEvents = visibleTimelineEvents(visibleEvents);
   // Custom scrubber
   const scrubRef = useRef<HTMLDivElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -190,6 +197,13 @@ function CinemaOverlay({
 
   const hoverEvent = hoverIndex != null ? (orderedEvents[hoverIndex] ?? null) : null;
   const stats = computeStats(visibleEvents);
+  const executionStarted = visibleEvents.some(
+    (event) => cleanToken(event.event_type) === "execution_starting",
+  );
+  const planningFocus =
+    isAssemblyPlanningEvent(activeEvent) &&
+    !executionStarted &&
+    plannedRoadmapSteps.length > 0;
 
   if (!open) return null;
 
@@ -224,7 +238,7 @@ function CinemaOverlay({
             </div>
           ))}
           {/* Research todo list rendered dark for the cinema background */}
-          {(plannedRoadmapSteps.length > 0 || visibleEvents.length > 0) ? (
+          {!planningFocus && (plannedRoadmapSteps.length > 0 || visibleEvents.length > 0) ? (
             <div className="mt-2 border-t border-white/[0.08] pt-3">
               <p className="mb-2 text-[10px] uppercase tracking-widest text-white/50">Tasks</p>
               <ResearchTodoList
@@ -296,7 +310,8 @@ function CinemaOverlay({
 
           {/* Event list */}
           <div className="space-y-1">
-            {visibleEvents.map((ev, eventIndex) => {
+            {timelineEvents.map((ev) => {
+              const eventIndex = visibleEvents.findIndex((candidate) => candidate.event_id === ev.event_id);
               const isActive = eventIndex === safeCursor;
               const badge = importanceBadge(ev);
               const icon = eventIcon(ev);

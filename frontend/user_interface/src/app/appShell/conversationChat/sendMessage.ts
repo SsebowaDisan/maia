@@ -219,6 +219,53 @@ function summarizeBrainRun(events: AgentActivityEvent[]): string {
     return type === "execution_complete" || type === "workflow_completed";
   });
   const outputRecord = asRecord(executionComplete?.data?.outputs);
+  const deliverySentEvent = [...events]
+    .reverse()
+    .find((event) => String(event.event_type || "").trim().toLowerCase() === "email_sent");
+  const rankedOutputs = Object.entries(outputRecord)
+    .map(([key, value]) => {
+      const preview = String(value || "").replace(/\r\n/g, "\n").trim();
+      const lowered = preview.toLowerCase();
+      let score = 0;
+      if (preview.includes("## Evidence Citations")) {
+        score += 5;
+      }
+      if (/\[\d+\]/.test(preview)) {
+        score += 3;
+      }
+      if (/##\s+(executive summary|key findings|summary|findings)/i.test(preview)) {
+        score += 2;
+      }
+      if (/email sent to|sent cited email to/i.test(preview)) {
+        score -= 5;
+      }
+      if (/^to:\s.+\nsubject:\s/im.test(preview)) {
+        score -= 2;
+      }
+      if (/draft|summary|research|report|findings/i.test(key)) {
+        score += 2;
+      }
+      score += Math.min(4, Math.floor(preview.length / 700));
+      return { key, preview, score };
+    })
+    .filter((row) => row.preview)
+    .sort((left, right) => right.score - left.score);
+  const citedResearchBrief = rankedOutputs.find(
+    (row) =>
+      /\[\d+\]/.test(row.preview) &&
+      !/^subject:\s/im.test(row.preview) &&
+      !/^to:\s/im.test(row.preview) &&
+      /##\s+(executive summary|key findings|summary|findings)/i.test(row.preview),
+  );
+  if (citedResearchBrief) {
+    const recipient = String(deliverySentEvent?.data?.recipient || "").trim();
+    const confirmation = recipient ? `\n\nEmail sent to ${recipient}.` : "";
+    return `${citedResearchBrief.preview}${confirmation}`;
+  }
+  const primaryRichOutput = rankedOutputs[0]?.preview || "";
+  if (primaryRichOutput && (primaryRichOutput.includes("## Evidence Citations") || /\[\d+\]/.test(primaryRichOutput))) {
+    return primaryRichOutput;
+  }
   const outputLines = Object.entries(outputRecord)
     .slice(0, 4)
     .map(([key, value]) => {

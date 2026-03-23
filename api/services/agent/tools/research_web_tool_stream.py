@@ -25,6 +25,39 @@ from api.services.agent.tools.research_web_stream_brave import run_brave_provide
 from api.services.agent.tools.research_web_stream_enrichment import run_enrichment_and_finalize_stage
 
 
+_QUERY_SCAFFOLD_MARKERS = (
+    "you are responsible for the role",
+    "execute only your assigned step",
+    "current step focus:",
+    "stage completion rule:",
+    "available context and previous outputs:",
+)
+
+
+def _primary_topic_from_settings(settings: dict[str, Any] | None) -> str:
+    if not isinstance(settings, dict):
+        return ""
+    topic = " ".join(str(settings.get("__workflow_stage_primary_topic") or "").split()).strip()
+    if topic:
+        return topic
+    raw_terms = settings.get("__research_search_terms")
+    if isinstance(raw_terms, list):
+        for item in raw_terms:
+            candidate = " ".join(str(item).split()).strip()
+            if candidate:
+                return candidate
+    return ""
+
+
+def _looks_like_prompt_scaffold(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split()).strip()
+    if not normalized:
+        return False
+    if any(marker in normalized for marker in _QUERY_SCAFFOLD_MARKERS):
+        return True
+    return len(normalized) > 180 and ("current step" in normalized or "execute only" in normalized)
+
+
 def execute_web_research_stream(
     *,
     context: ToolExecutionContext,
@@ -33,7 +66,13 @@ def execute_web_research_stream(
     get_connector_registry_fn: Callable[..., Any],
 ):
     get_connector_registry = get_connector_registry_fn
-    query = str(params.get("query") or prompt).strip() or "company market research"
+    primary_topic = _primary_topic_from_settings(context.settings if isinstance(context.settings, dict) else {})
+    raw_query = " ".join(str(params.get("query") or "").split()).strip()
+    if not raw_query:
+        raw_query = primary_topic or " ".join(str(prompt or "").split()).strip()
+    if _looks_like_prompt_scaffold(raw_query) and primary_topic:
+        raw_query = primary_topic
+    query = raw_query or "company market research"
     configured_max_variants = context.settings.get("__research_max_query_variants")
     max_query_variants = _as_bounded_int(
         params.get("max_query_variants"),
@@ -81,15 +120,36 @@ def execute_web_research_stream(
         high=4,
     )
     depth_tier = " ".join(str(params.get("research_depth_tier") or context.settings.get("__research_depth_tier") or "standard").split()).strip().lower() or "standard"
+    configured_max_live_inspections = _as_bounded_int(
+        context.settings.get("__research_max_live_inspections"),
+        default=8,
+        low=2,
+        high=120,
+    )
+    if depth_tier == "quick":
+        default_max_live_queries = min(2, configured_max_live_inspections)
+        default_clicks_per_query = 1
+    elif depth_tier == "standard":
+        default_max_live_queries = min(4, configured_max_live_inspections)
+        default_clicks_per_query = 1
+    elif depth_tier == "deep_analytics":
+        default_max_live_queries = min(5, configured_max_live_inspections)
+        default_clicks_per_query = 1
+    elif depth_tier == "expert":
+        default_max_live_queries = min(8, configured_max_live_inspections)
+        default_clicks_per_query = 2
+    else:
+        default_max_live_queries = min(6, configured_max_live_inspections)
+        default_clicks_per_query = 2
     max_live_queries = _as_bounded_int(
         context.settings.get("__research_theater_max_live_queries"),
-        default=10,
+        default=default_max_live_queries,
         low=1,
         high=30,
     )
     max_live_clicks_per_query = _as_bounded_int(
         context.settings.get("__research_theater_clicks_per_query"),
-        default=2,
+        default=default_clicks_per_query,
         low=1,
         high=5,
     )
@@ -99,15 +159,19 @@ def execute_web_research_stream(
             " ".join(str(item).split()).strip()
             for item in requested_variants_raw
             if " ".join(str(item).split()).strip()
+            and not _looks_like_prompt_scaffold(" ".join(str(item).split()).strip())
         ][:24]
         if isinstance(requested_variants_raw, list)
         else []
     )
+    query_variant_style = " ".join(str(params.get("query_variant_style") or context.settings.get("__research_query_variant_style") or "diverse").split()).strip().lower() or "diverse"
+    branching_mode = " ".join(str(params.get("branching_mode") or context.settings.get("__research_branching_mode") or "segmented").split()).strip().lower() or "segmented"
     query_variants = _extract_search_variants(
         query=query,
         prompt=prompt,
         requested_variants=requested_variants,
         max_variants=max_query_variants,
+        expansion_mode=query_variant_style,
     )
     if not query_variants:
         query_variants = [query]
@@ -153,6 +217,8 @@ def execute_web_research_stream(
             "provider_requested": requested_provider,
             "research_depth_tier": depth_tier,
             "max_query_variants": max_query_variants,
+            "query_variant_style": query_variant_style,
+            "branching_mode": branching_mode,
             "results_per_query": results_per_query,
             "search_budget_requested": requested_search_budget,
             "search_budget_effective": planned_result_budget,
@@ -171,6 +237,7 @@ def execute_web_research_stream(
         query=query,
         depth_tier=depth_tier,
         registry_names=_rt_registry_names,
+        branching_mode=branching_mode,
     )
     if _research_branches:
         tree_started = ToolTraceEvent(
@@ -312,6 +379,7 @@ def execute_web_research_stream(
         yield from run_enrichment_and_finalize_stage(
             context=context,
             depth_tier=depth_tier,
+            branching_mode=branching_mode,
             max_search_rounds=max_search_rounds,
             query=query,
             query_variants=query_variants,

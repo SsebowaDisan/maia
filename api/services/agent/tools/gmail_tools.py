@@ -20,6 +20,7 @@ from api.services.agent.tools.gmail_tools_helpers import (
     _extract_email,
     _extract_subject,
     _infer_dry_run,
+    _is_invalid_email_body,
     _resolve_attachments,
     _truthy,
 )
@@ -51,6 +52,12 @@ class GmailSendTool(AgentTool):
         explicit_subject = str(params.get("subject") or "").strip()
         explicit_body = str(params.get("body") or "").strip()
         subject = str(explicit_subject or delivery_subject_hint or report_title or _extract_subject(prompt)).strip()
+        if _is_invalid_email_body(explicit_body):
+            explicit_body = ""
+        if _is_invalid_email_body(delivery_body_hint):
+            delivery_body_hint = ""
+        if _is_invalid_email_body(report_content):
+            report_content = ""
         body_source = (
             "explicit"
             if explicit_body

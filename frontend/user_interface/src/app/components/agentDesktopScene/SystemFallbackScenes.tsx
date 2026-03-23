@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { sanitizeComputerUseText } from "../../utils/userFacingComputerUse";
 import { useTypewriterText } from "./useTypewriterText";
 
 type SystemSceneProps = {
@@ -25,14 +26,14 @@ function readRoadmapSteps(sceneData: Record<string, unknown> | undefined): Roadm
         return null;
       }
       const item = row as Record<string, unknown>;
-      const title = String(item.title || "").trim();
+      const title = sanitizeComputerUseText(item.title || "");
       if (!title) {
         return null;
       }
       return {
-        toolId: String(item.toolId || item.tool_id || title).trim() || title,
+        toolId: sanitizeComputerUseText(item.toolId || item.tool_id || title) || title,
         title,
-        whyThisStep: String(item.whyThisStep || item.why_this_step || "").trim(),
+        whyThisStep: sanitizeComputerUseText(item.whyThisStep || item.why_this_step || ""),
       };
     })
     .filter((row): row is RoadmapStep => Boolean(row));
@@ -58,25 +59,37 @@ function looksLikeAssemblyEvent(eventType: string): boolean {
   );
 }
 
+function cleanSystemNarration(value: unknown): string {
+  let text = sanitizeComputerUseText(value);
+  if (!text) {
+    return "";
+  }
+  text = text.replace(/\bllm_unavailable\b/gi, "brain unavailable");
+  text = text.replace(/\broute:\s*[^|]+/gi, "");
+  text = text.replace(/\bprovider:\s*[^|]+/gi, "");
+  text = text.replace(/\|\s*/g, " ");
+  text = text.replace(/\s+/g, " ").trim();
+  return text;
+}
+
 function SystemScene({ activeTitle, activeDetail, activeEventType, sceneText, activeSceneData }: SystemSceneProps) {
-  const statusText = activeTitle || "Processing secure agent workflow";
   const normalizedEventType = String(activeEventType || "").trim().toLowerCase();
   const roadmapSteps = readRoadmapSteps(activeSceneData);
   const roadmapActiveIndex = readRoadmapActiveIndex(activeSceneData);
-  const isAssemblyScene = looksLikeAssemblyEvent(normalizedEventType) || roadmapSteps.length > 0;
-  const connectorFromData = String(activeSceneData?.["connector_id"] || "").trim();
+  const isAssemblyScene = looksLikeAssemblyEvent(normalizedEventType);
+  const connectorFromData = sanitizeComputerUseText(activeSceneData?.["connector_id"] || "");
   const connectorLabelFromTitle = (() => {
     const prefix = "connector needed:";
     const lowered = String(activeTitle || "").trim().toLowerCase();
     if (!lowered.startsWith(prefix)) {
       return "";
     }
-    return String(activeTitle || "").slice(prefix.length).trim();
+    return sanitizeComputerUseText(String(activeTitle || "").slice(prefix.length).trim());
   })();
   const connectorLabel = connectorFromData || connectorLabelFromTitle;
   const stepCount = roadmapSteps.length || Number(activeSceneData?.["step_count"] || 0) || 0;
   const edgeCount = Math.max(0, Number(activeSceneData?.["edge_count"] || 0) || (stepCount > 1 ? stepCount - 1 : 0));
-  const assemblyNarration = String(sceneText || activeDetail || "").trim();
+  const assemblyNarration = cleanSystemNarration(sceneText || activeDetail || "");
   const assemblyStatusLabel = normalizedEventType.includes("error")
     ? "Assembly issue"
     : normalizedEventType === "execution_starting"
@@ -84,11 +97,21 @@ function SystemScene({ activeTitle, activeDetail, activeEventType, sceneText, ac
     : normalizedEventType === "assembly_complete" || normalizedEventType === "assembly_completed"
     ? "Assembly complete"
     : "Assembling";
+  const statusText = isAssemblyScene
+    ? normalizedEventType.includes("error")
+      ? "Assembly issue"
+      : normalizedEventType === "execution_starting"
+      ? "Execution starting"
+      : normalizedEventType === "assembly_complete" || normalizedEventType === "assembly_completed"
+      ? "Team assembled"
+      : "Assembling your team"
+    : cleanSystemNarration(activeTitle) || "Processing secure agent workflow";
   const allStepsCompleted =
     normalizedEventType === "execution_starting" ||
     normalizedEventType === "assembly_complete" ||
     normalizedEventType === "assembly_completed";
   const effectiveRoadmapCursor = allStepsCompleted ? roadmapSteps.length : roadmapActiveIndex;
+  const shouldShowAssemblyNarration = Boolean(assemblyNarration) && roadmapSteps.length === 0;
   const [reduceMotion, setReduceMotion] = useState(false);
   const { typedText: typedStatusText, showCaret } = useTypewriterText(statusText, {
     charIntervalMs: 52,
@@ -184,14 +207,18 @@ function SystemScene({ activeTitle, activeDetail, activeEventType, sceneText, ac
                     Connector needed: <span className="text-[#1d4ed8]">{connectorLabel}</span>
                   </p>
                 ) : null}
-                {assemblyNarration ? (
+                {shouldShowAssemblyNarration ? (
                   <p className="mt-2 text-[12px] text-[#344054]">{assemblyNarration}</p>
                 ) : null}
-                <div className="mt-3 space-y-2 rounded-xl border border-[#dbeafe] bg-[#f8fbff] p-2.5">
+                <div className="mt-3 max-h-[238px] space-y-2 overflow-y-auto rounded-xl border border-[#dbeafe] bg-[#f8fbff] p-2.5">
                   {roadmapSteps.length ? (
                     roadmapSteps.map((step, index) => {
                       const isComplete = effectiveRoadmapCursor > index;
                       const isActive = effectiveRoadmapCursor === index;
+                      const stepReason = sanitizeComputerUseText(step.whyThisStep || "");
+                      const isDuplicateReason =
+                        stepReason &&
+                        stepReason.toLowerCase().trim() === sanitizeComputerUseText(step.title || "").toLowerCase().trim();
                       return (
                         <div
                           key={`${step.toolId}-${index}`}
@@ -203,11 +230,11 @@ function SystemScene({ activeTitle, activeDetail, activeEventType, sceneText, ac
                               : "border-[#e4e7ec] bg-white/70"
                           }`}
                         >
-                          <p className="text-[12px] font-semibold text-[#1f2937]">
+                          <p className="break-words text-[12px] font-semibold text-[#1f2937]">
                             {index + 1}. {step.title}
                           </p>
-                          {step.whyThisStep ? (
-                            <p className="mt-0.5 text-[11px] text-[#475467]">{step.whyThisStep}</p>
+                          {stepReason && !isDuplicateReason ? (
+                            <p className="mt-0.5 break-words text-[11px] text-[#475467]">{stepReason}</p>
                           ) : null}
                         </div>
                       );

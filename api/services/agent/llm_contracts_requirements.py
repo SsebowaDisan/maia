@@ -163,6 +163,8 @@ def prune_missing_requirements_with_llm(
                 "- If delivery_recipient_required=false, recipient blockers are resolved.\n"
                 "- If delivery_target contains a valid recipient email, recipient-email blockers are resolved.\n"
                 "- If output_format_optional=true, generic output-format blockers are resolved.\n"
+                "- Do not keep tone/length/style preference blockers unless the user explicitly requested them.\n"
+                "- Do not keep blockers about another agent's handoff, verification, or internal workflow completion.\n"
                 "- Do not invent new missing blockers.\n"
                 "- Use only indexes from the provided missing_requirements list.\n\n"
                 f"Input:\n{json.dumps(payload, ensure_ascii=True)}"

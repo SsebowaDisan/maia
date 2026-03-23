@@ -491,6 +491,10 @@ frontend/user_interface/dist/
 
 # Local debug payloads / scratch artifacts
 .tmp_*.json
+.tmp_*.py
+.tmp_*.ps1
+.tmp_*.cmd
+tmp_*.txt
 
 # Node modules (root and nested workspaces)
 node_modules/

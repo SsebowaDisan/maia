@@ -144,6 +144,8 @@ def _request_openai_plan(
         "- User does not need to name APIs; infer the right tools from the task intent and tool_catalog.\n"
         "- Prefer business workflow wrappers for non-technical requests when they fully satisfy the task.\n"
         "- Use direct API tools when workflow wrappers are insufficient or unavailable.\n"
+        "- NEVER invent, guess, or placeholder-fill URLs. Only use a URL param when it was explicitly provided in the request/context or will be supplied by a prior execution step.\n"
+        "- Do not emit browser.playwright.inspect, web.extract.structured, or web.dataset.adapter with example.com/example.org/example.net/placeholder URLs.\n"
         f"- 1 to {MAX_PLANNER_STEPS} steps.\n"
         "- Put practical execution order in the steps list.\n"
         "- Keep params minimal and concrete.\n"

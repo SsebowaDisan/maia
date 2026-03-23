@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
 import { readEventPayload } from "../../utils/eventPayload";
+import { resolvePreferredRunId } from "../../utils/runIdSelection";
 import { ApprovalGateCard } from "./ApprovalGateCard";
 import { AgentHandoffRelay } from "./AgentHandoffRelay";
 import { AssemblyProgressPanel } from "./AssemblyProgressPanel";
@@ -86,8 +87,23 @@ function ActivityPanelBody({
   onReplayStep,
 }: ActivityPanelBodyProps) {
   const [panelTab, setPanelTab] = useState<"timeline" | "conversation">("timeline");
-  const conversationRunId =
-    String(activityRunId || "").trim() || String(orderedEvents[orderedEvents.length - 1]?.run_id || "").trim();
+  const conversationRunId = resolvePreferredRunId(activityRunId, orderedEvents);
+  const activeEventType = String(activeEvent?.event_type || "").trim().toLowerCase();
+  const executionStarted = orderedEvents.some(
+    (event) => String(event.event_type || "").trim().toLowerCase() === "execution_starting",
+  );
+  const isPreExecutionPlan =
+    !executionStarted &&
+    (
+      plannedRoadmapSteps.length > 0 ||
+      activeEventType.startsWith("assembly_") ||
+      activeEventType === "planning_started" ||
+      activeEventType === "workflow_saved" ||
+      activeEventType === "assembly_connector_needed" ||
+      activeEventType === "connector_needed"
+    );
+  const showPlanningSecondaryPanels = !isPreExecutionPlan;
+  const showReplayRail = !isPreExecutionPlan;
 
   return (
     <>
@@ -101,18 +117,22 @@ function ActivityPanelBody({
         }}
       />
 
-      <PhaseTimeline phases={phaseTimeline} streaming={streaming} eventCount={visibleEvents.length} />
+      {showPlanningSecondaryPanels ? (
+        <PhaseTimeline phases={phaseTimeline} streaming={streaming} eventCount={visibleEvents.length} />
+      ) : null}
 
-      <ResearchTodoList
-        visibleEvents={visibleEvents}
-        plannedRoadmapSteps={plannedRoadmapSteps}
-        roadmapActiveIndex={roadmapActiveIndex}
-        streaming={streaming}
-      />
+      {showPlanningSecondaryPanels ? (
+        <ResearchTodoList
+          visibleEvents={visibleEvents}
+          plannedRoadmapSteps={plannedRoadmapSteps}
+          roadmapActiveIndex={roadmapActiveIndex}
+          streaming={streaming}
+        />
+      ) : null}
 
-      <AssemblyProgressPanel events={orderedEvents} activeEvent={activeEvent} />
+      {showPlanningSecondaryPanels ? <AssemblyProgressPanel events={orderedEvents} activeEvent={activeEvent} /> : null}
 
-      <BrainReviewPanel events={orderedEvents} />
+      {showPlanningSecondaryPanels ? <BrainReviewPanel events={orderedEvents} /> : null}
 
       {(theatreStage === "review" || theatreStage === "confirm") ? (
         <div className="mt-3 rounded-2xl border border-[#e3e5e8] bg-white px-4 py-3">
@@ -134,32 +154,34 @@ function ActivityPanelBody({
 
       <AgentHandoffRelay event={activeEvent} />
 
-      <div className="mt-3 inline-flex rounded-full border border-[#e4e7ec] bg-white p-1">
-        <button
-          type="button"
-          onClick={() => setPanelTab("timeline")}
-          className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-            panelTab === "timeline"
-              ? "bg-[#111827] text-white"
-              : "text-[#475467] hover:bg-[#f8fafc]"
-          }`}
-        >
-          Timeline
-        </button>
-        <button
-          type="button"
-          onClick={() => setPanelTab("conversation")}
-          className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-            panelTab === "conversation"
-              ? "bg-[#111827] text-white"
-              : "text-[#475467] hover:bg-[#f8fafc]"
-          }`}
-        >
-          Team conversation
-        </button>
-      </div>
+      {showReplayRail ? (
+        <div className="mt-3 inline-flex rounded-full border border-[#e4e7ec] bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setPanelTab("timeline")}
+            className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+              panelTab === "timeline"
+                ? "bg-[#111827] text-white"
+                : "text-[#475467] hover:bg-[#f8fafc]"
+            }`}
+          >
+            Timeline
+          </button>
+          <button
+            type="button"
+            onClick={() => setPanelTab("conversation")}
+            className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+              panelTab === "conversation"
+                ? "bg-[#111827] text-white"
+                : "text-[#475467] hover:bg-[#f8fafc]"
+            }`}
+          >
+            Team conversation
+          </button>
+        </div>
+      ) : null}
 
-      {panelTab === "timeline" ? (
+      {showReplayRail && panelTab === "timeline" ? (
         <>
           <ReplayTimeline
             streaming={streaming}

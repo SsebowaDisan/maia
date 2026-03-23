@@ -269,18 +269,17 @@ def _build_research_tree(
     query: str,
     depth_tier: str,
     registry_names: list[str],
+    branching_mode: str = "segmented",
 ) -> list[dict]:
-    """Decompose any research question into structural branches.
+    """Decompose a research question into optional structural branches.
 
-    Works for any domain — science, law, medicine, business, technology,
-    geography, social topics, policy, sport, culture, etc. — by detecting
-    semantic signals present in the query rather than pattern-matching against
-    specific entity types (country, company, industry).
-
-    Returns [{branch_label, sub_question, preferred_providers}].
-    Quick tier: 2 branches. Standard+: 4-8 branches. Deep/expert: up to 10.
+    overview mode keeps standard requests on a single evidence track.
+    segmented mode expands into structural branches when breadth is justified.
     """
     lower = query.lower()
+    normalized_branching_mode = " ".join(str(branching_mode or "").split()).strip().lower()
+    if normalized_branching_mode not in {"overview", "segmented"}:
+        normalized_branching_mode = "segmented"
 
     def _b(label: str, sub_q: str) -> dict:
         providers = _BRANCH_PROVIDER_MAP.get(label, ["brave_search", "bing_search"])
@@ -288,34 +287,33 @@ def _build_research_tree(
         return {"branch_label": label, "sub_question": sub_q, "preferred_providers": filtered}
 
     if depth_tier == "quick":
-        return [_b("Factual", query), _b("News & Current Events", f"latest news {query}")]
+        return [_b("Factual", query)]
 
-    # ── Detect which optional branches are relevant for this question ─────────
-    has_financial    = any(s in lower for s in _SIG_FINANCIAL)
-    has_academic     = any(s in lower for s in _SIG_ACADEMIC)
-    has_people       = any(s in lower for s in _SIG_PEOPLE_SOCIETY)
-    has_policy       = any(s in lower for s in _SIG_POLICY_GOVERNANCE)
-    has_tech         = any(s in lower for s in _SIG_TECHNOLOGY)
-    has_risk         = any(s in lower for s in _SIG_RISK_SECURITY)
-    has_environment  = any(s in lower for s in _SIG_ENVIRONMENT)
-    has_legal        = any(s in lower for s in _SIG_LEGAL)
-    has_competitive  = any(s in lower for s in _SIG_COMPETITIVE)
-    has_market       = any(s in lower for s in _SIG_MARKET_INDUSTRY)
-    has_leadership   = any(s in lower for s in _SIG_LEADERSHIP)
-    has_news         = any(s in lower for s in _SIG_NEWS)
+    has_financial = any(s in lower for s in _SIG_FINANCIAL)
+    has_academic = any(s in lower for s in _SIG_ACADEMIC)
+    has_people = any(s in lower for s in _SIG_PEOPLE_SOCIETY)
+    has_policy = any(s in lower for s in _SIG_POLICY_GOVERNANCE)
+    has_tech = any(s in lower for s in _SIG_TECHNOLOGY)
+    has_risk = any(s in lower for s in _SIG_RISK_SECURITY)
+    has_environment = any(s in lower for s in _SIG_ENVIRONMENT)
+    has_legal = any(s in lower for s in _SIG_LEGAL)
+    has_competitive = any(s in lower for s in _SIG_COMPETITIVE)
+    has_market = any(s in lower for s in _SIG_MARKET_INDUSTRY)
+    has_leadership = any(s in lower for s in _SIG_LEADERSHIP)
+    has_news = any(s in lower for s in _SIG_NEWS)
 
     is_deep = depth_tier in ("deep_research", "deep_analytics", "expert")
     is_expert = depth_tier == "expert"
 
-    # Always start with the core factual branch
-    branches: list[dict] = [_b("Factual", query)]
+    if normalized_branching_mode == "overview" and not is_deep:
+        return [_b("Factual", query)]
 
-    # ── Optional branches, ordered by research value ──────────────────────────
+    branches: list[dict] = [_b("Factual", query)]
     if has_financial or is_deep:
         branches.append(_b("Financial & Economic", f"{query} financial economic data statistics"))
     if has_competitive or is_deep:
         branches.append(_b("Competitive Landscape", f"{query} competitors alternatives comparison market"))
-    if has_tech:
+    if has_tech and is_deep:
         branches.append(_b("Technology & Innovation", f"{query} technology innovation trends developments"))
     if has_people or is_deep:
         branches.append(_b("People & Society", f"{query} population society demographics social impact"))
@@ -331,21 +329,19 @@ def _build_research_tree(
         branches.append(_b("Market & Industry", f"{query} market size growth forecast industry"))
     if has_leadership:
         branches.append(_b("Leadership & Strategy", f"{query} leadership strategy vision roadmap"))
-    if has_academic or is_deep:
+    if has_academic and (normalized_branching_mode == "segmented" or is_deep):
         branches.append(_b("Academic Research", f"{query} research study evidence analysis academic"))
-    if has_news or True:  # Always include a news branch for current context
+    if has_news and (normalized_branching_mode == "segmented" or is_deep):
         branches.append(_b("News & Current Events", f"latest news {query} 2025 2026"))
     if is_expert:
         branches.append(_b("Expert Opinion", f"{query} expert analysis forecast whitepaper opinion"))
 
-    # For deep tiers with few signal-detected branches, ensure breadth
     if is_deep and len(branches) < 6:
         if not has_market:
             branches.append(_b("Market & Industry", f"{query} market growth trends forecast"))
         if not has_risk:
             branches.append(_b("Risk & Security", f"{query} challenges risks limitations concerns"))
 
-    # Deduplicate (preserve first occurrence) and cap
     seen: set[str] = set()
     unique: list[dict] = []
     for b in branches:
@@ -362,14 +358,14 @@ def _build_provider_plan(
     depth_tier: str,
     query: str,
     registry_names: list[str],
+    branching_mode: str = "segmented",
 ) -> list[tuple[str, int]]:
-    """Return [(connector_id, result_count)] for supplemental source providers.
-
-    Selection is driven by depth tier + keyword signals in the query.
-    Only connectors currently registered (env-flag enabled) are included.
-    """
+    """Return [(connector_id, result_count)] for supplemental source providers."""
     plan: list[tuple[str, int]] = []
     lower = query.lower()
+    normalized_branching_mode = " ".join(str(branching_mode or "").split()).strip().lower()
+    if normalized_branching_mode not in {"overview", "segmented"}:
+        normalized_branching_mode = "segmented"
 
     _ACADEMIC = frozenset([
         "research", "paper", "study", "academic", "machine learning",
@@ -381,9 +377,13 @@ def _build_provider_plan(
         "profit", "financial", "investor", "stock", "ipo",
         "balance sheet", "cash flow", "acquisition", "merger",
     ])
+    _NEWS = frozenset([
+        "news", "latest", "recent", "today", "announcement", "update", "2024", "2025", "2026",
+    ])
 
     has_academic = any(sig in lower for sig in _ACADEMIC)
     has_financial = any(sig in lower for sig in _FINANCIAL)
+    has_news = any(sig in lower for sig in _NEWS)
     is_deep = depth_tier in ("deep_research", "deep_analytics", "expert")
     is_standard_plus = depth_tier in ("standard", "deep_research", "deep_analytics", "expert")
 
@@ -391,9 +391,10 @@ def _build_provider_plan(
         plan.append(("arxiv", 20 if depth_tier == "expert" else 12 if is_deep else 8))
     if "sec_edgar" in registry_names and has_financial:
         plan.append(("sec_edgar", 12 if is_deep else 6))
-    if "newsapi" in registry_names and is_standard_plus:
+    if "newsapi" in registry_names and (has_news or is_deep or normalized_branching_mode == "segmented"):
         plan.append(("newsapi", 14 if is_deep else 8))
     if "reddit" in registry_names and is_deep:
         plan.append(("reddit", 10 if depth_tier == "expert" else 6))
 
     return plan
+

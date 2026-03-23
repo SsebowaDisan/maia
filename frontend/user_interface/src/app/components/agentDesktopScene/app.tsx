@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { startComputerUseSession } from "../../../api/client";
 import { renderRichText } from "../../utils/richText";
+import { sanitizeComputerUseText } from "../../utils/userFacingComputerUse";
 import { emitTheatreMetric } from "../agentActivityPanel/theatreTelemetry";
 import {
   INTERACTION_SUGGESTION_MIN_CONFIDENCE,
@@ -14,6 +15,7 @@ import { DocsScene } from "./DocsScene";
 import { DocumentFallbackScene, DocumentPdfScene } from "./DocumentScenes";
 import { EmailScene } from "./EmailScene";
 import { parseApiSceneState } from "./api_scene_state";
+import { TeamChatSkin } from "./skins/TeamChatSkin";
 import {
   asHttpUrl,
   compactValue,
@@ -29,6 +31,7 @@ import {
 import { SheetsScene } from "./SheetsScene";
 import { SnapshotScene } from "./SnapshotScene";
 import { DefaultScene, SystemScene } from "./SystemFallbackScenes";
+import { buildTeamChatMessages } from "./teamChatMessages";
 import { useSceneAnimations } from "./useSceneAnimations";
 import type { AgentDesktopSceneProps } from "./types";
 
@@ -67,6 +70,7 @@ function AgentDesktopScene({
   activeEventType,
   runId = "",
   activeStepIndex = null,
+  visibleEvents = [],
   interactionSuggestion = null,
   activeSceneData,
   sceneDocumentUrl,
@@ -366,7 +370,11 @@ function AgentDesktopScene({
     zoomHistory: pdfZoomHistory,
   } = parsePdfPlaybackState(activeSceneData, activeEventType);
   const roadmapSteps = Array.isArray(activeSceneData["__roadmap_steps"])
-    ? (activeSceneData["__roadmap_steps"] as Array<{ toolId: string; title: string; whyThisStep: string }>)
+    ? (activeSceneData["__roadmap_steps"] as Array<{ toolId: string; title: string; whyThisStep: string }>).map((step) => ({
+        toolId: sanitizeComputerUseText(step.toolId),
+        title: sanitizeComputerUseText(step.title),
+        whyThisStep: sanitizeComputerUseText(step.whyThisStep),
+      }))
     : [];
   const roadmapActiveIdx = Number(activeSceneData["__roadmap_active_index"] ?? -1);
   const emailBodyPreview = String(emailBodyHint || "").trim();
@@ -559,13 +567,17 @@ function AgentDesktopScene({
     isClickEvent: isDeterministicClickCue,
     clickRipples,
   };
+  const displayActiveTitle = sanitizeComputerUseText(activeTitle);
+  const displayActiveDetail = sanitizeComputerUseText(activeDetail);
+  const displaySceneText = sanitizeComputerUseText(sceneText);
+  const displayNarration = sanitizeComputerUseText(compactValue(activeSceneData["narration"]));
 
   if (isBrowserScene && !isPdfScene) {
     return (
       <BrowserScene
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         activeEventType={activeEventType}
-        activeTitle={activeTitle}
+        activeTitle={displayActiveTitle}
         action={actionForScene}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
@@ -581,7 +593,7 @@ function AgentDesktopScene({
         semanticFindResults={semanticFindResults}
         onSnapshotError={onSnapshotError}
         readingMode={readingMode}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         scrollDirection={scrollDirection}
         scrollPercent={scrollPercentForScene}
         targetRegion={targetRegion}
@@ -605,7 +617,7 @@ function AgentDesktopScene({
         isClickEvent={isClickEvent}
         clickRipples={clickRipples}
         cursorSource={mergedInteraction.source}
-        narration={compactValue(activeSceneData["narration"]) || null}
+        narration={displayNarration || null}
         roadmapSteps={roadmapSteps}
         roadmapActiveIndex={roadmapActiveIdx}
         runId={runId || undefined}
@@ -624,8 +636,32 @@ function AgentDesktopScene({
     );
   }
 
+  const shouldRenderTeamChatSkin =
+    (activeSceneData?.scene_surface === "team_chat" ||
+      activeEventType === "team_chat_message") &&
+    !isBrowserScene &&
+    !isEmailScene &&
+    !isDocumentScene &&
+    !isDocsScene &&
+    !isSheetsScene &&
+    !isSystemScene &&
+    !apiSceneState.isApiScene &&
+    !snapshotUrl;
+
+  // Team chat — only owns centre stage when no concrete work surface is active.
+  if (shouldRenderTeamChatSkin) {
+    const chatMessages = buildTeamChatMessages(visibleEvents, activeSceneData, activeDetail);
+    return (
+      <TeamChatSkin
+        messages={chatMessages}
+        topic={String(activeSceneData?.topic || displayActiveTitle || "")}
+        runId={runId || ""}
+      />
+    );
+  }
+
   if (apiSceneState.isApiScene && !isBrowserScene && !isDocumentScene && !isDocsScene && !isSheetsScene) {
-    return <ApiScene activeTitle={activeTitle} state={apiSceneState} />;
+    return <ApiScene activeTitle={displayActiveTitle} state={apiSceneState} />;
   }
 
   if (
@@ -638,11 +674,11 @@ function AgentDesktopScene({
   ) {
     return (
       <SnapshotScene
-        activeDetail={activeDetail}
-        activeTitle={activeTitle}
+        activeDetail={displayActiveDetail}
+        activeTitle={displayActiveTitle}
         isBrowserScene={isBrowserScene}
         onSnapshotError={onSnapshotError}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         snapshotUrl={snapshotUrl}
       />
     );
@@ -652,7 +688,7 @@ function AgentDesktopScene({
     return (
       <EmailScene
         activeEventType={activeEventType}
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         action={action}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
@@ -669,13 +705,13 @@ function AgentDesktopScene({
   if (isSheetsScene) {
     return (
       <SheetsScene
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         activeEventType={activeEventType}
         action={actionForScene}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
         actionTargetLabel={actionTargetLabelForScene}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         scrollDirection={scrollDirection}
         scrollPercent={scrollPercentForScene}
         sheetPreviewRows={sheetPreviewRows}
@@ -697,7 +733,7 @@ function AgentDesktopScene({
   if (isPdfScene) {
     return (
       <DocumentPdfScene
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         activeEventType={activeEventType}
         action={actionForScene}
         actionPhase={actionPhase}
@@ -726,7 +762,7 @@ function AgentDesktopScene({
         verifierConflictReason={verifierConflictReason}
         verifierRecheckRequired={verifierRecheckRequired}
         zoomEscalationRequested={zoomEscalationRequested}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         stageFileUrl={effectivePdfUrl || stageFileUrl}
         {...interactionCursorProps}
       />
@@ -736,9 +772,9 @@ function AgentDesktopScene({
   if (isDocsScene) {
     return (
       <DocsScene
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         activeEventType={activeEventType}
-        activeTitle={activeTitle}
+        activeTitle={displayActiveTitle}
         action={actionForScene}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
@@ -746,7 +782,7 @@ function AgentDesktopScene({
         docBodyHtml={docBodyHtml}
         docBodyPreview={docBodyPreview}
         docsFrameUrl={docsFrameUrl}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         scrollDirection={scrollDirection}
         scrollPercent={scrollPercentForScene}
         {...interactionCursorProps}
@@ -758,14 +794,14 @@ function AgentDesktopScene({
     return (
       <DocumentFallbackScene
         activeEventType={activeEventType}
-        activeDetail={activeDetail}
+        activeDetail={displayActiveDetail}
         action={actionForScene}
         actionPhase={actionPhase}
         actionStatus={actionStatus}
         actionTargetLabel={actionTargetLabelForScene}
         clipboardPreview={clipboardPreview}
         documentHighlights={documentHighlights}
-        sceneText={sceneText}
+        sceneText={displaySceneText}
         stageFileName={stageFileName}
         roadmapSteps={roadmapSteps}
         roadmapActiveIndex={roadmapActiveIdx}
@@ -777,9 +813,9 @@ function AgentDesktopScene({
     return (
       <SystemScene
         activeEventType={activeEventType}
-        activeDetail={activeDetail}
-        activeTitle={activeTitle}
-        sceneText={sceneText}
+        activeDetail={displayActiveDetail}
+        activeTitle={displayActiveTitle}
+        sceneText={displaySceneText}
         activeSceneData={activeSceneData}
       />
     );

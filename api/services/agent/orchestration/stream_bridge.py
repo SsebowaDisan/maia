@@ -444,6 +444,7 @@ class LiveRunStream:
         traces: list[ToolTraceEvent] | list[Any],
         is_shadow: bool = False,
         activity_event_factory: Callable[..., AgentActivityEvent],
+        tool_params: dict[str, Any] | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         for trace in list(traces or []):
             payload_raw = self._trace_payload(trace)
@@ -484,15 +485,24 @@ class LiveRunStream:
                 payload=trace_data_dict,
             )
             trace_snapshot = payload.get("snapshot_ref")
+            trace_metadata = {
+                **trace_data_dict,
+                "tool_id": step.tool_id,
+                "step": step_index,
+            }
+            # Inject sanitized tool_params so Theatre skins can display rich fields
+            if tool_params:
+                safe_params = {
+                    k: v for k, v in tool_params.items()
+                    if not str(k).startswith("__") and isinstance(v, (str, int, float, bool, list))
+                }
+                if safe_params:
+                    trace_metadata.setdefault("tool_params", safe_params)
             trace_event = activity_event_factory(
                 event_type=trace_event_type,
                 title=trace_title,
                 detail=trace_detail,
-                metadata={
-                    **trace_data_dict,
-                    "tool_id": step.tool_id,
-                    "step": step_index,
-                },
+                metadata=trace_metadata,
                 snapshot_ref=str(trace_snapshot) if trace_snapshot else None,
             )
             yield self.emit(trace_event)
@@ -528,5 +538,6 @@ class LiveRunStream:
                 traces=[trace],
                 is_shadow=is_shadow,
                 activity_event_factory=activity_event_factory,
+                tool_params=params,
             ):
                 yield trace_event

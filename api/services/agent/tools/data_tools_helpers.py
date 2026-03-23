@@ -19,6 +19,11 @@ from api.services.agent.tools.report_analytics_sections import (
     _analytics_insight_paragraphs,
     _analytics_section_lines,
 )
+from api.services.agent.tools.report_evidence_digest import (
+    _annotated_source_lines,
+    _build_evidence_findings_with_llm,
+    _evidence_findings_markdown,
+)
 from api.services.agent.tools.report_llm_content import (
     _analysis_paragraphs_with_llm,
     _compose_executive_summary,
@@ -94,4 +99,7 @@ __all__ = [
     "_analytics_insight_highlights",
     "_analytics_insight_paragraphs",
     "_analytics_section_lines",
+    "_annotated_source_lines",
+    "_build_evidence_findings_with_llm",
+    "_evidence_findings_markdown",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from typing import Any
+from urllib.parse import urlparse
 
 from api.schemas import ChatRequest
 from api.services.agent.models import AgentActivityEvent
@@ -45,6 +46,7 @@ def prepare_step_params(
     *,
     step: PlannedStep,
     access_context: Any,
+    settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     params = dict(step.params)
     if (
@@ -52,6 +54,118 @@ def prepare_step_params(
         and access_context.full_access_enabled
     ):
         params.setdefault("confirmed", True)
+    if step.tool_id == "browser.playwright.inspect":
+        params = _hydrate_browser_inspect_params(params=params, settings=settings)
+    if step.tool_id == "web.extract.structured":
+        params = _hydrate_web_extract_params(params=params, settings=settings)
+    return params
+
+
+_PLACEHOLDER_HOSTS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "localhost",
+    "127.0.0.1",
+}
+
+
+def _host_from_url(url: str) -> str:
+    try:
+        host = str(urlparse(str(url or "").strip()).hostname or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _is_valid_http_url(url: Any) -> bool:
+    text = " ".join(str(url or "").split()).strip()
+    if not text.startswith(("http://", "https://")):
+        return False
+    host = _host_from_url(text)
+    if not host:
+        return False
+    return host not in _PLACEHOLDER_HOSTS and not host.endswith(".example.com")
+
+
+def _clean_http_urls(value: Any) -> list[str]:
+    rows = value if isinstance(value, list) else []
+    urls: list[str] = []
+    for item in rows:
+        text = " ".join(str(item or "").split()).strip()
+        if not _is_valid_http_url(text):
+            continue
+        if text not in urls:
+            urls.append(text)
+    return urls
+
+
+def _latest_web_source_urls(settings: dict[str, Any] | None) -> list[str]:
+    if not isinstance(settings, dict):
+        return []
+    raw = settings.get("__latest_web_sources")
+    rows = raw if isinstance(raw, list) else []
+    urls: list[str] = []
+    for row in rows[:40]:
+        if not isinstance(row, dict):
+            continue
+        url = " ".join(str(row.get("url") or "").split()).strip()
+        if not _is_valid_http_url(url):
+            continue
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _hydrate_web_extract_params(
+    *,
+    params: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    has_page_text = bool(
+        " ".join(
+            str(
+                params.get("page_text")
+                or params.get("text")
+                or params.get("html_text")
+                or ""
+            ).split()
+        ).strip()
+    )
+    explicit_url = " ".join(str(params.get("url") or params.get("source_url") or "").split()).strip()
+    candidate_urls = _clean_http_urls(
+        params.get("candidate_urls") or params.get("source_urls") or []
+    )
+    if not candidate_urls:
+        candidate_urls = _latest_web_source_urls(settings)
+    if not has_page_text:
+        if not _is_valid_http_url(explicit_url) and candidate_urls:
+            params["url"] = candidate_urls[0]
+        if candidate_urls:
+            params["candidate_urls"] = candidate_urls[:8]
+    params.pop("source_urls", None)
+    return params
+
+
+def _hydrate_browser_inspect_params(
+    *,
+    params: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    explicit_url = " ".join(str(params.get("url") or params.get("source_url") or "").split()).strip()
+    candidate_urls = _clean_http_urls(
+        params.get("candidate_urls") or params.get("urls") or params.get("source_urls") or []
+    )
+    if not candidate_urls:
+        candidate_urls = _latest_web_source_urls(settings)
+    if not _is_valid_http_url(explicit_url) and candidate_urls:
+        params["url"] = candidate_urls[0]
+    if candidate_urls:
+        params["candidate_urls"] = candidate_urls[:8]
+        params["urls"] = candidate_urls[:8]
+    params.pop("source_urls", None)
     return params
 
 

@@ -1,12 +1,17 @@
 import {
   Activity,
+  Bot,
+  Brain,
   CheckCircle2,
   Eye,
   FileSearch,
+  MessageCircle,
   Monitor,
   Search,
+  ShieldCheck,
   Sparkles,
   TriangleAlert,
+  Users,
   Wrench,
 } from "lucide-react";
 import type { EventStyle } from "../types";
@@ -271,6 +276,85 @@ const coreEventStyles: Record<string, EventStyle> = {
     label: "Save Document",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
+  },
+  // ── Brain Review events ─────────────────────────────────────────────────
+  brain_review_started: {
+    label: "Brain Reviewing",
+    icon: Brain,
+    accent: "text-[#7c3aed]",
+  },
+  brain_review_decision: {
+    label: "Brain Decision",
+    icon: Brain,
+    accent: "text-[#7c3aed]",
+  },
+  brain_revision_requested: {
+    label: "Revision Requested",
+    icon: Brain,
+    accent: "text-[#f59e0b]",
+  },
+  brain_question: {
+    label: "Brain Question",
+    icon: Brain,
+    accent: "text-[#3b82f6]",
+  },
+  brain_answer_received: {
+    label: "Brain Answer",
+    icon: Brain,
+    accent: "text-[#10b981]",
+  },
+  brain_review_summary: {
+    label: "Review Summary",
+    icon: Brain,
+    accent: "text-[#7c3aed]",
+  },
+  // ── Agent Dialogue events ───────────────────────────────────────────────
+  agent_dialogue_started: {
+    label: "Dialogue Started",
+    icon: MessageCircle,
+    accent: "text-[#06b6d4]",
+  },
+  agent_dialogue_turn: {
+    label: "Agent Dialogue",
+    icon: MessageCircle,
+    accent: "text-[#06b6d4]",
+  },
+  agent_dialogue_resolved: {
+    label: "Dialogue Resolved",
+    icon: CheckCircle2,
+    accent: "text-[#10b981]",
+  },
+  agent_collaboration: {
+    label: "Collaboration",
+    icon: Users,
+    accent: "text-[#8b5cf6]",
+  },
+  agent_handoff: {
+    label: "Agent Handoff",
+    icon: Users,
+    accent: "text-[#f59e0b]",
+  },
+  // ── Approval events ─────────────────────────────────────────────────────
+  approval_required: {
+    label: "Approval Needed",
+    icon: ShieldCheck,
+    accent: "text-[#f59e0b]",
+  },
+  approval_granted: {
+    label: "Approved",
+    icon: ShieldCheck,
+    accent: "text-[#10b981]",
+  },
+  approval_rejected: {
+    label: "Rejected",
+    icon: ShieldCheck,
+    accent: "text-[#ef4444]",
+  },
+  // ── Quality gate ────────────────────────────────────────────────────────
+  workflow_step_quality_warning: {
+    label: "Quality Warning",
+    icon: TriangleAlert,
+    accent: "text-[#f59e0b]",
   },
 };
 

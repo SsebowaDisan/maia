@@ -4,11 +4,14 @@ import json
 import os
 import re
 import time
-from typing import Any
+import logging
+from typing import Any, Generator
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from api.services.agent.observability import get_agent_observability
+
+logger = logging.getLogger(__name__)
 
 PLACEHOLDER_API_KEYS = {
     "",
@@ -23,8 +26,20 @@ DEFAULT_OPENAI_BASE = "https://api.openai.com/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
 
+def _env_or_config(name: str, default: str = "") -> str:
+    value = str(os.getenv(name, "")).strip()
+    if value:
+        return value
+    try:
+        from decouple import config  # type: ignore[import-not-found]
+
+        return str(config(name, default=default) or "").strip()
+    except Exception:
+        return str(default or "").strip()
+
+
 def env_bool(name: str, *, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
+    raw = _env_or_config(name, "").lower()
     if not raw:
         return default
     if raw in {"1", "true", "yes", "on"}:
@@ -35,7 +50,7 @@ def env_bool(name: str, *, default: bool) -> bool:
 
 
 def _env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
-    raw = str(os.getenv(name, "")).strip()
+    raw = _env_or_config(name, "")
     try:
         value = int(raw)
     except Exception:
@@ -46,34 +61,40 @@ def _env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
 
 
 def openai_api_key() -> str:
-    return str(os.getenv("OPENAI_API_KEY", "")).strip()
+    return _env_or_config("OPENAI_API_KEY", "")
 
 
 def has_openai_credentials() -> bool:
-    return openai_api_key().lower() not in PLACEHOLDER_API_KEYS
+    key = openai_api_key()
+    if key.lower() not in PLACEHOLDER_API_KEYS:
+        return True
+    # Local OpenAI-compatible runtimes often run without a real key.
+    return _openai_base_url().rstrip("/") != DEFAULT_OPENAI_BASE
 
 
 def _openai_base_url() -> str:
-    return str(os.getenv("OPENAI_API_BASE", DEFAULT_OPENAI_BASE)).strip() or DEFAULT_OPENAI_BASE
+    return _env_or_config("OPENAI_API_BASE", DEFAULT_OPENAI_BASE) or DEFAULT_OPENAI_BASE
 
 
 def _openai_chat_model() -> str:
-    return str(os.getenv("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL)).strip() or DEFAULT_OPENAI_MODEL
+    return _env_or_config("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL
 
 
 def _openai_fallback_models() -> list[str]:
-    raw = str(
-        os.getenv("OPENAI_CHAT_MODEL_FALLBACKS", os.getenv("MAIA_AGENT_LLM_MODEL_FALLBACKS", ""))
-    ).strip()
+    raw = _env_or_config("OPENAI_CHAT_MODEL_FALLBACKS", "")
+    if not raw:
+        raw = _env_or_config("MAIA_AGENT_LLM_MODEL_FALLBACKS", "")
     if not raw:
         return []
     models = [item.strip() for item in raw.split(",")]
     return [item for item in models if item]
 
 
-def _candidate_models(model: str | None) -> list[str]:
+def _candidate_models(model: str | None, *, include_fallbacks: bool) -> list[str]:
     primary = str(model or _openai_chat_model()).strip()
-    candidates = [primary, *_openai_fallback_models()]
+    candidates = [primary]
+    if include_fallbacks:
+        candidates.extend(_openai_fallback_models())
     deduped: list[str] = []
     for item in candidates:
         if not item or item in deduped:
@@ -146,10 +167,16 @@ def call_openai_chat(
     timeout_seconds: int = 18,
     model: str | None = None,
     max_tokens: int | None = None,
+    retries: int | None = None,
+    enable_thinking: bool | None = None,
+    use_fallback_models: bool | None = None,
 ) -> dict[str, Any] | None:
     if not has_openai_credentials():
         return None
-    max_attempts = _env_int("MAIA_AGENT_LLM_RETRIES", default=2, minimum=1, maximum=5)
+    if isinstance(retries, int):
+        max_attempts = max(1, min(int(retries), 5))
+    else:
+        max_attempts = _env_int("MAIA_AGENT_LLM_RETRIES", default=2, minimum=1, maximum=5)
     base_backoff_ms = _env_int(
         "MAIA_AGENT_LLM_RETRY_BACKOFF_MS",
         default=250,
@@ -158,7 +185,12 @@ def call_openai_chat(
     )
     base_url = f"{_openai_base_url().rstrip('/')}/chat/completions"
     timeout_value = max(8, int(timeout_seconds))
-    for model_name in _candidate_models(model):
+    include_fallbacks = (
+        bool(use_fallback_models)
+        if isinstance(use_fallback_models, bool)
+        else env_bool("MAIA_AGENT_LLM_USE_FALLBACK_MODELS", default=True)
+    )
+    for model_name in _candidate_models(model, include_fallbacks=include_fallbacks):
         for attempt in range(1, max_attempts + 1):
             payload: dict[str, Any] = {
                 "model": model_name,
@@ -167,11 +199,21 @@ def call_openai_chat(
             }
             if isinstance(max_tokens, int) and max_tokens > 0:
                 payload["max_tokens"] = max_tokens
+            thinking_flag = _resolve_enable_thinking(
+                model_name=model_name,
+                explicit_value=enable_thinking,
+            )
+            if isinstance(thinking_flag, bool):
+                payload["enable_thinking"] = thinking_flag
             request_obj = Request(
                 base_url,
                 method="POST",
                 headers={
-                    "Authorization": f"Bearer {openai_api_key()}",
+                    "Authorization": (
+                        f"Bearer {openai_api_key()}"
+                        if openai_api_key()
+                        else "Bearer not-required"
+                    ),
                     "Content-Type": "application/json",
                 },
                 data=json.dumps(payload).encode("utf-8"),
@@ -207,6 +249,85 @@ def call_openai_chat(
     return None
 
 
+def call_openai_chat_stream(
+    *,
+    messages: list[dict[str, Any]],
+    temperature: float = 0.0,
+    timeout_seconds: int = 60,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    enable_thinking: bool | None = None,
+) -> Generator[str, None, None]:
+    """Stream chat completions token-by-token.
+
+    Yields text chunks as they arrive from the LLM. Works with OpenAI,
+    Qwen/DashScope, and any OpenAI-compatible API that supports
+    ``stream: true`` with SSE responses.
+    """
+    if not has_openai_credentials():
+        return
+    base_url = f"{_openai_base_url().rstrip('/')}/chat/completions"
+    timeout_value = max(10, int(timeout_seconds))
+    model_name = model or _primary_model()
+
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "temperature": max(0.0, min(1.0, float(temperature))),
+        "messages": messages,
+        "stream": True,
+    }
+    if isinstance(max_tokens, int) and max_tokens > 0:
+        payload["max_tokens"] = max_tokens
+    thinking_flag = _resolve_enable_thinking(
+        model_name=model_name, explicit_value=enable_thinking,
+    )
+    if isinstance(thinking_flag, bool):
+        payload["enable_thinking"] = thinking_flag
+
+    request_obj = Request(
+        base_url,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {openai_api_key()}" if openai_api_key() else "Bearer not-required",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
+        data=json.dumps(payload).encode("utf-8"),
+    )
+    try:
+        with urlopen(request_obj, timeout=timeout_value) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+    except Exception as exc:
+        logger.warning("Streaming LLM call failed: %s", exc)
+
+
+def _resolve_enable_thinking(*, model_name: str, explicit_value: bool | None) -> bool | None:
+    if isinstance(explicit_value, bool):
+        return explicit_value
+    base = _openai_base_url().lower()
+    model = str(model_name or "").strip().lower()
+    looks_like_qwen_runtime = "dashscope" in base or model.startswith("qwen")
+    if not looks_like_qwen_runtime:
+        return None
+    return env_bool("MAIA_AGENT_LLM_ENABLE_THINKING_DEFAULT", default=False)
+
+
 def first_message_text(payload: dict[str, Any] | None) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -230,6 +351,10 @@ def call_json_response(
     temperature: float = 0.0,
     timeout_seconds: int = 18,
     max_tokens: int | None = None,
+    retries: int | None = None,
+    allow_json_repair: bool = True,
+    enable_thinking: bool | None = None,
+    use_fallback_models: bool | None = None,
 ) -> dict[str, Any] | None:
     payload = call_openai_chat(
         messages=[
@@ -239,6 +364,9 @@ def call_json_response(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,
+        retries=retries,
+        enable_thinking=enable_thinking,
+        use_fallback_models=use_fallback_models,
     )
     text = first_message_text(payload)
     if not text:
@@ -246,6 +374,8 @@ def call_json_response(
     parsed = parse_json_object(text)
     if parsed is not None:
         return parsed
+    if not allow_json_repair:
+        return None
     # JSON repair pass for occasional malformed model outputs.
     repair_payload = call_openai_chat(
         messages=[
@@ -267,6 +397,9 @@ def call_json_response(
         temperature=0.0,
         timeout_seconds=min(max(8, timeout_seconds), 12),
         max_tokens=max_tokens,
+        retries=retries,
+        enable_thinking=False,
+        use_fallback_models=False,
     )
     repaired_text = first_message_text(repair_payload)
     if not repaired_text:
@@ -281,6 +414,9 @@ def call_text_response(
     temperature: float = 0.2,
     timeout_seconds: int = 18,
     max_tokens: int | None = None,
+    retries: int | None = None,
+    enable_thinking: bool | None = None,
+    use_fallback_models: bool | None = None,
 ) -> str:
     payload = call_openai_chat(
         messages=[
@@ -290,5 +426,8 @@ def call_text_response(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,
+        retries=retries,
+        enable_thinking=enable_thinking,
+        use_fallback_models=use_fallback_models,
     )
     return first_message_text(payload)

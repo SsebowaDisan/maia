@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Generator
 from typing import Any
 
@@ -386,16 +387,21 @@ def emit_checkpoint_with_persistence(
             status=status,
         )
     )
-    persist_run_checkpoint(
-        session_store=session_store,
-        run_id=run_id,
-        user_id=user_id,
-        tenant_id=tenant_id,
-        conversation_id=conversation_id,
-        request=request,
-        checkpoint=checkpoint,
-        settings=settings,
-        state=state,
-        pending_steps=pending_steps or [],
-        resume_status=resume_status,
-    )
+    threading.Thread(
+        target=persist_run_checkpoint,
+        kwargs={
+            "session_store": session_store,
+            "run_id": run_id,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "conversation_id": conversation_id,
+            "request": request,
+            "checkpoint": checkpoint,
+            "settings": settings,
+            "state": state,
+            "pending_steps": pending_steps or [],
+            "resume_status": resume_status,
+        },
+        daemon=True,
+        name="maia-checkpoint-persist",
+    ).start()

@@ -38,6 +38,9 @@ def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
         "response_style": "adaptive_detailed",
         "detail_level": "high",
         "tone": "professional",
+        "presentation_style": "premium_clarity",
+        "citation_style": "inline_markers_with_source_section",
+        "target_length": None,
         "sections": [
             {
                 "title": "Answer",
@@ -58,6 +61,32 @@ def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
         or fallback["detail_level"]
     )
     tone = " ".join(str(payload.get("tone") or "").split()).strip()[:40] or fallback["tone"]
+    presentation_style = (
+        " ".join(str(payload.get("presentation_style") or "").split()).strip()[:80]
+        or fallback["presentation_style"]
+    )
+    citation_style = (
+        " ".join(str(payload.get("citation_style") or "").split()).strip()[:80]
+        or fallback["citation_style"]
+    )
+    target_length = None
+    raw_target_length = payload.get("target_length")
+    if isinstance(raw_target_length, dict):
+        try:
+            min_chars = int(raw_target_length.get("min_chars") or 0)
+        except Exception:
+            min_chars = 0
+        try:
+            max_chars = int(raw_target_length.get("max_chars") or 0)
+        except Exception:
+            max_chars = 0
+        reason = " ".join(str(raw_target_length.get("reason") or "").split()).strip()[:200]
+        if 800 <= min_chars < max_chars <= 22000:
+            target_length = {
+                "min_chars": min_chars,
+                "max_chars": max_chars,
+                "reason": reason,
+            }
 
     sections: list[dict[str, str]] = []
     raw_sections = payload.get("sections")
@@ -84,6 +113,9 @@ def _normalize_blueprint(payload: dict[str, Any] | None) -> dict[str, Any]:
         "response_style": response_style,
         "detail_level": detail_level,
         "tone": tone,
+        "presentation_style": presentation_style,
+        "citation_style": citation_style,
+        "target_length": target_length,
         "sections": sections,
     }
 
@@ -115,10 +147,15 @@ def _plan_response_blueprint(
     plan_prompt = (
         "Design a deep, well-structured response blueprint for a final agent answer.\n"
         "Return one JSON object only with keys:\n"
-        '{ "response_style": "string", "detail_level": "high", "tone": "string", "sections": [{"title":"string","purpose":"string","format":"paragraphs|bullets|table|mixed"}] }\n'
+        '{ "response_style": "string", "detail_level": "high", "tone": "string", "presentation_style": "string", "citation_style": "string", "target_length": {"min_chars": 1200, "max_chars": 1600, "reason": "string"}, "sections": [{"title":"string","purpose":"string","format":"paragraphs|bullets|table|mixed"}] }\n'
         "Rules:\n"
         "- Section titles must be specific to this request, not generic reusable template labels.\n"
         "- Keep response detail_level as high.\n"
+        "- presentation_style should favor premium product-writing clarity: calm, elegant, restrained, and highly scannable.\n"
+        "- citation_style should usually be 'inline_markers_with_source_section'.\n"
+        "- Choose target_length based on the real complexity of the task, not a canned template.\n"
+        "- For a standard research brief or research-plus-email request, prefer approximately 1000-1500 characters unless the evidence complexity clearly requires more.\n"
+        "- For deep analytical work, increase target_length only when more space is necessary to preserve clarity and evidence.\n"
         "- For research, analytical, or comparative questions: use 4-8 substantive sections covering distinct dimensions "
         "(e.g. key findings, background/context, mechanisms, data/evidence, trade-offs, implications, limitations, next steps).\n"
         "- For direct task outcomes (e.g. 'send email', 'find contact'): 2-4 sections, outcome first, then supporting evidence.\n"
@@ -240,6 +277,18 @@ def polish_final_response(
         child_friendly_mode=child_friendly_mode,
         keep_diagnostics=keep_diagnostics,
     )
+    blueprint_target = blueprint.get("target_length") if isinstance(blueprint, dict) else None
+    if isinstance(blueprint_target, dict):
+        try:
+            blueprint_min = int(blueprint_target.get("min_chars") or 0)
+        except Exception:
+            blueprint_min = 0
+        try:
+            blueprint_max = int(blueprint_target.get("max_chars") or 0)
+        except Exception:
+            blueprint_max = 0
+        if 800 <= blueprint_min < blueprint_max <= 22000:
+            target_min_chars, target_max_chars = blueprint_min, blueprint_max
     payload = {
         "request_message": str(request_message or "").strip(),
         "answer_text": raw_answer,
@@ -297,6 +346,7 @@ def polish_final_response(
         "- Develop each section fully: include specific data points, statistics, mechanisms, concrete examples, "
         "and implications. Never leave a section at a surface-level summary when the evidence supports more depth.\n"
         "- Put the delivered outcome first.\n"
+        "- Write with premium Apple-style clarity: elegant, calm, precise, visually clean, and free of filler or hype.\n"
         "- LEAD WITH THE ANSWER: the very first sentence must state the core finding, conclusion, or outcome directly — "
         "never open with 'Based on...', 'It is important to note...', 'I will...', 'This response will...', "
         "'Certainly!', 'Great question!', or any meta-commentary about what you are about to say.\n"
@@ -309,6 +359,9 @@ def polish_final_response(
         "- Use precise, authoritative language at senior-analyst depth; write as if briefing an executive who needs the full picture.\n"
         "- Keep section headings specific, substantive, and high-signal.\n"
         "- Avoid raw HTML in body content; use markdown except citation anchors.\n"
+        "- Every material factual paragraph or bullet should carry inline citation markers like [1] or [2][3] whenever the evidence supports it.\n"
+        "- Do not push citations only into an appendix; weave them directly into the body near the supported claim.\n"
+        "- Preserve or strengthen the final Evidence Citations / Sources section so the inline markers remain auditable.\n"
         f"{template_rule}"
         "- Remove process noise and internal orchestration commentary unless user explicitly asked for it.\n"
         f"{diagnostics_rule}"

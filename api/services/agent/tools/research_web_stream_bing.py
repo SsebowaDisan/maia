@@ -16,6 +16,15 @@ from api.services.agent.tools.research_web_helpers import (
 )
 
 
+def _bing_fallback_configured(registry: Any, context: ToolExecutionContext) -> bool:
+    try:
+        connector = registry.build("bing_search", settings=context.settings)
+        health = connector.health_check()
+        return bool(getattr(health, "ok", False))
+    except Exception:
+        return False
+
+
 def run_bing_provider_and_materialize_stage(
     *,
     context: ToolExecutionContext,
@@ -47,7 +56,11 @@ def run_bing_provider_and_materialize_stage(
     if not isinstance(provider_attempted, list):
         provider_attempted = []
     domain_scope_filtered_out = int(state.get("domain_scope_filtered_out") or 0)
-    if not ok and (requested_provider == "bing_search" or allow_provider_fallback):
+    provider_fallback_skipped = bool(state.get("provider_fallback_skipped"))
+    fallback_possible = requested_provider == "bing_search" or (
+        allow_provider_fallback and _bing_fallback_configured(get_connector_registry(), context)
+    )
+    if not ok and fallback_possible:
         try:
             provider_attempted.append("bing_search")
             trace_events.append(
@@ -261,6 +274,13 @@ def run_bing_provider_and_materialize_stage(
         yield trace_events[-1]
     else:
         latest_failure = provider_failures[-1] if provider_failures else {}
+        fallback_skipped = (
+            allow_provider_fallback
+            and requested_provider != "bing_search"
+            and "bing_search" not in provider_attempted
+            and not _bing_fallback_configured(get_connector_registry(), context)
+        )
+        provider_fallback_skipped = provider_fallback_skipped or fallback_skipped
         trace_events.append(
             ToolTraceEvent(
                 event_type="tool_failed",
@@ -268,12 +288,18 @@ def run_bing_provider_and_materialize_stage(
                 detail=(
                     f"No data returned from external provider. "
                     f"{str(latest_failure.get('reason') or '').replace('_', ' ')}"
+                    + (
+                        ". Bing fallback skipped because AZURE_BING_API_KEY is not configured"
+                        if fallback_skipped
+                        else ""
+                    )
                 ).strip(),
                 data={
                     "provider_requested": requested_provider,
                     "provider_fallback_enabled": allow_provider_fallback,
                     "provider_attempted": provider_attempted[:4],
                     "provider_failures": provider_failures[:4],
+                    "provider_fallback_skipped": fallback_skipped,
                 },
             )
         )
@@ -366,3 +392,4 @@ def run_bing_provider_and_materialize_stage(
     state["provider_failures"] = provider_failures
     state["provider_attempted"] = provider_attempted
     state["domain_scope_filtered_out"] = int(domain_scope_filtered_out)
+    state["provider_fallback_skipped"] = provider_fallback_skipped

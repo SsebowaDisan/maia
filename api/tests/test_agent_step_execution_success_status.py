@@ -103,3 +103,537 @@ def test_handle_step_success_marks_unavailable_tool_result_as_failed(monkeypatch
     assert state.all_actions[0].status == "failed"
     assert state.executed_steps[0]["status"] == "failed"
     assert any(row.get("type") == "tool_failed" for row in emitted)
+
+
+def test_handle_step_success_skips_browser_followups_for_standard_overview_runs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="company_agent",
+            settings={
+                "__research_depth_tier": "standard",
+                "__research_branching_mode": "overview",
+                "__research_max_live_inspections": 3,
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning overview authoritative source"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 12 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": True,
+            "items": [
+                {"label": "Source A", "url": "https://example.com/a"},
+                {"label": "Source B", "url": "https://example.com/b.pdf"},
+            ],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+    emitted: list[dict[str, Any]] = []
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=False,
+            execution_prompt="make the research about machine learning and write an email about the research",
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: emitted.append(event.to_dict()) or event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert [planned.tool_id for planned in steps] == ["marketing.web_research", "report.generate"]
+    assert state.dynamic_inspection_inserted is False
+    assert not any(row.get("type") == "plan_refined" for row in emitted)
+
+
+def test_handle_step_success_skips_standard_coverage_retry_followups(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="company_agent",
+            settings={
+                "__research_depth_tier": "standard",
+                "__research_branching_mode": "overview",
+                "__research_max_live_inspections": 3,
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning overview authoritative source"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 36 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": False,
+            "items": [
+                {"label": "Source A", "url": "https://example.com/a"},
+                {"label": "Source B", "url": "https://example.com/b.pdf"},
+            ],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=False,
+            execution_prompt="make the research about machine learning and write an email about the research",
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert [planned.tool_id for planned in steps] == ["marketing.web_research", "report.generate"]
+    assert state.research_retry_inserted is False
+
+
+def test_handle_step_success_keeps_browser_followups_for_deep_runs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="deep_search",
+            settings={
+                "__research_depth_tier": "deep_research",
+                "__research_branching_mode": "segmented",
+                "__research_max_live_inspections": 2,
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning benchmarks"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 20 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": True,
+            "items": [
+                {"label": "Research PDF", "url": "https://example.com/paper.pdf"},
+                {"label": "Website article", "url": "https://example.com/article"},
+            ],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+    emitted: list[dict[str, Any]] = []
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=True,
+            execution_prompt="deeply research machine learning benchmarks",
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: emitted.append(event.to_dict()) or event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert [planned.tool_id for planned in steps][:3] == [
+        "marketing.web_research",
+        "browser.playwright.inspect",
+        "browser.playwright.inspect",
+    ]
+    assert state.dynamic_inspection_inserted is True
+    assert any(row.get("type") == "plan_refined" for row in emitted)
+
+
+def test_handle_step_success_research_retry_uses_stage_topic_not_execution_contract(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="deep_search",
+            settings={
+                "__research_depth_tier": "deep_research",
+                "__research_branching_mode": "segmented",
+                "__research_max_live_inspections": 2,
+                "__workflow_stage_primary_topic": "machine learning",
+                "__research_search_terms": ["machine learning", "machine learning enterprise adoption"],
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning overview authoritative source"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 8 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": False,
+            "items": [{"label": "Source A", "url": "https://example.com/a"}],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=True,
+            execution_prompt=(
+                "Each inline citation marker [n] must resolve to exactly one numbered row in the "
+                "Evidence Citations section."
+            ),
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert len(steps) >= 2
+    retry_step = steps[1]
+    assert retry_step.tool_id == "marketing.web_research"
+    assert retry_step.params["query"] == "machine learning official report filetype:pdf"
+
+
+def test_handle_step_success_filters_inserted_followups_by_explicit_allowlist(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="deep_search",
+            settings={
+                "__research_depth_tier": "deep_research",
+                "__research_branching_mode": "segmented",
+                "__research_max_live_inspections": 2,
+                "__allowed_tool_ids": ["marketing.web_research", "web.extract.structured"],
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning benchmarks"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 20 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": True,
+            "items": [
+                {"label": "Research PDF", "url": "https://example.com/paper.pdf"},
+                {"label": "Website article", "url": "https://example.com/article"},
+            ],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=True,
+            execution_prompt="deeply research machine learning benchmarks",
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert [planned.tool_id for planned in steps] == [
+        "marketing.web_research",
+        "report.generate",
+    ]
+    assert state.dynamic_inspection_inserted is False
+
+
+def test_handle_step_success_skips_live_source_followups_for_standard_explicit_scope(monkeypatch) -> None:
+    monkeypatch.setattr(
+        success_section,
+        "summarize_step_outcome",
+        lambda **kwargs: {"summary": "web research completed", "suggestion": ""},
+    )
+    monkeypatch.setattr(
+        success_section,
+        "run_workspace_shadow_logging",
+        lambda **kwargs: iter(()),
+    )
+
+    state = SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            user_id="u1",
+            tenant_id="t1",
+            conversation_id="c1",
+            run_id="run-1",
+            mode="company_agent",
+            settings={
+                "__research_depth_tier": "standard",
+                "__research_branching_mode": "segmented",
+                "__research_max_live_inspections": 8,
+                "__allowed_tool_ids": [
+                    "marketing.web_research",
+                    "web.extract.structured",
+                    "browser.playwright.inspect",
+                ],
+            },
+        ),
+        all_actions=[],
+        all_sources=[],
+        executed_steps=[],
+        next_steps=[],
+        dynamic_inspection_inserted=False,
+        research_retry_inserted=False,
+        deep_workspace_logging_enabled=False,
+        deep_workspace_docs_logging_enabled=False,
+        deep_workspace_sheets_logging_enabled=False,
+        deep_workspace_warning_emitted=False,
+        parallel_research_trace=[],
+        retry_trace=[],
+        remediation_trace=[],
+    )
+    access_context = SimpleNamespace(access_mode="restricted", full_access_enabled=False)
+    step = PlannedStep(
+        tool_id="marketing.web_research",
+        title="Search online sources",
+        params={"query": "machine learning benchmarks"},
+    )
+    result = ToolExecutionResult(
+        summary="Collected 20 source-backed results.",
+        content="",
+        data={
+            "coverage_ok": True,
+            "items": [
+                {"label": "Research PDF", "url": "https://example.com/paper.pdf"},
+                {"label": "Website article", "url": "https://example.com/article"},
+            ],
+        },
+        sources=[],
+        next_steps=[],
+        events=[],
+    )
+    steps = [step, PlannedStep(tool_id="report.generate", title="Generate report", params={})]
+
+    list(
+        success_section.handle_step_success(
+            access_context=access_context,
+            deep_research_mode=False,
+            execution_prompt="research machine learning and email the result",
+            state=state,
+            registry=_Registry(),
+            steps=steps,
+            step_cursor=0,
+            step=step,
+            index=1,
+            step_started="2026-03-22T00:00:00+00:00",
+            duration_seconds=2.0,
+            result=result,
+            run_tool_live=lambda **kwargs: (_ for _ in ()),
+            emit_event=lambda event: event.to_dict(),
+            activity_event_factory=_activity_event_factory,
+        )
+    )
+
+    assert [planned.tool_id for planned in steps] == [
+        "marketing.web_research",
+        "report.generate",
+    ]
+    assert state.dynamic_inspection_inserted is False

@@ -46,7 +46,18 @@ class WebStructuredExtractTool(AgentTool):
         url = str(params.get("url") or "").strip()
         if url:
             return url
-        return str(params.get("source_url") or "").strip()
+        source_url = str(params.get("source_url") or "").strip()
+        if source_url:
+            return source_url
+        for key in ("candidate_urls", "source_urls"):
+            rows = params.get(key)
+            if not isinstance(rows, list):
+                continue
+            for item in rows[:8]:
+                text = str(item or "").strip()
+                if text.startswith(("http://", "https://")):
+                    return text
+        return ""
 
     def execute(
         self,
@@ -66,6 +77,17 @@ class WebStructuredExtractTool(AgentTool):
             or params.get("html_text")
             or ""
         ).strip()
+        candidate_urls = []
+        for key in ("candidate_urls", "source_urls"):
+            rows = params.get(key)
+            if not isinstance(rows, list):
+                continue
+            for item in rows[:8]:
+                text = str(item or "").strip()
+                if text.startswith(("http://", "https://")) and text not in candidate_urls:
+                    candidate_urls.append(text)
+        if url and url not in candidate_urls:
+            candidate_urls.insert(0, url)
         render_quality = str(params.get("render_quality") or "unknown").strip().lower() or "unknown"
         try:
             content_density = max(0.0, min(1.0, float(params.get("content_density") or 0.0)))
@@ -91,44 +113,52 @@ class WebStructuredExtractTool(AgentTool):
         if not page_text:
             if not url:
                 raise ToolExecutionError("Provide `url` or `page_text` for structured extraction.")
-            events.append(
-                _event(
-                    tool_id=tool_id,
-                    event_type="api_call_started",
-                    title="Load web page content",
-                    detail=url[:180],
-                    data={"web_provider": "computer_use_browser"},
-                )
-            )
             connector = get_connector_registry().build("computer_use_browser", settings=context.settings)
-            capture = connector.browse_and_capture(
-                url=url,
-                follow_same_domain_links=False,
-            )
-            page_text = str(capture.get("text_excerpt") or "").strip()
-            url = str(capture.get("url") or url).strip()
-            render_quality = str(capture.get("render_quality") or "unknown").strip().lower() or "unknown"
-            try:
-                content_density = max(0.0, min(1.0, float(capture.get("content_density") or 0.0)))
-            except Exception:
-                content_density = 0.0
-            blocked_signal = bool(capture.get("blocked_signal"))
-            blocked_reason = str(capture.get("blocked_reason") or "").strip()
-            events.append(
-                _event(
-                    tool_id=tool_id,
-                    event_type="api_call_completed",
-                    title="Web page content loaded",
-                    detail=f"Captured {len(page_text)} characters",
-                    data={
-                        "captured_chars": len(page_text),
-                        "render_quality": render_quality,
-                        "content_density": content_density,
-                        "blocked_signal": blocked_signal,
-                        "blocked_reason": blocked_reason,
-                    },
+            attempted_urls = candidate_urls[:8] or ([url] if url else [])
+            for candidate_url in attempted_urls:
+                events.append(
+                    _event(
+                        tool_id=tool_id,
+                        event_type="api_call_started",
+                        title="Load web page content",
+                        detail=candidate_url[:180],
+                        data={
+                            "web_provider": "computer_use_browser",
+                            "attempted_url": candidate_url,
+                        },
+                    )
                 )
-            )
+                capture = connector.browse_and_capture(
+                    url=candidate_url,
+                    follow_same_domain_links=False,
+                )
+                page_text = str(capture.get("text_excerpt") or "").strip()
+                url = str(capture.get("url") or candidate_url).strip()
+                render_quality = str(capture.get("render_quality") or "unknown").strip().lower() or "unknown"
+                try:
+                    content_density = max(0.0, min(1.0, float(capture.get("content_density") or 0.0)))
+                except Exception:
+                    content_density = 0.0
+                blocked_signal = bool(capture.get("blocked_signal"))
+                blocked_reason = str(capture.get("blocked_reason") or "").strip()
+                events.append(
+                    _event(
+                        tool_id=tool_id,
+                        event_type="api_call_completed",
+                        title="Web page content loaded",
+                        detail=f"Captured {len(page_text)} characters",
+                        data={
+                            "captured_chars": len(page_text),
+                            "render_quality": render_quality,
+                            "content_density": content_density,
+                            "blocked_signal": blocked_signal,
+                            "blocked_reason": blocked_reason,
+                            "attempted_url": candidate_url,
+                        },
+                    )
+                )
+                if page_text:
+                    break
 
         if not page_text:
             schema_signature = _schema_signature(field_schema)
@@ -151,6 +181,7 @@ class WebStructuredExtractTool(AgentTool):
                 content="No readable page text was available for extraction.",
                 data={
                     "url": url,
+                    "candidate_urls": candidate_urls[:8],
                     "goal": extraction_goal,
                     "fields": field_schema,
                     "values": {},
@@ -255,6 +286,7 @@ class WebStructuredExtractTool(AgentTool):
                 content=cached_content,
                 data={
                     "url": url,
+                    "candidate_urls": candidate_urls[:8],
                     "goal": extraction_goal,
                     "fields": field_schema,
                     "values": cached_values,
@@ -438,6 +470,7 @@ class WebStructuredExtractTool(AgentTool):
             content=content,
             data={
                 "url": url,
+                "candidate_urls": candidate_urls[:8],
                 "goal": extraction_goal,
                 "fields": field_schema,
                 "values": values,

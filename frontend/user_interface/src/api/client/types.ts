@@ -95,7 +95,7 @@ type ChatResponse = {
   info: string;
   plot: Record<string, unknown> | null;
   state: Record<string, unknown>;
-  mode: "ask" | "company_agent" | "deep_search";
+  mode: "ask" | "company_agent" | "deep_search" | "brain";
   actions_taken: AgentActionRecord[];
   sources_used: AgentSourceRecord[];
   source_usage: SourceUsageRecord[];

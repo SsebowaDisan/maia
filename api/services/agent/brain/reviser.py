@@ -97,10 +97,25 @@ def _format_available_tools(registry: Any) -> str:
         return "  (unavailable)"
 
 
+def _normalize_allowed_tool_ids(allowed_tool_ids: list[str] | set[str] | tuple[str, ...] | None) -> list[str]:
+    if not allowed_tool_ids:
+        return []
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for tool_id in allowed_tool_ids:
+        normalized = str(tool_id).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
 def build_revision_steps(
     *,
     state: BrainState,
     registry: Any,
+    allowed_tool_ids: list[str] | set[str] | tuple[str, ...] | None = None,
 ) -> list[PlannedStep]:
     """Ask the LLM to propose new PlannedSteps to cover remaining gaps.
 
@@ -111,6 +126,7 @@ def build_revision_steps(
     if gap == "No specific gaps identified.":
         return []
 
+    effective_allowed_tool_ids = _normalize_allowed_tool_ids(allowed_tool_ids)
     system = _SYSTEM_PROMPT.format(max_steps=_MAX_NEW_STEPS)
     prompt = _USER_TEMPLATE.format(
         user_goal=state.user_message[:300],
@@ -118,7 +134,11 @@ def build_revision_steps(
         executed_steps=_format_executed_steps(state),
         evidence_summary=state.evidence_summary()[:500],
         gap_summary=gap[:300],
-        available_tools=_format_available_tools(registry),
+        available_tools=(
+            "  " + ", ".join(effective_allowed_tool_ids)
+            if effective_allowed_tool_ids
+            else _format_available_tools(registry)
+        ),
         max_steps=_MAX_NEW_STEPS,
     )
 
@@ -145,6 +165,12 @@ def build_revision_steps(
         title = str(item.get("title", "")).strip()
         if not tool_id or not title:
             logger.debug("brain.reviser.skipping_item missing tool_id or title")
+            continue
+        if effective_allowed_tool_ids and tool_id not in effective_allowed_tool_ids:
+            logger.debug(
+                "brain.reviser.skipping_item disallowed_tool tool_id=%s",
+                tool_id,
+            )
             continue
         params = item.get("params") or {}
         if not isinstance(params, dict):

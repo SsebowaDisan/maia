@@ -2,17 +2,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from api.schemas import ChatRequest
 from api.services.agent.llm_research_blueprint import build_research_blueprint
 from api.services.agent.planner_helpers import infer_intent_signals_from_text
-from api.services.agent.planner import PlannedStep, is_deep_research_request
+from api.services.agent.planner import PlannedStep
 
 GA_TOOL_IDS = {
     "analytics.ga4.report",
     "analytics.ga4.full_report",
     "business.ga4_kpi_sheet_report",
 }
+
+MAX_RESEARCH_QUERY_VARIANTS = 40
+_INSTRUCTIONAL_SEED_MARKERS = (
+    "brief must be",
+    "every [n] must",
+    "no email drafting",
+    "no downstream actions",
+    "synthesis must",
+    "evidence citations section",
+    "current step focus:",
+    "execute only your assigned step",
+    "you are responsible for the role",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -22,6 +36,8 @@ class ResearchBlueprint:
     highlight_color: str
     planned_search_terms: list[str]
     planned_keywords: list[str]
+    branching_mode: str
+    query_variant_style: str
     max_query_variants: int
     results_per_query: int
     fused_top_k: int
@@ -40,6 +56,57 @@ def _as_bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
     except Exception:
         parsed = int(default)
     return max(low, min(high, parsed))
+
+
+def _clean_seed_term(value: Any) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    return text[:180] if text else ""
+
+
+def _looks_like_instructional_seed(value: str) -> bool:
+    normalized = " ".join(str(value or "").lower().split()).strip()
+    if not normalized:
+        return False
+    if any(marker in normalized for marker in _INSTRUCTIONAL_SEED_MARKERS):
+        return True
+    if " must " in f" {normalized} " and any(
+        token in normalized
+        for token in ("citation", "character", "deliverable", "constraint", "evidence section", "premium tone")
+    ):
+        return True
+    return False
+
+
+def _seeded_search_terms_from_settings(settings: dict[str, Any]) -> list[str]:
+    seeded: list[str] = []
+    raw_terms = settings.get("__research_search_terms")
+    if isinstance(raw_terms, list):
+        for item in raw_terms:
+            cleaned = _clean_seed_term(item)
+            if cleaned and not _looks_like_instructional_seed(cleaned):
+                seeded.append(cleaned)
+    primary_topic = _clean_seed_term(settings.get("__workflow_stage_primary_topic"))
+    if primary_topic:
+        seeded.insert(0, primary_topic)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in seeded:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+        if len(deduped) >= MAX_RESEARCH_QUERY_VARIANTS:
+            break
+    return deduped
+
+
+def _looks_like_url(value: str) -> bool:
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except Exception:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _keyword_floor_for_request(request: ChatRequest, *, settings: dict[str, Any]) -> int:
@@ -102,7 +169,7 @@ def build_research_plan(
     settings: dict[str, Any],
 ) -> ResearchBlueprint:
     depth_tier = str(settings.get("__research_depth_tier") or "").strip().lower() or "standard"
-    deep_research_mode = depth_tier in {"deep_research", "deep_analytics"} or is_deep_research_request(request)
+    deep_research_mode = depth_tier in {"deep_research", "deep_analytics", "expert"}
     highlight_color = (
         " ".join(str(settings.get("agent.default_highlight_color") or "yellow").split())
         .strip()
@@ -115,13 +182,16 @@ def build_research_plan(
         settings.get("__research_max_query_variants"),
         default=4,
         low=2,
-        high=20,
+        high=MAX_RESEARCH_QUERY_VARIANTS,
     )
+    seeded_search_terms = _seeded_search_terms_from_settings(settings)
+    blueprint_message = seeded_search_terms[0] if seeded_search_terms else request.message
+    blueprint_goal = "" if seeded_search_terms else request.agent_goal
     research_blueprint = build_research_blueprint(
-        message=request.message,
-        agent_goal=request.agent_goal,
+        message=blueprint_message,
+        agent_goal=blueprint_goal,
         min_keywords=_keyword_floor_for_request(request, settings=settings),
-        min_search_terms=max(4, min(target_query_variants, 20)),
+        min_search_terms=max(4, min(target_query_variants, MAX_RESEARCH_QUERY_VARIANTS)),
         llm_only=bool(settings.get("__llm_only_keyword_generation", True)),
         llm_strict=bool(settings.get("__llm_only_keyword_generation_strict", False)),
     )
@@ -134,6 +204,22 @@ def build_research_plan(
         )
         if str(item).strip()
     ]
+    if seeded_search_terms:
+        merged_terms = [*seeded_search_terms, *planned_search_terms]
+        deduped_terms: list[str] = []
+        seen_terms: set[str] = set()
+        for item in merged_terms:
+            cleaned = _clean_seed_term(item)
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen_terms:
+                continue
+            seen_terms.add(key)
+            deduped_terms.append(cleaned)
+            if len(deduped_terms) >= MAX_RESEARCH_QUERY_VARIANTS:
+                break
+        planned_search_terms = deduped_terms
     planned_keywords = [
         str(item).strip()
         for item in (
@@ -141,17 +227,44 @@ def build_research_plan(
         )
         if str(item).strip()
     ]
+    if seeded_search_terms and not planned_keywords:
+        fallback_keywords = []
+        for term in seeded_search_terms[:4]:
+            if _looks_like_url(term):
+                continue
+            fallback_keywords.extend(word for word in term.split() if len(word) >= 3)
+        planned_keywords = list(dict.fromkeys(fallback_keywords))[:16]
     return ResearchBlueprint(
         deep_research_mode=deep_research_mode,
         depth_tier=depth_tier,
         highlight_color=highlight_color,
         planned_search_terms=planned_search_terms,
         planned_keywords=planned_keywords,
+        branching_mode=(
+            " ".join(
+                str(
+                    research_blueprint.get("branching_mode")
+                    if isinstance(research_blueprint, dict)
+                    else "overview"
+                ).split()
+            ).strip().lower()
+            or "overview"
+        ),
+        query_variant_style=(
+            " ".join(
+                str(
+                    research_blueprint.get("query_variant_style")
+                    if isinstance(research_blueprint, dict)
+                    else "focused"
+                ).split()
+            ).strip().lower()
+            or "focused"
+        ),
         max_query_variants=_as_bounded_int(
             settings.get("__research_max_query_variants"),
             default=target_query_variants,
             low=2,
-            high=20,
+            high=MAX_RESEARCH_QUERY_VARIANTS,
         ),
         results_per_query=_as_bounded_int(
             settings.get("__research_results_per_query"),
@@ -184,7 +297,7 @@ def build_research_plan(
                     settings.get("__research_max_query_variants"),
                     default=4,
                     low=2,
-                    high=20,
+                    high=MAX_RESEARCH_QUERY_VARIANTS,
                 )
                 * _as_bounded_int(
                     settings.get("__research_results_per_query"),
@@ -236,6 +349,8 @@ def normalize_step_parameters(
                     "query_variants",
                     planned_search_terms[1 : 1 + max(1, research_plan.max_query_variants - 1)],
                 )
+            params.setdefault("branching_mode", research_plan.branching_mode)
+            params.setdefault("query_variant_style", research_plan.query_variant_style)
             params.setdefault("max_query_variants", research_plan.max_query_variants)
             params.setdefault("results_per_query", research_plan.results_per_query)
             params.setdefault("fused_top_k", research_plan.fused_top_k)
@@ -265,6 +380,7 @@ def enforce_web_only_research_path(
     settings: dict[str, Any],
     steps: list[PlannedStep],
     research_plan: ResearchBlueprint,
+    allowed_tool_ids: set[str] | None = None,
 ) -> list[PlannedStep]:
     if any(step.tool_id in GA_TOOL_IDS for step in steps):
         return steps
@@ -284,7 +400,11 @@ def enforce_web_only_research_path(
         if step.tool_id != "documents.highlight.extract"
     ]
 
-    if not any(step.tool_id == "marketing.web_research" for step in constrained_steps):
+    allowed = {str(tool_id).strip() for tool_id in (allowed_tool_ids or set()) if str(tool_id).strip()}
+
+    if not any(step.tool_id == "marketing.web_research" for step in constrained_steps) and (
+        not allowed or "marketing.web_research" in allowed
+    ):
         query = (
             research_plan.planned_search_terms[0]
             if research_plan.planned_search_terms
@@ -307,7 +427,10 @@ def enforce_web_only_research_path(
             ),
         )
 
-    if not any(step.tool_id == "report.generate" for step in constrained_steps):
+    if (
+        (not allowed or "report.generate" in allowed)
+        and not any(step.tool_id == "report.generate" for step in constrained_steps)
+    ):
         constrained_steps.append(
             PlannedStep(
                 tool_id="report.generate",

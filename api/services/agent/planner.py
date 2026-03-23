@@ -255,9 +255,11 @@ def _augment_for_deep_research(
     preferred_tool_ids: set[str] | None = None,
     intent: dict[str, Any] | None = None,
     web_routing: dict[str, Any] | None = None,
+    deep_research_mode: bool | None = None,
 ) -> list[PlannedStep]:
     routing = web_routing if isinstance(web_routing, dict) else resolve_web_routing(request)
-    deep_research_mode = is_deep_research_request(request)
+    if deep_research_mode is None:
+        deep_research_mode = is_deep_research_request(request)
     company_agent_mode = request.agent_mode == "company_agent"
     effective_intent = intent if isinstance(intent, dict) else intent_signals(request)
     shaped_steps = _ensure_ga_plan_shape(
@@ -451,6 +453,7 @@ def build_plan(
     *,
     preferred_tool_ids: set[str] | None = None,
     web_routing: dict[str, Any] | None = None,
+    deep_research_mode: bool | None = None,
 ) -> list[PlannedStep]:
     steps: list[PlannedStep] = []
     routing = web_routing if isinstance(web_routing, dict) else resolve_web_routing(request)
@@ -521,6 +524,7 @@ def build_plan(
                 preferred_tool_ids=preferred_tool_ids,
                 intent=signals,
                 web_routing=routing,
+                deep_research_mode=deep_research_mode,
             )
 
     semantic_fallback_steps = _build_semantic_fallback_steps(request)
@@ -531,6 +535,7 @@ def build_plan(
             preferred_tool_ids=preferred_tool_ids,
             intent=signals,
             web_routing=routing,
+            deep_research_mode=deep_research_mode,
         )
 
     target_url = str(signals.get("url") or "")
@@ -562,7 +567,10 @@ def build_plan(
             params={"summary": request.message},
         )
     )
-    if recipient and not company_agent_mode and not is_deep_research_request(request):
+    effective_deep_research_mode = (
+        deep_research_mode if deep_research_mode is not None else is_deep_research_request(request)
+    )
+    if recipient and not company_agent_mode and not effective_deep_research_mode:
         steps.append(
             PlannedStep(
                 tool_id="gmail.draft",
@@ -621,6 +629,7 @@ def build_plan(
         preferred_tool_ids=preferred_tool_ids,
         intent=signals,
         web_routing=routing,
+        deep_research_mode=deep_research_mode,
     )
 
 

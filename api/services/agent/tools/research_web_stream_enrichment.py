@@ -95,6 +95,7 @@ def run_enrichment_and_finalize_stage(
     *,
     context: ToolExecutionContext,
     depth_tier: str,
+    branching_mode: str,
     max_search_rounds: int,
     query: str,
     query_variants: list[str],
@@ -124,14 +125,24 @@ def run_enrichment_and_finalize_stage(
     provider_failures = state.get("provider_failures")
     if not isinstance(provider_failures, list):
         provider_failures = []
+    provider_fallback_skipped = bool(state.get("provider_fallback_skipped"))
     domain_scope_filtered_out = int(state.get("domain_scope_filtered_out") or 0)
+    normalized_branching_mode = " ".join(str(branching_mode or "").split()).strip().lower()
+    if normalized_branching_mode not in {"overview", "segmented"}:
+        normalized_branching_mode = "segmented"
+    # Standard/quick runs should stop after the first evidence pass so the
+    # workflow can move into synthesis. Supplemental provider federation and
+    # branch-tree expansion are reserved for genuinely deep tiers.
+    allow_overview_enrichment = depth_tier in {"deep_research", "deep_analytics", "expert"}
+
     # ── S1: Supplemental source federation (arxiv, sec_edgar, newsapi, reddit) ─
-    if ok:
+    if ok and allow_overview_enrichment:
         _registry = get_connector_registry()
         _sup_plan = _build_provider_plan(
             depth_tier=depth_tier,
             query=query_variants[0] if query_variants else query,
             registry_names=_registry.names(),
+            branching_mode=str(context.settings.get("__research_branching_mode") or "segmented"),
         )
         _seen_sup_urls: set[str] = {str(s.url or "") for s in sources}
         for _conn_id, _result_count in _sup_plan:
@@ -203,7 +214,7 @@ def run_enrichment_and_finalize_stage(
         # Each branch targets a different angle (Financial, Academic, News…) and
         # uses its preferred providers.  A per-provider circuit breaker skips any
         # provider that has already failed 3+ times in this run.
-        if _research_branches:
+        if _research_branches and allow_overview_enrichment:
             # Load/init the circuit-breaker failure counter from context.
             _circuit_failures: dict[str, int] = context.settings.get(
                 "__provider_circuit_failures"
@@ -419,11 +430,15 @@ def run_enrichment_and_finalize_stage(
         yield shortfall_event
 
     # ── Iterative gap-fill rounds ─────────────────────────────────────────
-    # For deep_research / expert tiers (max_search_rounds ≥ 2), run up to
-    # (max_search_rounds - 1) additional targeted search passes when coverage
-    # is below the minimum.  Each round extracts topics from the top sources
-    # collected so far and fires gap-fill queries for them.
-    if ok and max_search_rounds >= 2 and len(unique_urls) < min_unique_sources:
+    # Only deep tiers should pay for iterative gap-fill rounds. Standard and
+    # quick research should stop after the first pass so Brain tasks can move
+    # into synthesis and teammate review without stalling.
+    if (
+        ok
+        and depth_tier in {"deep_research", "deep_analytics", "expert"}
+        and max_search_rounds >= 2
+        and len(unique_urls) < min_unique_sources
+    ):
         _seen_gap_urls: set[str] = set(unique_urls)
         _gap_round_limit = max_search_rounds - 1  # round 1 already done above
 
@@ -623,6 +638,7 @@ def run_enrichment_and_finalize_stage(
             "provider": used_provider,
             "provider_requested": requested_provider,
             "provider_fallback_enabled": allow_provider_fallback,
+            "provider_fallback_skipped": provider_fallback_skipped,
             "provider_attempted": provider_attempted[:4],
             "provider_failures": provider_failures[:4],
             "source_count": len(sources),

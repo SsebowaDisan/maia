@@ -176,6 +176,7 @@ _FAMILY_EXACT: dict[str, EventFamily] = {
     "agent_dialogue_turn": "plan",
     "agent_dialogue_started": "plan",
     "agent_dialogue_resolved": "plan",
+    "team_chat_message": "plan",
     # Assembly events
     "assembly_brain_thinking": "plan",
     "assembly_step_added": "plan",

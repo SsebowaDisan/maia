@@ -198,6 +198,13 @@ class AgentOrchestrator:
                 registry=self.registry,
             )
             apply_memory_to_state(_brain.state, _brain_memory)
+            _allowed_tool_ids = settings.get("__allowed_tool_ids")
+            if isinstance(_allowed_tool_ids, list):
+                _brain.state._allowed_tool_ids = [
+                    str(tool_id).strip()
+                    for tool_id in _allowed_tool_ids
+                    if str(tool_id).strip()
+                ]
             # Attach CausalDAG graph (Innovation #4) if the planner built one.
             _causal_graph_obj = settings.get("__causal_graph_obj")
             if _causal_graph_obj is not None:

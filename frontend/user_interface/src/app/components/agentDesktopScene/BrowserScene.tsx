@@ -24,6 +24,49 @@ import { useBrowserSceneScrollState } from "./browser_scene_scroll_state";
 import type { MergedInteractionSource } from "../agentActivityPanel/interactionSuggestionMerge";
 import type { HighlightRegion, ZoomHistoryEntry } from "./types";
 
+const FRAME_VIEWPORT_BASE_WIDTH = 1366;
+const FRAME_VIEWPORT_BASE_HEIGHT = 768;
+
+const TRUSTED_LIVE_EMBED_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "docs.google.com",
+  "drive.google.com",
+]);
+
+function normalizeHost(value: string): string {
+  try {
+    return new URL(value).hostname.trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function shouldPreferProxyForUrl(value: string): boolean {
+  const normalized = String(value || "").trim();
+  if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+    return false;
+  }
+  if (normalized.toLowerCase().includes(".pdf")) {
+    return false;
+  }
+  const host = normalizeHost(normalized);
+  if (!host) {
+    return true;
+  }
+  if (TRUSTED_LIVE_EMBED_HOSTS.has(host)) {
+    return false;
+  }
+  if (
+    host.endsWith(".localhost") ||
+    host.endsWith(".internal") ||
+    host.endsWith(".local")
+  ) {
+    return false;
+  }
+  return true;
+}
+
 type BrowserSceneProps = {
   activeDetail: string;
   activeEventType: string;
@@ -153,6 +196,10 @@ function BrowserScene({
       if (computerUseCleanupRef.current) {
         computerUseCleanupRef.current();
         computerUseCleanupRef.current = null;
+      }
+      if (frameScrollAnimationRef.current !== null) {
+        window.cancelAnimationFrame(frameScrollAnimationRef.current);
+        frameScrollAnimationRef.current = null;
       }
     },
     [],
@@ -352,7 +399,8 @@ function BrowserScene({
     Boolean(proxyPreviewUrl) &&
     (blockedSignal ||
       shouldAnnotatePreview ||
-      !canRenderLiveUrl);
+      !canRenderLiveUrl ||
+      shouldPreferProxyForUrl(resolvedPageUrl));
   const preferPreviewProxy =
     shouldUseProxyPreview &&
     (!sceneSnapshotUrl || snapshotErrored);
@@ -360,9 +408,14 @@ function BrowserScene({
   const [crossFadeUrl, setCrossFadeUrl] = useState<string>("");
   const [proxyLoaded, setProxyLoaded] = useState(false);
   const [frameScrollPercent, setFrameScrollPercent] = useState<number | null>(null);
+  const frameViewportRef = useRef<HTMLDivElement | null>(null);
+  const [frameScale, setFrameScale] = useState(1);
+  const [frameVirtualHeight, setFrameVirtualHeight] = useState(FRAME_VIEWPORT_BASE_HEIGHT);
   const prevSnapshotUrlRef = useRef<string>(sceneSnapshotUrl);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const frameScrollObserverCleanupRef = useRef<(() => void) | null>(null);
+  const lastTelemetryScrollPercentRef = useRef<number | null>(null);
+  const frameScrollAnimationRef = useRef<number | null>(null);
   const showSnapshotPrimary = Boolean(sceneSnapshotUrl) && !snapshotErrored && !preferPreviewProxy;
   const frameUrl = useMemo(() => {
     if (shouldUseProxyPreview && proxyPreviewUrl) {
@@ -399,6 +452,34 @@ function BrowserScene({
     },
     [],
   );
+  useEffect(() => {
+    const viewport = frameViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    const updateScale = () => {
+      const rect = viewport.getBoundingClientRect();
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      const nextScale = Math.max(0.25, Math.min(1, width / FRAME_VIEWPORT_BASE_WIDTH));
+      const nextVirtualHeight = Math.max(
+        FRAME_VIEWPORT_BASE_HEIGHT,
+        Math.ceil(height / nextScale),
+      );
+      setFrameScale((previous) =>
+        Math.abs(previous - nextScale) >= 0.002 ? nextScale : previous,
+      );
+      setFrameVirtualHeight((previous) =>
+        Math.abs(previous - nextVirtualHeight) >= 2 ? nextVirtualHeight : previous,
+      );
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(viewport);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
   const bindFrameScrollObserver = () => {
     if (frameScrollObserverCleanupRef.current) {
       frameScrollObserverCleanupRef.current();
@@ -484,16 +565,65 @@ function BrowserScene({
         return false;
       }
       const nextPercent = Math.max(0, Math.min(100, Number(percent)));
-      frameWindow.scrollTo({
-        top: (nextPercent / 100) * maxScrollable,
-        behavior: "smooth",
-      });
+      const targetTop = (nextPercent / 100) * maxScrollable;
+      const currentTop = Number(frameWindow.scrollY || doc?.scrollTop || body?.scrollTop || 0);
+      if (frameScrollAnimationRef.current !== null) {
+        window.cancelAnimationFrame(frameScrollAnimationRef.current);
+        frameScrollAnimationRef.current = null;
+      }
+      const distance = Math.abs(targetTop - currentTop);
+      const durationMs = Math.max(900, Math.min(2200, 700 + distance * 0.6));
+      const startAt = performance.now();
+      const easeInOutCubic = (t: number) =>
+        t < 0.5
+          ? 4 * t * t * t
+          : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      const animateScroll = (now: number) => {
+        const progress = Math.max(0, Math.min(1, (now - startAt) / durationMs));
+        const eased = easeInOutCubic(progress);
+        const nextTop = currentTop + (targetTop - currentTop) * eased;
+        frameWindow.scrollTo(0, nextTop);
+        if (progress < 1) {
+          frameScrollAnimationRef.current = window.requestAnimationFrame(animateScroll);
+          return;
+        }
+        frameScrollAnimationRef.current = null;
+      };
+      frameScrollAnimationRef.current = window.requestAnimationFrame(animateScroll);
       setFrameScrollPercent(nextPercent);
       return true;
     } catch {
       return false;
     }
   };
+  useEffect(() => {
+    if (!canProgrammaticallyScrollFrame || !proxyLoaded) {
+      lastTelemetryScrollPercentRef.current = null;
+      return;
+    }
+    if (typeof scrollPercent !== "number" || !Number.isFinite(scrollPercent)) {
+      return;
+    }
+    const nextPercent = Math.max(0, Math.min(100, Number(scrollPercent)));
+    const previousPercent = lastTelemetryScrollPercentRef.current;
+    if (previousPercent !== null && Math.abs(previousPercent - nextPercent) < 1.5) {
+      return;
+    }
+    const currentFramePercent =
+      typeof frameScrollPercent === "number" && Number.isFinite(frameScrollPercent)
+        ? Math.max(0, Math.min(100, frameScrollPercent))
+        : null;
+    if (currentFramePercent !== null && Math.abs(currentFramePercent - nextPercent) < 1.5) {
+      lastTelemetryScrollPercentRef.current = nextPercent;
+      return;
+    }
+    const sync = window.setTimeout(() => {
+      if (scrollFrameToPercent(nextPercent)) {
+        lastTelemetryScrollPercentRef.current = nextPercent;
+      }
+    }, 40);
+    return () => window.clearTimeout(sync);
+  }, [canProgrammaticallyScrollFrame, frameScrollPercent, proxyLoaded, scrollPercent]);
   const { navigationHint, effectiveScrollPercent, handleScrollSelect } = useBrowserSceneScrollState({
     activePageUrl: resolvedPageUrl,
     actionIndicatesScroll,
@@ -508,7 +638,20 @@ function BrowserScene({
     onSelectPercent: scrollFrameToPercent,
   });
   const showOverlayCursor = cursorX !== null && cursorY !== null;
-  const viewportScrollOffsetPx = 0;
+  const viewportScrollOffsetPx = useMemo(() => {
+    if (canProgrammaticallyScrollFrame) {
+      return 0;
+    }
+    if (typeof effectiveScrollPercent !== "number" || !Number.isFinite(effectiveScrollPercent)) {
+      return 0;
+    }
+    const viewportHeight = frameViewportRef.current?.clientHeight || 0;
+    if (viewportHeight <= 0) {
+      return 0;
+    }
+    const travelDistance = Math.max(36, Math.min(260, viewportHeight * 0.42));
+    return -1 * (Math.max(0, Math.min(100, effectiveScrollPercent)) / 100) * travelDistance;
+  }, [canProgrammaticallyScrollFrame, effectiveScrollPercent]);
   const roadmapVisible = useRoadmapTransition({
     roadmapStepCount: roadmapSteps.length,
     roadmapActiveIndex,
@@ -591,7 +734,7 @@ function BrowserScene({
             alt="Live browser capture"
             className={`absolute inset-0 h-full w-full object-contain object-top bg-transparent ${snapshotReady ? "opacity-100" : "opacity-0"}`}
             style={{
-              transition: "opacity 320ms ease-in-out, transform 220ms ease-out",
+              transition: "opacity 320ms ease-in-out, transform 1100ms cubic-bezier(0.22, 1, 0.36, 1)",
               transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
             }}
             onLoad={handleSnapshotLoad}
@@ -647,7 +790,7 @@ function BrowserScene({
           <ThoughtBubble text={sceneNarration} />
         </div>
       ) : showFramePreview ? (
-        <div className="relative flex-1 overflow-hidden bg-[#f5f7fb]">
+        <div ref={frameViewportRef} className="relative flex-1 overflow-hidden bg-[#f5f7fb]">
           {!proxyLoaded ? (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#f5f5f7]">
               <div className="space-y-2.5 w-[52%]">
@@ -661,10 +804,13 @@ function BrowserScene({
             ref={frameRef}
             src={frameUrl || resolvedPageUrl}
             title="Live website preview"
-            className="absolute inset-0 h-full w-full border-0"
+            className="absolute left-0 top-0 border-0"
             style={{
-              transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
-              transition: "transform 220ms ease-out",
+              width: `${FRAME_VIEWPORT_BASE_WIDTH}px`,
+              height: `${frameVirtualHeight}px`,
+              transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0) scale(${frameScale})`,
+              transformOrigin: "top left",
+              transition: "transform 1100ms cubic-bezier(0.22, 1, 0.36, 1)",
             }}
             sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
             referrerPolicy="no-referrer-when-downgrade"
@@ -737,7 +883,10 @@ function BrowserScene({
           <div className="relative overflow-hidden rounded-xl border border-black/[0.08] bg-white px-3 py-3">
             <div
               className="space-y-2 transition-transform duration-200 ease-out"
-              style={{ transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)` }}
+              style={{
+                transform: `translate3d(0, ${viewportScrollOffsetPx}px, 0)`,
+                transition: "transform 1100ms cubic-bezier(0.22, 1, 0.36, 1)",
+              }}
             >
               <div className="h-2 w-[92%] rounded-full bg-black/12" />
               <div className="h-2 w-[84%] rounded-full bg-black/8" />

@@ -25,10 +25,50 @@ GA_PROBE_ALLOWED_TOOL_IDS = {
     "business.ga4_kpi_sheet_report",
     "analytics.chart.generate",
 }
+SYNTHESIS_TOOL_IDS = {
+    "report.generate",
+    "docs.create",
+    "workspace.docs.research_notes",
+    "workspace.docs.fill_template",
+}
+DELIVERY_TOOL_IDS = {
+    "gmail.draft",
+    "gmail.send",
+    "email.draft",
+    "email.send",
+    "mailer.report_send",
+}
+EVIDENCE_TOOL_IDS = {
+    "marketing.web_research",
+    "web.extract.structured",
+    "web.dataset.adapter",
+    "browser.playwright.inspect",
+    "documents.highlight.extract",
+    "analytics.ga4.report",
+    "analytics.ga4.full_report",
+    "business.ga4_kpi_sheet_report",
+}
 
 
 def _is_allowed_url_scoped_probe(tool_id: str) -> bool:
     return str(tool_id or "").strip() in URL_SCOPED_PROBE_TOOL_IDS
+
+
+def _request_has_explicit_file_scope(request: ChatRequest) -> bool:
+    try:
+        for selection in request.index_selection.values():
+            file_ids = getattr(selection, "file_ids", []) or []
+            if any(str(file_id).strip() for file_id in file_ids):
+                return True
+    except Exception:
+        pass
+    try:
+        for attachment in request.attachments:
+            if str(getattr(attachment, "file_id", "") or "").strip():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _is_google_analytics_probe_context(
@@ -132,6 +172,7 @@ def insert_contract_probe_steps(
         return steps
 
     target_url = " ".join(str(task_prep.task_intelligence.target_url or "").split()).strip()
+    explicit_file_scope = _request_has_explicit_file_scope(request)
     probe_rows = propose_fact_probe_steps(
         contract=task_prep.task_contract,
         request_message=request.message,
@@ -157,6 +198,8 @@ def insert_contract_probe_steps(
     for row in probe_rows:
         tool_id = str(row.get("tool_id") or "").strip()
         if not tool_id:
+            continue
+        if tool_id == "documents.highlight.extract" and not explicit_file_scope:
             continue
         # When analytics context is active, GA tools are handled by the next filter;
         # skip the URL-scope restriction so analytics tools are not pre-filtered out.
@@ -197,4 +240,78 @@ def insert_contract_probe_steps(
                 break
         steps[insert_at:insert_at] = probe_steps
 
+    return steps
+
+
+def enforce_contract_synthesis_step(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+    steps: list[PlannedStep],
+    allowed_tool_ids: set[str] | None = None,
+) -> list[PlannedStep]:
+    allowed = {str(tool_id).strip() for tool_id in (allowed_tool_ids or set()) if str(tool_id).strip()}
+    if allowed and "report.generate" not in allowed:
+        return steps
+    contract_outputs = [
+        " ".join(str(item).split()).strip()
+        for item in task_prep.contract_outputs
+        if " ".join(str(item).split()).strip()
+    ]
+    task_contract_outputs = task_prep.task_contract.get("required_outputs")
+    if isinstance(task_contract_outputs, list):
+        contract_outputs.extend(
+            [
+                " ".join(str(item).split()).strip()
+                for item in task_contract_outputs
+                if " ".join(str(item).split()).strip()
+            ]
+        )
+    contract_outputs.extend(
+        [
+            " ".join(str(item).split()).strip()
+            for item in task_prep.planned_deliverables
+            if " ".join(str(item).split()).strip()
+        ]
+    )
+    contract_outputs = list(dict.fromkeys(contract_outputs))
+
+    if any(step.tool_id in SYNTHESIS_TOOL_IDS for step in steps):
+        return steps
+    if not any(step.tool_id in EVIDENCE_TOOL_IDS for step in steps):
+        return steps
+
+    summary = (
+        task_prep.contract_objective
+        or task_prep.rewritten_task
+        or request.message
+    )
+    required_facts = [
+        " ".join(str(item).split()).strip()
+        for item in task_prep.contract_facts
+        if " ".join(str(item).split()).strip()
+    ]
+    required_outputs = contract_outputs[:3]
+    summary_parts = [summary]
+    if required_facts:
+        summary_parts.append("Must explicitly cover: " + "; ".join(required_facts[:4]))
+    if required_outputs:
+        summary_parts.append("Deliverable expectations: " + "; ".join(required_outputs))
+    summary = " ".join(part for part in summary_parts if part).strip()
+    synthesis_step = PlannedStep(
+        tool_id="report.generate",
+        title="Synthesize cited research brief",
+        params={
+            "title": "Research Brief",
+            "summary": summary,
+        },
+        why_this_step="Convert gathered evidence into a structured, source-backed brief before verification or delivery.",
+        expected_evidence=tuple(contract_outputs[:4]),
+    )
+    insert_at = len(steps)
+    for idx, step in enumerate(steps):
+        if step.tool_id in DELIVERY_TOOL_IDS:
+            insert_at = idx
+            break
+    steps.insert(insert_at, synthesis_step)
     return steps

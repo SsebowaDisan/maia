@@ -24,6 +24,7 @@ type AgentDesktopSceneProps = {
   activeEventType: string;
   runId?: string;
   activeStepIndex?: number | null;
+  visibleEvents?: import("../../types").AgentActivityEvent[];
   interactionSuggestion?: InteractionSuggestion[] | null;
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl?: string;

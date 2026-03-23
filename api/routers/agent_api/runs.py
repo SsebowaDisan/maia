@@ -188,17 +188,8 @@ def get_agent_run_collaboration(
             continue
         event_type = str(payload.get("event_type") or "").strip().lower()
         if event_type not in {
-            "agent_collaboration",
-            "agent_handoff",
-            "agent.handoff",
-            "agent_dialogue_started",
+            "team_chat_message",
             "agent_dialogue_turn",
-            "agent_dialogue_resolved",
-            "brain_review_started",
-            "brain_review_decision",
-            "brain_revision_requested",
-            "brain_question",
-            "brain_answer_received",
         }:
             continue
 
@@ -206,18 +197,23 @@ def get_agent_run_collaboration(
         data_map = data if isinstance(data, dict) else {}
         from_agent = str(
             data_map.get("from_agent")
+            or data_map.get("speaker_id")
+            or data_map.get("speaker_name")
             or data_map.get("source_agent")
             or payload.get("agent_id")
             or "agent"
         ).strip()
         to_agent = str(
             data_map.get("to_agent")
+            or data_map.get("audience")
+            or data_map.get("recipient")
             or data_map.get("target_agent")
             or data_map.get("next_agent")
             or "agent"
         ).strip()
         message = str(
             data_map.get("message")
+            or data_map.get("content")
             or data_map.get("question")
             or data_map.get("answer")
             or data_map.get("reasoning")
@@ -230,7 +226,13 @@ def get_agent_run_collaboration(
         timestamp = data_map.get("timestamp") or payload.get("timestamp") or payload.get("ts")
         turn_type = str(data_map.get("turn_type") or "").strip().lower()
         turn_role = str(data_map.get("turn_role") or "").strip().lower()
-        if event_type == "agent_dialogue_turn":
+        if event_type == "team_chat_message":
+            entry_type = str(
+                data_map.get("entry_type")
+                or data_map.get("message_type")
+                or "chat"
+            ).strip().lower()
+        elif event_type == "agent_dialogue_turn":
             if turn_role in {"request", "response", "integration", "review", "handoff", "message"}:
                 entry_type = turn_role
             elif turn_type.endswith("_response") or turn_type.endswith("_answer") or turn_type == "answer":
@@ -239,14 +241,6 @@ def get_agent_run_collaboration(
                 entry_type = "question"
             else:
                 entry_type = turn_type or "message"
-        elif event_type == "brain_question":
-            entry_type = "question"
-        elif event_type == "brain_answer_received":
-            entry_type = "response"
-        elif event_type == "brain_revision_requested":
-            entry_type = "disagreement"
-        elif "handoff" in event_type:
-            entry_type = "handoff"
         else:
             entry_type = "message"
 

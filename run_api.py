@@ -8,7 +8,8 @@ warnings.filterwarnings("ignore", message=r"urllib3.*chardet.*doesn't match")
 warnings.filterwarnings("ignore", module=r"requests")
 warnings.filterwarnings("ignore", message=r"ARC4 has been moved", category=DeprecationWarning)
 
+from api.main import app  # noqa: E402
 import uvicorn  # noqa: E402
 
 if __name__ == "__main__":
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

@@ -160,19 +160,48 @@ def assemble_and_run(
                     pass
 
             # Phase 2: Execute (events also stream live via _emit_live)
-            _emit_live({"event_type": "execution_starting", "data": {"workflow_id": workflow_id}})
+            execution_run_id = str(uuid.uuid4())
+            _emit_live(
+                {
+                    "event_type": "execution_starting",
+                    "data": {
+                        "workflow_id": workflow_id,
+                        "run_id": execution_run_id,
+                    },
+                }
+            )
             try:
                 from api.services.agents.workflow_executor import execute_workflow
                 from api.schemas.workflow_definition import WorkflowDefinitionSchema
 
                 wf = WorkflowDefinitionSchema.model_validate(definition)
-                outputs = execute_workflow(wf, tenant_id=user_id, on_event=_emit_live)
-                _emit_live({"event_type": "execution_complete", "data": {
-                    "workflow_id": workflow_id,
-                    "outputs": {k: str(v)[:500] for k, v in outputs.items()},
-                }})
+                outputs = execute_workflow(
+                    wf,
+                    tenant_id=user_id,
+                    on_event=_emit_live,
+                    run_id=execution_run_id,
+                )
+                _emit_live(
+                    {
+                        "event_type": "execution_complete",
+                        "data": {
+                            "workflow_id": workflow_id,
+                            "run_id": execution_run_id,
+                            "outputs": {k: str(v)[:6000] for k, v in outputs.items()},
+                        },
+                    }
+                )
             except Exception as exc:
-                _emit_live({"event_type": "execution_error", "detail": str(exc)[:500]})
+                _emit_live(
+                    {
+                        "event_type": "execution_error",
+                        "detail": str(exc)[:500],
+                        "data": {
+                            "workflow_id": workflow_id,
+                            "run_id": execution_run_id,
+                        },
+                    }
+                )
         except Exception as exc:
             _emit_live({"event_type": "assembly_error", "detail": f"Pipeline crashed: {str(exc)[:500]}"})
         finally:
@@ -183,18 +212,26 @@ def assemble_and_run(
     pipeline_thread.start()
     _emit_live({
         "event_type": "assembly_started",
-        "title": "Brain started assembling the workflow",
-        "detail": "Planning team roles and dependencies...",
+        "title": "Assembling workflow",
+        "detail": "Building the team and dependency plan...",
     })
 
     def _stream():
         heartbeat_interval_seconds = 10.0
-        max_pipeline_seconds = float(os.getenv("MAIA_ASSEMBLE_RUN_MAX_SECONDS", "1800"))
-        if max_pipeline_seconds < 60:
+        idle_progress_interval_seconds = 30.0
+        raw_max_runtime = str(os.getenv("MAIA_ASSEMBLE_RUN_MAX_SECONDS", "0")).strip()
+        max_pipeline_seconds: float | None
+        try:
+            parsed_max_runtime = float(raw_max_runtime)
+            max_pipeline_seconds = parsed_max_runtime if parsed_max_runtime > 0 else None
+        except (TypeError, ValueError):
+            max_pipeline_seconds = None
+        if max_pipeline_seconds is not None and max_pipeline_seconds < 60:
             max_pipeline_seconds = 60.0
+        last_idle_progress_emit_at = pipeline_started_at
         while True:
             elapsed = time.monotonic() - pipeline_started_at
-            if elapsed > max_pipeline_seconds:
+            if max_pipeline_seconds is not None and elapsed > max_pipeline_seconds:
                 yield _sse(
                     "assembly_error",
                     {"detail": f"Pipeline exceeded max runtime of {int(max_pipeline_seconds)}s and was stopped."},
@@ -210,7 +247,10 @@ def assemble_and_run(
                     yield "data: [DONE]\n\n"
                     break
                 idle_seconds = int(time.monotonic() - pipeline_last_emit_at)
-                if idle_seconds >= 30 and (idle_seconds % 30 == 0):
+                if (
+                    idle_seconds >= int(idle_progress_interval_seconds)
+                    and (time.monotonic() - last_idle_progress_emit_at) >= idle_progress_interval_seconds
+                ):
                     yield _sse(
                         "execution_progress",
                         {
@@ -218,12 +258,14 @@ def assemble_and_run(
                             "detail": f"Waiting for next event... ({idle_seconds}s since last update)",
                         },
                     )
+                    last_idle_progress_emit_at = time.monotonic()
                 yield ": heartbeat\n\n"
                 continue
             if event is None:
                 yield "data: [DONE]\n\n"
                 break
             yield _sse(event.get("event_type", "event"), event)
+            last_idle_progress_emit_at = time.monotonic()
 
     return StreamingResponse(
         _stream(),

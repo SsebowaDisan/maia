@@ -31,6 +31,10 @@ _MODE_SCOPE_STATEMENTS: dict[str, str] = {
         "Deep Search mode: I will query multiple sources, "
         "synthesise evidence, and cite every claim. Expect 30–90 seconds."
     ),
+    "brain": (
+        "Brain mode: I will assemble a team of agents, build a workflow, "
+        "and run it. You will see the agents collaborate in real-time."
+    ),
 }
 
 

@@ -354,12 +354,26 @@ export function WorkflowGallery({
                 : [];
 
               return (
-                <button
+                <article
                   key={record.id}
-                  type="button"
-                  onClick={() => void handleSelect(record)}
-                  disabled={isDeleting}
-                  className={`group relative flex flex-col overflow-hidden rounded-2xl border border-black/[0.06] bg-white text-left shadow-sm transition hover:shadow-md disabled:opacity-50 ${color.hover}`}
+                  role="button"
+                  tabIndex={isDeleting ? -1 : 0}
+                  aria-disabled={isDeleting}
+                  onClick={() => {
+                    if (!isDeleting) {
+                      void handleSelect(record);
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (isDeleting) {
+                      return;
+                    }
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      void handleSelect(record);
+                    }
+                  }}
+                  className={`group relative flex flex-col overflow-hidden rounded-2xl border border-black/[0.06] bg-white text-left shadow-sm transition hover:shadow-md ${isDeleting ? "opacity-50" : ""} ${color.hover}`}
                 >
                   {/* Color accent header */}
                   <div className={`flex items-center gap-3 bg-gradient-to-r ${color.bg} px-4 pb-3 pt-4`}>
@@ -412,7 +426,7 @@ export function WorkflowGallery({
                   >
                     {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                   </button>
-                </button>
+                </article>
               );
             })}
           </div>

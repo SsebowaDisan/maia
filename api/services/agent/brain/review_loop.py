@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -64,52 +63,33 @@ def brain_review(
 
     # Call the LLM for the review decision (with timeout — don't hang the workflow)
     try:
-        import concurrent.futures
-        from api.services.agents.runner import run_agent_task
+        from api.services.agent.llm_runtime import call_json_response
 
-        def _review_call() -> str:
-            result_parts: list[str] = []
-            for chunk in run_agent_task(
-                prompt["user"],
+        payload = call_json_response(
+            system_prompt=prompt["system"],
+            user_prompt=prompt["user"],
+            timeout_seconds=30,
+            max_tokens=420,
+            retries=1,
+            allow_json_repair=True,
+            enable_thinking=False,
+            use_fallback_models=False,
+        )
+        if isinstance(payload, dict):
+            raw_response = json.dumps(payload)
+        else:
+            raw_response = _review_via_runner_fallback(
                 tenant_id=tenant_id,
                 system_prompt=prompt["system"],
-                max_tool_calls=0,
-            ):
-                text = chunk.get("text") or chunk.get("content") or ""
-                if text:
-                    result_parts.append(str(text))
-            return "".join(result_parts)
-
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(_review_call)
-        try:
-            raw_response = future.result(timeout=30)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+                user_prompt=prompt["user"],
+            )
+            if not raw_response:
+                raise RuntimeError("review fallback returned no content")
     except Exception as exc:
         logger.warning("Brain review LLM call failed or timed out: %s", exc)
         raw_response = '{"decision": "proceed", "reasoning": "Review unavailable", "confidence": 0.5}'
 
     decision = parse_review_response(raw_response)
-
-    # Record in collaboration log
-    try:
-        from api.services.agent.collaboration_logs import get_collaboration_service
-        svc = get_collaboration_service()
-        if decision["decision"] == "revise":
-            svc.record(run_id=run_id, from_agent="brain", to_agent=agent_id,
-                       message=f"Revision requested: {decision.get('feedback', '')}", entry_type="disagreement")
-        elif decision["decision"] == "question":
-            svc.record(run_id=run_id, from_agent="brain", to_agent=agent_id,
-                       message=decision.get("question", ""), entry_type="question")
-        elif decision["decision"] == "proceed":
-            svc.record(run_id=run_id, from_agent="brain", to_agent=agent_id,
-                       message=f"Approved: {decision.get('reasoning', 'Output meets standards')}", entry_type="message")
-    except Exception:
-        pass
 
     _emit(on_event, {
         "event_type": "brain_review_decision",
@@ -137,6 +117,8 @@ def brain_review_loop(
     tenant_id: str = "",
     on_event: Optional[Callable] = None,
     run_agent_fn: Optional[Callable] = None,
+    revise_output_fn: Optional[Callable[[str, str, int], str]] = None,
+    answer_question_fn: Optional[Callable[[str, str, int], str]] = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run the full Brain review loop for a step.
 
@@ -167,7 +149,7 @@ def brain_review_loop(
         if decision["decision"] == "proceed":
             break
 
-        if decision["decision"] == "revise" and run_agent_fn:
+        if decision["decision"] == "revise" and (revise_output_fn or run_agent_fn):
             feedback = decision.get("feedback", "Please improve your output.")
             revision_prompt = (
                 f"REVISION REQUESTED (round {round_num}/{MAX_REVIEW_ROUNDS}):\n"
@@ -184,12 +166,17 @@ def brain_review_loop(
                          "from_agent": "brain", "to_agent": agent_id, "run_id": run_id},
             })
             try:
-                output = run_agent_fn(revision_prompt)
+                if revise_output_fn is not None:
+                    output = revise_output_fn(feedback, output, round_num)
+                elif run_agent_fn is not None:
+                    output = run_agent_fn(revision_prompt)
+                else:
+                    break
             except Exception as exc:
                 logger.warning("Revision run failed: %s", exc)
                 break
 
-        elif decision["decision"] == "question" and run_agent_fn:
+        elif decision["decision"] == "question" and (answer_question_fn or run_agent_fn):
             question = decision.get("question", "Can you clarify your output?")
             _emit(on_event, {
                 "event_type": "brain_question",
@@ -200,16 +187,15 @@ def brain_review_loop(
                          "to_agent": agent_id, "run_id": run_id},
             })
             try:
-                answer = run_agent_fn(f"The Brain asks: {question}\n\nYour previous output:\n{output[:1500]}\n\nPlease answer the question.")
-                # Record the answer
-                try:
-                    from api.services.agent.collaboration_logs import get_collaboration_service
-                    get_collaboration_service().record(
-                        run_id=run_id, from_agent=agent_id, to_agent="brain",
-                        message=answer[:500], entry_type="response",
+                if answer_question_fn is not None:
+                    answer = answer_question_fn(question, output, round_num)
+                elif run_agent_fn is not None:
+                    answer = run_agent_fn(
+                        f"The Brain asks: {question}\n\nYour previous output:\n{output[:1500]}"
+                        "\n\nPlease answer the question."
                     )
-                except Exception:
-                    pass
+                else:
+                    break
                 _emit(on_event, {
                     "event_type": "brain_answer_received",
                     "title": f"{agent_id} → Brain: Response",
@@ -226,6 +212,38 @@ def brain_review_loop(
             break
 
     return output, history
+
+
+def _review_via_runner_fallback(*, tenant_id: str, system_prompt: str, user_prompt: str) -> str:
+    try:
+        import concurrent.futures
+        from api.services.agents.runner import run_agent_task
+
+        def _run() -> str:
+            result_parts: list[str] = []
+            for chunk in run_agent_task(
+                user_prompt,
+                tenant_id=tenant_id,
+                system_prompt=system_prompt,
+                agent_mode="ask",
+                max_tool_calls=0,
+            ):
+                text = chunk.get("text") or chunk.get("content") or ""
+                if text:
+                    result_parts.append(str(text))
+            return "".join(result_parts)
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_run)
+        try:
+            return future.result(timeout=30)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            return ""
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        return ""
 
 
 def _emit(on_event: Optional[Callable], event: dict[str, Any]) -> None:

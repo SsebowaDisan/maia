@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from api.services.agent.llm_intent import classify_intent_tags, enrich_task_intelligence
+from api.services.agent.llm_intent import enrich_task_intelligence
 from api.services.agent.planner_helpers import infer_intent_signals_from_text
 
 from .constants import EMAIL_RE, URL_RE
@@ -82,16 +82,12 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
         "wants_highlight_extract": bool(lexical_signals.get("wants_highlight_words")),
         "wants_location_lookup": bool(lexical_signals.get("wants_location_info")),
     }
-    intent_tags = classify_intent_tags(
-        message=message,
-        agent_goal=agent_goal,
-        heuristic=heuristic,
-    )
     llm_intent = enrich_task_intelligence(
         message=message,
         agent_goal=agent_goal,
         heuristic=heuristic,
     )
+    intent_tags: list[str] = []
     llm_target_url = str(llm_intent.get("target_url") or "").strip().rstrip(".,;)")
     if llm_target_url.startswith(("http://", "https://")):
         target_url = llm_target_url
@@ -117,7 +113,25 @@ def derive_task_intelligence(*, message: str, agent_goal: str | None = None) -> 
             for item in llm_tags
             if str(item).strip()
         ]
-        intent_tags = list(dict.fromkeys([*intent_tags, *normalized]))[:8]
+        intent_tags = list(dict.fromkeys(normalized))[:8]
+    else:
+        if bool(heuristic.get("requires_web_inspection")) or bool(heuristic.get("target_url")):
+            intent_tags.append("web_research")
+        if bool(heuristic.get("requested_report")):
+            intent_tags.append("report_generation")
+        if bool(heuristic.get("requires_delivery")) or bool(heuristic.get("delivery_email")):
+            intent_tags.append("email_delivery")
+        if bool(heuristic.get("requires_contact_form_submission")):
+            intent_tags.append("contact_form_submission")
+        if bool(heuristic.get("wants_docs_output")):
+            intent_tags.append("docs_write")
+        if bool(heuristic.get("wants_sheets_output")):
+            intent_tags.append("sheets_update")
+        if bool(heuristic.get("wants_highlight_extract")):
+            intent_tags.append("highlight_extract")
+        if bool(heuristic.get("wants_location_lookup")):
+            intent_tags.append("location_lookup")
+        intent_tags = list(dict.fromkeys(intent_tags))[:8]
 
     is_analytics_request = isinstance(llm_intent.get("is_analytics_request"), bool) and bool(
         llm_intent.get("is_analytics_request")

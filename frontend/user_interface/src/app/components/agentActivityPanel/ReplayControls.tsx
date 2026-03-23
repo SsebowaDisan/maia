@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  SkipBack,
-  StepBack,
-  Play,
-  Pause,
-  StepForward,
-  SkipForward,
-} from "lucide-react";
+import { SkipBack, StepBack, Play, Pause, StepForward, SkipForward } from "lucide-react";
+import { sanitizeComputerUseText } from "../../utils/userFacingComputerUse";
 
 type ReplayEvent = {
   event_type?: string;
@@ -75,7 +69,6 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
   if (!runId) return null;
 
   const total = events.length;
-  const pct = total > 1 ? (cursor / (total - 1)) * 100 : 0;
   const currentEvent = events[cursor];
 
   return (
@@ -105,7 +98,10 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
       {/* Transport controls */}
       <div className="flex items-center justify-center gap-1">
         <button
-          onClick={() => { setPlaying(false); setCursor(0); }}
+          onClick={() => {
+            setPlaying(false);
+            setCursor(0);
+          }}
           disabled={total === 0 || loading}
           className="p-1.5 rounded hover:bg-accent text-muted-foreground disabled:opacity-30 transition-colors"
           title="Go to start"
@@ -137,7 +133,10 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
           <StepForward size={13} />
         </button>
         <button
-          onClick={() => { setPlaying(false); setCursor(Math.max(0, total - 1)); }}
+          onClick={() => {
+            setPlaying(false);
+            setCursor(Math.max(0, total - 1));
+          }}
           disabled={total === 0 || loading}
           className="p-1.5 rounded hover:bg-accent text-muted-foreground disabled:opacity-30 transition-colors"
           title="Go to end"
@@ -150,15 +149,15 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
       {currentEvent && (
         <p className="text-[10px] text-muted-foreground text-center truncate">
           {currentEvent.event_type || "event"}
-          {currentEvent.tool_id ? ` · ${String(currentEvent.tool_id)}` : ""}
-          {(currentEvent.text || currentEvent.content)
-            ? ` · ${String(currentEvent.text ?? currentEvent.content).slice(0, 40)}`
+          {currentEvent.tool_id ? ` · ${sanitizeComputerUseText(currentEvent.tool_id)}` : ""}
+          {currentEvent.text || currentEvent.content
+            ? ` · ${sanitizeComputerUseText(currentEvent.text ?? currentEvent.content).slice(0, 40)}`
             : ""}
         </p>
       )}
 
       {loading && (
-        <p className="text-[10px] text-muted-foreground text-center">Loading events…</p>
+        <p className="text-[10px] text-muted-foreground text-center">Loading events...</p>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { Maximize2, Minimize2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AgentActivityEvent } from "../../types";
+import { visibleTimelineEvents } from "./replayModePolicy";
 
 interface FullscreenViewerOverlayProps {
   isOpen: boolean;
@@ -25,6 +26,7 @@ function FullscreenViewerOverlay({
   sceneText,
   onSelectEvent,
 }: FullscreenViewerOverlayProps) {
+  const timelineEvents = visibleTimelineEvents(visibleEvents);
   if (!isOpen) {
     return null;
   }
@@ -80,17 +82,20 @@ function FullscreenViewerOverlay({
             <div className="min-h-0 w-[340px] overflow-y-auto rounded-2xl border border-white/10 bg-white/[0.03] p-3">
               <p className="mb-2 text-[12px] font-medium text-white/90">Live timeline</p>
               <div className="space-y-1.5">
-                {visibleEvents.map((event, index) => (
-                  <button
-                    key={`fullscreen-row-${event.event_id || index}`}
-                    type="button"
-                    onClick={() => onSelectEvent(event, index)}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left text-white/90 transition hover:bg-white/[0.08]"
-                  >
-                    <p className="truncate text-[12px] font-medium">{event.title}</p>
-                    {event.detail ? <p className="mt-0.5 line-clamp-2 text-[11px] text-white/70">{event.detail}</p> : null}
-                  </button>
-                ))}
+                {timelineEvents.map((event) => {
+                  const index = visibleEvents.findIndex((candidate) => candidate.event_id === event.event_id);
+                  return (
+                    <button
+                      key={`fullscreen-row-${event.event_id || index}`}
+                      type="button"
+                      onClick={() => onSelectEvent(event, index)}
+                      className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left text-white/90 transition hover:bg-white/[0.08]"
+                    >
+                      <p className="truncate text-[12px] font-medium">{event.title}</p>
+                      {event.detail ? <p className="mt-0.5 line-clamp-2 text-[11px] text-white/70">{event.detail}</p> : null}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from api.services.agent.llm_runtime import call_text_response
+
+from .citations import collect_evidence_citations
 from .models import AnswerBuildContext
 from ..text_helpers import compact
 
@@ -162,6 +165,95 @@ def _collect_external_source_urls(ctx: AnswerBuildContext) -> list[str]:
     return collected[:80]
 
 
+def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
+    citations = collect_evidence_citations(ctx)
+    if not citations:
+        return ""
+
+    def _best_note_for_label(label: str, url: str) -> str:
+        for source in ctx.sources:
+            source_label = _clean(source.label)
+            source_url = _normalize_url(source.url)
+            metadata = source.metadata if isinstance(source.metadata, dict) else {}
+            if source_label != label and source_url != url:
+                continue
+            for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
+                note = _clean(metadata.get(key))
+                if note:
+                    return note[:260]
+        for bucket_key in ("__latest_report_sources", "__latest_web_sources"):
+            rows = ctx.runtime_settings.get(bucket_key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_label = _clean(row.get("label"))
+                row_url = _normalize_url(row.get("url"))
+                if row_label != label and row_url != url:
+                    continue
+                for key in ("snippet", "excerpt", "summary", "text", "quote"):
+                    note = _clean(row.get(key))
+                    if note:
+                        return note[:260]
+                metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
+                    note = _clean(metadata.get(key))
+                    if note:
+                        return note[:260]
+        return ""
+
+    numbered_sources: list[str] = []
+    for idx, row in enumerate(citations[:10], start=1):
+        label = _clean(row.get("label")) or f"Source {idx}"
+        url = _normalize_url(row.get("url"))
+        note = _best_note_for_label(label, url) or _clean(row.get("note"))
+        payload = f"[{idx}] {label}"
+        if url:
+            payload += f" | {url}"
+        if note:
+            payload += f" | {note}"
+        numbered_sources.append(payload[:520])
+    if len(numbered_sources) < 2:
+        return ""
+
+    request_message = _clean(ctx.request.message)
+    latest_title = _clean(ctx.runtime_settings.get("__latest_report_title")) or "Research summary"
+    user_goal = request_message or latest_title
+    response = call_text_response(
+        system_prompt=(
+            "You write premium research summaries for executives. "
+            "Your style is Apple-like: calm, precise, elegant, and highly structured. "
+            "Use only the provided evidence. "
+            "Every substantive claim must carry inline citation markers like [1] or [2][3] that map to the numbered sources."
+        ),
+        user_prompt=(
+            "Write a concise but substantive research brief in markdown.\n"
+            "Rules:\n"
+            "- Start directly with the answer; no meta commentary.\n"
+            "- Use 2-4 short paragraphs and optionally one compact bullet list if it improves clarity.\n"
+            "- Prefer roughly 1000-1500 characters for a standard research brief unless the evidence clearly requires less or more.\n"
+            "- Include actual findings, not process commentary.\n"
+            "- If evidence is incomplete or conflicting, state that clearly.\n"
+            "- Use only citation numbers from the provided numbered source list.\n"
+            "- Do not include a Sources section here.\n\n"
+            f"User request:\n{user_goal}\n\n"
+            f"Reference title:\n{latest_title}\n\n"
+            "Numbered sources:\n"
+            + "\n".join(numbered_sources)
+        ),
+        temperature=0.2,
+        timeout_seconds=16,
+        max_tokens=1400,
+    )
+    text = str(response or "").strip()
+    if not text or len(text) < 280:
+        return ""
+    if not re.search(r"\[\d+\]", text):
+        return ""
+    return text
+
+
 def append_execution_summary(lines: list[str], ctx: AnswerBuildContext) -> None:
     lines.append("")
     lines.append("## Execution Summary")
@@ -192,6 +284,11 @@ def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
     show_diagnostics = bool(ctx.runtime_settings.get("__show_response_diagnostics"))
     lines.append("")
     lines.append("## Executive Summary")
+    llm_summary = _compose_llm_cited_research_summary(ctx)
+    if llm_summary:
+        lines.extend(str(llm_summary).splitlines())
+        return
+
     browser_findings = ctx.runtime_settings.get("__latest_browser_findings")
     summary_emitted = False
     if isinstance(browser_findings, dict):

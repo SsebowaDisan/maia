@@ -46,14 +46,6 @@ function tabForEventType(eventType: string): PreviewTab {
     normalized === EVT_AGENT_WAITING ||
     normalized === EVT_AGENT_HANDOFF ||
     normalized === EVT_EVENT_COVERAGE ||
-    normalized === EVT_BRAIN_REVIEW_STARTED ||
-    normalized === EVT_BRAIN_REVIEW_DECISION ||
-    normalized === EVT_BRAIN_REVISION_REQUESTED ||
-    normalized === EVT_BRAIN_QUESTION ||
-    normalized === EVT_BRAIN_ANSWER_RECEIVED ||
-    normalized === EVT_AGENT_DIALOGUE_TURN ||
-    normalized === EVT_AGENT_DIALOGUE_STARTED ||
-    normalized === EVT_AGENT_DIALOGUE_RESOLVED ||
     normalized === EVT_ASSEMBLY_STARTED ||
     normalized === EVT_ASSEMBLY_STEP_ADDED ||
     normalized === EVT_ASSEMBLY_EDGE_ADDED ||

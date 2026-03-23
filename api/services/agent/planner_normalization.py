@@ -26,6 +26,36 @@ def host_from_url(url: str) -> str:
     return host
 
 
+_PLACEHOLDER_HOSTS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "localhost",
+    "127.0.0.1",
+}
+
+
+def _clean_http_urls(value: Any) -> list[str]:
+    urls: list[str] = []
+    rows = value if isinstance(value, list) else []
+    for item in rows:
+        text = " ".join(str(item or "").split()).strip()
+        if not text.startswith(("http://", "https://")):
+            continue
+        if _is_placeholder_url(text):
+            continue
+        if text not in urls:
+            urls.append(text)
+    return urls
+
+
+def _is_placeholder_url(url: str) -> bool:
+    host = host_from_url(url)
+    if not host:
+        return True
+    return host in _PLACEHOLDER_HOSTS or host.endswith(".example.com")
+
+
 def request_has_selected_files(request: ChatRequest) -> bool:
     selection = request.index_selection if isinstance(request.index_selection, dict) else {}
     for selected in selection.values():
@@ -121,21 +151,43 @@ def normalize_steps(
     normalized: list[PlannedStep] = []
     for step in steps:
         params = dict(step.params)
+        drop_step = False
         if step.tool_id == "browser.playwright.inspect":
+            candidate_urls = _clean_http_urls(
+                params.get("candidate_urls") or params.get("urls") or params.get("source_urls") or []
+            )
+            if candidate_urls:
+                params.setdefault("url", candidate_urls[0])
+                params["candidate_urls"] = candidate_urls[:8]
+                params["urls"] = candidate_urls[:8]
             if url:
                 params.setdefault("url", url)
             params.setdefault("web_provider", DEFAULT_WEB_PROVIDER)
             params.setdefault("highlight_color", highlight_color)
+            step_url = " ".join(str(params.get("url") or "").split()).strip()
+            if not step_url or _is_placeholder_url(step_url):
+                drop_step = not bool(url)
         if step.tool_id == "documents.highlight.extract":
             params.setdefault("highlight_color", highlight_color)
         if step.tool_id == "web.extract.structured":
             if url:
                 params.setdefault("url", url)
+            candidate_urls = _clean_http_urls(params.get("source_urls"))
+            if candidate_urls:
+                params.setdefault("url", candidate_urls[0])
+                params.setdefault("candidate_urls", candidate_urls[:8])
+            params.pop("source_urls", None)
             params.setdefault("extraction_goal", request.message)
+            step_url = " ".join(str(params.get("url") or "").split()).strip()
+            if not step_url or _is_placeholder_url(step_url):
+                drop_step = not bool(url)
         if step.tool_id == "web.dataset.adapter":
             if url:
                 params.setdefault("url", url)
             params.setdefault("goal", request.message)
+            step_url = " ".join(str(params.get("url") or "").split()).strip()
+            if not step_url or _is_placeholder_url(step_url):
+                drop_step = not bool(url)
         if step.tool_id == "marketing.web_research":
             query = sanitize_search_query(
                 str(params.get("query") or request.message),
@@ -183,6 +235,8 @@ def normalize_steps(
             params.setdefault("export_pdf", True)
         if step.tool_id in ("gmail.draft", "gmail.send") and attachment_delivery_requested:
             params.setdefault("attach_latest_report_pdf", True)
+        if drop_step:
+            continue
         normalized.append(
             PlannedStep(
                 tool_id=step.tool_id,

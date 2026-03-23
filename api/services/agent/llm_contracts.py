@@ -26,6 +26,7 @@ from .llm_contracts_helpers import (
     derive_required_actions as _derive_required_actions,
     filter_required_facts_for_execution as _filter_required_facts_for_execution,
     reconcile_required_actions_with_llm as _reconcile_required_actions_with_llm,
+    suppress_send_email_for_draft_only_scope as _suppress_send_email_for_draft_only_scope,
 )
 from .llm_contracts_requirements import (
     classify_missing_requirements as _classify_missing_requirements,
@@ -78,6 +79,12 @@ def build_task_contract(
         intent_tags=clean_intent_tags,
         delivery_target=delivery_target,
         target_url=target_url,
+    )
+    heuristic_actions = _suppress_send_email_for_draft_only_scope(
+        required_actions=heuristic_actions,
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
     )
     heuristic_facts = _filter_required_facts_for_execution(
         required_facts=heuristic_facts,
@@ -168,6 +175,9 @@ def build_task_contract(
         "- Do not ask for details that the agent can discover from website navigation, web research, or attached files.\n"
         "- For website outreach tasks, never require a contact-page URL when a site URL is already present.\n"
         "- missing_requirements should include concrete blockers such as recipient, target URL, required facts, output format, or sender identity details required for external outreach.\n\n"
+        "- For email delivery tasks, do not treat tone, preferred length, or style preferences as missing requirements unless the user explicitly requested them.\n"
+        "- Do not list collaborator handoff completion, another agent's verification, or internal workflow quality checks as missing requirements.\n"
+        "- Missing requirements are only unresolved user-provided inputs or truly non-discoverable blockers.\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
     )
     response = call_json_response(
@@ -227,6 +237,12 @@ def build_task_contract(
         intent_tags=clean_intent_tags,
         delivery_target=clean_target,
         target_url=target_url,
+    )
+    required_actions = _suppress_send_email_for_draft_only_scope(
+        required_actions=required_actions,
+        message=clean_message,
+        agent_goal=clean_goal,
+        rewritten_task=clean_rewrite,
     )
     required_facts = _filter_required_facts_for_execution(
         required_facts=required_facts,

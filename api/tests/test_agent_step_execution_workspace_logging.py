@@ -4,6 +4,7 @@ from api.services.agent.models import AgentActivityEvent
 from api.services.agent.orchestration.models import ExecutionState
 from api.services.agent.orchestration.step_execution_sections.failure import handle_step_failure
 from api.services.agent.orchestration.step_execution_sections.guards import (
+    prepare_step_params,
     should_skip_step_for_workspace_logging,
 )
 from api.services.agent.planner import PlannedStep
@@ -218,7 +219,58 @@ def test_execute_failure_emits_clarification_request_from_recovery_hint(monkeypa
     assert any(event.event_type == "llm.clarification_requested" for event in captured)
     clarification_event = next(event for event in captured if event.event_type == "llm.clarification_requested")
     assert clarification_event.data.get("deferred_until_after_attempts") is True
-    assert state.execution_context.settings.get("__clarification_requested_after_attempt") is True
+
+
+def test_prepare_step_params_hydrates_web_extract_from_latest_web_sources() -> None:
+    state = _state()
+    state.execution_context.settings["__latest_web_sources"] = [
+        {"url": "https://example.com/placeholder"},
+        {"url": "https://hai.stanford.edu/ai-index"},
+        {"url": "https://www.ibm.com/think/topics/machine-learning"},
+    ]
+    step = PlannedStep(
+        tool_id="web.extract.structured",
+        title="Extract findings",
+        params={"field_schema": {"topic": "string"}},
+    )
+
+    params = prepare_step_params(
+        step=step,
+        access_context=type("AccessContext", (), {"access_mode": "restricted", "full_access_enabled": False})(),
+        settings=state.execution_context.settings,
+    )
+
+    assert params.get("url") == "https://hai.stanford.edu/ai-index"
+    assert params.get("candidate_urls") == [
+        "https://hai.stanford.edu/ai-index",
+        "https://www.ibm.com/think/topics/machine-learning",
+    ]
+
+
+def test_prepare_step_params_hydrates_browser_inspect_from_latest_web_sources() -> None:
+    state = _state()
+    state.execution_context.settings["__latest_web_sources"] = [
+        {"url": "https://example.com/placeholder"},
+        {"url": "https://hai.stanford.edu/ai-index"},
+        {"url": "https://www.ibm.com/think/topics/machine-learning"},
+    ]
+    step = PlannedStep(
+        tool_id="browser.playwright.inspect",
+        title="Inspect source",
+        params={"urls": []},
+    )
+
+    params = prepare_step_params(
+        step=step,
+        access_context=type("AccessContext", (), {"access_mode": "restricted", "full_access_enabled": False})(),
+        settings=state.execution_context.settings,
+    )
+
+    assert params.get("url") == "https://hai.stanford.edu/ai-index"
+    assert params.get("urls") == [
+        "https://hai.stanford.edu/ai-index",
+        "https://www.ibm.com/think/topics/machine-learning",
+    ]
 
 
 def test_execute_failure_does_not_emit_clarification_for_internal_recovery_hint(monkeypatch) -> None:

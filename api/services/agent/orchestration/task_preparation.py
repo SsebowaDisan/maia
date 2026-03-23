@@ -39,7 +39,25 @@ from .task_preparation_helpers import (
     scoped_agent_goal_for_execution as _scoped_agent_goal_for_execution,
     selected_file_ids as _selected_file_ids,
     selected_index_id as _selected_index_id,
+    workflow_stage_context_retrieval_enabled as _workflow_stage_context_retrieval_enabled,
 )
+
+
+def _early_browser_workspace_url(*, target_url: str, settings: dict[str, Any]) -> str:
+    normalized_target = " ".join(str(target_url or "").split()).strip()
+    if normalized_target.startswith(("http://", "https://")):
+        return normalized_target
+    preferred_provider = " ".join(
+        str(
+            settings.get("agent.search_provider")
+            or settings.get("__search_provider")
+            or settings.get("search_provider")
+            or "brave"
+        ).split()
+    ).strip().lower()
+    if preferred_provider == "bing":
+        return "https://www.bing.com/search?q="
+    return "https://search.brave.com/search?q="
 
 def prepare_task_context(
     *,
@@ -162,7 +180,10 @@ def prepare_task_context(
 
     session_context_snippets: list[str] = []
     session_context_snippets = _retrieve_context_snippets(
-        enabled=truthy(settings.get("agent.session_context_enabled"), default=True),
+        enabled=(
+            truthy(settings.get("agent.session_context_enabled"), default=True)
+            and _workflow_stage_context_retrieval_enabled(settings=settings)
+        ),
         query_parts=[str(request.message or "").strip(), scoped_agent_goal, conversation_summary_text],
         retriever=lambda query: get_session_store().retrieve_context_snippets(
             query=query,
@@ -182,7 +203,10 @@ def prepare_task_context(
 
     memory_context_snippets: list[str] = []
     memory_context_snippets = _retrieve_context_snippets(
-        enabled=truthy(settings.get("agent.memory_context_enabled"), default=True),
+        enabled=(
+            truthy(settings.get("agent.memory_context_enabled"), default=True)
+            and _workflow_stage_context_retrieval_enabled(settings=settings)
+        ),
         query_parts=[str(request.message or "").strip(), scoped_agent_goal, conversation_summary_text],
         retriever=lambda query: get_memory_service().retrieve_context_snippets(
             query=query,
@@ -233,6 +257,33 @@ def prepare_task_context(
         metadata={"checks": preflight_checks},
     )
     yield emit_event(preflight_completed_event)
+
+    if task_intelligence.requires_web_inspection:
+        workspace_url = _early_browser_workspace_url(
+            target_url=task_intelligence.target_url,
+            settings=settings,
+        )
+        early_browser_event = activity_event_factory(
+            event_type="browser_open",
+            title="Preparing research workspace",
+            detail=(
+                "Loading the browser surface early while the research plan is finalized."
+                if not task_intelligence.target_url
+                else "Opening the target page early while the research plan is finalized."
+            ),
+            metadata={
+                "scene_family": "browser",
+                "scene_surface": "website",
+                "action": "navigate",
+                "action_phase": "active",
+                "action_status": "in_progress",
+                "url": workspace_url,
+                "source_url": workspace_url,
+                "target_url": " ".join(str(task_intelligence.target_url or "").split()).strip() or workspace_url,
+                "origin": "task_preparation",
+            },
+        )
+        yield emit_event(early_browser_event)
 
     planning_started_event = activity_event_factory(
         event_type="planning_started",

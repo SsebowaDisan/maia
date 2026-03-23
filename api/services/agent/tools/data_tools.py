@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from statistics import mean
 from typing import Any
 
@@ -18,13 +19,16 @@ from api.services.agent.tools.data_tools_helpers import (
     _analytics_insight_highlights,
     _analytics_insight_paragraphs,
     _analytics_section_lines,
+    _annotated_source_lines,
     _as_float,
     _auto_highlights_from_sources,
+    _build_evidence_findings_with_llm,
     _classify_report_intent_with_llm,
     _compose_executive_summary,
     _contradiction_section_lines,
     _detect_source_contradictions,
     _draft_report_markdown_with_llm,
+    _evidence_findings_markdown,
     _event,
     _extract_location_signal_with_llm,
     _fallback_analysis_paragraphs,
@@ -65,6 +69,40 @@ def _draft_direct_answer_with_local_llm(question: str) -> str:
     if len(clean) > 900:
         return f"{clean[:899].rstrip()}..."
     return clean
+
+
+def _report_has_citation_structure(
+    report_text: str,
+    *,
+    source_count: int,
+    requires_temporal_labeling: bool = False,
+) -> bool:
+    clean = str(report_text or "").strip()
+    if not clean:
+        return False
+    if not re.search(r"(?m)^###\s+Executive Summary\s*$", clean):
+        return False
+    if not re.search(r"(?m)^##\s+Sources\s*$", clean):
+        return False
+    if not (
+        re.search(r"(?m)^###\s+Detailed Analysis\s*$", clean)
+        or re.search(r"(?m)^###\s+Evidence-backed findings\s*$", clean)
+        or re.search(r"(?m)^###\s+Key Findings\s*$", clean)
+    ):
+        return False
+    markdown_link_count = len(re.findall(r"\[[^\]]+\]\(https?://[^)]+\)", clean))
+    minimum_links = 5 if source_count >= 5 else max(2, source_count)
+    if markdown_link_count < minimum_links:
+        return False
+    lowered = clean.lower()
+    if not (("why it matters" in lowered) or ("plain-language" in lowered) or ("in practice" in lowered)):
+        return False
+    cited_finding_bullets = len(re.findall(r"(?m)^- .*\[[^\]]+\]\(https?://[^)]+\)", clean))
+    if source_count >= 3 and cited_finding_bullets < 3:
+        return False
+    if requires_temporal_labeling and not re.search(r"(?i)(foundational|validation):\s*(?:19|20)\d{2}", clean):
+        return False
+    return True
 
 class DataAnalysisTool(AgentTool):
     metadata = ToolMetadata(
@@ -285,12 +323,57 @@ class ReportGenerationTool(AgentTool):
             raw_sources = context.settings.get("__latest_web_sources")
         source_limit = 320 if depth_tier in {"deep_research", "deep_analytics"} else 120
         source_rows = _normalize_source_rows(raw_sources, limit=source_limit)
+        task_contract = context.settings.get("__task_contract")
+        required_facts = (
+            [
+                " ".join(str(item or "").split()).strip()
+                for item in task_contract.get("required_facts", [])
+                if " ".join(str(item or "").split()).strip()
+            ]
+            if isinstance(task_contract, dict) and isinstance(task_contract.get("required_facts"), list)
+            else []
+        )
+        contract_outputs = (
+            [
+                " ".join(str(item or "").split()).strip()
+                for item in task_contract.get("required_outputs", [])
+                if " ".join(str(item or "").split()).strip()
+            ]
+            if isinstance(task_contract, dict) and isinstance(task_contract.get("required_outputs"), list)
+            else []
+        )
+        requires_temporal_labeling = any(
+            marker in " ".join([sanitized_prompt, summary, *contract_outputs]).lower()
+            for marker in (
+                "foundational",
+                "validation",
+                "source era",
+                "era (",
+            )
+        )
         summary = _compose_executive_summary(
             title=title,
             summary=summary,
             prompt=sanitized_prompt,
             source_rows=source_rows,
             depth_tier=depth_tier,
+        )
+        evidence_findings = _build_evidence_findings_with_llm(
+            title=title,
+            prompt=sanitized_prompt,
+            source_rows=source_rows,
+            depth_tier=depth_tier,
+            required_facts=required_facts,
+        )
+        evidence_findings_block = _evidence_findings_markdown(evidence_findings, source_rows)
+        annotated_source_lines = _annotated_source_lines(
+            source_rows,
+            limit=7 if depth_tier in {"deep_research", "deep_analytics", "expert"} else 6,
+        )
+        annotated_sources_block = (
+            "\n".join(["## Sources", "", *annotated_source_lines]).strip()
+            if annotated_source_lines
+            else ""
         )
 
         highlights = params.get("highlights")
@@ -399,6 +482,9 @@ class ReportGenerationTool(AgentTool):
             prompt=sanitized_prompt,
             summary=summary,
             source_rows=source_rows,
+            evidence_findings_block=evidence_findings_block,
+            annotated_sources_block=annotated_sources_block,
+            required_facts=required_facts,
             analysis_paragraphs=analysis_paragraphs,
             highlight_lines=highlight_lines,
             action_lines=action_lines,
@@ -416,6 +502,7 @@ class ReportGenerationTool(AgentTool):
                 "",
                 *simple_lines,
                 *([""] if simple_lines else []),
+                *(evidence_findings_block.splitlines() + [""] if evidence_findings_block else []),
                 "### Detailed Analysis",
                 "",
                 *analysis_lines,
@@ -428,11 +515,18 @@ class ReportGenerationTool(AgentTool):
                 "### Recommended Next Steps",
                 *action_lines[:32],
                 "",
-                "### Reference Links",
-                *reference_lines,
+                *(annotated_sources_block.splitlines() if annotated_sources_block else ["## Sources", *reference_lines]),
             ]
         )
-        content = llm_report or fallback_content
+        content = (
+            llm_report
+            if _report_has_citation_structure(
+                llm_report,
+                source_count=len(source_rows),
+                requires_temporal_labeling=requires_temporal_labeling,
+            )
+            else fallback_content
+        )
         content = _redact_delivery_targets(content, targets=delivery_targets)
         context.settings["__latest_report_title"] = title
         context.settings["__latest_report_content"] = content

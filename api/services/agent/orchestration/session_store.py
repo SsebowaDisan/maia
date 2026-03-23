@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from threading import Lock
@@ -35,7 +36,6 @@ def _clean_text(value: Any, *, max_chars: int = 420) -> str:
 def _session_snippet(row: dict[str, Any]) -> str:
     message = _clean_text(row.get("message"), max_chars=220)
     goal = _clean_text(row.get("agent_goal"), max_chars=220)
-    answer = _clean_text(row.get("answer"), max_chars=260)
     next_steps = row.get("next_recommended_steps")
     next_steps_text = (
         "; ".join(
@@ -47,7 +47,9 @@ def _session_snippet(row: dict[str, Any]) -> str:
         else ""
     )
     joined = " | ".join(
-        item for item in (message, goal, answer, next_steps_text) if item
+        # Keep retrieval anchored to prior task framing rather than prior model
+        # completions, which can inject scope drift into later runs.
+        item for item in (message, goal, next_steps_text) if item
     ).strip()
     return joined[:420]
 
@@ -70,8 +72,14 @@ class SessionStore:
             return []
 
     def _save(self, rows: list[dict[str, Any]]) -> None:
+        try:
+            max_rows = int(os.getenv("MAIA_SESSION_RUN_STORE_MAX_ROWS", "240"))
+        except Exception:
+            max_rows = 240
+        if max_rows > 0 and len(rows) > max_rows:
+            rows = rows[-max_rows:]
         self.file_path.write_text(
-            json.dumps(rows, indent=2, ensure_ascii=True),
+            json.dumps(rows, ensure_ascii=True, separators=(",", ":")),
             encoding="utf-8",
         )
 

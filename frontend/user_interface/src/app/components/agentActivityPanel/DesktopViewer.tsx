@@ -4,6 +4,7 @@ import type { InteractionSuggestion } from "./interactionSuggestionMerge";
 import { DoneStageOverlay } from "./DoneStageOverlay";
 import { DiffViewer } from "./DiffViewer";
 import { InteractionSuggestionsPanel } from "./InteractionSuggestionsPanel";
+import type { AgentActivityEvent } from "../../types";
 
 interface DesktopViewerProps {
   fullscreen?: boolean;
@@ -45,6 +46,7 @@ interface DesktopViewerProps {
   activeEventType: string;
   runId: string;
   activeStepIndex: number | null;
+  visibleEvents: AgentActivityEvent[];
   interactionSuggestion: InteractionSuggestion[] | null;
   activeSceneData: Record<string, unknown>;
   sceneDocumentUrl: string;
@@ -117,6 +119,7 @@ function DesktopViewer({
   activeEventType,
   runId,
   activeStepIndex,
+  visibleEvents,
   interactionSuggestion,
   activeSceneData,
   sceneDocumentUrl,
@@ -213,6 +216,7 @@ function DesktopViewer({
               activeEventType={activeEventType}
               runId={runId}
               activeStepIndex={activeStepIndex}
+              visibleEvents={visibleEvents}
               interactionSuggestion={interactionSuggestion}
               activeSceneData={activeSceneData}
               sceneDocumentUrl={sceneDocumentUrl}

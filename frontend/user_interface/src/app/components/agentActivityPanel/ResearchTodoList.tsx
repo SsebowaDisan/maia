@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Circle, Loader2 } from "lucide-react";
 import type { AgentActivityEvent } from "../../types";
 
@@ -10,6 +11,7 @@ type TodoItem = {
 };
 
 type RoadmapStep = { toolId: string; title: string; whyThisStep: string };
+const MAX_VISIBLE_TASK_ROWS = 6;
 
 const RESEARCH_PREFIXES = [
   "research_",
@@ -100,6 +102,26 @@ function deriveTodoItems(
   return order.map((key) => items.get(key)!).filter(Boolean);
 }
 
+function dedupeTodoItems(items: TodoItem[]): TodoItem[] {
+  const seen = new Set<string>();
+  const result: TodoItem[] = [];
+  for (const item of items) {
+    const normalizedLabel = String(item.label || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+    if (!normalizedLabel) {
+      continue;
+    }
+    if (seen.has(normalizedLabel)) {
+      continue;
+    }
+    seen.add(normalizedLabel);
+    result.push(item);
+  }
+  return result;
+}
+
 interface ResearchTodoListProps {
   visibleEvents: AgentActivityEvent[];
   plannedRoadmapSteps: RoadmapStep[];
@@ -116,18 +138,30 @@ export function ResearchTodoList({
   streaming,
   dark = false,
 }: ResearchTodoListProps) {
-  const items = deriveTodoItems(visibleEvents, plannedRoadmapSteps, roadmapActiveIndex);
-  const visibleItems = items.filter((item) => item.status !== "done");
+  const [showAll, setShowAll] = useState(false);
+  const items = useMemo(
+    () => deriveTodoItems(visibleEvents, plannedRoadmapSteps, roadmapActiveIndex),
+    [visibleEvents, plannedRoadmapSteps, roadmapActiveIndex],
+  );
+  const visibleItems = useMemo(
+    () => dedupeTodoItems(items.filter((item) => item.status !== "done")),
+    [items],
+  );
 
   // Hide completed rows and only render actionable tasks.
   if (!visibleItems.length) return null;
 
   const openCount = visibleItems.length;
+  const compactMode = openCount > MAX_VISIBLE_TASK_ROWS;
+  const displayedItems = showAll
+    ? visibleItems
+    : visibleItems.slice(0, MAX_VISIBLE_TASK_ROWS);
+  const hiddenCount = Math.max(0, openCount - displayedItems.length);
 
   if (dark) {
     return (
       <div className="space-y-1.5 rounded-[14px] border border-white/12 bg-[#131821] p-3">
-        {visibleItems.map((item) => (
+        {displayedItems.map((item) => (
           <div key={item.id} className="flex items-start gap-2">
             {item.status === "active" ? (
               <Loader2
@@ -147,6 +181,15 @@ export function ResearchTodoList({
             </p>
           </div>
         ))}
+        {compactMode ? (
+          <button
+            type="button"
+            onClick={() => setShowAll((value) => !value)}
+            className="rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-white/70 transition hover:bg-white/10"
+          >
+            {showAll ? "Show less" : `Show ${hiddenCount} more`}
+          </button>
+        ) : null}
         <p className="pt-1 text-[9px] tabular-nums text-white/30">{openCount} open</p>
       </div>
     );
@@ -164,7 +207,7 @@ export function ResearchTodoList({
       </div>
 
       <div className="space-y-2.5">
-        {visibleItems.map((item) => (
+        {displayedItems.map((item) => (
           <div key={item.id} className="flex items-start gap-2.5">
             {item.status === "active" ? (
               <Loader2
@@ -184,6 +227,15 @@ export function ResearchTodoList({
             </p>
           </div>
         ))}
+        {compactMode ? (
+          <button
+            type="button"
+            onClick={() => setShowAll((value) => !value)}
+            className="rounded-full border border-[#d0d5dd] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#475467] hover:bg-[#f9fafb]"
+          >
+            {showAll ? "Show less" : `Show ${hiddenCount} more`}
+          </button>
+        ) : null}
       </div>
     </div>
   );

@@ -1,7 +1,6 @@
-import { resolveApiScene } from "./api_scene_registry";
 import type { ApiSceneState } from "./api_scene_state";
-import { ConnectorCloneScene } from "./scenes/ConnectorCloneScene";
 import { GenericApiScene } from "./scenes/GenericApiScene";
+import { resolveSkin } from "./skins";
 
 type ApiSceneProps = {
   activeTitle: string;
@@ -9,16 +8,13 @@ type ApiSceneProps = {
 };
 
 function ApiScene({ activeTitle, state }: ApiSceneProps) {
-  const selectedScene = resolveApiScene(state);
-  if (selectedScene.kind === "clone") {
-    return (
-      <ConnectorCloneScene
-        activeTitle={activeTitle}
-        state={state}
-        variant={selectedScene.variant}
-      />
-    );
+  const resolved = resolveSkin(state, activeTitle);
+
+  if (resolved) {
+    const { Skin, props } = resolved;
+    return <Skin {...props} />;
   }
+
   return <GenericApiScene activeTitle={activeTitle} state={state} />;
 }
 

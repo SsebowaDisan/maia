@@ -6,6 +6,7 @@ advanced memory subsystems while preserving all existing imports.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from threading import Lock
@@ -29,8 +30,9 @@ def _playbooks_path() -> Path:
 
 
 class JsonStore:
-    def __init__(self, file_path: Path) -> None:
+    def __init__(self, file_path: Path, *, max_rows: int = 0) -> None:
         self.file_path = file_path
+        self.max_rows = max(0, int(max_rows))
         self._lock = Lock()
         if not self.file_path.exists():
             self.file_path.write_text("[]", encoding="utf-8")
@@ -42,7 +44,12 @@ class JsonStore:
             return []
 
     def _save(self, rows: list[dict[str, Any]]) -> None:
-        self.file_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        if self.max_rows > 0 and len(rows) > self.max_rows:
+            rows = rows[-self.max_rows:]
+        self.file_path.write_text(
+            json.dumps(rows, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
 
     def append(self, row: dict[str, Any]) -> None:
         with self._lock:
@@ -81,7 +88,11 @@ class JsonStore:
 
 class AgentMemoryService:
     def __init__(self) -> None:
-        self.runs = JsonStore(_runs_path())
+        try:
+            max_run_rows = int(os.getenv("MAIA_MEMORY_RUN_STORE_MAX_ROWS", "320"))
+        except Exception:
+            max_run_rows = 320
+        self.runs = JsonStore(_runs_path(), max_rows=max_run_rows)
         self.playbooks = JsonStore(_playbooks_path())
 
     def save_run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -191,8 +202,13 @@ def _score_overlap(*, query_tokens: set[str], text: str) -> float:
 def _run_snippet(row: dict[str, Any]) -> str:
     message = " ".join(str(row.get("message") or "").split()).strip()
     goal = " ".join(str(row.get("agent_goal") or "").split()).strip()
-    answer = " ".join(str(row.get("answer") or "").split()).strip()
-    joined = " | ".join([item for item in [message, goal, answer] if item]).strip()
+    joined = " | ".join(
+        [
+            item
+            for item in [message, goal]
+            if item
+        ]
+    ).strip()
     return joined[:420]
 
 

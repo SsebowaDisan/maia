@@ -69,8 +69,37 @@ def test_report_generation_includes_reference_links_from_recent_web_sources() ->
         params={"title": "AI Brief", "summary": "Machine learning overview."},
     )
     assert "### Detailed Analysis" in result.content
-    assert "### Reference Links" in result.content
+    assert "## Sources" in result.content
     assert "[OpenAI](https://openai.com)" in result.content
+
+
+def test_report_generation_falls_back_to_cited_structure_when_llm_report_is_weak(monkeypatch) -> None:
+    context = _context()
+    context.settings["__latest_web_sources"] = [
+        {
+            "label": "Stanford HAI AI Index",
+            "url": "https://hai.stanford.edu/ai-index",
+            "snippet": "Comprehensive benchmark, adoption, and policy trends across AI and machine learning.",
+        },
+        {
+            "label": "IBM Think: Machine learning",
+            "url": "https://www.ibm.com/think/topics/machine-learning",
+            "snippet": "Defines supervised, unsupervised, and reinforcement learning with business applications.",
+        },
+    ]
+    monkeypatch.setattr(
+        "api.services.agent.tools.data_tools._draft_report_markdown_with_llm",
+        lambda **kwargs: "## Weak Draft\n\nShort body with no citations.",
+    )
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt="build a cited machine learning brief",
+        params={"title": "ML Brief", "summary": "Explain machine learning clearly with evidence."},
+    )
+    assert "### Evidence-backed findings" in result.content
+    assert "Source era:" in result.content
+    assert "## Sources" in result.content
+    assert "[Stanford HAI AI Index](https://hai.stanford.edu/ai-index)" in result.content
 
 
 def test_report_generation_redacts_delivery_email_from_prompt_context() -> None:

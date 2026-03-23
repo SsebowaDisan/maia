@@ -423,9 +423,21 @@ def should_route_pdf_to_paddle_impl(
     *,
     configured_mode: str,
     classification: dict[str, Any],
+    paddleocr_vl_api_enabled: bool,
+    paddleocr_vl_api_url: str,
+    paddleocr_vl_api_token: str,
 ) -> bool:
     mode = str(configured_mode or "").strip() or "default"
     if mode == "paddleocr":
+        return True
+    remote_configured = bool(
+        paddleocr_vl_api_enabled
+        and str(paddleocr_vl_api_url or "").strip()
+        and str(paddleocr_vl_api_token or "").strip()
+    )
+    # When PaddleOCR-VL API is enabled/configured, make it the default
+    # extraction path for every PDF.
+    if remote_configured and mode == "default":
         return True
     if mode != "default":
         return False

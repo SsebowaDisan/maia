@@ -8,6 +8,7 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
+from api.services.agent.planner_helpers import infer_intent_signals_from_text
 
 DEPTH_TIERS = ("quick", "standard", "deep_research", "deep_analytics", "expert")
 
@@ -154,20 +155,20 @@ def _profile_for_tier(tier: str) -> dict[str, int]:
         }
     # standard (default)
     return {
-        "max_query_variants": 8,
-        "results_per_query": 12,
-        "fused_top_k": 60,
-        "max_live_inspections": 12,
-        "min_unique_sources": 15,
-        "source_budget_min": 15,
-        "source_budget_max": 50,
-        "min_keywords": 14,
-        "file_source_budget_min": 20,
-        "file_source_budget_max": 70,
-        "max_file_sources": 70,
-        "max_file_chunks": 500,
-        "max_file_scan_pages": 60,
-        "max_search_rounds": 2,
+        "max_query_variants": 5,
+        "results_per_query": 8,
+        "fused_top_k": 36,
+        "max_live_inspections": 8,
+        "min_unique_sources": 8,
+        "source_budget_min": 8,
+        "source_budget_max": 24,
+        "min_keywords": 10,
+        "file_source_budget_min": 12,
+        "file_source_budget_max": 40,
+        "max_file_sources": 40,
+        "max_file_chunks": 320,
+        "max_file_scan_pages": 40,
+        "max_search_rounds": 1,
     }
 
 
@@ -229,6 +230,9 @@ def _classify_depth_with_llm(
             "}\n"
             "Rules:\n"
             "- Infer depth from user intent and requested rigor.\n"
+            "- For a general overview request that will be delivered as an email or short report, choose `standard` even if the user asks for authoritative sources.\n"
+            "- Do not upgrade to deep_research just because the topic is broad or because authoritative sources are requested.\n"
+            "- Use deep_research only when the user explicitly wants exhaustive breadth, benchmark-heavy coverage, literature/paper review, peer-reviewed depth, latest developments, market/regulatory segmentation, or similarly high-rigor multi-angle work.\n"
             "- deep_research: 100-200 sources, 20 query variants, 3 rounds.\n"
             "- expert: 200-500 sources, 35 query variants, 4 rounds.\n"
             "- Keep source budgets realistic and internally consistent.\n"
@@ -241,6 +245,51 @@ def _classify_depth_with_llm(
     )
     normalized = sanitize_json_value(response) if isinstance(response, dict) else {}
     return normalized if isinstance(normalized, dict) else {}
+
+
+def _should_cap_to_standard(
+    *,
+    message: str,
+    agent_goal: str | None,
+    agent_mode: str,
+    requested_tier: str,
+) -> bool:
+    if requested_tier not in {"deep_research", "deep_analytics", "expert"}:
+        return False
+    if str(agent_mode or "").strip().lower() == "deep_search":
+        return False
+
+    text = " ".join(f"{message or ''} {agent_goal or ''}".split()).strip().lower()
+    signals = infer_intent_signals_from_text(message=message, agent_goal=agent_goal or "")
+    wants_delivery = bool(signals.get("wants_send")) or bool(signals.get("wants_report"))
+    explicit_deep_markers = (
+        "deep research",
+        "exhaustive",
+        "comprehensive analysis",
+        "systematic review",
+        "literature review",
+        "peer-reviewed",
+        "peer reviewed",
+        "recent papers",
+        "latest papers",
+        "benchmark",
+        "benchmarks",
+        "compare",
+        "comparison",
+        "versus",
+        "vs ",
+        "regulation",
+        "regulatory",
+        "policy",
+        "market size",
+        "forecast",
+        "academic",
+        "arxiv",
+        "survey paper",
+    )
+    if not wants_delivery:
+        return False
+    return not any(marker in text for marker in explicit_deep_markers)
 
 
 def derive_research_depth_profile(
@@ -274,14 +323,22 @@ def derive_research_depth_profile(
         tier = "deep_research"
     if normalized_agent_mode == "company_agent" and tier == "quick":
         tier = "standard"
+    if _should_cap_to_standard(
+        message=message,
+        agent_goal=agent_goal,
+        agent_mode=agent_mode,
+        requested_tier=tier,
+    ):
+        tier = "standard"
 
     base = _profile_for_tier(tier)
+    allow_llm_budget_override = tier in {"deep_research", "deep_analytics", "expert"}
     source_budget_min_raw = _coerce_optional_int(llm_profile.get("source_budget_min"))
     source_budget_max_raw = _coerce_optional_int(llm_profile.get("source_budget_max"))
 
     source_budget_min = int(base["source_budget_min"])
     source_budget_max = int(base["source_budget_max"])
-    if source_budget_min_raw is not None or source_budget_max_raw is not None:
+    if allow_llm_budget_override and (source_budget_min_raw is not None or source_budget_max_raw is not None):
         candidate_min = source_budget_min_raw if source_budget_min_raw is not None else source_budget_min
         candidate_max = source_budget_max_raw if source_budget_max_raw is not None else source_budget_max
         low = _clamp(candidate_min, low=3, high=500)
@@ -291,68 +348,125 @@ def derive_research_depth_profile(
         source_budget_min = low
         source_budget_max = high
 
+    max_query_variants_seed = (
+        _coerce_optional_int(llm_profile.get("max_query_variants"))
+        if allow_llm_budget_override
+        else None
+    )
     max_query_variants = _clamp(
-        _coerce_optional_int(llm_profile.get("max_query_variants")) or int(base["max_query_variants"]),
+        max_query_variants_seed or int(base["max_query_variants"]),
         low=2,
         high=40,
     )
+    results_per_query_seed = (
+        _coerce_optional_int(llm_profile.get("results_per_query"))
+        if allow_llm_budget_override
+        else None
+    )
     results_per_query = _clamp(
-        _coerce_optional_int(llm_profile.get("results_per_query")) or int(base["results_per_query"]),
+        results_per_query_seed or int(base["results_per_query"]),
         low=4,
         high=30,
     )
+    fused_top_k_seed = (
+        _coerce_optional_int(llm_profile.get("fused_top_k"))
+        if allow_llm_budget_override
+        else None
+    )
     fused_top_k = _clamp(
-        _coerce_optional_int(llm_profile.get("fused_top_k")) or int(base["fused_top_k"]),
+        fused_top_k_seed or int(base["fused_top_k"]),
         low=8,
         high=600,
     )
-    max_live_inspections = _clamp(
+    max_live_inspections_seed = (
         _coerce_optional_int(llm_profile.get("max_live_inspections"))
-        or int(base["max_live_inspections"]),
+        if allow_llm_budget_override
+        else None
+    )
+    max_live_inspections = _clamp(
+        max_live_inspections_seed or int(base["max_live_inspections"]),
         low=2,
         high=120,
     )
+    min_unique_sources_seed = (
+        _coerce_optional_int(llm_profile.get("min_unique_sources"))
+        if allow_llm_budget_override
+        else None
+    )
     min_unique_sources = _clamp(
-        _coerce_optional_int(llm_profile.get("min_unique_sources")) or int(base["min_unique_sources"]),
+        min_unique_sources_seed or int(base["min_unique_sources"]),
         low=3,
         high=500,
     )
+    min_keywords_seed = (
+        _coerce_optional_int(llm_profile.get("min_keywords"))
+        if allow_llm_budget_override
+        else None
+    )
     min_keywords = _clamp(
-        _coerce_optional_int(llm_profile.get("min_keywords")) or int(base["min_keywords"]),
+        min_keywords_seed or int(base["min_keywords"]),
         low=4,
         high=50,
     )
-    file_source_budget_min = _clamp(
+    file_source_budget_min_seed = (
         _coerce_optional_int(llm_profile.get("file_source_budget_min"))
-        or int(base["file_source_budget_min"]),
+        if allow_llm_budget_override
+        else None
+    )
+    file_source_budget_min = _clamp(
+        file_source_budget_min_seed or int(base["file_source_budget_min"]),
         low=3,
         high=600,
     )
-    file_source_budget_max = _clamp(
+    file_source_budget_max_seed = (
         _coerce_optional_int(llm_profile.get("file_source_budget_max"))
-        or int(base["file_source_budget_max"]),
+        if allow_llm_budget_override
+        else None
+    )
+    file_source_budget_max = _clamp(
+        file_source_budget_max_seed or int(base["file_source_budget_max"]),
         low=3,
         high=700,
     )
     if file_source_budget_max < file_source_budget_min:
         file_source_budget_min, file_source_budget_max = file_source_budget_max, file_source_budget_min
+    max_file_sources_seed = (
+        _coerce_optional_int(llm_profile.get("max_file_sources"))
+        if allow_llm_budget_override
+        else None
+    )
     max_file_sources = _clamp(
-        _coerce_optional_int(llm_profile.get("max_file_sources")) or int(base["max_file_sources"]),
+        max_file_sources_seed or int(base["max_file_sources"]),
         low=3,
         high=700,
     )
+    max_file_chunks_seed = (
+        _coerce_optional_int(llm_profile.get("max_file_chunks"))
+        if allow_llm_budget_override
+        else None
+    )
     max_file_chunks = _clamp(
-        _coerce_optional_int(llm_profile.get("max_file_chunks")) or int(base["max_file_chunks"]),
+        max_file_chunks_seed or int(base["max_file_chunks"]),
         low=40,
         high=6000,
     )
+    max_file_scan_pages_seed = (
+        _coerce_optional_int(llm_profile.get("max_file_scan_pages"))
+        if allow_llm_budget_override
+        else None
+    )
     max_file_scan_pages = _clamp(
-        _coerce_optional_int(llm_profile.get("max_file_scan_pages")) or int(base["max_file_scan_pages"]),
+        max_file_scan_pages_seed or int(base["max_file_scan_pages"]),
         low=8,
         high=600,
     )
+    max_search_rounds_seed = (
+        _coerce_optional_int(llm_profile.get("max_search_rounds"))
+        if allow_llm_budget_override
+        else None
+    )
     max_search_rounds = _clamp(
-        _coerce_optional_int(llm_profile.get("max_search_rounds")) or int(base.get("max_search_rounds", 1)),
+        max_search_rounds_seed or int(base.get("max_search_rounds", 1)),
         low=1,
         high=4,
     )

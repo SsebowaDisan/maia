@@ -15,6 +15,7 @@ from api.services.agent.orchestration.step_planner_sections.intent_enrichment im
     apply_intent_enrichment,
 )
 from api.services.agent.orchestration.step_planner_sections.contracts import (
+    enforce_contract_synthesis_step,
     insert_contract_probe_steps,
 )
 from api.services.agent.orchestration.step_planner_sections.workspace_logging import (
@@ -326,6 +327,59 @@ def test_enforce_web_only_research_path_skips_for_ga4_flows() -> None:
     assert tool_ids == ["analytics.ga4.full_report", "report.generate"]
 
 
+def test_enforce_web_only_research_path_respects_allowed_tool_ids() -> None:
+    request = ChatRequest(
+        message="Research machine learning and send an email summary.",
+        agent_mode="company_agent",
+    )
+    steps = [
+        PlannedStep(tool_id="marketing.web_research", title="Search online sources", params={}),
+    ]
+    research_plan = build_research_plan(request=request, settings={})
+    constrained = enforce_web_only_research_path(
+        request=request,
+        settings={"__research_web_only": True},
+        steps=steps,
+        research_plan=research_plan,
+        allowed_tool_ids={"marketing.web_research"},
+    )
+    assert [step.tool_id for step in constrained] == ["marketing.web_research"]
+
+
+def test_enforce_contract_synthesis_step_respects_allowed_tool_ids() -> None:
+    request = ChatRequest(
+        message="Research machine learning and send an email summary.",
+        agent_mode="company_agent",
+    )
+    task_prep = SimpleNamespace(
+        contract_outputs=["email summary"],
+        task_contract={"required_outputs": ["email summary"]},
+        planned_deliverables=["email summary"],
+        contract_objective="Research machine learning and prepare an email summary.",
+        rewritten_task=request.message,
+        contract_facts=["Key findings with citations."],
+    )
+    steps = [
+        PlannedStep(
+            tool_id="marketing.web_research",
+            title="Search online sources",
+            params={"query": "machine learning"},
+        ),
+        PlannedStep(
+            tool_id="gmail.draft",
+            title="Draft email",
+            params={"to": "ssebowadisan1@gmail.com"},
+        ),
+    ]
+    constrained = enforce_contract_synthesis_step(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+        allowed_tool_ids={"marketing.web_research", "gmail.draft"},
+    )
+    assert [step.tool_id for step in constrained] == ["marketing.web_research", "gmail.draft"]
+
+
 def test_build_research_plan_uses_default_keyword_floor(monkeypatch) -> None:
     captured: dict[str, int] = {}
 
@@ -492,6 +546,55 @@ def test_insert_contract_probe_steps_filters_web_probe_for_ga4_context(monkeypat
     tool_ids = [step.tool_id for step in result]
     assert "marketing.web_research" not in tool_ids
     assert tool_ids.count("analytics.ga4.full_report") == 1
+
+
+def test_insert_contract_probe_steps_skips_document_highlight_without_file_scope(monkeypatch) -> None:
+    from api.services.agent.orchestration.step_planner_sections import contracts as contracts_module
+
+    monkeypatch.setattr(
+        contracts_module,
+        "propose_fact_probe_steps",
+        lambda **kwargs: [
+            {
+                "tool_id": "documents.highlight.extract",
+                "title": "Extract key insights and attributions from inspected pages",
+                "params": {"sources": ["stanford.ai.index.report"]},
+            },
+            {
+                "tool_id": "marketing.web_research",
+                "title": "Collect missing evidence",
+                "params": {"query": "machine learning overview"},
+            },
+        ],
+    )
+    request = ChatRequest(
+        message="Research machine learning online and email a summary.",
+        agent_mode="company_agent",
+    )
+    task_prep = SimpleNamespace(
+        task_contract={"required_facts": ["balanced machine learning overview"]},
+        task_intelligence=SimpleNamespace(target_url=""),
+    )
+    steps = [
+        PlannedStep(
+            tool_id="marketing.web_research",
+            title="Search online sources",
+            params={"query": request.message},
+        ),
+        PlannedStep(
+            tool_id="report.generate",
+            title="Generate report",
+            params={"summary": request.message},
+        ),
+    ]
+    result = insert_contract_probe_steps(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+        allowed_tool_ids=["documents.highlight.extract", "marketing.web_research"],
+    )
+    tool_ids = [step.tool_id for step in result]
+    assert "documents.highlight.extract" not in tool_ids
 
 
 def test_intent_enrichment_skips_deep_highlight_without_explicit_file_scope(monkeypatch) -> None:

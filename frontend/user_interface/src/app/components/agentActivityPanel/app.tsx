@@ -16,6 +16,7 @@ import { useTheatreTelemetry } from "./useTheatreTelemetry";
 import { resolveStagedTheatreEnabled } from "./theatreFeatureFlags";
 import { latestOpenApprovalEvent } from "./approvalGateState";
 import { maybeOpenEventSource } from "./eventSelection";
+import { resolvePreferredRunId } from "../../utils/runIdSelection";
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
 export function AgentActivityPanel({
@@ -106,7 +107,7 @@ export function AgentActivityPanel({
     streaming,
   });
 
-  const sceneText = useSceneTextTyping(activeEvent);
+  const sceneText = useSceneTextTyping(sceneEvent || activeEvent);
 
   const phaseTimeline = useMemo(
     () => derivePhaseTimeline(visibleEvents, activeEvent),
@@ -360,7 +361,7 @@ export function AgentActivityPanel({
     return null;
   }
 
-  const runId = orderedEvents[0]?.run_id || activeEvent?.run_id || "";
+  const runId = resolvePreferredRunId(activeEvent?.run_id || "", orderedEvents);
 
   const exportRun = async () => {
     if (!runId || isExporting) {
@@ -418,9 +419,10 @@ export function AgentActivityPanel({
     emailBodyHint,
     docBodyHint,
     sheetBodyHint,
-    activeEventType: activeEvent?.event_type || sceneEvent?.event_type || "",
+    activeEventType: sceneEvent?.event_type || activeEvent?.event_type || "",
     runId,
     activeStepIndex,
+    visibleEvents,
     interactionSuggestion: activeSuggestion,
     computerUseSessionId: String(mergedSceneData["computer_use_session_id"] ?? "").trim() || undefined,
     computerUseTask: String(mergedSceneData["computer_use_task"] ?? "").trim() || undefined,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
 from pathlib import Path
 import tempfile
@@ -114,7 +115,32 @@ def extract_pdf_text_with_paddleocr_impl(
     vlm_extract_render_dpi: int,
     vlm_extract_timeout_seconds: float,
     ollama_timeout_fn: Callable[[float], httpx.Timeout],
+    paddleocr_vl_api_enabled: bool,
+    paddleocr_vl_api_url: str,
+    paddleocr_vl_api_token: str,
+    paddleocr_vl_api_timeout_seconds: float,
+    paddleocr_vl_api_file_type: int,
+    paddleocr_vl_api_use_doc_orientation_classify: bool,
+    paddleocr_vl_api_use_doc_unwarping: bool,
+    paddleocr_vl_api_use_chart_recognition: bool,
 ) -> tuple[Path, list[str]]:
+    remote_configured = bool(
+        str(paddleocr_vl_api_url or "").strip() and str(paddleocr_vl_api_token or "").strip()
+    )
+    if bool(paddleocr_vl_api_enabled) and remote_configured:
+        return _extract_pdf_text_with_paddleocr_vl_api_impl(
+            file_path=file_path,
+            should_cancel=should_cancel,
+            indexing_canceled_error_cls=indexing_canceled_error_cls,
+            api_url=paddleocr_vl_api_url,
+            api_token=paddleocr_vl_api_token,
+            timeout_seconds=paddleocr_vl_api_timeout_seconds,
+            file_type=paddleocr_vl_api_file_type,
+            use_doc_orientation_classify=paddleocr_vl_api_use_doc_orientation_classify,
+            use_doc_unwarping=paddleocr_vl_api_use_doc_unwarping,
+            use_chart_recognition=paddleocr_vl_api_use_chart_recognition,
+        )
+
     try:
         import fitz  # type: ignore[import-not-found]
     except Exception as exc:
@@ -203,6 +229,103 @@ def extract_pdf_text_with_paddleocr_impl(
                 doc.close()
             except Exception:
                 pass
+    return text_path, debug_rows
+
+
+def _extract_pdf_text_with_paddleocr_vl_api_impl(
+    *,
+    file_path: Path,
+    should_cancel: Callable[[], bool] | None,
+    indexing_canceled_error_cls: type[Exception],
+    api_url: str,
+    api_token: str,
+    timeout_seconds: float,
+    file_type: int,
+    use_doc_orientation_classify: bool,
+    use_doc_unwarping: bool,
+    use_chart_recognition: bool,
+) -> tuple[Path, list[str]]:
+    if should_cancel and should_cancel():
+        raise indexing_canceled_error_cls("Ingestion canceled by user.")
+    if not str(api_url or "").strip():
+        raise RuntimeError("PaddleOCR-VL API URL is not configured.")
+    if not str(api_token or "").strip():
+        raise RuntimeError("PaddleOCR-VL API token is not configured.")
+
+    work_dir = Path(tempfile.mkdtemp(prefix="paddleocr-vl-api-", dir=str(file_path.parent)))
+    text_path = work_dir / f"{file_path.stem}-{uuid.uuid4().hex[:8]}.txt"
+    debug_rows: list[str] = []
+
+    file_bytes = file_path.read_bytes()
+    if not file_bytes:
+        raise RuntimeError("Uploaded file is empty.")
+    encoded_file = base64.b64encode(file_bytes).decode("ascii")
+
+    payload: dict[str, Any] = {
+        "file": encoded_file,
+        "fileType": int(max(0, min(1, file_type))),
+        "useDocOrientationClassify": bool(use_doc_orientation_classify),
+        "useDocUnwarping": bool(use_doc_unwarping),
+        "useChartRecognition": bool(use_chart_recognition),
+    }
+    headers = {
+        "Authorization": f"token {api_token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        timeout = httpx.Timeout(max(10.0, float(timeout_seconds)))
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(str(api_url).strip(), json=payload, headers=headers)
+    except Exception as exc:
+        raise RuntimeError(f"PaddleOCR-VL API request failed: {exc}") from exc
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            "PaddleOCR-VL API returned non-200 status "
+            f"{response.status_code}: {response.text[:300]}"
+        )
+
+    try:
+        body = response.json()
+    except Exception as exc:
+        raise RuntimeError("PaddleOCR-VL API returned non-JSON response.") from exc
+
+    result = body.get("result") if isinstance(body, dict) else None
+    layout_results = (
+        result.get("layoutParsingResults")
+        if isinstance(result, dict)
+        else None
+    )
+    if not isinstance(layout_results, list) or not layout_results:
+        raise RuntimeError("PaddleOCR-VL API response did not include layoutParsingResults.")
+
+    blocks: list[str] = []
+    markdown_docs = 0
+    for idx, row in enumerate(layout_results, start=1):
+        if should_cancel and should_cancel():
+            raise indexing_canceled_error_cls("Ingestion canceled by user.")
+        if not isinstance(row, dict):
+            continue
+        markdown_text = ""
+        markdown_obj = row.get("markdown")
+        if isinstance(markdown_obj, dict):
+            markdown_text = str(markdown_obj.get("text") or "").strip()
+        if not markdown_text:
+            markdown_text = str(row.get("text") or "").strip()
+        if not markdown_text:
+            continue
+        markdown_docs += 1
+        blocks.append(f"# Layout Result {idx}\n{markdown_text}")
+
+    if not blocks:
+        raise RuntimeError("PaddleOCR-VL API response contained no markdown/text content.")
+
+    text_path.write_text("\n\n".join(blocks).strip() + "\n", encoding="utf-8")
+    debug_rows.append(
+        "PaddleOCR-VL API extracted markdown text for "
+        f"{markdown_docs}/{len(layout_results)} parsed layout result(s)."
+    )
     return text_path, debug_rows
 
 

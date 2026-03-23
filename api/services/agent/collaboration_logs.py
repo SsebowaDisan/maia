@@ -64,6 +64,7 @@ class CollaborationLogService:
         )
         with self._lock:
             self._logs.setdefault(run_id, []).append(entry)
+        self._append_to_activity_store(entry)
         # Emit as live event
         try:
             from api.services.agent.live_events import get_live_event_broker
@@ -94,13 +95,15 @@ class CollaborationLogService:
         question: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload = dict(metadata or {})
+        payload.setdefault("event_type", "agent_dialogue_turn")
         return self.record(
             run_id=run_id,
             from_agent=from_agent,
             to_agent=to_agent,
             message=question,
             entry_type="question",
-            metadata=metadata,
+            metadata=payload,
         )
 
     def record_response(
@@ -112,13 +115,15 @@ class CollaborationLogService:
         response: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload = dict(metadata or {})
+        payload.setdefault("event_type", "agent_dialogue_turn")
         return self.record(
             run_id=run_id,
             from_agent=from_agent,
             to_agent=to_agent,
             message=response,
             entry_type="response",
-            metadata=metadata,
+            metadata=payload,
         )
 
     def record_disagreement(
@@ -130,19 +135,91 @@ class CollaborationLogService:
         point: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload = dict(metadata or {})
+        payload.setdefault("event_type", "agent_dialogue_turn")
         return self.record(
             run_id=run_id,
             from_agent=from_agent,
             to_agent=to_agent,
             message=point,
             entry_type="disagreement",
-            metadata=metadata,
+            metadata=payload,
         )
 
     def get_log(self, run_id: str) -> list[dict[str, Any]]:
         with self._lock:
             entries = self._logs.get(run_id, [])
-        return [e.to_dict() for e in entries]
+        if entries:
+            return [e.to_dict() for e in entries]
+
+        # Fallback to persisted activity events so conversation history
+        # survives process restarts and multi-worker setups.
+        try:
+            from api.services.agent.activity import get_activity_store
+
+            rows = get_activity_store().load_events(run_id)
+            restored: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict) or row.get("type") != "event":
+                    continue
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                event_type = str(payload.get("event_type") or "").strip().lower()
+                if event_type not in {
+                    "team_chat_message",
+                    "agent_dialogue_turn",
+                }:
+                    continue
+                data = payload.get("data")
+                data_map = data if isinstance(data, dict) else {}
+                restored.append(
+                    {
+                        "run_id": run_id,
+                        "from_agent": str(
+                            data_map.get("from_agent")
+                            or data_map.get("speaker_id")
+                            or data_map.get("speaker_name")
+                            or data_map.get("source_agent")
+                            or payload.get("agent_id")
+                            or "agent"
+                        ).strip(),
+                        "to_agent": str(
+                            data_map.get("to_agent")
+                            or data_map.get("audience")
+                            or data_map.get("recipient")
+                            or data_map.get("target_agent")
+                            or data_map.get("next_agent")
+                            or "team"
+                        ).strip(),
+                        "message": str(
+                            data_map.get("message")
+                            or data_map.get("content")
+                            or data_map.get("question")
+                            or data_map.get("answer")
+                            or data_map.get("reasoning")
+                            or data_map.get("feedback")
+                            or data_map.get("summary")
+                            or payload.get("detail")
+                            or payload.get("title")
+                            or ""
+                        ).strip(),
+                        "entry_type": str(
+                            data_map.get("entry_type")
+                            if event_type == "team_chat_message"
+                            else data_map.get("turn_role")
+                            or data_map.get("turn_type")
+                            or data_map.get("entry_type")
+                            or data_map.get("message_type")
+                            or "message"
+                        ).strip().lower(),
+                        "timestamp": data_map.get("timestamp") or payload.get("timestamp") or payload.get("ts"),
+                        "metadata": data_map,
+                    }
+                )
+            return restored
+        except Exception:
+            return []
 
     def get_summary(self, run_id: str) -> dict[str, Any]:
         log = self.get_log(run_id)
@@ -158,6 +235,36 @@ class CollaborationLogService:
             "questions": sum(1 for e in log if e["entry_type"] == "question"),
             "disagreements": sum(1 for e in log if e["entry_type"] == "disagreement"),
         }
+
+    def _append_to_activity_store(self, entry: CollaborationEntry) -> None:
+        try:
+            from api.services.agent.activity import get_activity_store
+            from api.services.agent.models import AgentActivityEvent, new_id
+
+            payload = entry.to_dict()
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            event_type = str(metadata.get("event_type") or "").strip().lower()
+            if not event_type:
+                if entry.entry_type == "chat":
+                    event_type = "team_chat_message"
+                elif entry.entry_type in {"question", "response", "disagreement"}:
+                    event_type = "agent_dialogue_turn"
+                else:
+                    event_type = "agent_collaboration"
+            event = AgentActivityEvent(
+                event_id=new_id("evt"),
+                run_id=entry.run_id,
+                event_type=event_type,
+                title=f"{entry.from_agent} -> {entry.to_agent}",
+                detail=str(entry.message or "")[:300],
+                stage="execute",
+                status="info",
+                metadata=payload,
+                data=payload,
+            )
+            get_activity_store().append(event)
+        except Exception:
+            logger.debug("Failed to persist collaboration entry for run %s", entry.run_id, exc_info=True)
 
 
 _service: CollaborationLogService | None = None

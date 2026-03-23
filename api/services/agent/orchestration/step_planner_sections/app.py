@@ -22,6 +22,7 @@ from ..text_helpers import extract_first_email
 from .contracts import (
     build_planning_request,
     collect_probe_allowed_tool_ids,
+    enforce_contract_synthesis_step,
     insert_contract_probe_steps,
 )
 from .capability_planning import analyze_capability_plan
@@ -49,6 +50,59 @@ from .workspace_logging import (
     build_workspace_logging_plan,
     prepend_workspace_roadmap_steps,
 )
+
+
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _should_use_tree_of_thought(
+    *,
+    request: ChatRequest,
+    settings: dict[str, Any],
+    task_prep: TaskPreparation,
+) -> bool:
+    if not _truthy(settings.get("agent.tot_planning_enabled"), default=True):
+        return False
+    if _truthy(settings.get("agent.tot_planning_force"), default=False):
+        return True
+
+    profile = (
+        task_prep.research_depth_profile
+        if isinstance(task_prep.research_depth_profile, dict)
+        else {}
+    )
+    depth_tier = " ".join(
+        str(profile.get("tier") or settings.get("__research_depth_tier") or "").split()
+    ).strip().lower() or "standard"
+    if depth_tier == "expert":
+        return True
+
+    task_contract = task_prep.task_contract if isinstance(task_prep.task_contract, dict) else {}
+    complexity_score = sum(
+        len(task_contract.get(key) or [])
+        for key in ("required_outputs", "required_facts", "required_actions", "success_checks")
+        if isinstance(task_contract.get(key), list)
+    )
+    if task_prep.task_intelligence.is_analytics_request:
+        complexity_score += 2
+    if task_prep.task_intelligence.requires_web_inspection and task_prep.task_intelligence.requires_delivery:
+        complexity_score += 1
+    if depth_tier == "deep_analytics":
+        complexity_score += 2
+    if str(request.agent_mode or "").strip().lower() == "deep_search":
+        complexity_score += 1
+
+    return complexity_score >= 10
 
 
 def _extract_available_tool_ids(registry: Any) -> set[str]:
@@ -148,59 +202,72 @@ def build_execution_steps(
     # Try multi-candidate planning first; fall back to single-plan if it fails.
     steps: list[PlannedStep] = []
     _tot_used = False
-    try:
-        _tot_planner = TreeOfThoughtPlanner()
-        _tot_candidates = _tot_planner.generate_plan_candidates(
-            task_goal=str(request.message or ""),
-            available_tools=sorted(available_tool_ids)[:60],
-            context=str(request.agent_goal or ""),
-            num_candidates=3,
-        )
-        if _tot_candidates:
-            _task_contract = getattr(task_prep, "task_contract", None) or {}
-            _scored = _tot_planner.score_candidates(_tot_candidates, _task_contract)
-            _best = _tot_planner.select_best(_scored)
-            if _best and _best.steps:
-                steps = [
-                    PlannedStep(
-                        tool_id=str(s.get("tool_id") or ""),
-                        title=str(s.get("title") or "")[:120],
-                        params=dict(s.get("params") or {}),
-                        why_this_step=str(s.get("why_this_step") or "")[:240],
-                        expected_evidence=tuple(
-                            str(e)[:220]
-                            for e in (s.get("expected_evidence") or [])
-                            if str(e).strip()
-                        ),
-                    )
-                    for s in _best.steps
-                    if str(s.get("tool_id") or "").strip()
-                ]
-                _tot_used = bool(steps)
-                # Store alternatives for fallback in settings.
-                settings["__tot_alternatives"] = [
-                    {
-                        "plan_id": alt.plan_id,
-                        "rationale": alt.rationale[:200],
-                        "score": alt.score,
-                        "step_count": len(alt.steps),
-                    }
-                    for alt in _tot_planner.alternatives[:4]
-                ]
-                settings["__tot_selected_plan_id"] = _best.plan_id
-    except Exception:
-        import logging as _tot_log
-        _tot_log.getLogger(__name__).debug(
-            "Tree-of-Thought planning failed — falling back to single-plan",
-            exc_info=True,
-        )
+    if _should_use_tree_of_thought(
+        request=request,
+        settings=settings,
+        task_prep=task_prep,
+    ):
+        try:
+            _tot_planner = TreeOfThoughtPlanner()
+            _tot_candidates = _tot_planner.generate_plan_candidates(
+                task_goal=str(request.message or ""),
+                available_tools=sorted(available_tool_ids)[:60],
+                context=str(request.agent_goal or ""),
+                num_candidates=3,
+            )
+            if _tot_candidates:
+                _task_contract = getattr(task_prep, "task_contract", None) or {}
+                _scored = _tot_planner.score_candidates(_tot_candidates, _task_contract)
+                _best = _tot_planner.select_best(_scored)
+                if _best and _best.steps:
+                    steps = [
+                        PlannedStep(
+                            tool_id=str(s.get("tool_id") or ""),
+                            title=str(s.get("title") or "")[:120],
+                            params=dict(s.get("params") or {}),
+                            why_this_step=str(s.get("why_this_step") or "")[:240],
+                            expected_evidence=tuple(
+                                str(e)[:220]
+                                for e in (s.get("expected_evidence") or [])
+                                if str(e).strip()
+                            ),
+                        )
+                        for s in _best.steps
+                        if str(s.get("tool_id") or "").strip()
+                    ]
+                    _tot_used = bool(steps)
+                    settings["__tot_alternatives"] = [
+                        {
+                            "plan_id": alt.plan_id,
+                            "rationale": alt.rationale[:200],
+                            "score": alt.score,
+                            "step_count": len(alt.steps),
+                        }
+                        for alt in _tot_planner.alternatives[:4]
+                    ]
+                    settings["__tot_selected_plan_id"] = _best.plan_id
+        except Exception:
+            import logging as _tot_log
+            _tot_log.getLogger(__name__).debug(
+                "Tree-of-Thought planning failed - falling back to single-plan",
+                exc_info=True,
+            )
 
     # Fall back to the original single-plan LLM call if ToT did not produce steps.
     if not _tot_used:
+        depth_profile = (
+            task_prep.research_depth_profile
+            if isinstance(task_prep.research_depth_profile, dict)
+            else {}
+        )
+        effective_deep_research_mode = " ".join(
+            str(depth_profile.get("tier") or settings.get("__research_depth_tier") or "").split()
+        ).strip().lower() in {"deep_research", "deep_analytics", "expert"}
         steps = build_plan(
             planning_request,
             preferred_tool_ids=set(capability_analysis.preferred_tool_ids),
             web_routing=web_routing,
+            deep_research_mode=effective_deep_research_mode,
         )
     # --- end Tree-of-Thought -----------------------------------------------
 
@@ -226,6 +293,8 @@ def build_execution_steps(
     research_plan = build_research_plan(request=request, settings=settings)
     settings["__research_depth_tier"] = research_plan.depth_tier
     settings["__research_max_query_variants"] = research_plan.max_query_variants
+    settings["__research_branching_mode"] = research_plan.branching_mode
+    settings["__research_query_variant_style"] = research_plan.query_variant_style
     settings["__research_results_per_query"] = research_plan.results_per_query
     settings["__research_fused_top_k"] = research_plan.fused_top_k
     settings["__research_max_live_inspections"] = research_plan.max_live_inspections
@@ -248,6 +317,7 @@ def build_execution_steps(
         settings=settings,
         steps=steps,
         research_plan=research_plan,
+        allowed_tool_ids=available_tool_ids,
     )
     steps = ensure_company_agent_highlight_step(
         request=request,
@@ -262,7 +332,11 @@ def build_execution_steps(
         steps=steps,
     )
 
-    probe_allowed_tool_ids = collect_probe_allowed_tool_ids(registry)
+    probe_allowed_tool_ids = [
+        tool_id
+        for tool_id in collect_probe_allowed_tool_ids(registry)
+        if tool_id in available_tool_ids
+    ]
     steps = insert_contract_probe_steps(
         request=request,
         task_prep=task_prep,
@@ -275,6 +349,12 @@ def build_execution_steps(
         steps=steps,
         highlight_color=research_plan.highlight_color,
         registry=registry,
+    )
+    steps = enforce_contract_synthesis_step(
+        request=request,
+        task_prep=task_prep,
+        steps=steps,
+        allowed_tool_ids=available_tool_ids,
     )
     fact_coverage = summarize_fact_coverage(
         contract_facts=task_prep.contract_facts,
@@ -355,6 +435,8 @@ def build_execution_steps(
             research_depth_profile={
                 "tier": research_plan.depth_tier,
                 "max_query_variants": research_plan.max_query_variants,
+                "branching_mode": research_plan.branching_mode,
+                "query_variant_style": research_plan.query_variant_style,
                 "results_per_query": research_plan.results_per_query,
                 "fused_top_k": research_plan.fused_top_k,
                 "max_live_inspections": research_plan.max_live_inspections,

@@ -261,7 +261,10 @@ def _load_source_chunks(
     max_sources: int = 8,
     max_chunks: int = 28,
     prefer_pdf: bool = True,
+    allow_recent_index_fallback: bool = False,
 ) -> list[dict[str, Any]]:
+    if not file_ids and not allow_recent_index_fallback:
+        return []
     context = get_context()
     index = context.get_index(index_id)
     Source = index._resources["Source"]

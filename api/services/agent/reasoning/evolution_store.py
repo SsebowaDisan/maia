@@ -37,6 +37,15 @@ _CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "pipeline": ["workflow", "step", "retry", "timeout", "failed", "blocked", "sequence"],
 }
 
+_STAGE_CATEGORY_HINTS: dict[str, tuple[str, ...]] = {
+    "analysis": ("analysis", "analyst", "review", "reviewer", "verify"),
+    "writing": ("writer", "writing", "draft", "email", "deliver", "delivery", "summary", "report"),
+    "research": ("research", "browser", "search", "source", "evidence", "extract"),
+    "data": ("data", "sheet", "spreadsheet", "table", "csv"),
+    "connector": ("connector", "oauth", "gmail", "slack", "api", "integration"),
+    "pipeline": ("workflow", "planner", "orchestrator", "step", "pipeline"),
+}
+
 
 def _infer_category(lesson: str, default: str = "system") -> str:
     """Infer lesson category from content using keyword scoring."""
@@ -46,6 +55,17 @@ def _infer_category(lesson: str, default: str = "system") -> str:
         scores[cat] = sum(1 for kw in keywords if kw in text)
     best = max(scores, key=lambda c: scores[c])
     return best if scores[best] > 0 else default
+
+
+def _infer_stage_category(stage: str) -> str | None:
+    text = " ".join(str(stage or "").lower().replace("_", " ").replace("-", " ").split()).strip()
+    if not text:
+        return None
+    for category, hints in _STAGE_CATEGORY_HINTS.items():
+        if any(hint in text for hint in hints):
+            return category
+    inferred = _infer_category(text, default="")
+    return inferred or None
 
 
 def _time_decay_weight(created_at: float) -> float:
@@ -177,13 +197,9 @@ class EvolutionStore:
         Returns a text block that can be prepended to agent prompts
         to inject cross-run learning.
         """
-        category = None
-        if stage:
-            stage_lower = stage.lower()
-            for cat in LESSON_CATEGORIES:
-                if cat in stage_lower:
-                    category = cat
-                    break
+        category = _infer_stage_category(stage or "")
+        if not category:
+            return ""
 
         lessons = self.get_lessons(category=category, max_results=max_lessons)
         if not lessons:

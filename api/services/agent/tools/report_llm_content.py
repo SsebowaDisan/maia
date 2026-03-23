@@ -382,6 +382,9 @@ def _draft_report_markdown_with_llm(
     prompt: str,
     summary: str,
     source_rows: list[dict[str, str]],
+    evidence_findings_block: str,
+    annotated_sources_block: str,
+    required_facts: list[str],
     analysis_paragraphs: list[str],
     highlight_lines: list[str],
     action_lines: list[str],
@@ -407,6 +410,13 @@ def _draft_report_markdown_with_llm(
         "prompt": " ".join(str(prompt or "").split()).strip()[:700],
         "executive_summary_seed": str(summary or "").strip()[:2200],
         "depth_tier": " ".join(str(depth_tier or "").split()).strip().lower() or "standard",
+        "evidence_findings_markdown_block": str(evidence_findings_block or "").strip()[:12000],
+        "annotated_sources_markdown_block": str(annotated_sources_block or "").strip()[:9000],
+        "required_facts": [
+            " ".join(str(item or "").split()).strip()[:220]
+            for item in list(required_facts or [])[:6]
+            if " ".join(str(item or "").split()).strip()
+        ],
         "analysis_paragraphs": [str(item or "").strip()[:1200] for item in list(analysis_paragraphs or [])[:40]],
         "highlights": [
             " ".join(str(item or "").lstrip("- ").split()).strip()[:220]
@@ -423,22 +433,32 @@ def _draft_report_markdown_with_llm(
     response = call_text_response(
         system_prompt=(
             "You write premium, evidence-grounded research reports for executive audiences. "
+            "Use Apple-style clarity: elegant, restrained, and highly structured. "
             "Produce markdown only."
         ),
         user_prompt=(
             "Create a complete report in markdown.\n"
             "Requirements:\n"
             "- Tailor section titles to the exact request; avoid fixed reusable templates.\n"
-            "- Keep a professional, concise, high-credibility tone.\n"
+            "- Keep a professional, concise, high-credibility tone with Apple-style clarity: simple, precise, and visually clean.\n"
+            "- Include a dedicated key-findings section with 3-5 evidence-backed findings before broader analysis.\n"
             "- Integrate provided analysis/highlights/next_steps into a coherent narrative.\n"
-            "- Use inline markdown links for sources where URLs are provided.\n"
+            "- Open with an executive summary paragraph that answers the request directly.\n"
+            "- If required_facts are provided, address each one explicitly in the body unless the evidence is genuinely missing.\n"
+            "- Convert the evidence_findings_markdown_block into polished prose or bullets instead of ignoring it.\n"
+            "- Every major finding must include a plain-language explanation immediately after the evidence-backed claim.\n"
+            "- Use inline markdown links for sources where URLs are provided, and attach links immediately after the claim they support.\n"
+            "- Where multiple sources support the same claim, cite the strongest two links in the same paragraph or bullet.\n"
+            "- Label the strongest source behind each major finding with a source era marker such as `foundational: 1997` or `validation: 2019`.\n"
+            "- Include a final `## Sources` section with 5-7 annotated bullet citations using markdown links.\n"
+            "- The sources section must describe why each source matters, not just list links.\n"
             "- If evidence is limited, state uncertainty explicitly and avoid invented claims.\n"
             "- Do not include placeholders like [Your Name] or [Your Position].\n"
             "- Do not include recipient email addresses.\n"
             f"- Target approximately {min_chars}-{max_chars} characters.\n\n"
             "Output format:\n"
             "- Start with `## <request-specific title>`.\n"
-            "- Use 4-8 sections with clear hierarchy.\n"
+            "- Use 3-6 sections with clear hierarchy unless the evidence clearly requires more.\n"
             "- Include a final section with concrete next actions.\n\n"
             f"Input:\n{payload}"
         ),

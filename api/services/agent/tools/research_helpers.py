@@ -182,7 +182,14 @@ def clean_query(text: str) -> str:
     compact = " ".join(str(text or "").split())
     compact = re.sub(r"[^\w\s:/\.-]", " ", compact)
     compact = " ".join(compact.split())
-    return compact.strip()
+    compact = compact.strip()
+    if len(compact) <= 180:
+        return compact
+    clipped = compact[:180]
+    boundary = clipped.rfind(" ")
+    if boundary >= 80:
+        clipped = clipped[:boundary]
+    return clipped.strip(" .,:;!-")
 
 
 def extract_first_url(text: str) -> str:
@@ -218,8 +225,9 @@ def extract_search_variants(
     *,
     requested_variants: list[str] | None = None,
     max_variants: int = 4,
+    expansion_mode: str = "diverse",
 ) -> list[str]:
-    variant_cap = max(1, min(int(max_variants or 4), 20))
+    variant_cap = max(1, min(int(max_variants or 4), 40))
     base = clean_query(query) or clean_query(prompt) or "web research request"
     url = extract_first_url(prompt) or extract_first_url(query)
     host = (urlparse(url).hostname or "").strip().lower() if url else ""
@@ -234,33 +242,41 @@ def extract_search_variants(
     if host_no_www:
         candidates.append(f"site:{host_no_www} {base}".strip())
 
-    if env_bool("MAIA_AGENT_LLM_SEARCH_VARIANTS_ENABLED", default=True):
+    normalized_expansion_mode = " ".join(str(expansion_mode or "").split()).strip().lower()
+    if normalized_expansion_mode not in {"focused", "diverse"}:
+        normalized_expansion_mode = "diverse"
+
+    should_expand_with_llm = env_bool("MAIA_AGENT_LLM_SEARCH_VARIANTS_ENABLED", default=True)
+    if normalized_expansion_mode == "focused" and isinstance(requested_variants, list) and requested_variants:
+        should_expand_with_llm = False
+
+    if should_expand_with_llm:
         payload = {
             "query": base,
             "request_prompt": " ".join(str(prompt or "").split())[:500],
             "target_url": url,
             "max_variants": variant_cap,
+            "expansion_mode": normalized_expansion_mode,
         }
         response = call_json_response(
             system_prompt=(
-                "You generate diverse, high-signal search query variants for an enterprise research agent. "
-                "Each variant should target a different retrieval angle so together they maximise recall across sources. "
+                "You generate high-signal search query variants for an enterprise research agent. "
+                "Adapt breadth to the requested expansion_mode instead of always maximizing diversity. "
                 "Return strict JSON only."
             ),
             user_prompt=(
-                "Generate diverse query variants for the search query below.\n"
+                "Generate search query variants for the search query below.\n"
                 "Return JSON in this schema only:\n"
                 '{ "query_variants": ["variant one", "variant two"] }\n'
-                "Produce variants across these dimensions (pick the most relevant):\n"
-                "- Temporal: add a year (e.g. '2024', '2025') or recency signal ('latest', 'recent', 'Q1 2025')\n"
-                "- Aspect: focus on a specific facet — pricing, alternatives, competitors, risks, regulation, case studies, data\n"
-                "- Competitive: frame as a comparison or ranking ('X vs Y', 'top providers of X', 'best alternatives to X')\n"
-                "- Authoritative: add source signals like 'site:gov', 'filetype:pdf', 'research paper', 'annual report'\n"
-                "- Rewrite: rephrase using domain synonyms or more precise technical terminology\n"
+                "Mode rules:\n"
+                "- focused: stay close to the core topic, use tight paraphrases and evidence-oriented wording, and only mild recency/source cues when directly useful.\n"
+                "- diverse: broaden across temporal, facet, comparison, source-type, and terminology angles when it improves coverage.\n"
                 "Rules:\n"
-                "- Every variant must be grounded in the input — do not invent entities, names, or claims.\n"
+                "- Every variant must be grounded in the input; do not invent entities, names, or claims.\n"
                 "- Keep each variant concise (under 15 words).\n"
                 "- Do not repeat the original query verbatim.\n"
+                "- Do not inject arbitrary site/domain constraints unless the input already implies them.\n"
+                "- Do not force comparison, ranking, regulation, or latest-news framing unless the input calls for it.\n"
                 f"- Return exactly 1-{variant_cap} variants.\n\n"
                 f"Input:\n{json.dumps(payload, ensure_ascii=True)}"
             ),

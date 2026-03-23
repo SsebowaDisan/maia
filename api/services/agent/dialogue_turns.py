@@ -19,6 +19,7 @@ class DialogueTurn:
     __slots__ = (
         "turn_id",
         "run_id",
+        "step_id",
         "from_agent",
         "to_agent",
         "message",
@@ -32,7 +33,15 @@ class DialogueTurn:
         "action_phase",
         "action_status",
         "timestamp",
+        "question_turn_id",
+        "agent_avatar",
+        "agent_color",
     )
+
+    # Agent avatar color palette for Theatre rendering
+    _AGENT_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"]
+    _color_index = 0
+    _color_cache: dict[str, str] = {}
 
     def __init__(
         self,
@@ -50,9 +59,12 @@ class DialogueTurn:
         action: str = "",
         action_phase: str = "",
         action_status: str = "",
+        step_id: str = "",
+        question_turn_id: str = "",
     ):
         self.turn_id = f"dt_{int(time.time() * 1000)}"
         self.run_id = run_id
+        self.step_id = step_id
         self.from_agent = from_agent
         self.to_agent = to_agent
         self.message = message
@@ -66,17 +78,30 @@ class DialogueTurn:
         self.action_phase = action_phase
         self.action_status = action_status
         self.timestamp = time.time()
+        self.question_turn_id = question_turn_id
+        # Assign stable avatar color per agent
+        self.agent_color = self._resolve_color(from_agent)
+        self.agent_avatar = (from_agent or "?")[0].upper()
+
+    @classmethod
+    def _resolve_color(cls, agent_id: str) -> str:
+        if agent_id not in cls._color_cache:
+            cls._color_cache[agent_id] = cls._AGENT_COLORS[cls._color_index % len(cls._AGENT_COLORS)]
+            cls._color_index += 1
+        return cls._color_cache[agent_id]
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "turn_id": self.turn_id, "run_id": self.run_id,
+            "turn_id": self.turn_id, "run_id": self.run_id, "step_id": self.step_id,
             "from_agent": self.from_agent, "to_agent": self.to_agent,
             "message": self.message, "turn_type": self.turn_type,
             "turn_role": self.turn_role, "interaction_label": self.interaction_label,
             "scene_family": self.scene_family, "scene_surface": self.scene_surface,
             "operation_label": self.operation_label,
             "action": self.action, "action_phase": self.action_phase, "action_status": self.action_status,
-            "timestamp": self.timestamp,
+            "timestamp": self.timestamp, "question_turn_id": self.question_turn_id,
+            "agent_avatar": self.agent_avatar, "agent_color": self.agent_color,
+            "speaker_role": self.from_agent,
         }
 
 
@@ -113,7 +138,15 @@ class DialogueService:
         pair_key = f"{run_id}:{from_agent}:{to_agent}"
         turns = self._turns.setdefault(pair_key, [])
         if len(turns) >= MAX_TURNS_PER_PAIR:
-            return "[Max dialogue turns reached]"
+            logger.info(
+                "Dialogue limit reached (%d turns) for %s → %s in run %s",
+                MAX_TURNS_PER_PAIR, from_agent, to_agent, run_id,
+            )
+            raise RuntimeError(
+                f"Dialogue limit reached ({MAX_TURNS_PER_PAIR} turns) "
+                f"between {from_agent} and {to_agent}. "
+                f"Consider breaking this into smaller tasks."
+            )
 
         # Record and emit question
         q_turn = DialogueTurn(
@@ -157,34 +190,47 @@ class DialogueService:
         except Exception:
             pass
 
-        # Get the answer
+        # Get the answer (with timeout to prevent indefinite blocking)
+        import concurrent.futures as _cf
+        _DIALOGUE_ANSWER_TIMEOUT = 60  # seconds
+
         answer = ""
         if answer_fn:
-            try:
-                preamble = str(prompt_preamble or "").strip()
-                if preamble:
-                    prompt = (
-                        f"{preamble}\n\n"
-                        f"Your teammate {from_agent} asks: {question}\n\n"
-                        "Provide a clear, concise answer with evidence when relevant."
-                    )
-                else:
-                    prompt = (
-                        f"Your teammate {from_agent} asks: {question}\n\n"
-                        "Provide a clear, concise answer with evidence when relevant."
-                    )
+            preamble = str(prompt_preamble or "").strip()
+            if preamble:
+                prompt = (
+                    f"{preamble}\n\n"
+                    f"Your teammate {from_agent} asks: {question}\n\n"
+                    "Provide a clear, concise answer with evidence when relevant."
+                )
+            else:
+                prompt = (
+                    f"Your teammate {from_agent} asks: {question}\n\n"
+                    "Provide a clear, concise answer with evidence when relevant."
+                )
+
+            def _call_answer() -> str:
                 try:
-                    # Preferred path: answer with the specific teammate agent.
-                    answer = answer_fn(to_agent, prompt)
+                    return answer_fn(to_agent, prompt)
                 except TypeError:
-                    # Backward-compatible fallback for legacy one-arg callbacks.
-                    answer = answer_fn(prompt)
+                    return answer_fn(prompt)
+
+            pool = _cf.ThreadPoolExecutor(max_workers=1)
+            try:
+                future = pool.submit(_call_answer)
+                answer = future.result(timeout=_DIALOGUE_ANSWER_TIMEOUT)
+            except _cf.TimeoutError:
+                future.cancel()
+                answer = f"[Timed out waiting for {to_agent} to respond after {_DIALOGUE_ANSWER_TIMEOUT}s]"
+                logger.warning("Dialogue answer from %s timed out after %ds", to_agent, _DIALOGUE_ANSWER_TIMEOUT)
             except Exception as exc:
                 answer = f"[Failed to respond: {exc}]"
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
         else:
             answer = "[No response handler available]"
 
-        # Record and emit answer
+        # Record and emit answer — linked back to the question turn
         a_turn = DialogueTurn(
             run_id=run_id,
             from_agent=to_agent,
@@ -199,6 +245,7 @@ class DialogueService:
             action=str(action or "").strip().lower(),
             action_phase="completed",
             action_status="ok",
+            question_turn_id=q_turn.turn_id,
         )
         turns.append(a_turn)
         self._emit_turn(a_turn, on_event)

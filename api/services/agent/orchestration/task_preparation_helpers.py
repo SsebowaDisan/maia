@@ -103,6 +103,20 @@ def retrieve_context_snippets(
         return []
 
 
+def workflow_stage_context_retrieval_enabled(
+    *,
+    settings: dict[str, Any],
+    default: bool = False,
+) -> bool:
+    explicit_scope = settings.get("__allowed_tool_ids")
+    if not isinstance(explicit_scope, list):
+        return True
+    return truthy(
+        settings.get("agent.workflow_stage_context_retrieval_enabled"),
+        default=default,
+    )
+
+
 def force_deep_search_profile(
     *,
     request: ChatRequest,
@@ -123,7 +137,7 @@ def force_deep_search_profile(
         settings.get("__research_max_query_variants"),
         default=max(18 if complex_mode else 12, depth_profile.max_query_variants),
         low=8,
-        high=20,
+        high=40,
     )
     results_per_query = bounded_int(
         settings.get("__research_results_per_query"),

@@ -97,4 +97,29 @@ describe("deriveSurfaceCommit", () => {
     ]);
     expect(commit?.tab).toBe("email");
   });
+
+  it("does not let team chat override an earlier browser surface commit", () => {
+    const commit = deriveSurfaceCommit([
+      makeEvent({
+        eventType: "browser_navigate",
+        data: {
+          scene_surface: "website",
+          url: "https://www.itransition.com/machine-learning/statistics",
+        },
+      }),
+      makeEvent({
+        eventType: "team_chat_message",
+        data: {
+          scene_surface: "team_chat",
+          scene_family: "chat",
+        },
+        metadata: {
+          scene_surface: "team_chat",
+          scene_family: "chat",
+        },
+      }),
+    ]);
+    expect(commit?.tab).toBe("browser");
+    expect(commit?.sourceUrl).toBe("https://www.itransition.com/machine-learning/statistics");
+  });
 });

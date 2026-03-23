@@ -318,10 +318,21 @@ def analyze_capability_plan(
             str(request.agent_goal or "").strip().lower(),
         ]
     ).strip()
-    llm_domains = _infer_domains_with_llm(
-        request=request,
-        task_prep=task_prep,
-        available_domains=available_domains,
+    contract = task_prep.task_contract if isinstance(task_prep.task_contract, dict) else {}
+    planning_complexity = len(intent_tags) + sum(
+        len(contract.get(key) or [])
+        for key in ("required_outputs", "required_facts", "required_actions")
+        if isinstance(contract.get(key), list)
+    )
+    use_llm_domain_routing = planning_complexity >= 8 or bool(task_prep.task_intelligence.is_analytics_request)
+    llm_domains = (
+        _infer_domains_with_llm(
+            request=request,
+            task_prep=task_prep,
+            available_domains=available_domains,
+        )
+        if use_llm_domain_routing
+        else []
     )
     llm_domains = _filter_llm_domains_by_request_scope(
         proposed_domains=llm_domains,

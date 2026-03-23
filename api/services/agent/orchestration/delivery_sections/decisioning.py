@@ -112,6 +112,30 @@ def prepare_delivery_content(
     runtime: DeliveryRuntime,
     activity_event_factory,
 ) -> tuple[str, str, list[AgentActivityEvent]]:
+    def _source_rows(limit: int) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for source in state.all_sources[:limit]:
+            metadata = source.metadata if isinstance(source.metadata, dict) else {}
+            snippet = " ".join(
+                str(
+                    metadata.get("snippet")
+                    or metadata.get("excerpt")
+                    or metadata.get("summary")
+                    or metadata.get("text")
+                    or ""
+                ).split()
+            ).strip()
+            rows.append(
+                {
+                    "label": str(source.label or "").strip(),
+                    "url": str(source.url or "").strip(),
+                    "source_type": str(source.source_type or "").strip(),
+                    "snippet": snippet[:420],
+                    "metadata": metadata,
+                }
+            )
+        return rows
+
     task_intelligence = task_prep.task_intelligence
     preferred_tone = str(
         task_intelligence.preferred_tone or task_prep.user_preferences.get("tone") or ""
@@ -131,17 +155,7 @@ def prepare_delivery_content(
             objective=task_intelligence.objective,
             report_title=report_title or "Website Analysis Report",
             executed_steps=[dict(row) for row in state.executed_steps],
-            sources=[
-                {
-                    "label": str(source.label or "").strip(),
-                    "url": str(source.url or "").strip(),
-                    "source_type": str(source.source_type or "").strip(),
-                    "metadata": (
-                        source.metadata if isinstance(source.metadata, dict) else {}
-                    ),
-                }
-                for source in state.all_sources[:16]
-            ],
+            sources=_source_rows(16),
             preferred_tone=preferred_tone,
         )
         draft_subject = " ".join(str(drafted_report.get("subject") or "").split()).strip()
@@ -191,13 +205,12 @@ def prepare_delivery_content(
             ),
             sources=[
                 {
-                    "label": str(source.label or "").strip(),
-                    "url": str(source.url or "").strip(),
-                    "metadata": (
-                        source.metadata if isinstance(source.metadata, dict) else {}
-                    ),
+                    "label": row.get("label", ""),
+                    "url": row.get("url", ""),
+                    "metadata": row.get("metadata", {}),
+                    "snippet": row.get("snippet", ""),
                 }
-                for source in state.all_sources[:12]
+                for row in _source_rows(12)
             ],
         )
         location_summary = " ".join(str(location_brief.get("summary") or "").split()).strip()

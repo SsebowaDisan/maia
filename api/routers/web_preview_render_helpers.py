@@ -112,6 +112,12 @@ def sanitize_and_inject_preview_html(
 
     style_block = (
         "<style>"
+        "html,body{max-width:100% !important;overflow-x:hidden !important;}"
+        "*,*::before,*::after{box-sizing:border-box;}"
+        "img,video,canvas,svg,iframe,embed,object{max-width:100% !important;height:auto !important;}"
+        "table{max-width:100% !important;width:100% !important;table-layout:fixed;}"
+        "pre,code,kbd,samp{white-space:pre-wrap !important;overflow-wrap:anywhere !important;word-break:break-word !important;}"
+        "[style*='width:'],[width]{max-width:100% !important;}"
         ".maia-citation-region{"
         "background:rgba(255,233,107,.2) !important;"
         "border-radius:.5em;"

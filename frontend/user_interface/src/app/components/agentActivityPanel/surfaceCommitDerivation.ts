@@ -112,6 +112,15 @@ function deriveSurfaceCommit(visibleEvents: AgentActivityEvent[]): SurfaceCommit
     const event = visibleEvents[idx];
     const normalizedType = readString(event.event_type).toLowerCase();
     const sceneSurface = readString(sceneSurfaceFromEvent(event)).toLowerCase();
+    const isTeamChatEvent =
+      normalizedType === "team_chat_message" ||
+      sceneSurface === "team_chat" ||
+      readString(event.data?.["scene_surface"]).toLowerCase() === "team_chat" ||
+      readString(event.metadata?.["scene_surface"]).toLowerCase() === "team_chat";
+
+    if (isTeamChatEvent) {
+      continue;
+    }
 
     // Metadata-first: use scene_family from event data if available
     const sceneFamily = readString(event.data?.["scene_family"] ?? event.metadata?.["scene_family"]).toLowerCase();
@@ -122,7 +131,6 @@ function deriveSurfaceCommit(visibleEvents: AgentActivityEvent[]): SurfaceCommit
         document: { tab: "document", surface: "document" },
         browser: { tab: "browser", surface: "website" },
         api: { tab: "system", surface: "api" },
-        chat: { tab: "system", surface: "api" },
       };
       const mapped = sfMap[sceneFamily];
       if (mapped) {
