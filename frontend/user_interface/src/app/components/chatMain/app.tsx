@@ -10,8 +10,8 @@ import {
 import { ArrowDown } from "lucide-react";
 import { toast } from "sonner";
 import { approveAgentRunGate, listPendingGates, rejectAgentRunGate } from "../../../api/client";
+import { getPdfHighlightTargetCached } from "../../../api/client/uploads";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
-import { CanvasPanel } from "../canvas/CanvasPanel";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useAgentRunStore } from "../../stores/agentRunStore";
 import {
@@ -427,8 +427,12 @@ function ChatMain({
   // Keep composer expanded while agent is streaming, and restore it when streaming ends.
   useEffect(() => {
     if (isActivityStreaming || isSending) {
-      setComposerCollapsed(false);
+      setComposerCollapsed(true);
+      setComposerHovering(false);
+      setComposerFocused(false);
+      return;
     }
+    setComposerCollapsed(false);
   }, [isActivityStreaming, isSending]);
 
   useEffect(() => {
@@ -472,10 +476,72 @@ function ChatMain({
     return () => window.clearTimeout(timer);
   }, [chatTurns.length]);
 
-  // Hide composer when Brain is actively working — show on hover
-  const isBrainActive = interactions.composerMode === "brain" && isActivityStreaming;
-  const composerVisible = isBrainActive
-    ? composerHovering || composerFocused
+  useEffect(() => {
+    const container = contentScrollRef.current;
+    if (!container || chatTurns.length === 0) {
+      return;
+    }
+
+    const prefetchCitationGeometry = (anchor: HTMLAnchorElement) => {
+      const turnNode = anchor.closest<HTMLElement>("[data-turn-index]");
+      const turnIndex = Number(turnNode?.dataset.turnIndex || Number.NaN);
+      if (!Number.isFinite(turnIndex) || turnIndex < 0 || turnIndex >= chatTurns.length) {
+        return;
+      }
+      const turn = chatTurns[turnIndex];
+      if (!turn) {
+        return;
+      }
+      const resolved = resolveCitationFocusFromAnchor({ turn, citationAnchor: anchor });
+      const focus = resolved.focus;
+      if (
+        !focus.fileId ||
+        !focus.page ||
+        (!focus.extract && !focus.claimText) ||
+        (Array.isArray(focus.highlightBoxes) && focus.highlightBoxes.length > 0) ||
+        (Array.isArray(focus.evidenceUnits) && focus.evidenceUnits.length > 0)
+      ) {
+        return;
+      }
+      void getPdfHighlightTargetCached(focus.fileId, {
+        page: focus.page,
+        text: focus.extract || "",
+        claim_text: focus.claimText || "",
+      }).catch(() => undefined);
+    };
+
+    const warmVisibleCitations = () => {
+      const anchors = Array.from(
+        container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"),
+      ).slice(0, 8);
+      for (const anchor of anchors) {
+        prefetchCitationGeometry(anchor);
+      }
+    };
+
+    const onPointerEnter = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      const anchor = target?.closest?.(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
+      if (!anchor) {
+        return;
+      }
+      prefetchCitationGeometry(anchor);
+    };
+
+    const timer = window.setTimeout(warmVisibleCitations, 320);
+    container.addEventListener("pointerenter", onPointerEnter, true);
+    return () => {
+      window.clearTimeout(timer);
+      container.removeEventListener("pointerenter", onPointerEnter, true);
+    };
+  }, [chatTurns]);
+
+  // Once a run starts, keep the composer out of the viewport until the run ends.
+  // Hover/focus should not resurrect it mid-run because that obscures the theatre.
+  const hasActiveRun = isSending || isActivityStreaming;
+  const isBrainActive = interactions.composerMode === "brain" && hasActiveRun;
+  const composerVisible = hasActiveRun
+    ? false
     : !composerCollapsed || composerHovering || composerFocused;
 
   const handleSelectWorkflow = useCallback(
@@ -557,6 +623,7 @@ function ChatMain({
               selectedTurnIndex={selectedTurnIndex}
               setEditingText={interactions.setEditingText}
               citationFocus={citationFocus}
+              onCitationClick={onCitationClick}
             />
           )}
         </div>
@@ -578,8 +645,16 @@ function ChatMain({
       </div>
       <div
         className="z-20 mt-auto shrink-0"
-        onMouseEnter={() => setComposerHovering(true)}
-        onMouseLeave={() => setComposerHovering(false)}
+        onMouseEnter={() => {
+          if (!hasActiveRun) {
+            setComposerHovering(true);
+          }
+        }}
+        onMouseLeave={() => {
+          if (!hasActiveRun) {
+            setComposerHovering(false);
+          }
+        }}
       >
         {!composerVisible && isBrainActive ? (
           <div className="flex justify-center py-1.5">
@@ -599,6 +674,7 @@ function ChatMain({
               enableAskMode={interactions.enableAskMode}
               enableAgentMode={interactions.enableAgentMode}
               enableBrainMode={interactions.enableBrainMode}
+              enableRagMode={interactions.enableRagMode}
               enableWebSearch={interactions.enableWebSearch}
               enableDeepResearch={interactions.enableDeepResearch}
               activeAgent={interactions.activeAgent}
@@ -631,6 +707,10 @@ function ChatMain({
               }}
             />
           </div>
+        ) : hasActiveRun ? (
+          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 py-2">
+            <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
+          </div>
         ) : (
           <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pt-3 pb-[42px]">
             <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
@@ -645,8 +725,6 @@ function ChatMain({
           onSubmit={onSubmitClarificationPrompt}
         />
       ) : null}
-
-      <CanvasPanel />
     </div>
   );
 }

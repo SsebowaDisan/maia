@@ -302,4 +302,15 @@ async function request<T>(path: string, init?: RequestInit, authRetryAttempt = 0
   return (await response.json()) as T;
 }
 
-export { ACTIVE_USER_ID, API_BASE, fetchApi, request, withUserIdHeaders, withUserIdQuery };
+export {
+  ACTIVE_USER_ID,
+  API_BASE,
+  buildApiBaseCandidates,
+  buildNetworkError,
+  buildRequestUrl,
+  fetchApi,
+  isNetworkError,
+  request,
+  withUserIdHeaders,
+  withUserIdQuery,
+};

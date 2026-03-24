@@ -76,6 +76,10 @@ type CanvasDocumentRecord = {
   id: string;
   title: string;
   content: string;
+  infoHtml?: string;
+  infoPanel?: Record<string, unknown>;
+  userPrompt?: string;
+  modeVariant?: string;
 };
 
 function readString(value: unknown): string {
@@ -119,6 +123,20 @@ function normalizeCanvasDocuments(raw: unknown): CanvasDocumentRecord[] {
         id,
         title,
         content: String(record.content ?? ""),
+        ...(readString(record.info_html ?? record.infoHtml)
+          ? { infoHtml: readString(record.info_html ?? record.infoHtml) }
+          : {}),
+        ...(record.info_panel && typeof record.info_panel === "object" && !Array.isArray(record.info_panel)
+          ? { infoPanel: record.info_panel as Record<string, unknown> }
+          : record.infoPanel && typeof record.infoPanel === "object" && !Array.isArray(record.infoPanel)
+            ? { infoPanel: record.infoPanel as Record<string, unknown> }
+            : {}),
+        ...(readString(record.user_prompt ?? record.userPrompt)
+          ? { userPrompt: readString(record.user_prompt ?? record.userPrompt) }
+          : {}),
+        ...(readString(record.mode_variant ?? record.modeVariant)
+          ? { modeVariant: readString(record.mode_variant ?? record.modeVariant) }
+          : {}),
       } satisfies CanvasDocumentRecord;
     })
     .filter((entry): entry is CanvasDocumentRecord => Boolean(entry));

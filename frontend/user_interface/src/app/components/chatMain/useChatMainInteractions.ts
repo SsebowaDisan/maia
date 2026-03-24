@@ -10,6 +10,7 @@ import {
   mapTurnAttachments,
 } from "./interactions/attachmentActions";
 import { ComposerMode, WEB_SEARCH_SETTING_OVERRIDES } from "./interactions/constants";
+import { RAG_SETTING_OVERRIDES } from "../../appShell/conversationChat/constants";
 import { handleComposerFileChange } from "./interactions/fileUpload";
 import { useWorkflowViewStore } from "../../stores/workflowViewStore";
 
@@ -196,7 +197,9 @@ function useChatMainInteractions({
   const buildSendOptions = () => {
     const workspaceModeOverride = buildWorkspaceModeOverride();
     const modeSettingOverrides =
-      agentMode === "deep_search" && deepSearchProfile === "web_search"
+      agentMode === "rag"
+        ? { ...RAG_SETTING_OVERRIDES, ...workspaceModeOverride }
+        : agentMode === "deep_search" && deepSearchProfile === "web_search"
         ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
         : workspaceModeOverride;
     return {
@@ -216,7 +219,13 @@ function useChatMainInteractions({
 
   const submit = async () => {
     const userInput = message.trim();
-    if (!userInput || isSending) {
+    const hasPendingAttachments = attachments.some(
+      (attachment) => attachment.status === "uploading" || attachment.status === "indexing",
+    );
+    if (!userInput || isSending || hasPendingAttachments) {
+      if (hasPendingAttachments) {
+        showActionStatus("Wait for file indexing to finish before sending.");
+      }
       return;
     }
     // If a workflow is active, prepend the workflow context to the user's input
@@ -244,7 +253,7 @@ function useChatMainInteractions({
     }
     const sendOptions = buildSendOptions();
     const turnAttachments = attachments
-      .filter((item) => item.status !== "error")
+      .filter((item) => item.status === "indexed")
       .map((item) => ({ name: item.name, fileId: item.fileId }));
     setMessage("");
     await onSendMessage(payload, turnAttachments, sendOptions);
@@ -371,6 +380,15 @@ function useChatMainInteractions({
     onAgentModeChange("deep_search");
     onAccessModeChange("restricted");
     showActionStatus("Deep search mode enabled.");
+  };
+
+  const enableRagMode = () => {
+    setAgentControlsVisible(false);
+    setDeepSearchProfile("default");
+    setActiveAgent(null);
+    onAgentModeChange("rag");
+    onAccessModeChange("restricted");
+    showActionStatus("RAG mode enabled. Maia will answer from files and URLs already in Maia.");
   };
 
   const enableWebSearch = () => {
@@ -630,6 +648,7 @@ function useChatMainInteractions({
     enableAgentMode,
     enableBrainMode,
     enableDeepResearch,
+    enableRagMode,
     enableWebSearch,
     fileInputRef,
     isUploading,

@@ -16,6 +16,7 @@ from .conversation_store import (
     get_or_create_conversation,
     maybe_autoname_conversation,
 )
+from .fast_qa import stream_fast_chat_turn
 from .app_stream_orchestrator import run_orchestrator_stream_turn
 from .app_stream_pipeline import run_pipeline_stream_turn
 
@@ -23,6 +24,10 @@ from .app_stream_pipeline import run_pipeline_stream_turn
 # turn of a conversation.  Kept as constants so they are fast, deterministic,
 # and updatable without LLM access.
 _MODE_SCOPE_STATEMENTS: dict[str, str] = {
+    "rag": (
+        "RAG mode: I will answer from files and indexed URLs already in Maia, "
+        "grounding every claim in those sources."
+    ),
     "company_agent": (
         "Company Agent mode: I will use your connected tools, "
         "execute multi-step tasks, and cite every action taken."
@@ -155,15 +160,15 @@ def stream_chat_turn(
 
     requested_mode = str(request.agent_mode or "").strip().lower() or "ask"
     mode_variant = mode_variant_from_request_fn(request=request, requested_mode=requested_mode)
+    committed_mode = mode_variant or requested_mode
+    if not chat_history and committed_mode in _MODE_SCOPE_STATEMENTS:
+        yield {
+            "type": "mode_committed",
+            "mode": committed_mode,
+            "scope_statement": _MODE_SCOPE_STATEMENTS[committed_mode],
+        }
+
     if is_orchestrator_mode_fn(requested_mode):
-        # Emit mode_committed on the first turn so the frontend can show a scope
-        # statement before any answer text arrives.
-        if not chat_history and requested_mode in _MODE_SCOPE_STATEMENTS:
-            yield {
-                "type": "mode_committed",
-                "mode": requested_mode,
-                "scope_statement": _MODE_SCOPE_STATEMENTS[requested_mode],
-            }
         return (
             yield from run_orchestrator_stream_turn(
                 request=request,
@@ -185,6 +190,15 @@ def stream_chat_turn(
             )
         )
 
+    if committed_mode == "rag":
+        return (
+            yield from stream_fast_chat_turn(
+                context=context,
+                user_id=user_id,
+                request=request,
+            )
+        )
+
     return (
         yield from run_pipeline_stream_turn(
             context=context,
@@ -199,5 +213,7 @@ def stream_chat_turn(
             chat_history=chat_history,
             data_source=data_source,
             turn_attachments=turn_attachments,
+            requested_mode=requested_mode,
+            mode_variant=mode_variant,
         )
     )

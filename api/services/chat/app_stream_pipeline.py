@@ -83,6 +83,8 @@ def run_pipeline_stream_turn(
     chat_history: list[list[str]],
     data_source: dict[str, Any],
     turn_attachments: list[dict[str, str]],
+    requested_mode: str,
+    mode_variant: str,
 ) -> Generator[dict[str, Any], None, dict[str, Any]]:
     pipeline, reasoning_state, reasoning_id = create_pipeline(
         context=context,
@@ -208,6 +210,7 @@ def run_pipeline_stream_turn(
         else:
             answer_text = answer_with_citation_suffix
             yield {"type": "chat_delta", "delta": f"\n\n{answer_text}", "text": answer_text}
+    display_mode = mode_variant or requested_mode or "ask"
     info_panel = build_info_panel_copy(
         request_message=message,
         answer_text=answer_text,
@@ -217,6 +220,8 @@ def run_pipeline_stream_turn(
         web_summary={},
     )
     info_panel["verification_contract_version"] = VERIFICATION_CONTRACT_VERSION
+    if mode_variant:
+        info_panel["mode_variant"] = mode_variant
     if mindmap_payload:
         info_panel["mindmap"] = mindmap_payload
     _pipeline_perf: dict[str, Any] = {
@@ -228,8 +233,8 @@ def run_pipeline_stream_turn(
         "retrieval_score_p50": None,
         "context_tokens_used": None,
         "context_tokens_budget": None,
-        "mode_requested": "ask",
-        "mode_actually_used": "ask",
+        "mode_requested": display_mode,
+        "mode_actually_used": display_mode,
         "halt_reason": pipeline_halt_reason,
         "mindmap_generated": bool(mindmap_payload),
         "focus_applied": False,
@@ -269,7 +274,8 @@ def run_pipeline_stream_turn(
             "blocks": blocks,
             "documents": documents,
             "halt_reason": pipeline_halt_reason,
-            "mode_actually_used": "ask",
+            "mode_requested": display_mode,
+            "mode_actually_used": display_mode,
             "perf": _pipeline_perf,
         }
     )
@@ -297,7 +303,8 @@ def run_pipeline_stream_turn(
         "state": chat_state,
         "mode": "ask",
         "halt_reason": pipeline_halt_reason,
-        "mode_actually_used": "ask",
+        "mode_requested": display_mode,
+        "mode_actually_used": display_mode,
         "actions_taken": [],
         "sources_used": [],
         "source_usage": [],

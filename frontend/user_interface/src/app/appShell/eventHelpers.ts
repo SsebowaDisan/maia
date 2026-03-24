@@ -8,7 +8,7 @@ import {
 import type { AgentActivityEvent, ChatTurn } from "../types";
 
 type ConversationMessageMeta = {
-  mode?: "ask" | "company_agent" | "deep_search" | "web_search";
+  mode?: "ask" | "rag" | "company_agent" | "deep_search" | "web_search" | "brain";
   mode_requested?: string | null;
   mode_actually_used?: string | null;
   mode_scope_statement?: string | null;
@@ -32,6 +32,7 @@ type ConversationMessageMeta = {
 };
 
 const MODE_SCOPE_STATEMENTS: Record<string, string> = {
+  rag: "RAG mode: I will answer from files and indexed URLs already in Maia, using citations.",
   company_agent: "Agent mode: I will execute tools and complete the workflow end-to-end.",
   deep_search:
     "Deep search: I will query multiple sources, synthesize evidence, and cite each key claim.",
@@ -54,7 +55,9 @@ function resolveTurnMode(
     .toLowerCase();
   return rawMode === "deep_search" && modeVariant === "web_search"
     ? "web_search"
-    : rawMode;
+    : rawMode === "ask" && modeVariant === "rag"
+      ? "rag"
+      : rawMode;
 }
 
 function resolveModeStatus({
@@ -230,6 +233,9 @@ function asCanvasDocumentRecord(value: unknown): CanvasDocumentRecord | null {
     id,
     title,
     content: String(row.content ?? row.markdown ?? row.body ?? ""),
+    infoHtml: String(row.info_html ?? row.infoHtml ?? ""),
+    userPrompt: String(row.user_prompt ?? row.userPrompt ?? ""),
+    modeVariant: String(row.mode_variant ?? row.modeVariant ?? ""),
   };
 }
 

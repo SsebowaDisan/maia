@@ -71,7 +71,7 @@ def test_run_fast_chat_turn_falls_back_to_llm_without_indexed_snippets(monkeypat
     monkeypatch.setattr("api.services.chat.fast_qa.load_recent_chunks_for_fast_qa", lambda **kwargs: [])
     monkeypatch.setattr(
         "api.services.chat.fast_qa._finalize_retrieved_snippets",
-        lambda **kwargs: ([], "", "no_relevant_snippets"),
+        lambda **kwargs: ([], "", "no_relevant_snippets", {}),
     )
     monkeypatch.setattr(
         "api.services.chat.fast_qa._assess_evidence_sufficiency_with_llm",

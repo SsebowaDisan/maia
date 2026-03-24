@@ -25,7 +25,7 @@ type ChatMainProps = {
       mindmapSettings?: Record<string, unknown>;
       mindmapFocus?: Record<string, unknown>;
       settingOverrides?: Record<string, unknown>;
-      agentMode?: "ask" | "company_agent" | "deep_search";
+      agentMode?: "ask" | "rag" | "company_agent" | "deep_search";
       agentId?: string;
       accessMode?: "restricted" | "full_access";
     },
@@ -69,8 +69,8 @@ type ChatMainProps = {
   onMindmapMapTypeChange: (mapType: "structure" | "evidence" | "work_graph" | "context_mindmap") => void;
   onCitationClick: (citation: CitationFocus) => void;
   citationFocus?: CitationFocus | null;
-  agentMode: "ask" | "company_agent" | "deep_search" | "brain";
-  onAgentModeChange: (mode: "ask" | "company_agent" | "deep_search" | "brain") => void;
+  agentMode: "ask" | "rag" | "company_agent" | "deep_search" | "brain";
+  onAgentModeChange: (mode: "ask" | "rag" | "company_agent" | "deep_search" | "brain") => void;
   accessMode: "restricted" | "full_access";
   onAccessModeChange: (mode: "restricted" | "full_access") => void;
   activityEvents: AgentActivityEvent[];
@@ -80,7 +80,7 @@ type ChatMainProps = {
   onSubmitClarificationPrompt: (answers: string[]) => Promise<void>;
 };
 
-type AttachmentStatus = "uploading" | "indexed" | "error";
+type AttachmentStatus = "uploading" | "indexing" | "indexed" | "error";
 
 type ComposerAttachment = {
   id: string;

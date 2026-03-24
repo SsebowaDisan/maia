@@ -1,6 +1,6 @@
 import type { ChatAttachment } from "../../types";
 
-type AgentMode = "ask" | "company_agent" | "deep_search" | "brain";
+type AgentMode = "ask" | "rag" | "company_agent" | "deep_search" | "brain";
 type AccessMode = "restricted" | "full_access";
 type MindmapMapType = "structure" | "evidence" | "work_graph" | "context_mindmap";
 
@@ -44,6 +44,11 @@ const DEEP_SEARCH_SETTING_OVERRIDES: Record<string, unknown> = {
   __file_research_max_scan_pages: 200,
 };
 
+const RAG_SETTING_OVERRIDES: Record<string, unknown> = {
+  __rag_mode_enabled: true,
+  __disable_auto_web_fallback: true,
+};
+
 function normalizeMindmapMapType(raw: unknown): MindmapMapType {
   const value = String(raw || "").trim().toLowerCase();
   if (value === "context_mindmap") {
@@ -69,6 +74,7 @@ function readStringList(value: unknown, limit = 8): string[] {
 export {
   DEEP_SEARCH_SETTING_OVERRIDES,
   MINDMAP_SETTINGS_STORAGE_KEY,
+  RAG_SETTING_OVERRIDES,
   normalizeMindmapMapType,
   readStringList,
 };

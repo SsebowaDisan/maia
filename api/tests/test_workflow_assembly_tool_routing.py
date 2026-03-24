@@ -94,6 +94,22 @@ def test_email_draft_step_keeps_report_generation_and_draft_without_send_tools()
     assert "marketing.web_research" not in tool_ids
 
 
+def test_email_specialist_never_keeps_send_tools_even_when_hint_requests_send() -> None:
+    step = {
+        "step_id": "step_2",
+        "agent_role": "email specialist",
+        "description": "Compose a polished email for the recipient and keep it ready for delivery.",
+        "tools_needed": ["send", "email", "summary"],
+    }
+    tool_ids = _normalize_step_tool_ids(
+        step=step,
+        request_description="Make the research about machine learning and write an email about the research to ssebowadisan1@gmail.com",
+    )
+    assert "gmail.send" not in tool_ids
+    assert "mailer.report_send" not in tool_ids
+    assert "report.generate" in tool_ids
+
+
 def test_research_step_with_full_request_text_stays_evidence_first() -> None:
     step = {
         "step_id": "step_1",

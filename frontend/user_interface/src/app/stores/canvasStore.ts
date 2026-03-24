@@ -1,10 +1,15 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import type { CanvasDocumentRecord } from "../messageBlocks";
 
 type CanvasDocumentState = CanvasDocumentRecord & {
   isDirty: boolean;
+};
+
+type PersistedCanvasStoreState = {
+  activeDocumentId: string | null;
+  documentsById: Record<string, Partial<CanvasDocumentState>>;
 };
 
 type CanvasStoreState = {
@@ -43,11 +48,59 @@ type CanvasSyncStorageMessage = CanvasSyncMessage & {
 
 const CANVAS_SYNC_CHANNEL_NAME = "maia.canvas.sync.v1";
 const CANVAS_SYNC_STORAGE_KEY = "maia.canvas.sync.storage.v1";
+const CANVAS_DOCUMENTS_STORAGE_KEY = "maia.canvas.documents.v1";
 const CANVAS_SENDER_ID = `canvas-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+const CANVAS_PERSIST_SOFT_LIMIT_BYTES = 180_000;
 const canvasSyncChannel =
   typeof window !== "undefined" && "BroadcastChannel" in window
     ? new BroadcastChannel(CANVAS_SYNC_CHANNEL_NAME)
     : null;
+
+function sanitizeLegacyCanvasStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const raw = window.localStorage.getItem(CANVAS_DOCUMENTS_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+    if (raw.length <= CANVAS_PERSIST_SOFT_LIMIT_BYTES) {
+      return;
+    }
+    const parsed = JSON.parse(raw) as { state?: PersistedCanvasStoreState; version?: number };
+    const documentEntries = Object.entries(parsed?.state?.documentsById || {});
+    const compactedState = {
+      state: {
+        activeDocumentId: parsed?.state?.activeDocumentId || null,
+        documentsById: Object.fromEntries(
+          documentEntries.slice(0, 2).map(([id, doc]) => [
+            id,
+            {
+              id,
+              title: String((doc as Partial<CanvasDocumentState>)?.title || "").slice(0, 160),
+              content: "",
+              infoHtml: "",
+              userPrompt: String((doc as Partial<CanvasDocumentState>)?.userPrompt || "").slice(0, 400),
+              modeVariant: String((doc as Partial<CanvasDocumentState>)?.modeVariant || "").slice(0, 64),
+              isDirty: Boolean((doc as Partial<CanvasDocumentState>)?.isDirty),
+            },
+          ]),
+        ),
+      },
+      version: parsed?.version ?? 0,
+    };
+    window.localStorage.setItem(CANVAS_DOCUMENTS_STORAGE_KEY, JSON.stringify(compactedState));
+  } catch {
+    try {
+      window.localStorage.removeItem(CANVAS_DOCUMENTS_STORAGE_KEY);
+    } catch {
+      // Ignore final storage failures.
+    }
+  }
+}
+
+sanitizeLegacyCanvasStorage();
 
 function postCanvasSync(message: Omit<CanvasSyncMessage, "senderId">) {
   const payload = {
@@ -133,6 +186,107 @@ function applyCanvasSyncMessage(payload: CanvasSyncMessage) {
   });
 }
 
+function compactPersistedCanvasState(state: CanvasStoreState): PersistedCanvasStoreState {
+  const entries = Object.entries(state.documentsById || {});
+  const activeId = state.activeDocumentId;
+  const prioritized = entries.sort(([aId, aDoc], [bId, bDoc]) => {
+    if (aId === activeId) return -1;
+    if (bId === activeId) return 1;
+    if (aDoc.isDirty && !bDoc.isDirty) return -1;
+    if (bDoc.isDirty && !aDoc.isDirty) return 1;
+    return bId.localeCompare(aId);
+  });
+
+  const limited = prioritized.slice(0, 6);
+  const documentsById = Object.fromEntries(
+    limited.map(([id, doc]) => [
+      id,
+      {
+        id,
+        title: String(doc.title || "").slice(0, 240),
+        content: String(doc.content || "").slice(0, 12000),
+        infoHtml: String(doc.infoHtml || "").slice(0, 8000),
+        userPrompt: String(doc.userPrompt || "").slice(0, 2000),
+        modeVariant: String(doc.modeVariant || "").slice(0, 64),
+        isDirty: Boolean(doc.isDirty),
+      } satisfies Partial<CanvasDocumentState>,
+    ]),
+  );
+
+  return {
+    activeDocumentId: activeId && documentsById[activeId] ? activeId : Object.keys(documentsById)[0] || null,
+    documentsById,
+  };
+}
+
+const safeCanvasStorage: StateStorage = {
+  getItem: (name) => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    try {
+      const raw = window.localStorage.getItem(name);
+      if (name === CANVAS_DOCUMENTS_STORAGE_KEY && raw && raw.length > CANVAS_PERSIST_SOFT_LIMIT_BYTES) {
+        sanitizeLegacyCanvasStorage();
+        return window.localStorage.getItem(name);
+      }
+      return raw;
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(name, value);
+      return;
+    } catch {
+      try {
+        const parsed = JSON.parse(String(value || "{}")) as { state?: PersistedCanvasStoreState };
+        const compactedState = {
+          state: {
+            activeDocumentId: parsed?.state?.activeDocumentId || null,
+            documentsById: Object.fromEntries(
+              Object.entries(parsed?.state?.documentsById || {}).slice(0, 3).map(([id, doc]) => [
+                id,
+                {
+                  id,
+                  title: String((doc as Partial<CanvasDocumentState>)?.title || "").slice(0, 160),
+                  content: "",
+                  infoHtml: "",
+                  userPrompt: String((doc as Partial<CanvasDocumentState>)?.userPrompt || "").slice(0, 500),
+                  modeVariant: String((doc as Partial<CanvasDocumentState>)?.modeVariant || "").slice(0, 64),
+                  isDirty: Boolean((doc as Partial<CanvasDocumentState>)?.isDirty),
+                },
+              ]),
+            ),
+          },
+          version: 0,
+        };
+        window.localStorage.setItem(name, JSON.stringify(compactedState));
+      } catch {
+        try {
+          window.localStorage.removeItem(name);
+        } catch {
+          // Ignore final storage failures.
+        }
+      }
+    }
+  },
+  removeItem: (name) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.removeItem(name);
+    } catch {
+      // Ignore storage failures.
+    }
+  },
+};
+
 const useCanvasStore = create<CanvasStoreState>()(
   persist(
     (set) => ({
@@ -177,6 +331,13 @@ const useCanvasStore = create<CanvasStoreState>()(
                 current && current.isDirty
                   ? current.content
                   : String(document.content ?? current?.content ?? ""),
+              infoHtml: String(document.infoHtml ?? current?.infoHtml ?? ""),
+              infoPanel:
+                document.infoPanel && typeof document.infoPanel === "object" && !Array.isArray(document.infoPanel)
+                  ? document.infoPanel
+                  : current?.infoPanel,
+              userPrompt: String(document.userPrompt ?? current?.userPrompt ?? ""),
+              modeVariant: String(document.modeVariant ?? current?.modeVariant ?? ""),
               isDirty: current?.isDirty || false,
             };
           }
@@ -232,10 +393,10 @@ const useCanvasStore = create<CanvasStoreState>()(
         }),
     }),
     {
-      name: "maia.canvas.documents.v1",
+      name: CANVAS_DOCUMENTS_STORAGE_KEY,
+      storage: createJSONStorage(() => safeCanvasStorage),
       partialize: (state) => ({
-        activeDocumentId: state.activeDocumentId,
-        documentsById: state.documentsById,
+        ...compactPersistedCanvasState(state),
       }),
     },
   ),

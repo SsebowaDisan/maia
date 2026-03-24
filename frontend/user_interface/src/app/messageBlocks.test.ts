@@ -5,7 +5,7 @@ import {
   normalizeCanvasDocuments,
   normalizeMessageBlocks,
 } from "./messageBlocks";
-import { renderMathInMarkdown } from "./utils/richText";
+import { renderMathInMarkdown, splitDenseParagraphsForTest } from "./utils/richText";
 
 describe("messageBlocks", () => {
   it("falls back to a markdown block when no structured blocks are provided", () => {
@@ -57,6 +57,32 @@ describe("messageBlocks", () => {
         { id: "", title: "Broken" },
       ]),
     ).toEqual([{ id: "doc_1", title: "Report", content: "# Draft" }]);
+  });
+
+  it("preserves canvas citation context metadata", () => {
+    expect(
+      normalizeCanvasDocuments([
+        {
+          id: "doc_1",
+          title: "Report",
+          content: "# Draft",
+          info_html: "<div>evidence</div>",
+          info_panel: { evidence_items: [{ id: "evidence-1", file_id: "file-1", page: 12 }] },
+          user_prompt: "Explain this report",
+          mode_variant: "rag",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "doc_1",
+        title: "Report",
+        content: "# Draft",
+        infoHtml: "<div>evidence</div>",
+        infoPanel: { evidence_items: [{ id: "evidence-1", file_id: "file-1", page: 12 }] },
+        userPrompt: "Explain this report",
+        modeVariant: "rag",
+      },
+    ]);
   });
 
   it("returns an empty list for blank fallback assistant text", () => {
@@ -137,6 +163,13 @@ describe("messageBlocks", () => {
   it("returns identical text when there is no math", () => {
     const source = "No equations here, just plain markdown text.";
     expect(renderMathInMarkdown(source)).toBe(source);
+  });
+
+  it("splits dense prose into multiple paragraphs for canvas rendering", () => {
+    const source =
+      "Crystal field splitting governs the coloration of octahedral transition-metal complexes in aqueous media because ligand interactions separate the d orbitals into different energy levels and create optically allowed d-d transitions across the visible range. The resulting absorption energies depend on ligand field strength, oxidation state, and electron configuration, which is why closely related ions can still produce distinct colors in solution. In the cited document, the reported Δo values vary materially across first-row divalent ions and the observed hues track those shifts rather than appearing arbitrarily. That same mechanism explains why Zn2+ remains colorless in the same environment, because its filled d shell eliminates the relevant d-d transition pathway even though the ligand environment is otherwise similar.";
+    const normalized = splitDenseParagraphsForTest(source);
+    expect(normalized.split(/\n{2,}/).length).toBeGreaterThan(1);
   });
 
   it("keeps markdown content intact through normalizeMessageBlocks round-trip", () => {

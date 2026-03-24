@@ -26,6 +26,7 @@ type TurnsPanelProps = {
   setEditingText: (value: string) => void;
   autoFollowLatest: boolean;
   citationFocus?: CitationFocus | null;
+  onCitationClick: (citation: CitationFocus) => void;
 };
 
 function TurnsPanel({
@@ -47,6 +48,7 @@ function TurnsPanel({
   setEditingText,
   autoFollowLatest,
   citationFocus = null,
+  onCitationClick,
 }: TurnsPanelProps) {
   const turnsRootRef = useRef<HTMLDivElement | null>(null);
   const pendingTheatreCenterTurnRef = useRef<number | null>(null);
@@ -267,6 +269,7 @@ function TurnsPanel({
           onRetryTurn={retryTurn}
           onQuoteAssistant={quoteAssistant}
           onOpenPreviewAttachment={setPreviewAttachment}
+          onCitationClick={onCitationClick}
         />
       ))}
 

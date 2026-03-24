@@ -14,6 +14,7 @@ from api.services.agent.tools.base import (
     ToolMetadata,
     ToolTraceEvent,
 )
+from api.services.agent.orchestration.text_helpers import chunk_preserve_text
 from api.services.agent.tools.data_tools_helpers import (
     _analysis_paragraphs_with_llm,
     _analytics_insight_highlights,
@@ -532,6 +533,43 @@ class ReportGenerationTool(AgentTool):
         context.settings["__latest_report_content"] = content
         if source_rows:
             context.settings["__latest_report_sources"] = source_rows
+        body_chunks = chunk_preserve_text(
+            content,
+            chunk_size=180,
+            limit=max(1, (len(content) // 180) + 2),
+        )
+        report_events = [
+            ToolTraceEvent(
+                event_type="doc_open",
+                title="Open report template",
+                detail=f"Preparing report draft: {title}",
+                data={"title": title},
+            ),
+        ]
+        typed_preview = ""
+        for chunk_index, chunk in enumerate(body_chunks, start=1):
+            typed_preview += chunk
+            report_events.append(
+                ToolTraceEvent(
+                    event_type="doc_type_text",
+                    title=f"Writing report {chunk_index}/{len(body_chunks)}",
+                    detail=chunk or " ",
+                    data={
+                        "title": title,
+                        "chunk_index": chunk_index,
+                        "chunk_total": len(body_chunks),
+                        "typed_preview": typed_preview,
+                    },
+                )
+            )
+        report_events.append(
+            ToolTraceEvent(
+                event_type="doc_insert_text",
+                title="Populate report sections",
+                detail="Filled summary, highlights, and action plan sections",
+                data={"title": title, "typed_preview": content},
+            )
+        )
         return ToolExecutionResult(
             summary=f"Generated report draft: {title}",
             content=content,
@@ -547,18 +585,5 @@ class ReportGenerationTool(AgentTool):
                 "Attach owner/timeline for each action.",
                 "Publish to Docs/Slack/Email channels.",
             ],
-            events=[
-                ToolTraceEvent(
-                    event_type="doc_open",
-                    title="Open report template",
-                    detail=f"Preparing report draft: {title}",
-                    data={"title": title},
-                ),
-                ToolTraceEvent(
-                    event_type="doc_insert_text",
-                    title="Populate report sections",
-                    detail="Filled summary, highlights, and action plan sections",
-                    data={"title": title},
-                ),
-            ],
+            events=report_events,
         )

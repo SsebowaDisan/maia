@@ -3,6 +3,7 @@ import { type MouseEvent as ReactMouseEvent } from "react";
 import type { AgentActivityEvent, ChatTurn, CitationFocus } from "../../../types";
 import { fallbackAssistantBlocks } from "../../../messageBlocks";
 import { AgentActivityPanel } from "../../AgentActivityPanel";
+import { CanvasWorkspaceSurface } from "../../canvas/CanvasWorkspaceSurface";
 import { MessageBlocks } from "../../messages/MessageBlocks";
 import { ChatTurnPlot } from "../ChatTurnPlot";
 import type { FilePreviewAttachment } from "../types";
@@ -37,6 +38,7 @@ type TurnListItemProps = {
   onRetryTurn: (turn: ChatTurn) => void;
   onQuoteAssistant: (turn: ChatTurn) => void;
   onOpenPreviewAttachment: (attachment: FilePreviewAttachment) => void;
+  onCitationClick: (citation: CitationFocus) => void;
 };
 
 function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
@@ -47,6 +49,9 @@ function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
 function resolveTurnModeLabel(mode: ChatTurn["mode"]): string {
   if (mode === "brain") {
     return "Maia Brain";
+  }
+  if (mode === "rag") {
+    return "RAG";
   }
   if (mode === "web_search") {
     return "Web Search";
@@ -95,6 +100,7 @@ function TurnListItem({
   onRetryTurn,
   onQuoteAssistant,
   onOpenPreviewAttachment,
+  onCitationClick,
 }: TurnListItemProps) {
   const turnActivityEvents =
     turn.mode === "company_agent" ||
@@ -107,11 +113,13 @@ function TurnListItem({
       : [];
   const stageAttachment =
     (turn.attachments || []).find((attachment) => Boolean(attachment.fileId)) || (turn.attachments || [])[0];
+  const primaryCanvasDocument = turn.documents?.[0] || null;
   const assistantBlocks =
     turn.blocks && turn.blocks.length > 0
       ? turn.blocks
       : fallbackAssistantBlocks(turn.assistant);
-  const hasAssistantOutput = assistantBlocks.length > 0 || Boolean(turn.plot);
+  const ragCanvasOnly = turn.mode === "rag" && Boolean(primaryCanvasDocument);
+  const hasAssistantOutput = (!ragCanvasOnly && assistantBlocks.length > 0) || Boolean(turn.plot);
   const userCopyFeedbackKey = `user-${index}`;
   const assistantCopyFeedbackKey = `assistant-${index}`;
   const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
@@ -302,6 +310,18 @@ function TurnListItem({
                     }
                   : null
               }
+            />
+          </div>
+        </div>
+      ) : null}
+      {ragCanvasOnly ? (
+        <div className="flex justify-start">
+          <div className="max-w-[95%] min-w-0 space-y-1.5">
+            <CanvasWorkspaceSurface
+              documentId={primaryCanvasDocument?.id || ""}
+              fallbackDocument={primaryCanvasDocument}
+              onSelectCitationFocus={onCitationClick}
+              embedded
             />
           </div>
         </div>

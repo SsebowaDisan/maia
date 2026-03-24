@@ -20,6 +20,7 @@ import { clarificationPromptFromEvent } from "./clarification";
 import { extractCanvasDocumentFromToolEvent } from "../eventHelpers";
 import {
   DEEP_SEARCH_SETTING_OVERRIDES,
+  RAG_SETTING_OVERRIDES,
   type AccessMode,
   type AgentMode,
   normalizeMindmapMapType,
@@ -27,6 +28,7 @@ import {
 } from "./constants";
 
 const MODE_SCOPE_STATEMENTS: Record<string, string> = {
+  rag: "RAG mode: I will answer from files and indexed URLs already in Maia, grounding each claim in those sources.",
   company_agent: "Agent mode: I will execute tools and complete the workflow end-to-end.",
   deep_search:
     "Deep search: I will query multiple sources, synthesize evidence, and cite each key claim.",
@@ -37,6 +39,40 @@ const MODE_SCOPE_STATEMENTS: Record<string, string> = {
 function normalizeModeValue(value: unknown, fallback: string): string {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized || fallback;
+}
+
+function resolveReturnedTurnMode({
+  effectiveMode,
+  responseMode,
+  responseModeRequested,
+  responseModeActual,
+  infoPanel,
+  webOnlyResearchRequested,
+}: {
+  effectiveMode: AgentMode;
+  responseMode?: string | null;
+  responseModeRequested?: string | null;
+  responseModeActual?: string | null;
+  infoPanel?: Record<string, unknown> | null;
+  webOnlyResearchRequested: boolean;
+}): ChatTurn["mode"] {
+  const modeVariant = normalizeModeValue(
+    (infoPanel as { mode_variant?: unknown } | null)?.mode_variant,
+    "",
+  );
+  if (
+    effectiveMode === "rag" ||
+    modeVariant === "rag" ||
+    normalizeModeValue(responseModeRequested, "") === "rag" ||
+    normalizeModeValue(responseModeActual, "") === "rag"
+  ) {
+    return "rag";
+  }
+  const normalizedResponseMode = normalizeModeValue(responseMode, effectiveMode);
+  if (normalizedResponseMode === "deep_search" && webOnlyResearchRequested) {
+    return "web_search";
+  }
+  return normalizedResponseMode as ChatTurn["mode"];
 }
 
 function deriveModeStatus({
@@ -400,9 +436,11 @@ async function sendConversationMessage({
   }
 
   const effectiveMode = options?.agentMode ?? composerMode;
-  const backendMode: AgentMode = effectiveMode === "brain" ? "company_agent" : effectiveMode;
+  const backendMode: AgentMode =
+    effectiveMode === "brain" ? "company_agent" : effectiveMode === "rag" ? "ask" : effectiveMode;
   const effectiveAccessMode = options?.accessMode ?? accessMode;
   const orchestratorMode = backendMode === "company_agent" || backendMode === "deep_search";
+  const liveStreamMode = orchestratorMode || effectiveMode === "rag";
   const webOnlyResearchRequested =
     backendMode === "deep_search" && Boolean(options?.settingOverrides?.["__research_web_only"]);
   const requestedTurnMode: ChatTurn["mode"] =
@@ -419,15 +457,19 @@ async function sendConversationMessage({
           message: null,
         }
       : null;
-  const delayedPendingAssistantMessage = orchestratorMode
+  const delayedPendingAssistantMessage = liveStreamMode
     ? effectiveMode === "brain"
       ? "Brain is assembling your team and running the workflow..."
       : backendMode === "deep_search"
-      ? webOnlyResearchRequested
-        ? "Running web search..."
-        : "Running deep search..."
-      : "Starting my desktop..."
-    : "Thinking....";
+        ? webOnlyResearchRequested
+          ? "Running web search..."
+          : "Running deep search..."
+        : effectiveMode === "rag"
+          ? "Reviewing the selected files and indexed URLs..."
+        : "Starting my desktop..."
+    : effectiveMode === "rag"
+      ? "Grounding the answer in files and indexed URLs already in Maia..."
+      : "Thinking....";
   const firstAttachedFile = (attachments || []).find((item) => Boolean(item.fileId));
   if (firstAttachedFile?.fileId) {
     setCitationFocus({
@@ -445,12 +487,13 @@ async function sendConversationMessage({
   const pendingTurnIndex = chatTurnsLength;
   const mergedSettingOverrides: Record<string, unknown> = {
     ...(backendMode === "deep_search" ? DEEP_SEARCH_SETTING_OVERRIDES : {}),
+    ...(effectiveMode === "rag" ? RAG_SETTING_OVERRIDES : {}),
     ...(options?.settingOverrides || {}),
     ...(effectiveMode === "brain" ? { __brain_mode_enabled: true } : {}),
   };
 
   setIsSending(true);
-  setIsActivityStreaming(orchestratorMode);
+  setIsActivityStreaming(liveStreamMode);
   setClarificationPrompt(null);
   setCitationFocus(null);
   setInfoText("");
@@ -528,7 +571,7 @@ async function sendConversationMessage({
     };
 
     let response: ChatResponse;
-    if (orchestratorMode) {
+    if (liveStreamMode) {
       let streamedInfo = "";
       const streamedEvents: AgentActivityEvent[] = [];
       let streamedRunId = "";
@@ -625,7 +668,7 @@ async function sendConversationMessage({
           response = await sendChatStream(message, selectedConversationId, {
             ...sharedPayload,
             agentGoal: message,
-            idleTimeoutMs: 60000,
+            idleTimeoutMs: effectiveMode === "rag" ? 90000 : 60000,
             onEvent: (event) => {
               if (!event || typeof event !== "object") {
                 return;
@@ -747,7 +790,9 @@ async function sendConversationMessage({
                 if (createdCanvasDocument) {
                   const canvasStore = useCanvasStore.getState();
                   canvasStore.upsertDocuments([createdCanvasDocument]);
-                  canvasStore.openDocument(createdCanvasDocument.id);
+                  if (String(createdCanvasDocument.modeVariant || "").trim().toLowerCase() !== "rag") {
+                    canvasStore.openDocument(createdCanvasDocument.id);
+                  }
                 }
                 const payloadRunId = String(payload.run_id || "").trim();
                 if (payloadRunId) {
@@ -829,6 +874,8 @@ async function sendConversationMessage({
       response = await sendChat(message, selectedConversationId, sharedPayload);
     }
 
+    const normalizedResponseDocuments = normalizeCanvasDocuments(response.documents);
+
     setConversationProjects((prev) =>
       prev[response.conversation_id]
         ? prev
@@ -855,28 +902,33 @@ async function sendConversationMessage({
       },
     }));
     setInfoText(response.info || "");
+    const effectiveReturnedMode = (response.mode as AgentMode | undefined) || backendMode;
+    const responseModeRequested =
+      effectiveMode === "brain"
+        ? "brain"
+        : normalizeModeValue(response.mode_requested, initialRequestedMode);
+    const responseModeActual =
+      effectiveMode === "brain"
+        ? "brain"
+        : normalizeModeValue(
+            response.mode_actually_used || effectiveReturnedMode,
+            responseModeRequested,
+          );
+    const resolvedTurnMode = resolveReturnedTurnMode({
+      effectiveMode,
+      responseMode: effectiveReturnedMode,
+      responseModeRequested,
+      responseModeActual,
+      infoPanel:
+        response.info_panel && typeof response.info_panel === "object"
+          ? (response.info_panel as Record<string, unknown>)
+          : null,
+      webOnlyResearchRequested,
+    });
     setChatTurns((prev) => {
       const next = [...prev];
       const last = next[next.length - 1];
-      const effectiveReturnedMode = (response.mode as AgentMode | undefined) || backendMode;
-      const resolvedTurnMode: ChatTurn["mode"] =
-        effectiveMode === "brain"
-          ? "brain"
-          : effectiveReturnedMode === "deep_search" && webOnlyResearchRequested
-          ? "web_search"
-          : effectiveReturnedMode;
       const backendModeMismatch = orchestratorMode && effectiveReturnedMode === "ask";
-      const responseModeRequested =
-        effectiveMode === "brain"
-          ? "brain"
-          : normalizeModeValue(response.mode_requested, initialRequestedMode);
-      const responseModeActual =
-        effectiveMode === "brain"
-          ? "brain"
-          : normalizeModeValue(
-              response.mode_actually_used || effectiveReturnedMode,
-              responseModeRequested,
-            );
       const haltReason = String(response.halt_reason || "").trim() || null;
       const haltMessage = String(response.halt_message || "").trim() || null;
       const modeStatus = deriveModeStatus({
@@ -894,7 +946,7 @@ async function sendConversationMessage({
         user: message,
         assistant: finalAssistantText,
         blocks: normalizeMessageBlocks(response.blocks, finalAssistantText),
-        documents: normalizeCanvasDocuments(response.documents),
+        documents: normalizedResponseDocuments,
         info: response.info || "",
         plot: response.plot || null,
         mode: resolvedTurnMode,
@@ -917,6 +969,10 @@ async function sendConversationMessage({
       };
       return next;
     });
+    if (resolvedTurnMode === "rag" && normalizedResponseDocuments.length > 0) {
+      const canvasStore = useCanvasStore.getState();
+      canvasStore.upsertDocuments(normalizedResponseDocuments);
+    }
     setActivityEvents(streamedEventsLocal);
     setSelectedTurnIndex(pendingTurnIndex);
     try {

@@ -42,6 +42,62 @@ async function waitForIngestionJob(
   }
 }
 
+async function trackQueuedIngestionJob({
+  jobId,
+  pending,
+  setAttachments,
+  showActionStatus,
+}: {
+  jobId: string;
+  pending: ComposerAttachment[];
+  setAttachments: Dispatch<SetStateAction<ComposerAttachment[]>>;
+  showActionStatus: (text: string) => void;
+}) {
+  const pendingIds = new Set(pending.map((attachment) => attachment.id));
+  const updatePendingMessage = (text: string) => {
+    setAttachments((previous) =>
+      previous.map((attachment) =>
+        pendingIds.has(attachment.id)
+          ? {
+              ...attachment,
+              status: "indexing",
+              message: text,
+            }
+          : attachment,
+      ),
+    );
+  };
+
+  try {
+    const finalJob = await waitForIngestionJob(jobId, updatePendingMessage);
+    applyUploadResult({
+      pending,
+      result: {
+        items: finalJob.items,
+        errors: finalJob.errors,
+        file_ids: finalJob.file_ids,
+      },
+      setAttachments,
+      showActionStatus,
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error || "Upload failed.");
+    const compact = errorMessage.length > 120 ? `${errorMessage.slice(0, 117)}...` : errorMessage;
+    setAttachments((previous) =>
+      previous.map((attachment) =>
+        pendingIds.has(attachment.id)
+          ? {
+              ...attachment,
+              status: "error",
+              message: errorMessage,
+            }
+          : attachment,
+      ),
+    );
+    showActionStatus(`Upload failed: ${compact}`);
+  }
+}
+
 function applyUploadResult({
   pending,
   result,
@@ -165,24 +221,29 @@ async function handleComposerFileChange({
     if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
       updatePendingMessage("Uploading to server 0%");
       const queued = await onCreateFileIngestionJob(selectedFiles, {
-        reindex: true,
+        reindex: false,
         scope: "chat_temp",
         onUploadProgress: (loadedBytes, totalBytesBytes) => {
           updatePendingMessage(formatUploadProgress(loadedBytes, totalBytesBytes, "creating indexing job"));
         },
       });
-      updatePendingMessage(formatIngestionJobProgress(queued));
+      setAttachments((previous) =>
+        previous.map((attachment) =>
+          pending.some((item) => item.id === attachment.id)
+            ? {
+                ...attachment,
+                status: "indexing",
+                message: formatIngestionJobProgress(queued),
+              }
+            : attachment,
+        ),
+      );
       showActionStatus(
         `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
       );
-      const finalJob = await waitForIngestionJob(queued.id, updatePendingMessage);
-      applyUploadResult({
+      void trackQueuedIngestionJob({
+        jobId: queued.id,
         pending,
-        result: {
-          items: finalJob.items,
-          errors: finalJob.errors,
-          file_ids: finalJob.file_ids,
-        },
         setAttachments,
         showActionStatus,
       });

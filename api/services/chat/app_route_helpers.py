@@ -7,9 +7,12 @@ def should_auto_web_fallback(
     *,
     message: str,
     chat_history: list[list[str]],
+    disable_auto_web_fallback: bool,
     call_json_response_fn: Callable[..., dict[str, Any]],
     env_bool_fn: Callable[[str, bool], bool],
 ) -> bool:
+    if disable_auto_web_fallback:
+        return False
     if not env_bool_fn("MAIA_CHAT_AUTO_WEB_FALLBACK_ENABLED", default=True):
         return False
 

@@ -160,6 +160,10 @@ export function InfoPanel({
   const activeCitationSourceKey = useMemo(() => sourceIdForCitation(activeCitation), [activeCitation]);
 
   const preferredCitationPage = useMemo(() => {
+    const explicitCitationPage = String(activeCitation?.page || "").trim();
+    if (explicitCitationPage) {
+      return undefined;
+    }
     if (!activeCitationSourceKey) {
       return undefined;
     }

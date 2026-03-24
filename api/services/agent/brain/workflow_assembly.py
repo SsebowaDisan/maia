@@ -1295,6 +1295,13 @@ def _normalize_step_tool_ids(*, step: dict[str, Any], request_description: str) 
             for tool_id in normalized
             if tool_id not in blocked_delivery_tools
         ]
+    if role_implies_writing and not role_implies_delivery:
+        normalized = [
+            tool_id
+            for tool_id in normalized
+            if tool_id not in {"gmail.send", "email.send", "mailer.report_send"}
+        ]
+        _add("report.generate")
     if explicit_send_delivery and not research_priority:
         normalized = [
             tool_id

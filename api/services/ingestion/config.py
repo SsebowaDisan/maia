@@ -15,7 +15,7 @@ TERMINAL_JOB_STATUSES = {
     JOB_STATUS_CANCELED,
 }
 
-INGEST_WORKERS = max(1, int(config("MAIA_INGEST_WORKERS", default=2, cast=int)))
+INGEST_WORKERS = max(1, int(config("MAIA_INGEST_WORKERS", default=4, cast=int)))
 INGEST_FILE_BATCH_SIZE = max(
     1, int(config("MAIA_INGEST_FILE_BATCH_SIZE", default=25, cast=int))
 )
@@ -31,7 +31,7 @@ UPLOAD_USE_UNIFIED_PERSIST = bool(
     config("MAIA_UPLOAD_USE_UNIFIED_PERSIST", default=True, cast=bool)
 )
 UPLOAD_SAVE_CONCURRENCY = max(
-    1, int(config("MAIA_UPLOAD_SAVE_CONCURRENCY", default=6, cast=int))
+    1, int(config("MAIA_UPLOAD_SAVE_CONCURRENCY", default=10, cast=int))
 )
 UPLOAD_MAX_FILES_PER_REQUEST = max(
     1, int(config("MAIA_UPLOAD_MAX_FILES_PER_REQUEST", default=60, cast=int))
@@ -61,7 +61,7 @@ UPLOAD_STREAM_CHUNK_BYTES = max(
     int(
         config(
             "MAIA_UPLOAD_STREAM_CHUNK_BYTES",
-            default=1024 * 1024,  # 1 MiB
+            default=4 * 1024 * 1024,  # 4 MiB
             cast=int,
         )
     ),

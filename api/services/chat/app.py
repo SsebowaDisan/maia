@@ -91,10 +91,12 @@ def _should_auto_web_fallback(
     *,
     message: str,
     chat_history: list[list[str]],
+    disable_auto_web_fallback: bool = False,
 ) -> bool:
     return _should_auto_web_fallback_impl(
         message=message,
         chat_history=chat_history,
+        disable_auto_web_fallback=disable_auto_web_fallback,
         call_json_response_fn=call_json_response,
         env_bool_fn=env_bool,
     )
@@ -204,7 +206,19 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                     chat_history = deepcopy(data_source.get("messages", []))
                 except Exception:
                     chat_history = []
-                if _should_auto_web_fallback(message=request.message, chat_history=chat_history):
+                request_overrides = (
+                    dict(request.setting_overrides)
+                    if isinstance(request.setting_overrides, dict)
+                    else {}
+                )
+                disable_auto_web_fallback = _truthy_flag(
+                    request_overrides.get("__disable_auto_web_fallback")
+                )
+                if _should_auto_web_fallback(
+                    message=request.message,
+                    chat_history=chat_history,
+                    disable_auto_web_fallback=disable_auto_web_fallback,
+                ):
                     request = _request_with_command(request, WEB_SEARCH_COMMAND)
                     logger.warning("chat_path_selected path=web_fallback_llm")
             logger.warning("chat_path_fallback reason=fast_qa_returned_none")
@@ -251,6 +265,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             context=context,
             user_id=user_id,
         )
+        timeout_display_mode = timeout_mode_variant or timeout_mode
         timeout_info = normalize_info_evidence_html(timeout_info)
         timeout_answer = enforce_required_citations(
             answer=timeout_answer,
@@ -295,6 +310,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "blocks": blocks,
                 "documents": documents,
                 "halt_reason": HaltReason.llm_timeout,
+                "mode_requested": timeout_display_mode,
                 "mode_actually_used": "extractive_fallback",
             }
         )
@@ -332,6 +348,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "info_panel": timeout_info_panel,
             "mindmap": {},
             "halt_reason": HaltReason.llm_timeout,
+            "mode_requested": timeout_display_mode,
             "mode_actually_used": "extractive_fallback",
         }
     finally:

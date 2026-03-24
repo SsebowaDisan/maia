@@ -21,6 +21,7 @@ def test_should_auto_web_fallback_true_on_web_route(monkeypatch) -> None:
     assert chat_app._should_auto_web_fallback(
         message="What is the latest revenue for this public company?",
         chat_history=_empty_history(),
+        disable_auto_web_fallback=False,
     )
 
 
@@ -35,6 +36,7 @@ def test_should_auto_web_fallback_false_when_disabled(monkeypatch) -> None:
     assert not chat_app._should_auto_web_fallback(
         message="Any question",
         chat_history=_empty_history(),
+        disable_auto_web_fallback=False,
     )
 
 
@@ -48,6 +50,7 @@ def test_should_auto_web_fallback_false_for_local_route(monkeypatch) -> None:
     assert not chat_app._should_auto_web_fallback(
         message="Summarize this document",
         chat_history=_empty_history(),
+        disable_auto_web_fallback=False,
     )
 
 
@@ -60,6 +63,7 @@ def test_should_auto_web_fallback_true_for_explicit_url_without_llm(monkeypatch)
     assert chat_app._should_auto_web_fallback(
         message="https://axongroup.com what is this company doing?",
         chat_history=_empty_history(),
+        disable_auto_web_fallback=False,
     )
 
 
@@ -72,6 +76,21 @@ def test_should_auto_web_fallback_true_for_recent_url_context_without_llm(monkey
     assert chat_app._should_auto_web_fallback(
         message="what is their contact details",
         chat_history=[["https://axongroup.com what is this company doing?", "Summary answer"]],
+        disable_auto_web_fallback=False,
+    )
+
+
+def test_should_auto_web_fallback_false_when_request_disables_it(monkeypatch) -> None:
+    monkeypatch.setattr(
+        chat_app,
+        "call_json_response",
+        lambda **_: {"route": "web", "confidence": 0.99, "reason": "would route web"},
+    )
+
+    assert not chat_app._should_auto_web_fallback(
+        message="latest public company revenue",
+        chat_history=_empty_history(),
+        disable_auto_web_fallback=True,
     )
 
 
@@ -133,6 +152,45 @@ def test_run_chat_turn_keeps_command_when_router_says_local(monkeypatch) -> None
         request=ChatRequest(message="Summarize local docs"),
     )
 
+    assert captured.get("command") in (None, "")
+    assert result.get("command") in (None, "")
+
+
+def test_run_chat_turn_rag_request_does_not_switch_to_web_command(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(chat_app, "API_CHAT_FAST_PATH", True)
+    monkeypatch.setattr(chat_app, "run_fast_chat_turn", lambda **_: None)
+    def fake_should_auto_web_fallback(**kwargs: Any) -> bool:
+        captured["disable_auto_web_fallback"] = kwargs.get("disable_auto_web_fallback")
+        return False
+
+    monkeypatch.setattr(chat_app, "_should_auto_web_fallback", fake_should_auto_web_fallback)
+    monkeypatch.setattr(
+        chat_app,
+        "get_or_create_conversation",
+        lambda **_: ("c1", "Conversation", {"messages": []}),
+    )
+
+    def fake_stream_chat_turn(context, user_id, request):
+        del context, user_id
+        captured["command"] = request.command
+        if False:
+            yield {}
+        return {"ok": True, "command": request.command}
+
+    monkeypatch.setattr(chat_app, "stream_chat_turn", fake_stream_chat_turn)
+
+    result = chat_app.run_chat_turn(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u1",
+        request=ChatRequest(
+            message="Answer from my uploaded files only.",
+            setting_overrides={"__rag_mode_enabled": True, "__disable_auto_web_fallback": True},
+        ),
+    )
+
+    assert captured.get("disable_auto_web_fallback") is True
     assert captured.get("command") in (None, "")
     assert result.get("command") in (None, "")
 

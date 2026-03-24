@@ -26,12 +26,13 @@ const MAX_TEXTAREA_HEIGHT_PX = 168;
 type ComposerPanelProps = {
   accessMode: "restricted" | "full_access";
   agentControlsVisible: boolean;
-  agentMode: "ask" | "company_agent" | "deep_search";
-  composerMode: "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
+  agentMode: "ask" | "rag" | "company_agent" | "deep_search";
+  composerMode: "ask" | "rag" | "company_agent" | "deep_search" | "web_search" | "brain";
   attachments: ComposerAttachment[];
   clearAttachments: () => void;
   removeAttachment: (attachmentId: string) => void;
   enableAskMode: () => void;
+  enableRagMode: () => void;
   enableAgentMode: () => void;
   enableBrainMode: () => void;
   enableWebSearch: () => void;
@@ -74,6 +75,7 @@ function ComposerPanel({
   clearAttachments,
   removeAttachment,
   enableAskMode,
+  enableRagMode,
   enableAgentMode,
   enableBrainMode,
   enableWebSearch,
@@ -102,7 +104,10 @@ function ComposerPanel({
   submit,
   onFocusWithinChange,
 }: ComposerPanelProps) {
-  const canSubmit = Boolean(message.trim()) && !isUploading && !isSending;
+  const hasPendingAttachments = attachments.some(
+    (attachment) => attachment.status === "uploading" || attachment.status === "indexing",
+  );
+  const canSubmit = Boolean(message.trim()) && !isSending && !hasPendingAttachments;
   const sendDisabled = !canSubmit;
   const [previewAttachment, setPreviewAttachment] = useState<ComposerAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -189,6 +194,9 @@ function ComposerPanel({
   const attachmentStatusLabel = (attachment: ComposerAttachment) => {
     if (attachment.status === "uploading") {
       return attachment.message || "Uploading";
+    }
+    if (attachment.status === "indexing") {
+      return attachment.message || "Indexing";
     }
     if (attachment.status === "error") {
       const detail = String(attachment.message || "").trim();
@@ -279,6 +287,8 @@ function ComposerPanel({
                 placeholder={
                   composerMode === "brain"
                     ? "Describe what you want — the Brain will assemble a team and run it..."
+                    : composerMode === "rag"
+                      ? "Ask Maia to answer from your files and indexed URLs..."
                     : composerMode === "deep_search"
                       ? "What would you like to research in depth?"
                       : composerMode === "web_search"
@@ -322,6 +332,10 @@ function ComposerPanel({
                 onChange={(value) => {
                   if (value === "ask") {
                     enableAskMode();
+                    return;
+                  }
+                  if (value === "rag") {
+                    enableRagMode();
                     return;
                   }
                   if (value === "brain") {

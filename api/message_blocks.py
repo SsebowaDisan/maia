@@ -84,6 +84,10 @@ class CanvasDocumentRecord(BaseModel):
     id: str
     title: str
     content: str = ""
+    info_html: str = ""
+    info_panel: dict[str, Any] = Field(default_factory=dict)
+    user_prompt: str = ""
+    mode_variant: str = ""
 
 
 _MESSAGE_BLOCKS_ADAPTER = TypeAdapter(list[MessageBlock])

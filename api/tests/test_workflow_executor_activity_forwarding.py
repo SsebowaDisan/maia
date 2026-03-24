@@ -525,6 +525,93 @@ def test_dispatch_step_direct_delivery_ignores_handoff_summary_text(monkeypatch)
     assert result.startswith("To: ssebowadisan1@gmail.com")
 
 
+def test_run_direct_delivery_step_is_idempotent_within_same_run(monkeypatch) -> None:
+    sent_calls: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        module,
+        "send_report_email",
+        lambda **kwargs: sent_calls.append(
+            {
+                "to_email": str(kwargs.get("to_email") or ""),
+                "subject": str(kwargs.get("subject") or ""),
+                "body_text": str(kwargs.get("body_text") or ""),
+            }
+        )
+        or {"id": "msg_once"},
+    )
+
+    step = WorkflowStep(
+        step_id="step_3",
+        step_type="agent",
+        agent_id="delivery-specialist",
+        description="Send the cited email draft produced by the previous step to ssebowadisan1@gmail.com without changing its substance.",
+        output_key="output_step_3",
+        step_config={"tool_ids": ["mailer.report_send"], "role": "delivery specialist"},
+    )
+    draft = (
+        "Subject: Machine Learning Research Brief\n\n"
+        "Hi ssebowadisan1@gmail.com,\n\n"
+        "Machine learning is increasingly central to modern software and science [1].\n\n"
+        "Best regards,\n"
+        "Maia\n\n"
+        "## Evidence Citations\n"
+        "- [1] [Source](https://example.com)"
+    )
+
+    first = module._run_direct_delivery_step(
+        step=step,
+        step_inputs={"Email Specialist": draft, "recipient": "ssebowadisan1@gmail.com"},
+        tenant_id="tenant_1",
+        run_id="run_idempotent_delivery",
+        agent_id="delivery-specialist",
+        on_event=lambda event: None,
+    )
+    second = module._run_direct_delivery_step(
+        step=step,
+        step_inputs={"Email Specialist": draft, "recipient": "ssebowadisan1@gmail.com"},
+        tenant_id="tenant_1",
+        run_id="run_idempotent_delivery",
+        agent_id="delivery-specialist",
+        on_event=lambda event: None,
+    )
+
+    assert len(sent_calls) == 1
+    assert first == second
+
+
+def test_run_step_with_retry_skips_quality_gate_after_direct_delivery(monkeypatch) -> None:
+    step = WorkflowStep(
+        step_id="step_3",
+        step_type="agent",
+        agent_id="delivery-specialist",
+        description="Send the cited email draft produced by the previous step to ssebowadisan1@gmail.com without changing its substance.",
+        output_key="delivery_output",
+        step_config={"tool_ids": ["mailer.report_send"], "role": "delivery specialist"},
+    )
+
+    monkeypatch.setattr(module, "_validate_stage_contract", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_emit_step_kickoff_chat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_dispatch_step", lambda *args, **kwargs: "To: ssebowadisan1@gmail.com\nSubject: Research Brief\n\nBody [1]")
+
+    def _fail_quality_gate(*args, **kwargs):
+        raise AssertionError("quality gate should be skipped after direct delivery")
+
+    monkeypatch.setattr(module, "_run_quality_gate", _fail_quality_gate)
+
+    result = module._run_step_with_retry(
+        step,
+        {"writer": "Subject: Research Brief\n\nBody [1]", "recipient": "ssebowadisan1@gmail.com"},
+        "tenant_1",
+        "wf_1",
+        "run_direct_delivery_skip_quality",
+        on_event=lambda event: None,
+        step_timeout_s=420,
+    )
+
+    assert result.startswith("To: ssebowadisan1@gmail.com")
+
+
 def test_dispatch_step_skips_gmail_send_approval_for_direct_mailer_path(monkeypatch) -> None:
     step = WorkflowStep(
         step_id="step_3",

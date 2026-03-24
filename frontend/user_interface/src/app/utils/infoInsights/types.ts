@@ -5,6 +5,13 @@ type HighlightBox = {
   height: number;
 };
 
+type EvidenceUnit = {
+  text: string;
+  highlightBoxes: HighlightBox[];
+  charStart?: number;
+  charEnd?: number;
+};
+
 type EvidenceCard = {
   id: string;
   title: string;
@@ -16,6 +23,7 @@ type EvidenceCard = {
   extract: string;
   imageSrc?: string;
   highlightBoxes?: HighlightBox[];
+  evidenceUnits?: EvidenceUnit[];
   confidence?: number;
   collectedBy?: string;
   graphNodeIds?: string[];
@@ -45,4 +53,5 @@ export type {
   ClaimStatus,
   EvidenceCard,
   HighlightBox,
+  EvidenceUnit,
 };

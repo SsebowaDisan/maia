@@ -38,7 +38,7 @@ function ComposerAttachmentChips({
               const attachmentStatus = attachmentStatusLabel(attachment);
               const content = (
                 <>
-                  {attachment.status === "uploading" ? (
+                  {attachment.status === "uploading" || attachment.status === "indexing" ? (
                     <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[#6e6e73]" />
                   ) : attachment.status === "error" ? (
                     <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#d44848]" />

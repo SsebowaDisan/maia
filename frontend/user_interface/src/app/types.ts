@@ -10,7 +10,7 @@ export type ClarificationPrompt = {
   originalRequest: string;
   questions: string[];
   missingRequirements: string[];
-  agentMode: "ask" | "company_agent" | "deep_search";
+  agentMode: "ask" | "rag" | "company_agent" | "deep_search";
   accessMode: "restricted" | "full_access";
 };
 
@@ -45,7 +45,7 @@ export type ResearchTreeBranch = {
   result_count?: number;
 };
 
-export type ChatTurnMode = "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
+export type ChatTurnMode = "ask" | "rag" | "company_agent" | "deep_search" | "web_search" | "brain";
 
 export type ChatTurnModeStatus = {
   state: "committed" | "downgraded";
@@ -148,6 +148,13 @@ export type CitationHighlightBox = {
   height: number;
 };
 
+export type CitationEvidenceUnit = {
+  text: string;
+  highlightBoxes: CitationHighlightBox[];
+  charStart?: number;
+  charEnd?: number;
+};
+
 export type CitationFocus = {
   fileId?: string;
   sourceUrl?: string;
@@ -158,6 +165,7 @@ export type CitationFocus = {
   claimText?: string;
   evidenceId?: string;
   highlightBoxes?: CitationHighlightBox[];
+  evidenceUnits?: CitationEvidenceUnit[];
   unitId?: string;
   selector?: string;
   charStart?: number;

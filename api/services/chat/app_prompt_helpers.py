@@ -305,13 +305,16 @@ def _classify_deep_search_complexity(message: str) -> str:
 
 
 def _mode_variant_from_request(*, request: ChatRequest, requested_mode: str) -> str:
-    if str(requested_mode or "").strip().lower() != _DEEP_SEARCH_MODE:
-        return ""
+    normalized_mode = str(requested_mode or "").strip().lower()
     setting_overrides = (
         dict(request.setting_overrides)
         if isinstance(request.setting_overrides, dict)
         else {}
     )
+    if normalized_mode == "ask" and _truthy_flag(setting_overrides.get("__rag_mode_enabled")):
+        return "rag"
+    if normalized_mode != _DEEP_SEARCH_MODE:
+        return ""
     if _truthy_flag(setting_overrides.get("__research_web_only")):
         return "web_search"
     return ""

@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, ChevronRight, GitBranch, Globe, Search, Sparkles } from "lucide-react";
+import { BookOpenText, Brain, ChevronDown, ChevronRight, GitBranch, Globe, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   AgentCommandMenu,
@@ -7,7 +7,7 @@ import {
 } from "./chatMain/composer/AgentCommandMenu";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
-type ComposerMode = "ask" | "company_agent" | "deep_search" | "web_search" | "brain";
+type ComposerMode = "ask" | "rag" | "company_agent" | "deep_search" | "web_search" | "brain";
 
 type ComposerModeSelectorProps = {
   value: ComposerMode;
@@ -26,6 +26,7 @@ type ModeOption = {
 
 const MODE_OPTIONS: ModeOption[] = [
   { value: "ask", label: "Standard", Icon: Sparkles, description: "Send directly to LLM" },
+  { value: "rag", label: "RAG", Icon: BookOpenText, description: "Answer from files and URLs in Maia" },
   { value: "brain", label: "Maia Brain", Icon: Brain, description: "Auto-builds a team and runs it" },
   { value: "company_agent", label: "Workflow", Icon: GitBranch, description: "Pick an existing workflow" },
   { value: "deep_search", label: "Deep research", Icon: Search, description: "Multi-source deep analysis" },
@@ -34,6 +35,7 @@ const MODE_OPTIONS: ModeOption[] = [
 
 const MODE_LABEL_CLASS: Record<ComposerMode, string> = {
   ask: "text-[#6e6e73]",
+  rag: "text-[#7c3aed]",
   brain: "text-[#7c3aed]",
   company_agent: "text-[#7c3aed]",
   deep_search: "text-[#7c3aed]",

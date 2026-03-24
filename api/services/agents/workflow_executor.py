@@ -25,6 +25,7 @@ from api.schemas.workflow_definition import WorkflowDefinitionSchema, WorkflowEd
 from api.services.agent.events import infer_stage, infer_status
 from api.services.agent.models import AgentActivityEvent, new_id
 from api.services.mailer_service import send_report_email
+from api.services.agent.orchestration.text_helpers import chunk_preserve_text
 
 logger = logging.getLogger(__name__)
 
@@ -373,6 +374,23 @@ def _is_direct_delivery_candidate(step: WorkflowStep | None, step_inputs: dict[s
         return False
     if tool_ids.intersection({"marketing.web_research", "web.extract.structured", "browser.playwright.inspect"}):
         return False
+    role_text = " ".join(
+        str(
+            (getattr(step, "step_config", {}) or {}).get("role")
+            if isinstance(getattr(step, "step_config", None), dict)
+            else ""
+        ).split()
+    ).strip().lower()
+    role_implies_writer = any(
+        marker in role_text
+        for marker in ("writer", "author", "editor", "content", "email specialist", "drafter")
+    )
+    role_implies_delivery = any(
+        marker in role_text
+        for marker in ("deliver", "delivery", "dispatch", "sender", "mailer")
+    )
+    if role_implies_writer and not role_implies_delivery:
+        return False
     description = " ".join(str(getattr(step, "description", "") or "").lower().split())
     if any(
         marker in description
@@ -514,8 +532,63 @@ def _run_direct_delivery_step(
     if not recipient or not body:
         return None
 
+    stored_delivery: dict[str, Any] | None = None
+    if run_id:
+        try:
+            from api.services.agents.workflow_context import WorkflowRunContext
+
+            run_ctx = WorkflowRunContext(run_id)
+            cached = run_ctx.read(f"__delivery_sent_{step.step_id}")
+            if isinstance(cached, dict):
+                stored_delivery = cached
+        except Exception:
+            stored_delivery = None
+
     subject = _derive_delivery_subject(artifact=artifact, step=step)
+    if stored_delivery:
+        cached_body = str(stored_delivery.get("body") or body).strip() or body
+        cached_recipient = str(stored_delivery.get("recipient") or recipient).strip() or recipient
+        cached_subject = str(stored_delivery.get("subject") or subject).strip() or subject
+        cached_message_id = str(stored_delivery.get("message_id") or "").strip()
+        _emit_parent_step_event(
+            on_event=on_event,
+            run_id=run_id,
+            step=step,
+            agent_id=agent_id,
+            event_type="tool_completed",
+            title="Email delivery already completed",
+            detail=cached_message_id or cached_recipient,
+            data={
+                "tool_id": "mailer.report_send",
+                "recipient": cached_recipient,
+                "subject": cached_subject,
+                "message_id": cached_message_id,
+                "deduplicated": True,
+            },
+        )
+        return f"To: {cached_recipient}\nSubject: {cached_subject}\n\n{cached_body}"
+
     body_preview = body[:240]
+    _emit_parent_step_event(
+        on_event=on_event,
+        run_id=run_id,
+        step=step,
+        agent_id=agent_id,
+        event_type="email_open_compose",
+        title="Open compose window",
+        detail=recipient,
+        data={"tool_id": "mailer.report_send"},
+    )
+    _emit_parent_step_event(
+        on_event=on_event,
+        run_id=run_id,
+        step=step,
+        agent_id=agent_id,
+        event_type="email_draft_create",
+        title="Create delivery draft",
+        detail=recipient,
+        data={"tool_id": "mailer.report_send"},
+    )
     _emit_parent_step_event(
         on_event=on_event,
         run_id=run_id,
@@ -546,6 +619,29 @@ def _run_direct_delivery_step(
         detail=subject,
         data={"tool_id": "mailer.report_send"},
     )
+    typed_preview = ""
+    body_chunks = chunk_preserve_text(
+        body,
+        chunk_size=120,
+        limit=max(1, (len(body) // 120) + 2),
+    )
+    for chunk_index, chunk in enumerate(body_chunks, start=1):
+        typed_preview += chunk
+        _emit_parent_step_event(
+            on_event=on_event,
+            run_id=run_id,
+            step=step,
+            agent_id=agent_id,
+            event_type="email_type_body",
+            title=f"Type email body {chunk_index}/{len(body_chunks)}",
+            detail=chunk or " ",
+            data={
+                "tool_id": "mailer.report_send",
+                "chunk_index": chunk_index,
+                "chunk_total": len(body_chunks),
+                "typed_preview": typed_preview,
+            },
+        )
     _emit_parent_step_event(
         on_event=on_event,
         run_id=run_id,
@@ -554,7 +650,7 @@ def _run_direct_delivery_step(
         event_type="email_set_body",
         title="Apply email body",
         detail=f"{len(body)} characters",
-        data={"tool_id": "mailer.report_send", "typed_preview": body_preview},
+        data={"tool_id": "mailer.report_send", "typed_preview": typed_preview or body},
     )
     _emit_parent_step_event(
         on_event=on_event,
@@ -564,7 +660,17 @@ def _run_direct_delivery_step(
         event_type="email_ready_to_send",
         title="Dispatching cited email",
         detail=recipient,
-        data={"tool_id": "mailer.report_send", "typed_preview": body_preview},
+        data={"tool_id": "mailer.report_send", "typed_preview": typed_preview or body},
+    )
+    _emit_parent_step_event(
+        on_event=on_event,
+        run_id=run_id,
+        step=step,
+        agent_id=agent_id,
+        event_type="email_click_send",
+        title="Click Send",
+        detail="Submitting message to mailer service",
+        data={"tool_id": "mailer.report_send"},
     )
     delivery_response = send_report_email(
         to_email=recipient,
@@ -572,6 +678,22 @@ def _run_direct_delivery_step(
         body_text=body,
     )
     message_id = str(delivery_response.get("id") or "").strip()
+    if run_id:
+        try:
+            from api.services.agents.workflow_context import WorkflowRunContext
+
+            run_ctx = WorkflowRunContext(run_id)
+            run_ctx.write(
+                f"__delivery_sent_{step.step_id}",
+                {
+                    "recipient": recipient,
+                    "subject": subject,
+                    "body": body,
+                    "message_id": message_id,
+                },
+            )
+        except Exception:
+            pass
     _emit_parent_step_event(
         on_event=on_event,
         run_id=run_id,
@@ -2370,10 +2492,10 @@ def _run_step_with_retry(
             result = _dispatch_step(step, step_inputs, tenant_id, run_id, step_on_event)
             # Validate output contract + quality gate
             _validate_stage_contract(step, "output", result if isinstance(result, dict) else {}, workflow_id, on_event)
-            _run_quality_gate(step, result, workflow_id, on_event)
-            # Brain review for agent steps
             if direct_delivery_candidate or grounded_email_draft_candidate:
                 return result
+            _run_quality_gate(step, result, workflow_id, on_event)
+            # Brain review for agent steps
             result = _run_brain_review(
                 step,
                 result,
