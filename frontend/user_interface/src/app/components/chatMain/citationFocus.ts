@@ -62,13 +62,17 @@ function resolveCitationAnchorInteractionPolicy(
   const viewerUrl = normalizeViewerUrl(citationAnchor.getAttribute("data-viewer-url") || "");
   const directOpenUrl = sourceUrl || viewerUrl;
   const hasUsableFileId = fileId.length > 0;
+  const usesUploadedFileViewer =
+    viewerUrl.startsWith("/api/uploads/files/") ||
+    viewerUrl.includes("/api/uploads/files/");
+  const isFileBackedCitation = hasUsableFileId || usesUploadedFileViewer;
   return {
     sourceUrl,
     viewerUrl,
     directOpenUrl,
     fileId,
     hasUsableFileId,
-    openDirectOnPrimaryClick: Boolean(directOpenUrl),
+    openDirectOnPrimaryClick: Boolean(directOpenUrl) && !isFileBackedCitation,
     openDirectOnModifiedClick: Boolean(directOpenUrl),
   };
 }
@@ -262,6 +266,60 @@ function parseHighlightBoxes(...candidates: Array<string | undefined | null>): C
   return [];
 }
 
+function parseEvidenceUnits(...candidates: Array<string | undefined | null>) {
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").trim();
+    if (!raw) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        continue;
+      }
+      const units: NonNullable<CitationFocus["evidenceUnits"]> = [];
+      for (const row of parsed) {
+        if (!row || typeof row !== "object") {
+          continue;
+        }
+        const entry = row as Record<string, unknown>;
+        const text = String(entry.text || "").replace(/\s+/g, " ").trim().slice(0, 240);
+        if (text.length < 8) {
+          continue;
+        }
+        const boxesRaw = Array.isArray(entry.highlight_boxes)
+          ? entry.highlight_boxes
+          : Array.isArray(entry.highlightBoxes)
+            ? entry.highlightBoxes
+            : [];
+        const highlightBoxes = boxesRaw
+          .map((item) => normalizeHighlightBox(item))
+          .filter((item): item is CitationHighlightBox => Boolean(item));
+        if (!highlightBoxes.length) {
+          continue;
+        }
+        const charStart = Number(String(entry.char_start ?? entry.charStart ?? "").trim());
+        const charEnd = Number(String(entry.char_end ?? entry.charEnd ?? "").trim());
+        units.push({
+          text,
+          highlightBoxes,
+          charStart: Number.isFinite(charStart) ? charStart : undefined,
+          charEnd: Number.isFinite(charEnd) ? charEnd : undefined,
+        });
+        if (units.length >= 12) {
+          break;
+        }
+      }
+      if (units.length) {
+        return units;
+      }
+    } catch {
+      // Ignore malformed payloads and continue with other candidates.
+    }
+  }
+  return undefined;
+}
+
 function extractCitationClaimText(citationAnchor: HTMLAnchorElement): string {
   const claimHost =
     citationAnchor.closest("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6") ||
@@ -397,7 +455,7 @@ function resolveCitationFocusFromAnchor(params: {
 }): ResolvedCitationFocus {
   const { turn, citationAnchor } = params;
   const evidenceCards =
-    params.evidenceCards ||
+    (Array.isArray(params.evidenceCards) && params.evidenceCards.length ? params.evidenceCards : null) ||
     parseEvidence(turn.info || "", {
       infoPanel: (turn.infoPanel as Record<string, unknown>) || null,
     });
@@ -412,6 +470,7 @@ function resolveCitationFocusFromAnchor(params: {
     citationAnchor.getAttribute("data-boxes") ||
     citationAnchor.getAttribute("data-bboxes") ||
     "";
+  const evidenceUnitsAttr = citationAnchor.getAttribute("data-evidence-units") || "";
   const strengthAttrRaw = (citationAnchor.getAttribute("data-strength") || "").trim();
   const strengthTierAttrRaw = (citationAnchor.getAttribute("data-strength-tier") || "").trim();
   const strengthAttr = Number(strengthAttrRaw);
@@ -484,6 +543,11 @@ function resolveCitationFocusFromAnchor(params: {
     boxesAttr,
     JSON.stringify(matchedEvidence?.highlightBoxes || []),
   );
+  const evidenceUnits = parseEvidenceUnits(
+    evidenceUnitsAttr,
+    JSON.stringify(matchedEvidence?.evidenceUnits || []),
+    JSON.stringify(fallbackEvidence?.evidenceUnits || []),
+  );
 
   const strengthScore = strengthAttrRaw && Number.isFinite(strengthAttr)
     ? strengthAttr
@@ -512,6 +576,7 @@ function resolveCitationFocusFromAnchor(params: {
     claimText: extractCitationClaimText(citationAnchor) || undefined,
     evidenceId: evidenceId || undefined,
     highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+    evidenceUnits,
     strengthScore,
     strengthTier,
     matchQuality: matchQualityAttr || matchedEvidence?.matchQuality,

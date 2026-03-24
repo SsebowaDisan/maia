@@ -19,9 +19,10 @@
 .citation-pdf .citation-pdf-overlay-path {
   fill: var(--citation-highlight-fill);
   stroke: var(--citation-highlight-stroke);
-  stroke-width: 0.24;
+  stroke-width: 0.18;
   vector-effect: non-scaling-stroke;
-  opacity: 0.92;
+  opacity: 0.88;
+  filter: saturate(0.92);
 }
 
 .citation-pdf .citation-pdf-overlay-svg.is-active .citation-pdf-overlay-path {

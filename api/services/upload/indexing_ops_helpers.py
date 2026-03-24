@@ -28,6 +28,49 @@ class IndexingCanceledError(RuntimeError):
         self.debug = list(debug or [])
 
 
+def is_already_indexed_error_impl(exc: Exception) -> bool:
+    normalized = " ".join(str(exc or "").split()).strip().lower()
+    return "already indexed" in normalized
+
+
+def resolve_existing_file_id_for_upload_impl(
+    *,
+    index: Any,
+    user_id: str,
+    file_path: Path,
+    uploaded_file_meta: dict[str, dict[str, Any]] | None,
+) -> str | None:
+    Source = index._resources["Source"]
+    is_private = bool(index.config.get("private", False))
+
+    checksum = ""
+    try:
+        resolved_key = str(file_path.resolve())
+    except Exception:
+        resolved_key = str(file_path)
+    if isinstance(uploaded_file_meta, dict):
+        meta = uploaded_file_meta.get(resolved_key) or {}
+        checksum = str(meta.get("checksum") or "").strip().lower()
+
+    with Session(engine) as session:
+        if checksum:
+            statement = select(Source.id).where(Source.path == checksum)
+            if is_private:
+                statement = statement.where(Source.user == user_id)
+            row = session.execute(statement).first()
+            if row and row[0]:
+                return str(row[0]).strip() or None
+
+        statement = select(Source.id).where(Source.name == file_path.name)
+        if is_private:
+            statement = statement.where(Source.user == user_id)
+        row = session.execute(statement).first()
+        if row and row[0]:
+            return str(row[0]).strip() or None
+
+    return None
+
+
 def collect_index_stream_impl(
     output_stream,
     *,
@@ -139,6 +182,9 @@ def index_files_impl(
     fallback_reader_mode_for_pdf_fn: Callable[..., str],
     select_reader_mode_for_file_fn: Callable[..., str],
     apply_upload_scope_to_sources_fn: Callable[..., None],
+    schedule_pdf_precompute_fn: Callable[[Path], None],
+    resolve_existing_file_id_for_upload_fn: Callable[..., str | None],
+    is_already_indexed_error_fn: Callable[[Exception], bool],
     indexing_canceled_error_cls: type[Exception],
     upload_paddleocr_enabled: bool,
     upload_paddleocr_vl_api_enabled: bool,
@@ -164,6 +210,107 @@ def index_files_impl(
     all_errors: list[str] = []
     all_items: list[dict[str, Any]] = []
     all_debug: list[str] = []
+
+    def _run_parser_or_reuse(
+        *,
+        file_path: Path,
+        reader_mode: str,
+        route: str,
+        classification: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            return run_index_pipeline_for_file_fn(
+                index=index,
+                user_id=user_id,
+                source_path=file_path,
+                target_path=file_path,
+                reindex=reindex,
+                base_settings=base_settings,
+                prefix=prefix,
+                reader_mode=reader_mode,
+                uploaded_file_meta=uploaded_file_meta,
+                should_cancel=should_cancel,
+                route=route,
+            )
+        except indexing_canceled_error_cls:
+            raise
+        except Exception as exc:
+            if not reindex and is_already_indexed_error_fn(exc):
+                reused_file_id = resolve_existing_file_id_for_upload_fn(
+                    index=index,
+                    user_id=user_id,
+                    file_path=file_path,
+                    uploaded_file_meta=uploaded_file_meta,
+                )
+                if reused_file_id:
+                    all_debug.append(
+                        f"{file_path.name}: already indexed; reusing existing file {reused_file_id}."
+                    )
+                    return {
+                        "file_ids": [reused_file_id],
+                        "errors": [],
+                        "items": [
+                            {
+                                "file_name": file_path.name,
+                                "status": "success",
+                                "message": "Already indexed; reused existing file.",
+                                "file_id": reused_file_id,
+                            }
+                        ],
+                        "debug": [],
+                    }
+            raise
+
+    def _normalize_duplicate_failure_response(
+        *,
+        file_path: Path,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        if reindex:
+            return response
+        items = list(response.get("items") or [])
+        errors = [str(err) for err in list(response.get("errors") or [])]
+        if not items and not errors:
+            return response
+        duplicate_messages = []
+        for item in items:
+            if str(item.get("status") or "").strip().lower() != "failed":
+                continue
+            message = str(item.get("message") or "").strip()
+            if message and is_already_indexed_error_fn(ValueError(message)):
+                duplicate_messages.append(message)
+        for error in errors:
+            if error and is_already_indexed_error_fn(ValueError(error)):
+                duplicate_messages.append(error)
+        if not duplicate_messages:
+            return response
+
+        reused_file_id = resolve_existing_file_id_for_upload_fn(
+            index=index,
+            user_id=user_id,
+            file_path=file_path,
+            uploaded_file_meta=uploaded_file_meta,
+        )
+        if not reused_file_id:
+            return response
+
+        all_debug.append(
+            f"{file_path.name}: already indexed response detected; reusing existing file {reused_file_id}."
+        )
+        return {
+            "file_ids": [reused_file_id],
+            "errors": [],
+            "items": [
+                {
+                    "file_name": file_path.name,
+                    "status": "success",
+                    "message": "Already indexed; reused existing file.",
+                    "file_id": reused_file_id,
+                }
+            ],
+            "debug": list(response.get("debug") or []),
+        }
+
     for file_path in file_paths:
         ext = str(file_path.suffix or "").lower()
         is_pdf = ext == ".pdf"
@@ -221,50 +368,57 @@ def index_files_impl(
                         file_path=file_path,
                     )
                     route_name = "normal"
-                response = run_index_pipeline_for_file_fn(
-                    index=index,
-                    user_id=user_id,
-                    source_path=file_path,
-                    target_path=file_path,
-                    reindex=reindex,
-                    base_settings=base_settings,
-                    prefix=prefix,
+                response = _run_parser_or_reuse(
+                    file_path=file_path,
                     reader_mode=selected_mode,
-                    uploaded_file_meta=uploaded_file_meta,
-                    should_cancel=should_cancel,
                     route=route_name,
+                    classification=classification,
                 )
         except indexing_canceled_error_cls:
             raise
         except Exception as exc:
             if not route_to_paddle:
                 raise
-            fallback_mode = fallback_reader_mode_for_pdf_fn(
-                file_path,
-                configured_reader_mode,
-                classification=classification,
-            )
-            all_debug.append(
-                f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}."
-            )
-            response = run_index_pipeline_for_file_fn(
-                index=index,
-                user_id=user_id,
-                source_path=file_path,
-                target_path=file_path,
-                reindex=reindex,
-                base_settings=base_settings,
-                prefix=prefix,
-                reader_mode=fallback_mode,
-                uploaded_file_meta=uploaded_file_meta,
-                should_cancel=should_cancel,
-                route="heavy-pdf-fallback",
-            )
+            else:
+                fallback_mode = fallback_reader_mode_for_pdf_fn(
+                    file_path,
+                    configured_reader_mode,
+                    classification=classification,
+                )
+                all_debug.append(
+                    f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}."
+                )
+                response = _run_parser_or_reuse(
+                    file_path=file_path,
+                    reader_mode=fallback_mode,
+                    route="heavy-pdf-fallback",
+                    classification=classification,
+                )
+
+        response = _normalize_duplicate_failure_response(
+            file_path=file_path,
+            response=response,
+        )
 
         file_ids = list(response.get("file_ids") or [])
         errors = list(response.get("errors") or [])
         items = list(response.get("items") or [])
         debug = [str(msg) for msg in list(response.get("debug") or [])]
+        if is_pdf and file_ids:
+            has_success = any(
+                str(item.get("status") or "").strip().lower() == "success"
+                for item in items
+            )
+            if has_success:
+                try:
+                    schedule_pdf_precompute_fn(file_path)
+                    all_debug.append(
+                        f"{file_path.name}: scheduled page-unit precompute."
+                    )
+                except Exception as exc:
+                    all_debug.append(
+                        f"{file_path.name}: page-unit precompute scheduling failed ({exc})."
+                    )
         all_file_ids.extend(file_ids)
         all_errors.extend(errors)
         all_items.extend(items)

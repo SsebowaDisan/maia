@@ -267,6 +267,7 @@ def classify_pdf_ingestion_route_cached_impl(
     low_text_pages = 0
     very_low_text_detected = False
     image_and_low_text_detected = False
+    sampled_page_metrics: list[dict[str, Any]] = []
 
     for page_index in sampled_indexes:
         page = pages[page_index]
@@ -286,6 +287,54 @@ def classify_pdf_ingestion_route_cached_impl(
             very_low_text_detected = True
         if has_images and compact_len < min_text_chars_per_page:
             image_and_low_text_detected = True
+        sampled_page_metrics.append(
+            {
+                "page_index": int(page_index),
+                "has_images": bool(has_images),
+                "compact_len": int(compact_len),
+            }
+        )
+
+    fitz_native_text_pages = 0
+    fitz_probe_error = ""
+    if sampled_page_metrics and low_text_pages > 0:
+        try:
+            import fitz  # type: ignore[import-not-found]
+
+            doc = fitz.open(str(path))
+            try:
+                adjusted_low_text_pages = 0
+                adjusted_very_low_text_detected = False
+                adjusted_image_and_low_text_detected = False
+                for page_metric in sampled_page_metrics:
+                    compact_len = int(page_metric.get("compact_len", 0) or 0)
+                    page_index = int(page_metric.get("page_index", 0) or 0)
+                    has_images = bool(page_metric.get("has_images"))
+                    fitz_compact_len = compact_len
+                    if compact_len < min_text_chars_per_page and 0 <= page_index < int(
+                        getattr(doc, "page_count", 0) or 0
+                    ):
+                        try:
+                            fitz_text = str(doc.load_page(page_index).get_text("text") or "")
+                        except Exception:
+                            fitz_text = ""
+                        fitz_compact_len = len("".join(fitz_text.split()))
+                    if fitz_compact_len >= min_text_chars_per_page:
+                        fitz_native_text_pages += 1
+                        continue
+                    adjusted_low_text_pages += 1
+                    if fitz_compact_len < very_low_text_chars_per_page:
+                        adjusted_very_low_text_detected = True
+                    if has_images and fitz_compact_len < min_text_chars_per_page:
+                        adjusted_image_and_low_text_detected = True
+
+                low_text_pages = adjusted_low_text_pages
+                very_low_text_detected = adjusted_very_low_text_detected
+                image_and_low_text_detected = adjusted_image_and_low_text_detected
+            finally:
+                doc.close()
+        except Exception as exc:
+            fitz_probe_error = str(exc)
 
     sampled_pages = max(1, sampled_pages)
     low_text_ratio = low_text_pages / float(sampled_pages)
@@ -346,7 +395,10 @@ def classify_pdf_ingestion_route_cached_impl(
         "image_ratio_all": float(image_ratio_all),
         "low_text_ratio_sampled": float(low_text_ratio),
         "sampled_pages": int(sampled_pages),
+        "fitz_native_text_pages_sampled": int(fitz_native_text_pages),
     }
+    if fitz_probe_error:
+        classification["fitz_probe_error"] = fitz_probe_error
     return apply_vlm_review_upgrade_fn(
         path,
         classification,
@@ -430,15 +482,26 @@ def should_route_pdf_to_paddle_impl(
     mode = str(configured_mode or "").strip() or "default"
     if mode == "paddleocr":
         return True
+    if mode != "default":
+        return False
     remote_configured = bool(
         paddleocr_vl_api_enabled
         and str(paddleocr_vl_api_url or "").strip()
         and str(paddleocr_vl_api_token or "").strip()
     )
-    # When PaddleOCR-VL API is enabled/configured, make it the default
-    # extraction path for every PDF.
-    if remote_configured and mode == "default":
-        return True
-    if mode != "default":
+    if not remote_configured:
+        return str(classification.get("route") or "normal") == "heavy"
+
+    route = str(classification.get("route") or "normal")
+    if route != "heavy" or not bool(classification.get("use_ocr")):
         return False
-    return str(classification.get("route") or "normal") == "heavy"
+
+    image_pages_all = int(classification.get("image_pages_all", 0) or 0)
+    reason = str(classification.get("reason") or "").strip().lower()
+    if image_pages_all > 0:
+        return True
+    if "image" in reason:
+        return True
+    if reason in {"pdf-probe-failed", "empty-pdf-pages"}:
+        return True
+    return False

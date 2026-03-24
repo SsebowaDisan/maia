@@ -17,6 +17,61 @@ from llama_index.core.readers.base import BaseReader
 from maia.base import Document
 
 
+def _serialize_unstructured_coordinates(value: Any) -> dict[str, Any]:
+    coordinates = value if value is not None else {}
+    points = getattr(coordinates, "points", None)
+    system = getattr(coordinates, "system", None)
+    if not points or system is None:
+        return {}
+    try:
+        page_width = float(getattr(system, "width", 0) or 0)
+        page_height = float(getattr(system, "height", 0) or 0)
+    except Exception:
+        page_width = 0.0
+        page_height = 0.0
+    if page_width <= 0 or page_height <= 0:
+        return {}
+    xs: list[float] = []
+    ys: list[float] = []
+    serialized_points: list[list[float]] = []
+    for point in list(points):
+        try:
+            px = float(point[0])
+            py = float(point[1])
+        except Exception:
+            continue
+        xs.append(px)
+        ys.append(py)
+        serialized_points.append([px, py])
+    if len(xs) < 2 or len(ys) < 2:
+        return {}
+    x0 = max(0.0, min(1.0, min(xs) / page_width))
+    y0 = max(0.0, min(1.0, min(ys) / page_height))
+    x1 = max(x0, min(1.0, max(xs) / page_width))
+    y1 = max(y0, min(1.0, max(ys) / page_height))
+    width = max(0.0, x1 - x0)
+    height = max(0.0, y1 - y0)
+    if width < 0.002 or height < 0.002:
+        return {}
+    return {
+        "page_width": page_width,
+        "page_height": page_height,
+        "highlight_boxes": [
+            {
+                "x": round(x0, 6),
+                "y": round(y0, 6),
+                "width": round(width, 6),
+                "height": round(height, 6),
+            }
+        ],
+        "coordinates": {
+            "points": serialized_points,
+            "page_width": page_width,
+            "page_height": page_height,
+        },
+    }
+
+
 class UnstructuredReader(BaseReader):
     """General unstructured text reader for a variety of files."""
 
@@ -125,9 +180,8 @@ class UnstructuredReader(BaseReader):
                     for field, val in vars(node.metadata).items():
                         if field == "_known_field_names":
                             continue
-                        # removing coordinates because it does not serialize
-                        # and dont want to bother with it
                         if field == "coordinates":
+                            metadata.update(_serialize_unstructured_coordinates(val))
                             continue
                         # removing bc it might cause interference
                         if field == "parent_id":

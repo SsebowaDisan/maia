@@ -1,4 +1,13 @@
-import { ACTIVE_USER_ID, API_BASE, request, withUserIdQuery } from "./core";
+import {
+  ACTIVE_USER_ID,
+  API_BASE,
+  buildApiBaseCandidates,
+  buildNetworkError,
+  buildRequestUrl,
+  isNetworkError,
+  request,
+  withUserIdHeaders,
+} from "./core";
 import type {
   BulkDeleteFilesResponse,
   BulkDeleteUrlsResponse,
@@ -6,6 +15,7 @@ import type {
   FileGroupListResponse,
   FileGroupResponse,
   FileRecord,
+  HighlightTargetResponse,
   IngestionJob,
   MoveFilesToGroupResponse,
   UploadResponse,
@@ -13,6 +23,47 @@ import type {
 
 function getRawFileUrl(fileId: string): string {
   return `${API_BASE}/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
+}
+
+function getPdfHighlightTarget(
+  fileId: string,
+  payload: {
+    page?: string;
+    text?: string;
+    claim_text?: string;
+    index_id?: number;
+  },
+) {
+  return request<HighlightTargetResponse>(`/api/uploads/files/${encodeURIComponent(fileId)}/highlight-target`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+const highlightTargetRequestCache = new Map<string, Promise<HighlightTargetResponse>>();
+
+function getPdfHighlightTargetCached(
+  fileId: string,
+  payload: {
+    page?: string;
+    text?: string;
+    claim_text?: string;
+    index_id?: number;
+  },
+) {
+  const cacheKey = `${fileId}::${payload.page || ""}::${payload.text || ""}::${payload.claim_text || ""}::${payload.index_id ?? ""}`;
+  const existing = highlightTargetRequestCache.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+  const requestPromise = getPdfHighlightTarget(fileId, payload)
+    .catch((error) => {
+      highlightTargetRequestCache.delete(cacheKey);
+      throw error;
+    });
+  highlightTargetRequestCache.set(cacheKey, requestPromise);
+  return requestPromise;
 }
 
 type UploadProgressCallback = (loadedBytes: number, totalBytes: number) => void;
@@ -36,66 +87,97 @@ function requestMultipartWithProgress<T>(
     });
   }
 
-  return new Promise<T>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    let settled = false;
-    const relativePath = withUserIdQuery(path);
-    const url = `${API_BASE}${relativePath}`;
-    const buildAbortError = () => {
-      try {
-        return new DOMException("Upload canceled.", "AbortError");
-      } catch {
-        const error = new Error("Upload canceled.");
-        error.name = "AbortError";
-        return error;
-      }
-    };
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      if (signal && abortListener) {
-        signal.removeEventListener("abort", abortListener);
-      }
-      callback();
-    };
-    const abortListener = () => {
-      xhr.abort();
-    };
-    xhr.open("POST", url, true);
-    if (ACTIVE_USER_ID) {
-      xhr.setRequestHeader("X-User-Id", ACTIVE_USER_ID);
+  const candidates = buildApiBaseCandidates();
+
+  const buildAbortError = () => {
+    try {
+      return new DOMException("Upload canceled.", "AbortError");
+    } catch {
+      const error = new Error("Upload canceled.");
+      error.name = "AbortError";
+      return error;
     }
-    if (signal?.aborted) {
-      reject(buildAbortError());
-      return;
-    }
-    if (signal) {
-      signal.addEventListener("abort", abortListener, { once: true });
-    }
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable) {
+  };
+
+  const attemptUpload = (candidateIndex: number): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const candidateBase = candidates[candidateIndex] || API_BASE;
+      const url = buildRequestUrl(path, candidateBase);
+      const xhr = new XMLHttpRequest();
+      let settled = false;
+      const retryNextCandidate = (cause: unknown) => {
+        if (candidateIndex < candidates.length - 1) {
+          resolve(attemptUpload(candidateIndex + 1));
+          return;
+        }
+        reject(buildNetworkError(path, candidates, cause));
+      };
+      const finish = (callback: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (signal && abortListener) {
+          signal.removeEventListener("abort", abortListener);
+        }
+        callback();
+      };
+      const abortListener = () => {
+        xhr.abort();
+      };
+
+      xhr.open("POST", url, true);
+      xhr.timeout = 10 * 60 * 1000;
+
+      const headers = withUserIdHeaders();
+      headers.forEach((value, key) => {
+        xhr.setRequestHeader(key, value);
+      });
+
+      if (signal?.aborted) {
+        reject(buildAbortError());
         return;
       }
-      onUploadProgress(event.loaded, event.total);
-    };
-    xhr.onabort = () => {
-      finish(() => reject(buildAbortError()));
-    };
-    xhr.onerror = () => {
-      finish(() => reject(new Error("Network error while uploading files.")));
-    };
-    xhr.onload = () => {
-      if (xhr.status < 200 || xhr.status >= 300) {
-        finish(() => reject(new Error(xhr.responseText || `Request failed: ${xhr.status}`)));
-        return;
+      if (signal) {
+        signal.addEventListener("abort", abortListener, { once: true });
       }
-      try {
-        finish(() => resolve(JSON.parse(xhr.responseText || "{}") as T));
-      } catch (error) {
-        finish(() => reject(new Error(`Invalid JSON response: ${String(error)}`)));
-      }
-    };
-    xhr.send(formData);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          return;
+        }
+        onUploadProgress?.(event.loaded, event.total);
+      };
+      xhr.onabort = () => {
+        finish(() => reject(buildAbortError()));
+      };
+      xhr.onerror = () => {
+        finish(() => retryNextCandidate(new Error("Network error while uploading files.")));
+      };
+      xhr.ontimeout = () => {
+        finish(() => retryNextCandidate(new Error("Upload timed out while sending files.")));
+      };
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const responseError = new Error(xhr.responseText || `Request failed: ${xhr.status}`);
+          if ([502, 503, 504].includes(xhr.status)) {
+            finish(() => retryNextCandidate(responseError));
+            return;
+          }
+          finish(() => reject(responseError));
+          return;
+        }
+        try {
+          finish(() => resolve(JSON.parse(xhr.responseText || "{}") as T));
+        } catch (error) {
+          finish(() => reject(new Error(`Invalid JSON response: ${String(error)}`)));
+        }
+      };
+      xhr.send(formData);
+    });
+
+  return attemptUpload(0).catch((error) => {
+    if (isNetworkError(error)) {
+      throw buildNetworkError(path, candidates, error);
+    }
+    throw error;
   });
 }
 
@@ -456,6 +538,8 @@ export {
   deleteFiles,
   deleteUrls,
   getIngestionJob,
+  getPdfHighlightTargetCached,
+  getPdfHighlightTarget,
   getRawFileUrl,
   listFileGroups,
   listFiles,

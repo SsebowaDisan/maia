@@ -208,6 +208,60 @@ def _realign_bracket_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str
     return realigned_body
 
 
+def _diversify_repeated_ref_numbers(answer: str, refs: list[dict[str, Any]]) -> str:
+    text = str(answer or "")
+    if not text or not refs:
+        return text
+    if "class='citation'" in text or 'class="citation"' in text:
+        return text
+
+    body, tail = _split_answer_for_inline_injection(text)
+    matches = list(_INLINE_REF_TOKEN_RE.finditer(body))
+    if len(matches) < 2:
+        return text
+
+    unique_markers = {int(match.group(1)) for match in matches}
+    valid_ref_ids = {int(ref.get("id", 0) or 0) for ref in refs if int(ref.get("id", 0) or 0) > 0}
+    if len(valid_ref_ids) < 2 or len(unique_markers) > 1:
+        return text
+
+    rebuilt: list[str] = []
+    cursor = 0
+    changed = False
+    for segment_match in _SENTENCE_SEGMENT_RE.finditer(body):
+        start, end = segment_match.span()
+        rebuilt.append(body[cursor:start])
+        segment = segment_match.group(0)
+        segment_markers = list(_INLINE_REF_TOKEN_RE.finditer(segment))
+        if not segment_markers or not _is_claim_like_fragment(segment):
+            rebuilt.append(segment)
+            cursor = end
+            continue
+
+        cleaned_segment = _clean_text(_INLINE_REF_TOKEN_RE.sub("", segment))
+        best_ref_id, score = _best_ref_for_context(cleaned_segment, refs)
+        if best_ref_id is None or best_ref_id not in valid_ref_ids or score < 0.08:
+            rebuilt.append(segment)
+            cursor = end
+            continue
+
+        first_marker = int(segment_markers[0].group(1))
+        if first_marker != best_ref_id:
+            changed = True
+
+        replaced_segment = _INLINE_REF_TOKEN_RE.sub(f"[{best_ref_id}]", segment)
+        rebuilt.append(replaced_segment)
+        cursor = end
+
+    rebuilt.append(body[cursor:])
+    diversified_body = "".join(rebuilt)
+    if not changed:
+        return text
+    if tail:
+        return f"{diversified_body.rstrip()}\n\n{tail.lstrip()}"
+    return diversified_body
+
+
 def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
     text = str(answer or "")
     if not text.strip() or not refs:
@@ -265,6 +319,126 @@ def _inject_inline_citations(answer: str, refs: list[dict[str, Any]]) -> str:
     return body
 
 
+def _enforce_paragraph_citation_coverage(answer: str, refs: list[dict[str, Any]]) -> str:
+    """Ensure every substantive paragraph has at least one citation.
+
+    Walks paragraphs (separated by blank lines). For each paragraph that:
+    - is claim-like (>40 chars, not a heading/code/HTML)
+    - has no bracket citation marker
+    assigns the best-matching ref via context scoring.
+    """
+    text = str(answer or "")
+    if not text.strip() or not refs:
+        return text
+    if "class='citation'" in text or 'class="citation"' in text:
+        return text
+
+    body, tail = _split_answer_for_inline_injection(text)
+    paragraphs = re.split(r"\n\s*\n", body)
+    if len(paragraphs) <= 1:
+        return text
+
+    out_paragraphs: list[str] = []
+    changed = False
+    for para in paragraphs:
+        stripped = para.strip()
+        # Skip non-claim paragraphs
+        if not stripped or stripped.startswith("#") or stripped.startswith("```") or stripped.startswith("<"):
+            out_paragraphs.append(para)
+            continue
+        if len(stripped) < 40:
+            out_paragraphs.append(para)
+            continue
+        # Already has a citation marker — skip
+        if _INLINE_REF_TOKEN_RE.search(stripped):
+            out_paragraphs.append(para)
+            continue
+        # Find best ref for this paragraph
+        cleaned = _clean_text(_INLINE_REF_TOKEN_RE.sub("", stripped))
+        best_ref_id, score = _best_ref_for_context(cleaned, refs)
+        if best_ref_id is not None and score >= 0.10:
+            para = f"{para.rstrip()} [{best_ref_id}]"
+            changed = True
+        out_paragraphs.append(para)
+
+    if not changed:
+        return text
+    rewritten_body = "\n\n".join(out_paragraphs)
+    if tail:
+        return f"{rewritten_body.rstrip()}\n\n{tail.lstrip()}"
+    return rewritten_body
+
+
+def _guard_citation_dominance(answer: str, refs: list[dict[str, Any]]) -> str:
+    """Prevent one citation from dominating the entire answer.
+
+    If a single ref accounts for >60% of all citation markers and there
+    are 2+ other refs available, re-score over-represented paragraphs
+    to redistribute citations.
+    """
+    text = str(answer or "")
+    if not text.strip() or len(refs) < 2:
+        return text
+
+    body, tail = _split_answer_for_inline_injection(text)
+    all_markers = list(_INLINE_REF_TOKEN_RE.finditer(body))
+    if len(all_markers) < 3:
+        return text
+
+    # Count frequency of each ref ID
+    freq: dict[int, int] = {}
+    for m in all_markers:
+        ref_id = int(m.group(1))
+        freq[ref_id] = freq.get(ref_id, 0) + 1
+    total = sum(freq.values())
+    if total < 3:
+        return text
+
+    dominant_id = max(freq, key=lambda k: freq[k])
+    dominance_ratio = freq[dominant_id] / total
+    if dominance_ratio <= 0.60:
+        return text
+
+    # Re-score segments that use the dominant ref
+    valid_ref_ids = {int(ref.get("id", 0) or 0) for ref in refs if int(ref.get("id", 0) or 0) > 0}
+    rebuilt: list[str] = []
+    cursor = 0
+    changed = False
+
+    for segment_match in _SENTENCE_SEGMENT_RE.finditer(body):
+        start, end = segment_match.span()
+        rebuilt.append(body[cursor:start])
+        segment = segment_match.group(0)
+        segment_markers = list(_INLINE_REF_TOKEN_RE.finditer(segment))
+
+        if not segment_markers or int(segment_markers[0].group(1)) != dominant_id:
+            rebuilt.append(segment)
+            cursor = end
+            continue
+
+        # Re-score this segment excluding the dominant ref
+        cleaned = _clean_text(_INLINE_REF_TOKEN_RE.sub("", segment))
+        non_dominant_refs = [r for r in refs if int(r.get("id", 0) or 0) != dominant_id]
+        best_alt_id, alt_score = _best_ref_for_context(cleaned, non_dominant_refs)
+
+        if best_alt_id is not None and best_alt_id in valid_ref_ids and alt_score >= 0.12:
+            replaced = _INLINE_REF_TOKEN_RE.sub(f"[{best_alt_id}]", segment)
+            rebuilt.append(replaced)
+            changed = True
+        else:
+            rebuilt.append(segment)
+        cursor = end
+
+    rebuilt.append(body[cursor:])
+    if not changed:
+        return text
+
+    rewritten_body = "".join(rebuilt)
+    if tail:
+        return f"{rewritten_body.rstrip()}\n\n{tail.lstrip()}"
+    return rewritten_body
+
+
 def render_fast_citation_links(
     answer: str,
     refs: list[dict[str, Any]],
@@ -274,11 +448,15 @@ def render_fast_citation_links(
         return answer
 
     answer = _realign_bracket_ref_numbers(answer, refs)
+    answer = _diversify_repeated_ref_numbers(answer, refs)
+    answer = _enforce_paragraph_citation_coverage(answer, refs)
+    answer = _guard_citation_dominance(answer, refs)
     answer = _inject_claim_level_bracket_citations(answer, refs)
 
     if "class='citation'" in answer or 'class="citation"' in answer:
         marker_text = _anchors_to_bracket_markers(_augment_existing_citation_anchors(answer, refs))
         marker_text = _realign_bracket_ref_numbers(marker_text, refs)
+        marker_text = _diversify_repeated_ref_numbers(marker_text, refs)
         marker_text = _inject_claim_level_bracket_citations(marker_text, refs)
         ref_by_id: dict[int, dict[str, Any]] = {
             int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0

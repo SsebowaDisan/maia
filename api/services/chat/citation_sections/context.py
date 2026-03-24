@@ -10,6 +10,11 @@ from .shared import (
     _clean_text,
 )
 
+_PAGE_MENTION_RE = re.compile(
+    r"\b(?:page|pages|p\.|pp\.)\s*([A-Za-z0-9]+)(?:\s*[-–]\s*([A-Za-z0-9]+))?",
+    flags=re.IGNORECASE,
+)
+
 
 def _tokens(text: str) -> set[str]:
     normalized = _clean_text(text).lower()
@@ -25,6 +30,30 @@ def _tokens(text: str) -> set[str]:
         if token.isdigit() and len(token) < 4:
             continue
         values.add(token)
+    return values
+
+
+def _normalize_page_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    token = token.rstrip(".,;:)]}")
+    token = token.lstrip("([{")
+    return token
+
+
+def _extract_page_mentions(text: str) -> set[str]:
+    raw = str(text or "")
+    if not raw:
+        return set()
+    values: set[str] = set()
+    for match in _PAGE_MENTION_RE.finditer(raw):
+        first = _normalize_page_token(match.group(1))
+        second = _normalize_page_token(match.group(2))
+        if first:
+            values.add(first)
+        if second:
+            values.add(second)
     return values
 
 
@@ -78,8 +107,12 @@ def _best_ref_for_context(
     context: str,
     refs: list[dict[str, Any]],
 ) -> tuple[int | None, float]:
+    raw_context = str(context or "")
     context_tokens = _tokens(context)
     if not context_tokens:
+        context_tokens = set()
+    context_pages = _extract_page_mentions(raw_context)
+    if not context_tokens and not context_pages:
         return None, 0.0
     best_ref_id: int | None = None
     best_score = 0.0
@@ -90,15 +123,16 @@ def _best_ref_for_context(
         phrase = str(ref.get("phrase", "") or "")
         label = str(ref.get("label", "") or "")
         source_name = str(ref.get("source_name", "") or "")
+        page_label = _normalize_page_token(ref.get("page_label", ""))
         ref_tokens = _tokens(f"{phrase} {label} {source_name}")
-        if not ref_tokens:
+        if not ref_tokens and not page_label:
             continue
         overlap_tokens = context_tokens & ref_tokens
         overlap = len(overlap_tokens)
-        if overlap <= 0:
+        if overlap <= 0 and not context_pages:
             continue
         informative_overlap = sum(1 for token in overlap_tokens if _is_informative_token(token))
-        if overlap < 2 and informative_overlap <= 0:
+        if overlap < 2 and informative_overlap <= 0 and not context_pages:
             short_context_match = (
                 len(context_tokens) <= 2
                 and len(ref_tokens) <= 8
@@ -106,11 +140,18 @@ def _best_ref_for_context(
             )
             if not short_context_match:
                 continue
-        precision = overlap / max(1, len(context_tokens))
-        recall = overlap / max(1, len(ref_tokens))
+        precision = overlap / max(1, len(context_tokens)) if context_tokens else 0.0
+        recall = overlap / max(1, len(ref_tokens)) if ref_tokens else 0.0
         score = (precision * 0.6) + (recall * 0.3)
         if informative_overlap > 0:
             score += 0.1 * min(1.0, informative_overlap / max(1, overlap))
+        if context_pages:
+            if page_label and page_label in context_pages:
+                score += 0.45
+            elif page_label:
+                score -= 0.18
+            else:
+                score -= 0.08
         if score > best_score:
             best_score = score
             best_ref_id = ref_id

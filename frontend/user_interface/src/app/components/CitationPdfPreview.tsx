@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
-import type { CitationHighlightBox } from "../types";
+import type { CitationEvidenceUnit, CitationHighlightBox } from "../types";
 import {
   buildOverlayPath,
   buildSearchCandidates,
@@ -32,6 +33,7 @@ interface CitationPdfPreviewProps {
   charStart?: number;
   charEnd?: number;
   highlightBoxes?: CitationHighlightBox[];
+  evidenceUnits?: CitationEvidenceUnit[];
   viewerHeight?: number;
   initialZoom?: number;
   onZoomChange?: (zoom: number) => void;
@@ -48,6 +50,7 @@ export function CitationPdfPreview({
   charStart,
   charEnd,
   highlightBoxes,
+  evidenceUnits,
   viewerHeight = 420,
   initialZoom = 1,
   onZoomChange,
@@ -80,15 +83,26 @@ export function CitationPdfPreview({
     requestedPageSafe,
   );
   const searchCandidates = useMemo(() => {
-    const merged = [
-      ...buildSearchCandidates(highlightText),
-      ...buildSearchCandidates(highlightQuery || ""),
-    ];
-    return Array.from(new Set(merged)).sort((a, b) => b.length - a.length).slice(0, 80);
+    const primary = buildSearchCandidates(highlightText);
+    const secondary = buildSearchCandidates(highlightQuery || "");
+    const merged = [...primary, ...secondary];
+    return Array.from(new Set(merged)).slice(0, 80);
   }, [highlightQuery, highlightText]);
   const externalOverlayRects = useMemo(
     () => normalizeExternalOverlayRects(highlightBoxes),
     [highlightBoxes],
+  );
+  const evidenceUnitsKey = useMemo(
+    () =>
+      (evidenceUnits || [])
+        .map((unit) => {
+          const boxes = (unit.highlightBoxes || [])
+            .map((item) => `${item.x},${item.y},${item.width},${item.height}`)
+            .join("|");
+          return `${unit.charStart ?? ""}:${unit.charEnd ?? ""}:${String(unit.text || "").slice(0, 64)}:${boxes}`;
+        })
+        .join("~"),
+    [evidenceUnits],
   );
   const highlightRequestKey = useMemo(() => {
     const normalizedEvidence = normalizeSearchText(highlightText).slice(0, 220);
@@ -96,8 +110,8 @@ export function CitationPdfPreview({
     const overlayKey = externalOverlayRects
       .map((item) => `${item.leftPct},${item.topPct},${item.widthPct},${item.heightPct}`)
       .join("|");
-    return `${fileUrl}::${requestedPageSafe}::${normalizedEvidence}::${normalizedQuery}::${overlayKey}`;
-  }, [externalOverlayRects, fileUrl, highlightQuery, highlightText, requestedPageSafe]);
+    return `${fileUrl}::${requestedPageSafe}::${normalizedEvidence}::${normalizedQuery}::${overlayKey}::${evidenceUnitsKey}`;
+  }, [evidenceUnitsKey, externalOverlayRects, fileUrl, highlightQuery, highlightText, requestedPageSafe]);
 
   const clampPage = (value: number) => Math.min(Math.max(1, value), Math.max(1, numPages));
 
@@ -189,6 +203,7 @@ export function CitationPdfPreview({
         appliedKey,
         charStart,
         charEnd,
+        evidenceUnits,
         searchCandidates,
         externalOverlayRects,
         pageSurfaceRefs,
@@ -270,7 +285,7 @@ export function CitationPdfPreview({
       scheduleHighlightFocus(target);
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [docReady, numPages, requestedPageSafe, searchCandidates, highlightText, externalOverlayRects]);
+  }, [docReady, numPages, requestedPageSafe, searchCandidates, highlightText, externalOverlayRects, evidenceUnitsKey]);
 
   useEffect(() => {
     if (!docReady) {

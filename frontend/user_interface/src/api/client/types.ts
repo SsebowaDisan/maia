@@ -221,6 +221,27 @@ type UploadResponse = {
   debug: string[];
 };
 
+type CitationHighlightBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type CitationEvidenceUnit = {
+  text: string;
+  highlight_boxes?: CitationHighlightBox[];
+  char_start?: number | null;
+  char_end?: number | null;
+};
+
+type HighlightTargetResponse = {
+  file_id: string;
+  page: string;
+  highlight_boxes: CitationHighlightBox[];
+  evidence_units: CitationEvidenceUnit[];
+};
+
 type IngestionJob = {
   id: string;
   user_id: string;
@@ -666,4 +687,5 @@ export type {
   UploadItem,
   UrlActionResult,
   UploadResponse,
+  HighlightTargetResponse,
 };

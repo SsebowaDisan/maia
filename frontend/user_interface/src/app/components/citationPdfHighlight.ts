@@ -1,4 +1,4 @@
-import type { CitationHighlightBox } from "../types";
+import type { CitationEvidenceUnit, CitationHighlightBox } from "../types";
 
 export type SpanSegment = {
   node: HTMLSpanElement;
@@ -33,7 +33,7 @@ export function normalizeWhitespace(input: string): string {
 export function normalizeSearchText(input: string): string {
   return normalizeWhitespace(input)
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/gi, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -58,6 +58,11 @@ export function buildSearchCandidates(rawText: string): string[] {
     .map((chunk) => normalizeSearchText(chunk))
     .filter((chunk) => chunk.length >= 10)
     .slice(0, 8);
+  const clauseChunks = String(rawText || "")
+    .split(/[,:()\[\]\u2013\u2014\n\r]+/)
+    .map((chunk) => normalizeSearchText(chunk))
+    .filter((chunk) => chunk.length >= 10)
+    .slice(0, 12);
   const firstSentence = sentenceChunks[0] || "";
 
   const ngrams: string[] = [];
@@ -87,7 +92,7 @@ export function buildSearchCandidates(rawText: string): string[] {
       break;
     }
   }
-  const uniqueCandidates = Array.from(new Set([normalized, ...sentenceChunks, ...ngrams]))
+  const uniqueCandidates = Array.from(new Set([...sentenceChunks, ...clauseChunks, normalized, ...ngrams]))
     .filter((candidate) => candidate.length >= 10)
     .slice(0, 120);
   const firstSentenceLead =
@@ -153,6 +158,124 @@ export function normalizeExternalOverlayRects(
     }
   }
   return normalized;
+}
+
+function tokenizeCandidate(input: string): string[] {
+  return Array.from(
+    new Set(
+      normalizeSearchText(input)
+        .split(" ")
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3),
+    ),
+  );
+}
+
+function normalizeEvidenceUnitBoxes(units: CitationEvidenceUnit[] | undefined): CitationEvidenceUnit[] {
+  if (!Array.isArray(units) || !units.length) {
+    return [];
+  }
+  const output: CitationEvidenceUnit[] = [];
+  const seen = new Set<string>();
+  for (const unit of units) {
+    const text = normalizeWhitespace(unit?.text || "").slice(0, 240);
+    const boxes = Array.isArray(unit?.highlightBoxes) ? unit.highlightBoxes : [];
+    const normalizedBoxes = boxes
+      .map((box) => normalizeExternalOverlayRects([box]))
+      .flat()
+      .map((rect) => ({
+        x: Number((rect.leftPct / 100).toFixed(6)),
+        y: Number((rect.topPct / 100).toFixed(6)),
+        width: Number((rect.widthPct / 100).toFixed(6)),
+        height: Number((rect.heightPct / 100).toFixed(6)),
+      }));
+    if (text.length < 8 || !normalizedBoxes.length) {
+      continue;
+    }
+    const charStart = Number.isFinite(Number(unit?.charStart)) ? Number(unit?.charStart) : undefined;
+    const charEnd = Number.isFinite(Number(unit?.charEnd)) ? Number(unit?.charEnd) : undefined;
+    const key = `${charStart ?? 0}|${charEnd ?? 0}|${text.toLowerCase().slice(0, 120)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push({
+      text,
+      highlightBoxes: normalizedBoxes,
+      charStart,
+      charEnd,
+    });
+    if (output.length >= 12) {
+      break;
+    }
+  }
+  return output;
+}
+
+export function selectEvidenceUnitOverlayRects(params: {
+  evidenceUnits?: CitationEvidenceUnit[];
+  charStart?: number;
+  charEnd?: number;
+  candidates: string[];
+}): OverlayRect[] {
+  const units = normalizeEvidenceUnitBoxes(params.evidenceUnits);
+  if (!units.length) {
+    return [];
+  }
+  const requestedStart = Number(params.charStart);
+  const requestedEnd = Number(params.charEnd);
+  const selected: CitationEvidenceUnit[] = [];
+  const hasRange =
+    Number.isFinite(requestedStart) &&
+    Number.isFinite(requestedEnd) &&
+    requestedStart >= 0 &&
+    requestedEnd > requestedStart;
+  if (hasRange) {
+    for (const unit of units) {
+      const unitStart = Number(unit.charStart);
+      const unitEnd = Number(unit.charEnd);
+      if (!Number.isFinite(unitStart) || !Number.isFinite(unitEnd) || unitEnd <= unitStart) {
+        continue;
+      }
+      if (unitEnd <= requestedStart || unitStart >= requestedEnd) {
+        continue;
+      }
+      selected.push(unit);
+    }
+  }
+  if (!selected.length) {
+    const tokenCandidates = params.candidates
+      .map((candidate) => tokenizeCandidate(candidate))
+      .filter((tokens) => tokens.length >= 3)
+      .slice(0, 8);
+    let bestScore = 0;
+    for (const unit of units) {
+      const unitTokens = new Set(tokenizeCandidate(unit.text));
+      if (!unitTokens.size) {
+        continue;
+      }
+      for (const candidateTokens of tokenCandidates) {
+        let overlap = 0;
+        for (const token of candidateTokens) {
+          if (unitTokens.has(token)) {
+            overlap += 1;
+          }
+        }
+        const score = overlap / Math.max(candidateTokens.length, unitTokens.size);
+        if (overlap >= 2 && score >= bestScore) {
+          if (score > bestScore) {
+            selected.length = 0;
+            bestScore = score;
+          }
+          selected.push(unit);
+        }
+      }
+    }
+  }
+  const overlayRects = normalizeExternalOverlayRects(
+    selected.flatMap((unit) => unit.highlightBoxes || []).slice(0, 24),
+  );
+  return overlayRects;
 }
 
 function mergeRectsByLine(rects: PixelRect[]): PixelRect[] {
@@ -356,6 +479,69 @@ export function findHighlightRange(
     }
   }
   return null;
+}
+
+export function findApproximateHighlightRange(
+  params: {
+    segments: SpanSegment[];
+    candidates: string[];
+  },
+): SpanRange | null {
+  const { segments, candidates } = params;
+  if (!segments.length || !candidates.length) {
+    return null;
+  }
+
+  const tokenCandidates = candidates
+    .map((candidate) => tokenizeCandidate(candidate))
+    .filter((tokens) => tokens.length >= 3)
+    .slice(0, 8);
+  if (!tokenCandidates.length) {
+    return null;
+  }
+
+  let bestRange: SpanRange | null = null;
+  let bestScore = 0;
+  const maxWindowSize = Math.min(64, Math.max(8, Math.ceil(segments.length * 0.3)));
+
+  for (const candidateTokens of tokenCandidates) {
+    const candidateTokenSet = new Set(candidateTokens);
+    for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
+      const seen = new Set<string>();
+      let overlap = 0;
+      let totalWindowChars = 0;
+      for (
+        let endIndex = startIndex;
+        endIndex < segments.length && endIndex < startIndex + maxWindowSize;
+        endIndex += 1
+      ) {
+        const segmentText = segments[endIndex]?.text || "";
+        totalWindowChars += segmentText.length;
+        for (const token of segmentText.split(" ").filter(Boolean)) {
+          if (seen.has(token)) {
+            continue;
+          }
+          seen.add(token);
+          if (candidateTokenSet.has(token)) {
+            overlap += 1;
+          }
+        }
+        if (totalWindowChars < 24) {
+          continue;
+        }
+        const candidateCoverage = overlap / Math.max(1, candidateTokenSet.size);
+        const windowPrecision = overlap / Math.max(1, seen.size);
+        const score = candidateCoverage * 0.72 + windowPrecision * 0.28;
+        const longEnough = endIndex - startIndex >= 1 || totalWindowChars >= 42;
+        if (longEnough && overlap >= 2 && score > bestScore) {
+          bestScore = score;
+          bestRange = { startIndex, endIndex };
+        }
+      }
+    }
+  }
+
+  return bestScore >= 0.3 ? bestRange : null;
 }
 
 function rectToRoundedPath(rect: OverlayRect, radius = 0.5): string {

@@ -10,6 +10,7 @@ from ktem.db.models import engine
 from api.context import ApiContext
 
 from .fast_qa_retrieval_helpers import (
+    _extract_evidence_units,
     _extract_highlight_boxes,
     _extract_query_terms,
     _extract_target_hosts,
@@ -71,13 +72,22 @@ def load_recent_chunks_for_fast_qa(
         if not source_ids:
             return []
 
+        relation_limit = max(chunk_limit * 18, source_scan * 4)
+        if mode == "select" and selected_ids:
+            # For explicit file-group selection, preserve coverage across the full
+            # selected set instead of letting a few hot documents dominate the scan.
+            relation_limit = max(
+                relation_limit,
+                len(source_ids) * max(8, min(chunk_limit, 18)),
+            )
+
         rel_stmt = (
             select(IndexTable.target_id, IndexTable.source_id)
             .where(
                 IndexTable.relation_type == "document",
                 IndexTable.source_id.in_(source_ids),
             )
-            .limit(max(chunk_limit * 18, source_scan * 4))
+            .limit(relation_limit)
         )
         rel_rows = session.execute(rel_stmt).all()
 
@@ -112,6 +122,7 @@ def load_recent_chunks_for_fast_qa(
         doc_type = str(metadata.get("type", "") or "")
         page_label = str(metadata.get("page_label", "") or "")
         highlight_boxes = _extract_highlight_boxes(metadata)
+        evidence_units = _extract_evidence_units(metadata)
 
         source_id = target_to_source.get(doc_id, "")
         source_name = str(metadata.get("file_name", "") or "") or source_name_by_id.get(
@@ -184,6 +195,7 @@ def load_recent_chunks_for_fast_qa(
             {
                 "score": score,
                 "source_id": source_id,
+                "file_id": source_id,
                 "source_key": source_key,
                 "source_name": source_name,
                 "source_url": source_url,
@@ -192,6 +204,7 @@ def load_recent_chunks_for_fast_qa(
                 "page_label": page_label,
                 "image_origin": image_by_source.get(source_key, {}).get("image_origin"),
                 "highlight_boxes": highlight_boxes,
+                "evidence_units": evidence_units,
                 "unit_id": str(metadata.get("unit_id", "") or "").strip(),
                 "char_start": metadata.get("char_start"),
                 "char_end": metadata.get("char_end"),
@@ -234,16 +247,89 @@ def load_recent_chunks_for_fast_qa(
             and len(query_terms) <= 2
         )
         if use_broad_selected_context:
-            scored_text.sort(
-                key=lambda item: (
-                    item.get("source_name", ""),
-                    _page_label_sort_key(item.get("page_label")),
-                    -len(str(item.get("text", ""))),
+            by_page: dict[str, list[dict[str, Any]]] = {}
+            for item in scored_text:
+                page_key = str(item.get("page_label", "") or "")
+                by_page.setdefault(page_key, []).append(item)
+            selected_text = []
+            for page_key in sorted(by_page.keys(), key=_page_label_sort_key):
+                rows = by_page.get(page_key, [])
+                rows.sort(
+                    key=lambda item: (
+                        -int(item.get("score", 0) or 0),
+                        -len(str(item.get("text", ""))),
+                    )
                 )
-            )
-            selected_text = scored_text[: chunk_limit * 2]
+                if rows:
+                    selected_text.append(rows[0])
+                if len(selected_text) >= chunk_limit:
+                    break
+            if len(selected_text) < chunk_limit:
+                seen_keys = {
+                    (
+                        str(item.get("source_key", "")),
+                        str(item.get("page_label", "")),
+                        str(item.get("unit_id", "")),
+                        str(item.get("text", "")),
+                    )
+                    for item in selected_text
+                }
+                for item in _ranked_chunk_selection(scored_text, chunk_limit=chunk_limit * 2):
+                    key = (
+                        str(item.get("source_key", "")),
+                        str(item.get("page_label", "")),
+                        str(item.get("unit_id", "")),
+                        str(item.get("text", "")),
+                    )
+                    if key in seen_keys:
+                        continue
+                    selected_text.append(item)
+                    seen_keys.add(key)
+                    if len(selected_text) >= chunk_limit:
+                        break
         else:
-            selected_text = _ranked_chunk_selection(scored_text, chunk_limit=chunk_limit)
+            effective_chunk_limit = max(chunk_limit, min(len(selected_ids), 24))
+            by_source: dict[str, list[dict[str, Any]]] = {}
+            for item in scored_text:
+                source_key = str(item.get("source_key", "") or "")
+                if not source_key:
+                    continue
+                by_source.setdefault(source_key, []).append(item)
+            mandatory_rows: list[dict[str, Any]] = []
+            for source_key in selected_ids:
+                rows = by_source.get(str(source_key), [])
+                if not rows:
+                    continue
+                rows.sort(
+                    key=lambda item: (
+                        -int(item.get("score", 0) or 0),
+                        _page_label_sort_key(item.get("page_label")),
+                    )
+                )
+                mandatory_rows.append(rows[0])
+            mandatory_keys = {
+                (
+                    str(item.get("source_key", "")),
+                    str(item.get("page_label", "")),
+                    str(item.get("unit_id", "")),
+                    str(item.get("text", "")),
+                )
+                for item in mandatory_rows
+            }
+            ranked_rows = _ranked_chunk_selection(scored_text, chunk_limit=effective_chunk_limit * 2)
+            selected_text = list(mandatory_rows)
+            for item in ranked_rows:
+                key = (
+                    str(item.get("source_key", "")),
+                    str(item.get("page_label", "")),
+                    str(item.get("unit_id", "")),
+                    str(item.get("text", "")),
+                )
+                if key in mandatory_keys:
+                    continue
+                selected_text.append(item)
+                if len(selected_text) >= effective_chunk_limit:
+                    break
     else:
         selected_text = _ranked_chunk_selection(scored_text, chunk_limit=chunk_limit)
 
@@ -255,6 +341,7 @@ def load_recent_chunks_for_fast_qa(
             {
                 "score": -1,
                 "source_id": str(image_payload.get("source_id", "") or ""),
+                "file_id": str(image_payload.get("source_id", "") or ""),
                 "source_key": source_key,
                 "source_name": str(image_payload.get("source_name", "") or "Indexed file"),
                 "source_url": str(image_payload.get("source_url", "") or ""),

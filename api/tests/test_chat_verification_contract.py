@@ -101,6 +101,36 @@ def test_build_verification_evidence_items_merges_snippet_and_ref_fields() -> No
     assert VERIFICATION_CONTRACT_VERSION == "2026-03-08.v1"
 
 
+def test_normalize_verification_evidence_items_expands_extract_to_sentence_grade_quote() -> None:
+    rows = normalize_verification_evidence_items(
+        [
+            {
+                "id": "evidence-2",
+                "source": {
+                    "id": "file-2",
+                    "type": "pdf",
+                    "title": "Scientific Report",
+                    "file_id": "file-2",
+                    "page": "126",
+                },
+                "extract": (
+                    "Crystal field splitting explains the visible color of hydrated divalent transition-metal ions. "
+                    "The ligand-field splitting parameter governs the corresponding absorption energy."
+                ),
+                "citation": {"label": "[2]"},
+                "review_location": {"surface": "pdf", "file_id": "file-2", "page": "126"},
+            }
+        ]
+    )
+    assert rows
+    extract = str(rows[0]["extract"])
+    quote = str(rows[0]["citation"]["quote"])
+    assert "Crystal field splitting explains the visible color" in extract
+    assert extract.endswith(".")
+    assert quote.endswith(".")
+    assert len(extract.split()) >= 10
+
+
 def test_build_web_review_content_groups_web_sources_and_sanitizes_payload() -> None:
     payload = build_web_review_content(
         [

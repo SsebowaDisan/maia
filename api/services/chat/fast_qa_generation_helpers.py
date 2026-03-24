@@ -87,7 +87,18 @@ def call_openai_fast_qa_impl(
         for turn in chat_history[-3:]:
             if not isinstance(turn, list) or len(turn) < 2:
                 continue
-            history_blocks.append(f"User: {turn[0]}\nAssistant: {turn[1]}")
+            user_turn = str(turn[0] or "").strip()
+            assistant_turn = str(turn[1] or "").strip()
+            if not user_turn:
+                continue
+            if general_knowledge_mode:
+                history_blocks.append(f"User: {user_turn}\nAssistant: {assistant_turn}")
+            else:
+                # For evidence-grounded follow-ups, prior assistant answers are not
+                # reliable evidence and can self-reinforce hallucinated details.
+                # Keep only the user's previous questions to preserve referents
+                # like "this system" without leaking model-written prose back in.
+                history_blocks.append(f"User: {user_turn}")
 
     history_text = "\n\n".join(history_blocks) if history_blocks else "(none)"
     context_text = "\n\n".join(context_blocks)
@@ -110,7 +121,8 @@ def call_openai_fast_qa_impl(
             "Cite factual claims with source refs in square brackets like [1], [2]. "
             "Every major claim should have at least one citation. "
             "Use the most specific ref excerpt that directly supports each cited claim. "
-            "Number refs sequentially starting at [1] and reuse the same ref number when citing the same evidence."
+            "Number refs sequentially starting at [1] and reuse the same ref number when citing the same evidence. "
+            "When different claims are supported by different refs, use those different ref numbers instead of repeating [1] everywhere."
         )
 
     temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
@@ -155,6 +167,8 @@ def call_openai_fast_qa_impl(
         "- When a table or bullet list is used, precede it with at least one explanatory paragraph that contextualises the data.\n"
         "- When data or numbers are available, surface them explicitly — do not bury or omit statistics.\n"
         "- When multiple sources agree or disagree, call it out explicitly with specifics.\n"
+        "- If multiple indexed PDFs or files are in the selected scope, reconcile the answer across that full selected set before concluding; do not anchor the answer to a single file unless you explicitly state the others contained no relevant evidence.\n"
+        "- When indexed excerpts contain formulas, equations, symbolic definitions, or numeric tables, use those exact formulas and values first. Cite every substituted value and state when different files disagree.\n"
         "- Do not lead with isolated quoted fragments or decorative callouts unless the user explicitly asks.\n"
         "- Prefer complete sentences and coherent paragraphs over stylized snippets.\n"
         "- Keep section titles specific to the request domain; avoid generic reusable labels.\n"
@@ -177,9 +191,23 @@ def call_openai_fast_qa_impl(
         + (
             "- If indexed evidence is unavailable, answer from general knowledge and explicitly mark uncertainty when needed.\n"
             if general_knowledge_mode
-            else "- If information is missing, say: Not visible in indexed content.\n"
+        else "- If information is missing, say: Not visible in indexed content.\n"
         )
         + f"- {build_response_language_rule_fn(requested_language=requested_language, latest_message=question)}\n"
+        "- If more than one relevant ref exists, distribute citations across the answer instead of leaning on a single ref number.\n"
+        "- Every substantive paragraph should end with at least one inline citation when evidence is available.\n"
+        "- For multi-section answers, each major section must cite at least one supporting ref when evidence exists for that section.\n"
+        "- When two or more distinct refs are available, use multiple ref numbers in the body of the answer instead of repeating a single citation number across unrelated claims.\n"
+        "- Do not stack the same citation number on consecutive paragraphs unless those paragraphs are genuinely supported by the exact same source passage.\n"
+        "- Avoid citation stacks like [1][2][3] at the end of a single sentence unless the sentence truly depends on all of those refs; distribute those refs across the nearby sentences instead.\n"
+        "- Prefer 1-2 citations per sentence. If a paragraph uses 3 or more refs, spread them across the paragraph where each claim is made.\n"
+        "- Do not put three or more inline citations on the opening sentence of the answer. If the opening conclusion draws on several sources, cite the strongest 1-2 refs there and support the rest in the next sentences.\n"
+        "- When comparing claims, attach the citation directly to the sentence that states the comparison, not only at the end of the section.\n"
+        "- For formula-based answers, cite the formula source and cite each substituted value where it appears.\n"
+        "- Do not write raw page-number prose such as 'Page 66 states...' or 'on page 8'; let the inline citations carry page provenance instead.\n"
+        "- Every substantive sentence must be directly supported by the citation attached to that sentence or by a citation immediately at the end of that sentence; do not let one citation carry multiple later sentences that introduce new facts.\n"
+        "- Do not invent exact numbers, temperatures, dimensions, material grades, performance percentages, standards, or engineering recommendations unless they are explicitly present in the retrieved evidence.\n"
+        "- If an exact value or specification is not visible in the evidence, say that it is not explicitly stated in the indexed content instead of filling it in from general knowledge.\n"
         "- Use clean markdown and avoid malformed formatting."
     )
 
@@ -251,6 +279,9 @@ def call_openai_fast_qa_impl(
                             "MATH & CALCULATIONS: for any quantitative question (physics, chemistry, finance, statistics, etc.), always show the step-by-step calculation. Use LaTeX: $...$ for inline values and $$...$$ for display equations. Lead with the numerical answer, then prove it by showing the formula, substituting values, and simplifying. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker: go beyond surface summaries, surface key numbers, explain mechanisms, and address implications. "
                             "Never truncate a response mid-thought; complete every section fully before ending. "
+                            "Do not write raw page-number prose such as 'Page 66 states...' or 'on page 8'; let the inline citations carry page provenance instead. "
+                            "Every substantive sentence must be directly supported by the citation attached to that sentence or by a citation immediately at the end of that sentence; do not let one citation carry multiple later sentences that introduce new facts. "
+                            "Do not invent exact numbers, dimensions, material grades, standards, or engineering recommendations unless they are explicitly visible in the evidence. "
                         )
                         if general_knowledge_mode
                         else (
@@ -259,10 +290,16 @@ def call_openai_fast_qa_impl(
                             "LEAD WITH THE ANSWER: the very first sentence must state the direct answer, core finding, or conclusion — never open with 'Based on...', 'It is important to note...', 'I will...', 'Certainly!', 'Great question!', 'As an AI...', or any meta-commentary about what you are about to say. "
                             "Adapt structure and depth to the question — analytical and research questions deserve rich, multi-section responses with specific data, comparisons, mechanisms, and implications drawn from the evidence. "
                             "Go beyond surface summaries: surface exact numbers, highlight agreements and contradictions across sources, and develop each section with substantive detail that would satisfy a domain expert. "
+                            "When multiple selected files are in scope, compare across the full selected set before concluding. "
+                            "If formulas or equations appear in the indexed evidence, use those exact formulas and cited values in the reasoning. "
                             "MATH & CALCULATIONS: for any quantitative question (physics, chemistry, finance, statistics, etc.), always show the step-by-step calculation. Use LaTeX: $...$ for inline values and $$...$$ for display equations. Lead with the numerical answer, then prove it by showing the formula, substituting values, and simplifying. "
                             "Write with the depth and precision of a senior analyst briefing a decision-maker. "
                             "Never truncate a response mid-thought; complete every section fully before ending. "
-                            "CITATION RULE: cite every factual claim inline using the source ref number in square brackets, e.g. [1] or [2]. Every major claim must have at least one citation marker. Reuse the same ref number when citing the same source. Do not leave any substantive claim uncited. "
+                            "Do not write raw page-number prose such as 'Page 66 states...' or 'on page 8'; let the inline citations carry page provenance instead. "
+                            "CITATION RULE: cite every factual claim inline using the source ref number in square brackets, e.g. [1] or [2]. Every major claim must have at least one citation marker. Reuse the same ref number only when citing the same source; if different claims are grounded in different refs, distribute citations across those refs instead of repeating [1] for unrelated claims. Every substantive paragraph should carry at least one inline citation when evidence exists. For equations and calculations, cite the governing equation and each substituted value. Do not leave any substantive claim uncited. "
+                            "Every substantive sentence must be directly supported by the citation attached to that sentence or by a citation immediately at the end of that sentence; do not let one citation carry multiple later sentences that introduce new facts. "
+                            "Do not invent exact numbers, dimensions, material grades, standards, or engineering recommendations unless they are explicitly visible in the evidence. "
+                            "Treat prior assistant messages as non-authoritative context only; never reuse prior assistant prose as evidence or as a source of technical facts. "
                         )
                         + f"{build_response_language_rule_fn(requested_language=requested_language, latest_message=question)} "
                         + (

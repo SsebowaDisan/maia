@@ -20,6 +20,7 @@ CITATION_MODE_FOOTNOTE = "footnote"
 ALLOWED_CITATION_MODES = {"highlight", CITATION_MODE_INLINE, CITATION_MODE_FOOTNOTE}
 CITATION_PHRASE_MAX_CHARS = 420
 CITATION_BOXES_MAX_CHARS = 2000
+EVIDENCE_UNITS_MAX_CHARS = 9000
 MAX_HIGHLIGHT_BOXES = 24
 _CITATION_SECTION_RE = re.compile(
     r"(^|\n)\s*##\s+(Evidence\s+Citations|Sources)\b",
@@ -48,6 +49,7 @@ _DETAILS_MATCH_QUALITY_RE = re.compile(r"data-match-quality=['\"]([^'\"]+)['\"]"
 _DETAILS_CHAR_START_RE = re.compile(r"data-char-start=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _DETAILS_CHAR_END_RE = re.compile(r"data-char-end=['\"](\d{1,12})['\"]", flags=re.IGNORECASE)
 _DETAILS_SOURCE_URL_RE = re.compile(r"data-source-url=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
+_DETAILS_EVIDENCE_UNITS_RE = re.compile(r"data-evidence-units=['\"]([^'\"]+)['\"]", flags=re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._/-]{1,}")
 _ARTIFACT_URL_PATH_SEGMENTS = {
     "extract",
@@ -325,6 +327,64 @@ def _load_highlight_boxes_attr(raw: str) -> list[dict[str, float]]:
     return _normalize_highlight_boxes(parsed)
 
 
+def _normalize_evidence_units(raw: Any, *, limit: int = 12) -> list[dict[str, Any]]:
+    rows = raw if isinstance(raw, list) else []
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = _clean_text(row.get("text"))
+        if len(text) < 8:
+            continue
+        boxes = _normalize_highlight_boxes(row.get("highlight_boxes"))
+        if not boxes:
+            continue
+        char_start = _to_int(row.get("char_start"))
+        char_end = _to_int(row.get("char_end"))
+        if char_start is not None and char_start <= 0:
+            char_start = None
+        if char_end is not None and (char_start is None or char_end <= char_start):
+            char_end = None
+        key = f"{char_start or 0}|{char_end or 0}|{text[:120].lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        item: dict[str, Any] = {
+            "text": text[:240],
+            "highlight_boxes": boxes,
+        }
+        if char_start is not None:
+            item["char_start"] = char_start
+        if char_end is not None:
+            item["char_end"] = char_end
+        output.append(item)
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _serialize_evidence_units(raw: Any) -> str:
+    units = _normalize_evidence_units(raw)
+    if not units:
+        return ""
+    payload = json.dumps(units, ensure_ascii=True, separators=(",", ":"))
+    if len(payload) > EVIDENCE_UNITS_MAX_CHARS:
+        return ""
+    return payload
+
+
+def _load_evidence_units_attr(raw: str) -> list[dict[str, Any]]:
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    try:
+        parsed = json.loads(html.unescape(value))
+    except Exception:
+        return []
+    return _normalize_evidence_units(parsed)
+
+
 def _clean_text(fragment: str) -> str:
     if not fragment:
         return ""
@@ -333,14 +393,13 @@ def _clean_text(fragment: str) -> str:
     return _SPACE_RE.sub(" ", plain).strip()
 
 
-def _snippet_signature_text(raw: Any, *, limit: int = 420) -> str:
-    text = _clean_text(str(raw or ""))
-    if not text:
+def _clip_text_to_sentence_boundary(text: str, *, limit: int) -> str:
+    normalized = _clean_text(text)
+    if not normalized:
         return ""
-    if len(text) <= limit:
-        return text
-    clipped = text[:limit]
-    # Prefer sentence boundary so n-gram search finds complete sentences
+    if len(normalized) <= limit:
+        return normalized
+    clipped = normalized[:limit]
     last_sentence = max(
         clipped.rfind(". "),
         clipped.rfind("! "),
@@ -352,6 +411,41 @@ def _snippet_signature_text(raw: Any, *, limit: int = 420) -> str:
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped.strip()
+
+
+def _sentence_grade_extract(
+    raw: Any,
+    *,
+    limit: int = CITATION_PHRASE_MAX_CHARS,
+    min_chars: int = 72,
+    max_sentences: int = 2,
+) -> str:
+    text = _clean_text(str(raw or ""))
+    if not text:
+        return ""
+    sentences = [segment.strip() for segment in _SENTENCE_SEGMENT_RE.findall(text) if segment.strip()]
+    if sentences:
+        selected: list[str] = []
+        total_chars = 0
+        for sentence in sentences:
+            selected.append(sentence)
+            total_chars += len(sentence)
+            if total_chars >= min_chars or len(selected) >= max(1, int(max_sentences)):
+                break
+        candidate = " ".join(selected).strip()
+        if candidate and (len(candidate) >= min_chars or len(selected) >= 2):
+            return _clip_text_to_sentence_boundary(candidate, limit=limit)
+    token_count = len(_TOKEN_RE.findall(text))
+    if token_count >= 4 and len(text) >= 20:
+        return _clip_text_to_sentence_boundary(text, limit=limit)
+    return ""
+
+
+def _snippet_signature_text(raw: Any, *, limit: int = 420) -> str:
+    sentence_extract = _sentence_grade_extract(raw, limit=limit)
+    if sentence_extract:
+        return sentence_extract
+    return _clip_text_to_sentence_boundary(str(raw or ""), limit=limit)
 
 
 def _score_value(raw: Any) -> float:
@@ -369,8 +463,37 @@ def _normalized_retrieval_signal(snippet: dict[str, Any]) -> float:
 def _span_bonus(snippet: dict[str, Any]) -> float:
     exact_bonus = 0.60 if bool(snippet.get("is_exact_match", False)) else 0.0
     span_text = str(snippet.get("text", "") or "")
-    length_bonus = min(0.40, len(span_text) / 900.0)
-    return min(1.0, exact_bonus + length_bonus)
+    sentence_grade = _sentence_grade_extract(span_text, limit=520, min_chars=72, max_sentences=2)
+    raw_token_count = len(_TOKEN_RE.findall(_clean_text(span_text)))
+    sentence_token_count = len(_TOKEN_RE.findall(sentence_grade))
+    if sentence_grade:
+        shape_bonus = min(0.40, len(sentence_grade) / 520.0)
+        if sentence_token_count >= 10:
+            shape_bonus = min(0.40, shape_bonus + 0.10)
+    elif raw_token_count >= 8:
+        shape_bonus = min(0.24, len(_clean_text(span_text)) / 1000.0)
+    else:
+        shape_bonus = 0.04
+    return min(1.0, exact_bonus + shape_bonus)
+
+
+def _evidence_text_signal(snippet: dict[str, Any]) -> float:
+    span_text = _clean_text(str(snippet.get("text", "") or ""))
+    if not span_text:
+        return 0.0
+    token_count = len(_TOKEN_RE.findall(span_text))
+    sentence_grade = _sentence_grade_extract(span_text, limit=520, min_chars=72, max_sentences=2)
+    if sentence_grade:
+        sentence_tokens = len(_TOKEN_RE.findall(sentence_grade))
+        if sentence_tokens >= 10:
+            return 1.0
+        if sentence_tokens >= 6:
+            return 0.78
+    if token_count >= 6 and len(span_text) >= 40:
+        return 0.52
+    if token_count >= 4 and len(span_text) >= 20:
+        return 0.28
+    return 0.08
 
 
 def _strength_tier(value: Any) -> int:
@@ -386,11 +509,13 @@ def _snippet_strength_score(snippet: dict[str, Any]) -> float:
     retrieval = _normalized_retrieval_signal(snippet)
     llm_score = min(1.0, max(0.0, _score_value(snippet.get("llm_trulens_score"))))
     span_quality = _span_bonus(snippet)
+    text_signal = _evidence_text_signal(snippet)
     weighted = (
         (retrieval * float(MAIA_CITATION_STRENGTH_WEIGHT_RETRIEVAL))
         + (llm_score * float(MAIA_CITATION_STRENGTH_WEIGHT_LLM))
         + (span_quality * float(MAIA_CITATION_STRENGTH_WEIGHT_SPAN))
     )
+    weighted *= (0.25 + (0.75 * text_signal))
     return round(max(0.0, min(1.0, weighted)), 6)
 
 
@@ -486,23 +611,10 @@ def _extract_phrase_from_details_body(body_html: str) -> str:
             body_html,
             flags=re.IGNORECASE,
         )
-    phrase = _clean_text(extract_match.group(1) if extract_match else "")
+    phrase = _sentence_grade_extract(extract_match.group(1) if extract_match else "")
     if not phrase:
         return ""
-    if len(phrase) <= CITATION_PHRASE_MAX_CHARS:
-        return phrase
-    clipped = phrase[:CITATION_PHRASE_MAX_CHARS]
-    last_sentence = max(
-        clipped.rfind(". "),
-        clipped.rfind("! "),
-        clipped.rfind("? "),
-        clipped.rfind(".\n"),
-    )
-    if last_sentence >= 80:
-        return clipped[: last_sentence + 1].strip()
-    if " " in clipped:
-        clipped = clipped.rsplit(" ", 1)[0]
-    return clipped.strip()
+    return _clip_text_to_sentence_boundary(phrase, limit=CITATION_PHRASE_MAX_CHARS)
 
 
 def _split_answer_for_inline_injection(answer: str) -> tuple[str, str]:

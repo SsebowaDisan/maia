@@ -311,6 +311,60 @@ function parseHighlightBoxes(raw: string | null): HighlightBox[] {
   }
 }
 
+function normalizeEvidenceUnits(rawValue: unknown): EvidenceCard["evidenceUnits"] {
+  let rows: unknown[] = [];
+  if (Array.isArray(rawValue)) {
+    rows = rawValue;
+  } else if (typeof rawValue === "string" && rawValue.trim()) {
+    try {
+      const parsed = JSON.parse(rawValue);
+      rows = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      rows = [];
+    }
+  }
+  const output: NonNullable<EvidenceCard["evidenceUnits"]> = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const entry = row as Record<string, unknown>;
+    const text = normalizeText(String(entry.text || "")).trim().slice(0, 240);
+    if (text.length < 8) {
+      continue;
+    }
+    const boxesRaw = Array.isArray(entry.highlight_boxes)
+      ? entry.highlight_boxes
+      : Array.isArray(entry.highlightBoxes)
+        ? entry.highlightBoxes
+        : [];
+    const highlightBoxes = boxesRaw
+      .map((item) => normalizeHighlightBox(item))
+      .filter((item): item is HighlightBox => Boolean(item));
+    if (!highlightBoxes.length) {
+      continue;
+    }
+    const charStart = toFiniteNumberOptional(entry.char_start ?? entry.charStart);
+    const charEnd = toFiniteNumberOptional(entry.char_end ?? entry.charEnd);
+    const key = `${charStart ?? 0}|${charEnd ?? 0}|${text.toLowerCase().slice(0, 120)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push({
+      text,
+      highlightBoxes,
+      charStart: typeof charStart === "number" ? charStart : undefined,
+      charEnd: typeof charEnd === "number" ? charEnd : undefined,
+    });
+    if (output.length >= 12) {
+      break;
+    }
+  }
+  return output.length ? output : undefined;
+}
+
 function parseHighlightBoxesFromDetails(details: Element): HighlightBox[] {
   const fromBoxes = parseHighlightBoxes(details.getAttribute("data-boxes"));
   if (fromBoxes.length) {
@@ -329,6 +383,27 @@ function parseHighlightBoxesFromDetails(details: Element): HighlightBox[] {
     return nestedBoxes;
   }
   return parseHighlightBoxes(candidate.getAttribute("data-bboxes"));
+}
+
+function parseEvidenceUnitsFromDetails(details: Element) {
+  const attrs = ["data-evidence-units", "data-evidenceUnits"];
+  for (const attr of attrs) {
+    const explicit = normalizeEvidenceUnits(details.getAttribute(attr));
+    if (explicit.length) {
+      return explicit;
+    }
+  }
+  const candidate = details.querySelector("[data-evidence-units], [data-evidenceUnits]");
+  if (!candidate) {
+    return undefined;
+  }
+  for (const attr of attrs) {
+    const nested = normalizeEvidenceUnits(candidate.getAttribute(attr));
+    if (nested.length) {
+      return nested;
+    }
+  }
+  return undefined;
 }
 
 function toFiniteNumberOptional(value: unknown): number | undefined {
@@ -449,6 +524,12 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
     const highlightBoxes = highlightBoxesRaw
       .map((entry) => normalizeHighlightBox(entry))
       .filter((entry): entry is HighlightBox => Boolean(entry));
+    const evidenceUnits = normalizeEvidenceUnits(
+      item.evidence_units ??
+        item.evidenceUnits ??
+        highlightTarget.units ??
+        highlightTarget.evidence_units,
+    );
     const graphNodeIds = normalizeStringList(item.graph_node_ids ?? item.graphNodeIds);
     const sceneRefs = normalizeStringList(item.scene_refs ?? item.sceneRefs);
     const eventRefs = normalizeStringList(item.event_refs ?? item.eventRefs);
@@ -485,6 +566,7 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
       fileId: normalizeText(String(item.file_id ?? item.fileId ?? sourceMap.file_id ?? sourceMap.fileId ?? reviewLocation.file_id ?? reviewLocation.fileId ?? "")).trim() || undefined,
       extract: extract || "No extract available for this citation.",
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+      evidenceUnits,
       confidence: typeof confidence === "number" ? confidence : undefined,
       collectedBy: normalizeText(String(item.collected_by || item.collectedBy || "")).trim() || undefined,
       graphNodeIds: graphNodeIds.length ? graphNodeIds : undefined,
@@ -581,6 +663,7 @@ function parseEvidence(
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
     const highlightBoxes = parseHighlightBoxesFromDetails(details);
+    const evidenceUnits = parseEvidenceUnitsFromDetails(details);
     const rawStrength = Number(details.getAttribute("data-strength") || "");
     const strengthScore = Number.isFinite(rawStrength) ? rawStrength : undefined;
     const rawStrengthTier = Number(details.getAttribute("data-strength-tier") || "");
@@ -611,6 +694,7 @@ function parseEvidence(
       extract,
       imageSrc,
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
+      evidenceUnits,
       confidence,
       collectedBy,
       graphNodeIds: graphNodeIds.length ? graphNodeIds : undefined,

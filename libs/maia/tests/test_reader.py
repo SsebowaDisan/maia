@@ -10,6 +10,7 @@ from maia.loaders import (
     DocxReader,
     HtmlReader,
     MhtmlReader,
+    PDFThumbnailReader,
     UnstructuredReader,
 )
 
@@ -56,6 +57,21 @@ def test_pdf_reader():
     node_parser = SimpleNodeParser.from_defaults(chunk_size=100, chunk_overlap=20)
     nodes = node_parser.get_nodes_from_documents(documents)
     assert len(nodes) > 0
+
+
+def test_pdf_thumbnail_reader_exposes_page_units() -> None:
+    reader = PDFThumbnailReader()
+    dirpath = Path(__file__).parent
+    documents = reader.load_data(dirpath / "resources" / "dummy.pdf")
+
+    text_docs = [doc for doc in documents if str((doc.metadata or {}).get("type", "") or "") != "thumbnail"]
+    assert text_docs
+    page_units = text_docs[0].metadata.get("page_units")
+    assert isinstance(page_units, list)
+    assert page_units
+    first_unit = page_units[0]
+    assert isinstance(first_unit.get("highlight_boxes"), list)
+    assert first_unit["highlight_boxes"]
 
 
 @skip_when_unstructured_pdf_not_installed

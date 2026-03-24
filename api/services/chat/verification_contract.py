@@ -314,6 +314,7 @@ def build_verification_evidence_items(
             "strength_score": snippet.get("strength_score") or ref.get("strength_score"),
             "strength_tier": snippet.get("strength_tier") or ref.get("strength_tier"),
             "highlight_boxes": snippet.get("highlight_boxes") or ref.get("highlight_boxes"),
+            "evidence_units": snippet.get("evidence_units") or ref.get("evidence_units"),
         }
         candidates.append(candidate)
 
@@ -338,6 +339,7 @@ def build_verification_evidence_items(
                 "strength_score": ref.get("strength_score"),
                 "strength_tier": ref.get("strength_tier"),
                 "highlight_boxes": ref.get("highlight_boxes"),
+                "evidence_units": ref.get("evidence_units"),
             }
         )
 

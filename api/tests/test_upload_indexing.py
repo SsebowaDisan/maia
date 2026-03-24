@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -233,7 +234,7 @@ def test_index_files_routes_heavy_pdf_to_paddle(monkeypatch) -> None:
     monkeypatch.setattr(
         indexing,
         "_classify_pdf_ingestion_route",
-        lambda _path: {"route": "heavy", "use_ocr": True, "reason": "heavy-image-ratio"},
+        lambda _path, **_kwargs: {"route": "heavy", "use_ocr": True, "reason": "heavy-image-ratio"},
     )
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
 
@@ -263,6 +264,55 @@ def test_index_files_routes_heavy_pdf_to_paddle(monkeypatch) -> None:
     assert len(parser_calls) == 0
 
 
+def test_index_files_keeps_math_native_pdf_off_remote_paddle(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=16, pipeline=pipeline)
+
+    paddle_calls: list[dict] = []
+    parser_calls: list[dict] = []
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {
+            "route": "heavy",
+            "use_ocr": True,
+            "reason": "heavy-low-text-ratio",
+            "image_pages_all": 0,
+        },
+    )
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_ENABLED", True)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_URL", "https://example.test/paddle")
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_TOKEN", "token")
+
+    def _fake_paddle(**kwargs):
+        paddle_calls.append(dict(kwargs))
+        return {"file_ids": ["paddle-1"], "errors": [], "items": [], "debug": []}
+
+    def _fake_parser(**kwargs):
+        parser_calls.append(dict(kwargs))
+        return {"file_ids": ["parser-1"], "errors": [], "items": [], "debug": []}
+
+    monkeypatch.setattr(indexing, "_index_pdf_with_paddleocr_route", _fake_paddle)
+    monkeypatch.setattr(indexing, "_run_index_pipeline_for_file", _fake_parser)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-math-native",
+        file_paths=[Path("/tmp/math-native.pdf")],
+        index_id=16,
+        reindex=False,
+        settings={},
+    )
+
+    assert result["file_ids"] == ["parser-1"]
+    assert len(parser_calls) == 1
+    assert len(paddle_calls) == 0
+
+
 def test_index_files_falls_back_to_current_parser_when_paddle_fails(monkeypatch) -> None:
     pipeline = _DummyPipeline()
     index = _DummyIndex(index_id=13, pipeline=pipeline)
@@ -273,9 +323,17 @@ def test_index_files_falls_back_to_current_parser_when_paddle_fails(monkeypatch)
     monkeypatch.setattr(
         indexing,
         "_classify_pdf_ingestion_route",
-        lambda _path: {"route": "heavy", "use_ocr": True, "reason": "heavy-low-text-ratio"},
+        lambda _path, **_kwargs: {
+            "route": "heavy",
+            "use_ocr": True,
+            "reason": "heavy-image-ratio",
+            "image_pages_all": 2,
+        },
     )
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_ENABLED", True)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_URL", "https://example.test/paddle")
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_TOKEN", "token")
 
     def _raise_paddle(**_kwargs):
         raise RuntimeError("paddle unavailable")
@@ -304,12 +362,287 @@ def test_index_files_falls_back_to_current_parser_when_paddle_fails(monkeypatch)
     assert any("PaddleOCR failed" in message for message in result["debug"])
 
 
+def test_classify_pdf_ingestion_route_prefers_native_text_when_fitz_recovers_math_pages(
+    monkeypatch, tmp_path: Path
+) -> None:
+    pdf_path = tmp_path / "math.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+
+    class _FakePypdfPage:
+        def extract_text(self):
+            return ""
+
+    class _FakePdfReader:
+        def __init__(self, _path: str) -> None:
+            self.pages = [_FakePypdfPage(), _FakePypdfPage()]
+
+    class _FakeFitzPage:
+        def get_text(self, mode: str = "text") -> str:
+            assert mode == "text"
+            return "E = mc^2 and integral_0^1 x^2 dx = 1/3 with theorem context"
+
+    class _FakeFitzDoc:
+        page_count = 2
+
+        def load_page(self, _index: int) -> _FakeFitzPage:
+            return _FakeFitzPage()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=_FakePdfReader))
+    monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=lambda _path: _FakeFitzDoc()))
+
+    result = indexing._classify_pdf_ingestion_route_cached(
+        str(pdf_path.resolve()),
+        0,
+        pdf_path.stat().st_size,
+    )
+
+    assert result["route"] == "normal"
+    assert result["use_ocr"] is False
+    assert result["fitz_native_text_pages_sampled"] >= 1
+
+
+def test_index_files_reuses_existing_file_when_duplicate_upload_hits_parser(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=14, pipeline=pipeline)
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(indexing, "_should_route_pdf_to_paddle", lambda **kwargs: False)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {"route": "normal", "use_ocr": False, "reason": "normal"},
+    )
+    monkeypatch.setattr(
+        indexing,
+        "_run_index_pipeline_for_file",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError(
+                "File sample.pdf already indexed. Please rerun with reindex=True to force reindexing."
+            )
+        ),
+    )
+    monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-1")
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-existing",
+        file_paths=[Path("/tmp/sample.pdf")],
+        index_id=14,
+        reindex=False,
+        settings={},
+        scope="chat_temp",
+        uploaded_file_meta={str(Path("/tmp/sample.pdf").resolve()): {"checksum": "a" * 64}},
+    )
+
+    assert result["file_ids"] == ["existing-1"]
+    assert result["items"]
+    assert result["items"][0]["status"] == "success"
+    assert result["items"][0]["file_id"] == "existing-1"
+
+
+def test_index_files_schedules_pdf_precompute_after_success(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=18, pipeline=pipeline)
+    scheduled: list[Path] = []
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(indexing, "_should_route_pdf_to_paddle", lambda **kwargs: False)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {"route": "normal", "use_ocr": False, "reason": "normal"},
+    )
+    monkeypatch.setattr(
+        indexing,
+        "_run_index_pipeline_for_file",
+        lambda **kwargs: {
+            "file_ids": ["fresh-1"],
+            "errors": [],
+            "items": [
+                {
+                    "file_name": "sample.pdf",
+                    "status": "success",
+                    "message": "Indexed",
+                    "file_id": "fresh-1",
+                }
+            ],
+            "debug": [],
+        },
+    )
+    monkeypatch.setattr(
+        indexing,
+        "precompute_page_units_background",
+        lambda file_path: scheduled.append(Path(file_path)),
+    )
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-precompute",
+        file_paths=[Path("/tmp/sample.pdf")],
+        index_id=18,
+        reindex=False,
+        settings={},
+        scope="chat_temp",
+    )
+
+    assert result["file_ids"] == ["fresh-1"]
+    assert scheduled == [Path("/tmp/sample.pdf")]
+    assert any("scheduled page-unit precompute" in message for message in result["debug"])
+
+
+def test_index_files_reuses_existing_file_when_paddle_fallback_hits_duplicate(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=15, pipeline=pipeline)
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {"route": "heavy", "use_ocr": True, "reason": "heavy-low-text-ratio"},
+    )
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
+    monkeypatch.setattr(indexing, "_index_pdf_with_paddleocr_route", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("paddle unavailable")))
+    monkeypatch.setattr(
+        indexing,
+        "_run_index_pipeline_for_file",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError(
+                "File sample.pdf already indexed. Please rerun with reindex=True to force reindexing."
+            )
+        ),
+    )
+    monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-fallback-1")
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-existing-fallback",
+        file_paths=[Path("/tmp/sample.pdf")],
+        index_id=15,
+        reindex=False,
+        settings={},
+        scope="chat_temp",
+        uploaded_file_meta={str(Path("/tmp/sample.pdf").resolve()): {"checksum": "a" * 64}},
+    )
+
+    assert result["file_ids"] == ["existing-fallback-1"]
+    assert result["items"]
+    assert result["items"][0]["status"] == "success"
+    assert result["items"][0]["file_id"] == "existing-fallback-1"
+
+
+def test_index_files_schedules_pdf_precompute_after_duplicate_reuse(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=19, pipeline=pipeline)
+    scheduled: list[Path] = []
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(indexing, "_should_route_pdf_to_paddle", lambda **kwargs: False)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {"route": "normal", "use_ocr": False, "reason": "normal"},
+    )
+    monkeypatch.setattr(
+        indexing,
+        "_run_index_pipeline_for_file",
+        lambda **kwargs: (_ for _ in ()).throw(
+            ValueError(
+                "File sample.pdf already indexed. Please rerun with reindex=True to force reindexing."
+            )
+        ),
+    )
+    monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-2")
+    monkeypatch.setattr(
+        indexing,
+        "precompute_page_units_background",
+        lambda file_path: scheduled.append(Path(file_path)),
+    )
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-existing-2",
+        file_paths=[Path("/tmp/sample.pdf")],
+        index_id=19,
+        reindex=False,
+        settings={},
+        scope="chat_temp",
+        uploaded_file_meta={str(Path("/tmp/sample.pdf").resolve()): {"checksum": "c" * 64}},
+    )
+
+    assert result["file_ids"] == ["existing-2"]
+    assert result["items"][0]["status"] == "success"
+    assert scheduled == [Path("/tmp/sample.pdf")]
+    assert any("scheduled page-unit precompute" in message for message in result["debug"])
+
+
+def test_index_files_reuses_existing_file_when_pipeline_returns_duplicate_failure_item(
+    monkeypatch,
+) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=17, pipeline=pipeline)
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(indexing, "_should_route_pdf_to_paddle", lambda **kwargs: False)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {"route": "normal", "use_ocr": False, "reason": "normal"},
+    )
+    monkeypatch.setattr(
+        indexing,
+        "_run_index_pipeline_for_file",
+        lambda **kwargs: {
+            "file_ids": [],
+            "errors": [
+                "File sample.pdf already indexed. Please rerun with reindex=True to force reindexing."
+            ],
+            "items": [
+                {
+                    "file_name": "sample.pdf",
+                    "status": "failed",
+                    "message": "File sample.pdf already indexed. Please rerun with reindex=True to force reindexing.",
+                    "file_id": None,
+                }
+            ],
+            "debug": ["Indexing [1/1]: sample.pdf"],
+        },
+    )
+    monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-item-1")
+
+    result = indexing.index_files(
+        context=object(),  # type: ignore[arg-type]
+        user_id="u-existing-item",
+        file_paths=[Path("/tmp/sample.pdf")],
+        index_id=17,
+        reindex=False,
+        settings={},
+        scope="chat_temp",
+        uploaded_file_meta={str(Path("/tmp/sample.pdf").resolve()): {"checksum": "b" * 64}},
+    )
+
+    assert result["file_ids"] == ["existing-item-1"]
+    assert result["errors"] == []
+    assert result["items"][0]["status"] == "success"
+    assert result["items"][0]["file_id"] == "existing-item-1"
+
+
 def test_run_upload_startup_checks_warns_when_dependencies_missing(monkeypatch) -> None:
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_STARTUP_CHECK", True)
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_STARTUP_STRICT", False)
     monkeypatch.setattr(indexing, "UPLOAD_INDEX_READER_MODE", "default")
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_STARTUP_WARMUP", False)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_ENABLED", False)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_URL", "")
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_TOKEN", "")
 
     imported_modules: list[str] = []
     real_import = __import__
@@ -322,7 +655,7 @@ def test_run_upload_startup_checks_warns_when_dependencies_missing(monkeypatch) 
 
     warnings: list[str] = []
     monkeypatch.setattr("builtins.__import__", _fake_import)
-    monkeypatch.setattr(indexing.logger, "warning", lambda msg: warnings.append(str(msg)))
+    monkeypatch.setattr(indexing.logger, "info", lambda msg: warnings.append(str(msg)))
 
     notices = indexing.run_upload_startup_checks()
 
@@ -341,6 +674,10 @@ def test_run_upload_startup_checks_strict_mode_raises_for_missing_dependencies(
     monkeypatch.setattr(indexing, "UPLOAD_INDEX_READER_MODE", "paddleocr")
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
     monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_STARTUP_WARMUP", False)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_ENABLED", False)
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_URL", "")
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_VL_API_TOKEN", "")
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_STARTUP_STRICT", True)
 
     real_import = __import__
 
@@ -426,7 +763,7 @@ def test_run_vlm_startup_checks_warns_when_model_missing(monkeypatch) -> None:
     monkeypatch.setattr(indexing, "UPLOAD_PDF_VLM_EXTRACT_MODEL", "qwen2.5vl:7b")
     monkeypatch.setattr(indexing.OllamaService, "list_models", lambda self: [])
     warnings: list[str] = []
-    monkeypatch.setattr(indexing.logger, "warning", lambda msg: warnings.append(str(msg)))
+    monkeypatch.setattr(indexing.logger, "info", lambda msg: warnings.append(str(msg)))
 
     notices = indexing._run_vlm_startup_checks()
 

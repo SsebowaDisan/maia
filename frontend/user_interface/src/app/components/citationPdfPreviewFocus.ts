@@ -2,16 +2,20 @@ import type { MutableRefObject } from "react";
 import {
   buildOverlayRectsForRange,
   collectSpanSegments,
+  findApproximateHighlightRange,
   findRangeByCharOffsets,
   findHighlightRange,
+  selectEvidenceUnitOverlayRects,
   type OverlayRect,
 } from "./citationPdfHighlight";
+import type { CitationEvidenceUnit } from "../types";
 
 type TryFocusHighlightParams = {
   targetPage: number;
   appliedKey: string;
   charStart?: number;
   charEnd?: number;
+  evidenceUnits?: CitationEvidenceUnit[];
   searchCandidates: string[];
   externalOverlayRects: OverlayRect[];
   pageSurfaceRefs: MutableRefObject<Record<number, HTMLDivElement | null>>;
@@ -31,6 +35,7 @@ export function tryFocusHighlight({
   appliedKey,
   charStart,
   charEnd,
+  evidenceUnits,
   searchCandidates,
   externalOverlayRects,
   pageSurfaceRefs,
@@ -47,6 +52,22 @@ export function tryFocusHighlight({
   }
   const currentRects = overlayRectsByPageRef.current[safePage] || [];
   if (appliedHighlightKeyRef.current === appliedKey && currentRects.length > 0) {
+    return true;
+  }
+  const evidenceUnitRects = selectEvidenceUnitOverlayRects({
+    evidenceUnits,
+    charStart,
+    charEnd,
+    candidates: searchCandidates,
+  });
+  if (evidenceUnitRects.length) {
+    applyOverlayRects(safePage, evidenceUnitRects);
+    scrollToOverlayRect({
+      pageSurface,
+      page: safePage,
+      overlayRect: evidenceUnitRects[0],
+    });
+    appliedHighlightKeyRef.current = appliedKey;
     return true;
   }
   if (externalOverlayRects.length) {
@@ -69,6 +90,10 @@ export function tryFocusHighlight({
     findHighlightRange({
       segments,
       combined,
+      candidates: searchCandidates,
+    }) ||
+    findApproximateHighlightRange({
+      segments,
       candidates: searchCandidates,
     });
   if (!highlightRange) {

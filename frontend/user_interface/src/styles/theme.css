@@ -58,20 +58,20 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  --citation-chip-text: #5b21b6;
-  --citation-chip-bg: #ede9fe;
-  --citation-chip-border: #c4b5fd;
-  --citation-chip-hover-bg: #ddd6fe;
-  --citation-chip-hover-border: #a78bfa;
-  --citation-chip-focus: #7c3aed;
+  --citation-chip-text: #335c85;
+  --citation-chip-bg: #eef4fa;
+  --citation-chip-border: #bfd3e7;
+  --citation-chip-hover-bg: #e2edf7;
+  --citation-chip-hover-border: #8fb4d8;
+  --citation-chip-focus: #4e7aa6;
   --citation-chip-shadow: none;
   --citation-chip-shadow-hover: none;
   --citation-chip-dot-ring: rgba(255, 255, 255, 0.9);
   --citation-tier-1: #9ca8bf;
-  --citation-tier-2: #7c3aed;
-  --citation-tier-3: #198754;
-  --citation-highlight-fill: rgba(255, 210, 61, 0.58);
-  --citation-highlight-stroke: rgba(145, 102, 4, 0.78);
+  --citation-tier-2: #4e7aa6;
+  --citation-tier-3: #3b8b68;
+  --citation-highlight-fill: rgba(255, 214, 102, 0.34);
+  --citation-highlight-stroke: rgba(184, 130, 14, 0.52);
 }
 
 .dark {
@@ -109,20 +109,20 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.269 0 0);
   --sidebar-ring: oklch(0.439 0 0);
-  --citation-chip-text: #c4b5fd;
-  --citation-chip-bg: rgba(91, 33, 182, 0.25);
-  --citation-chip-border: rgba(167, 139, 250, 0.45);
-  --citation-chip-hover-bg: rgba(109, 40, 217, 0.38);
-  --citation-chip-hover-border: rgba(196, 181, 253, 0.72);
-  --citation-chip-focus: #a78bfa;
+  --citation-chip-text: #c7dbef;
+  --citation-chip-bg: rgba(65, 101, 138, 0.24);
+  --citation-chip-border: rgba(143, 180, 216, 0.42);
+  --citation-chip-hover-bg: rgba(78, 122, 166, 0.34);
+  --citation-chip-hover-border: rgba(180, 208, 233, 0.62);
+  --citation-chip-focus: #9dc1e3;
   --citation-chip-shadow: none;
   --citation-chip-shadow-hover: none;
   --citation-chip-dot-ring: rgba(15, 21, 31, 0.85);
   --citation-tier-1: #9da9bf;
-  --citation-tier-2: #a78bfa;
-  --citation-tier-3: #7ccf93;
-  --citation-highlight-fill: rgba(249, 207, 81, 0.28);
-  --citation-highlight-stroke: rgba(255, 217, 120, 0.48);
+  --citation-tier-2: #9dc1e3;
+  --citation-tier-3: #8fd3ad;
+  --citation-highlight-fill: rgba(255, 214, 102, 0.24);
+  --citation-highlight-stroke: rgba(255, 224, 163, 0.34);
 }
 
 @theme inline {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import queue
 import logging
+import threading
 from typing import Any
 from decouple import config
 from ktem.llms.manager import llms
@@ -81,6 +83,7 @@ from .verification_contract import (
     build_verification_evidence_items,
     build_web_review_content,
 )
+from .streaming import chunk_text_for_stream, make_activity_stream_event
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_URL_PATH_SEGMENTS = {
@@ -539,3 +542,85 @@ def run_fast_chat_turn(
             "MAIA_CITATION_STRENGTH_ORDERING_ENABLED": MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
         },
     )
+
+
+def stream_fast_chat_turn(
+    context: ApiContext,
+    user_id: str,
+    request: ChatRequest,
+):
+    event_queue: queue.Queue[Any] = queue.Queue()
+    result_holder: dict[str, Any] = {}
+    error_holder: dict[str, BaseException] = {}
+    sentinel = object()
+
+    def emit_stream_event(payload: dict[str, Any]) -> None:
+        event_queue.put(payload)
+
+    def worker() -> None:
+        try:
+            result_holder["value"] = run_fast_chat_turn_impl(
+                context=context,
+                user_id=user_id,
+                request=request,
+                logger=logger,
+                default_setting=DEFAULT_SETTING,
+                get_or_create_conversation_fn=get_or_create_conversation,
+                maybe_autoname_conversation_fn=maybe_autoname_conversation,
+                resolve_response_language_fn=resolve_response_language,
+                build_selected_payload_fn=build_selected_payload,
+                resolve_contextual_url_targets_fn=_resolve_contextual_url_targets,
+                rewrite_followup_question_for_retrieval_fn=_rewrite_followup_question_for_retrieval,
+                load_recent_chunks_for_fast_qa_fn=load_recent_chunks_for_fast_qa,
+                finalize_retrieved_snippets_fn=_finalize_retrieved_snippets,
+                assess_evidence_sufficiency_with_llm_fn=_assess_evidence_sufficiency_with_llm,
+                expand_retrieval_query_for_gap_fn=_expand_retrieval_query_for_gap,
+                call_openai_fast_qa_fn=call_openai_fast_qa,
+                normalize_fast_answer_fn=normalize_fast_answer,
+                build_no_relevant_evidence_answer_fn=_build_no_relevant_evidence_answer,
+                resolve_required_citation_mode_fn=resolve_required_citation_mode,
+                render_fast_citation_links_fn=render_fast_citation_links,
+                build_fast_info_html_fn=build_fast_info_html,
+                enforce_required_citations_fn=enforce_required_citations,
+                build_source_usage_fn=build_source_usage,
+                build_claim_signal_summary_fn=build_claim_signal_summary,
+                build_citation_quality_metrics_fn=build_citation_quality_metrics,
+                build_info_panel_copy_fn=build_info_panel_copy,
+                build_knowledge_map_fn=_build_knowledge_map_with_llm_steps,
+                build_verification_evidence_items_fn=build_verification_evidence_items,
+                build_web_review_content_fn=build_web_review_content,
+                persist_conversation_fn=persist_conversation,
+                normalize_request_attachments_fn=_normalize_request_attachments,
+                emit_stream_event_fn=emit_stream_event,
+                make_activity_event_fn=make_activity_stream_event,
+                chunk_text_for_stream_fn=chunk_text_for_stream,
+                constants={
+                    "STATE": STATE,
+                    "truncate_for_log_fn": _truncate_for_log,
+                    "API_FAST_QA_SOURCE_SCAN": API_FAST_QA_SOURCE_SCAN,
+                    "API_FAST_QA_MAX_SOURCES": API_FAST_QA_MAX_SOURCES,
+                    "API_FAST_QA_MAX_SNIPPETS": API_FAST_QA_MAX_SNIPPETS,
+                    "assign_fast_source_refs_fn": assign_fast_source_refs,
+                    "MAIA_SOURCE_USAGE_HEATMAP_ENABLED": MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
+                    "MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD": MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD,
+                    "VERIFICATION_CONTRACT_VERSION": VERIFICATION_CONTRACT_VERSION,
+                    "MAIA_CITATION_STRENGTH_ORDERING_ENABLED": MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
+                },
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced to stream caller
+            error_holder["error"] = exc
+        finally:
+            event_queue.put(sentinel)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    while True:
+        item = event_queue.get()
+        if item is sentinel:
+            break
+        yield item
+
+    if "error" in error_holder:
+        raise error_holder["error"]
+    return result_holder.get("value") or {}

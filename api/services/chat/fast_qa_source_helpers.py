@@ -168,10 +168,34 @@ def _diverse_select(
         return []
     # Group by source name (stable order preserved from pre-sorted input).
     from collections import OrderedDict
+
+    def _page_diverse_bucket(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        by_page: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+        for row in rows:
+            page_key = str(row.get("page_label", "") or "").strip()
+            bucket_key = page_key or "__no_page__"
+            by_page.setdefault(bucket_key, []).append(row)
+        diversified: list[dict[str, Any]] = []
+        while True:
+            added_any = False
+            for key in list(by_page.keys()):
+                page_rows = by_page.get(key) or []
+                if not page_rows:
+                    continue
+                diversified.append(page_rows.pop(0))
+                added_any = True
+            if not added_any:
+                break
+        return diversified
+
     buckets: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     for row in ordered:
         key = str(row.get("source_name", "") or row.get("source_id", "") or "").strip()
         buckets.setdefault(key, []).append(row)
+    for key, rows in list(buckets.items()):
+        buckets[key] = _page_diverse_bucket(rows)
     result: list[dict[str, Any]] = []
     # Keep iterating through source buckets round-robin until we hit keep_limit.
     while len(result) < keep_limit:

@@ -9,6 +9,21 @@ import {
   sourceLooksImage,
 } from "./urlHelpers";
 
+function normalizeFileId(rawValue: unknown): string {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/^(?:none|null|undefined|n\/a|unknown)$/i.test(value)) {
+    return "";
+  }
+  // Keep the check permissive enough for existing ids while rejecting obvious garbage.
+  if (!/^[a-z0-9][a-z0-9._:-]{1,255}$/i.test(value)) {
+    return "";
+  }
+  return value;
+}
+
 function toCitationFromEvidence(card: EvidenceCard, index: number): CitationFocus {
   const sourceUrl = normalizeHttpUrl(card.sourceUrl);
   // Prefer "file" when a fileId is present — the backend clears fileId for web-only sources,
@@ -25,6 +40,7 @@ function toCitationFromEvidence(card: EvidenceCard, index: number): CitationFocu
       .trim(),
     evidenceId: normalizeEvidenceId(card.id) || `evidence-${index + 1}`,
     highlightBoxes: card.highlightBoxes,
+    evidenceUnits: card.evidenceUnits,
     strengthScore: card.strengthScore,
     strengthTier: card.strengthTier,
     matchQuality: card.matchQuality,
@@ -109,11 +125,10 @@ function resolveCitationOpenUrl(params: {
   const citationWebsiteUrl = choosePreferredSourceUrl([extractUrl, matchedUrl, directUrl, sourceNameUrl]) || "";
 
   // Resolve uploaded-file raw URL (if any).
+  const normalizedFileId = normalizeFileId(citation.fileId);
   const citationRawUrl =
-    citation.fileId
-      ? buildRawFileUrl(citation.fileId, {
-          indexId: typeof params.indexId === "number" ? params.indexId : undefined,
-        })
+    normalizedFileId
+      ? buildRawFileUrl(normalizedFileId)
       : null;
 
   // Detect external PDFs hidden behind a Google Docs viewer wrapper, or bare .pdf URLs.

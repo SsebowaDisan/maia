@@ -1,7 +1,9 @@
-import { ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, ExternalLink, Loader2, X } from "lucide-react";
+import { getPdfHighlightTargetCached } from "../../../api/client/uploads";
 import type { CitationFocus } from "../../types";
-import type { EvidenceCard } from "../../utils/infoInsights";
 import { CitationPdfPreview } from "../CitationPdfPreview";
+import { WidgetRenderBoundary } from "../messages/WidgetRenderBoundary";
 import { WebReviewViewer } from "./review/WebReviewViewer";
 import type { WebReviewSource } from "./review/webReviewContent";
 
@@ -50,6 +52,110 @@ function CitationPreviewPanel({
   onClear,
   renderResizeHandle,
 }: CitationPreviewPanelProps) {
+  const hasInlineGeometry =
+    Boolean(citationFocus.highlightBoxes?.length) || Boolean(citationFocus.evidenceUnits?.length);
+  const backfillPage = preferredPage || citationFocus.page;
+  const backfillText = citationFocus.extract || citationFocus.claimText || "";
+  const [resolvedGeometry, setResolvedGeometry] = useState<{
+    highlightBoxes: CitationFocus["highlightBoxes"];
+    evidenceUnits: CitationFocus["evidenceUnits"];
+  } | null>(null);
+  const [isResolvingGeometry, setIsResolvingGeometry] = useState(false);
+
+  useEffect(() => {
+    setResolvedGeometry(null);
+    setIsResolvingGeometry(false);
+  }, [citationFocus.evidenceId, citationFocus.fileId, citationFocus.page, preferredPage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!citationIsPdf || !citationRawUrl || !citationFocus.fileId || !backfillPage || !backfillText || hasInlineGeometry) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    setIsResolvingGeometry(true);
+    getPdfHighlightTargetCached(citationFocus.fileId, {
+      page: backfillPage,
+      text: citationFocus.extract || "",
+      claim_text: citationFocus.claimText || "",
+    })
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        const highlightBoxes = Array.isArray(result.highlight_boxes)
+          ? result.highlight_boxes.map((item) => ({
+              x: Number(item.x) || 0,
+              y: Number(item.y) || 0,
+              width: Number(item.width) || 0,
+              height: Number(item.height) || 0,
+            }))
+          : [];
+        const evidenceUnits = Array.isArray(result.evidence_units)
+          ? result.evidence_units.map((unit) => ({
+              text: String(unit.text || ""),
+              charStart:
+                typeof unit.char_start === "number" && Number.isFinite(unit.char_start)
+                  ? unit.char_start
+                  : undefined,
+              charEnd:
+                typeof unit.char_end === "number" && Number.isFinite(unit.char_end)
+                  ? unit.char_end
+                  : undefined,
+              highlightBoxes: Array.isArray(unit.highlight_boxes)
+                ? unit.highlight_boxes.map((item) => ({
+                    x: Number(item.x) || 0,
+                    y: Number(item.y) || 0,
+                    width: Number(item.width) || 0,
+                    height: Number(item.height) || 0,
+                  }))
+                : [],
+            }))
+          : [];
+        setResolvedGeometry({
+          highlightBoxes,
+          evidenceUnits,
+        });
+        setIsResolvingGeometry(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResolvedGeometry({
+            highlightBoxes: [],
+            evidenceUnits: [],
+          });
+          setIsResolvingGeometry(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    backfillPage,
+    backfillText,
+    citationFocus.claimText,
+    citationFocus.extract,
+    citationFocus.fileId,
+    citationIsPdf,
+    citationRawUrl,
+    hasInlineGeometry,
+  ]);
+
+  const effectiveHighlightBoxes = useMemo(() => {
+    if (citationFocus.highlightBoxes?.length) {
+      return citationFocus.highlightBoxes;
+    }
+    return resolvedGeometry?.highlightBoxes || [];
+  }, [citationFocus.highlightBoxes, resolvedGeometry?.highlightBoxes]);
+
+  const effectiveEvidenceUnits = useMemo(() => {
+    if (citationFocus.evidenceUnits?.length) {
+      return citationFocus.evidenceUnits;
+    }
+    return resolvedGeometry?.evidenceUnits || [];
+  }, [citationFocus.evidenceUnits, resolvedGeometry?.evidenceUnits]);
+
   return (
     <div className="overflow-hidden rounded-2xl border border-[#d2d2d7] bg-white shadow-sm">
       {/* Header: source name + nav + open */}
@@ -114,21 +220,36 @@ function CitationPreviewPanel({
 
       {/* Content */}
       <div className="p-3">
+        {citationIsPdf && isResolvingGeometry && !hasInlineGeometry ? (
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#eadfbe] bg-[#fff9eb] px-3 py-2 text-[12px] text-[#7a5a12]">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>Locating the cited passage and preparing the highlight…</span>
+          </div>
+        ) : null}
         {citationRawUrl && citationIsPdf ? (
-          <CitationPdfPreview
-            key={`${citationFocus.fileId || "file"}:${preferredPage || citationFocus.page || "1"}:${String(citationFocus.extract || "").slice(0, 64)}`}
-            fileUrl={citationRawUrl}
-            page={preferredPage || citationFocus.page}
-            highlightText={citationFocus.extract || citationFocus.claimText || ""}
-            highlightQuery={reviewQuery || citationFocus.claimText}
-            charStart={citationFocus.charStart}
-            charEnd={citationFocus.charEnd}
-            highlightBoxes={citationFocus.highlightBoxes}
-            viewerHeight={citationViewerHeight}
-            initialZoom={pdfZoom}
-            onZoomChange={onPdfZoomChange}
-            onPageChange={onPdfPageChange}
-          />
+          <WidgetRenderBoundary
+            fallback={
+              <div className="rounded-xl border border-[#fecaca] bg-[#fff1f2] p-3 text-[12px] text-[#9f1239]">
+                PDF preview failed to render. Use <span className="font-medium">Open</span> to inspect the source directly.
+              </div>
+            }
+          >
+            <CitationPdfPreview
+              key={`${citationFocus.fileId || "file"}:${preferredPage || citationFocus.page || "1"}:${String(citationFocus.extract || "").slice(0, 64)}`}
+              fileUrl={citationRawUrl}
+              page={preferredPage || citationFocus.page}
+              highlightText={citationFocus.extract || citationFocus.claimText || ""}
+              highlightQuery={citationFocus.claimText || ""}
+              charStart={citationFocus.charStart}
+              charEnd={citationFocus.charEnd}
+              highlightBoxes={effectiveHighlightBoxes}
+              evidenceUnits={effectiveEvidenceUnits}
+              viewerHeight={citationViewerHeight}
+              initialZoom={pdfZoom}
+              onZoomChange={onPdfZoomChange}
+              onPageChange={onPdfPageChange}
+            />
+          </WidgetRenderBoundary>
         ) : null}
 
         {citationRawUrl && citationIsImage ? (

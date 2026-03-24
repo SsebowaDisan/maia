@@ -8,7 +8,15 @@ from .cleanup import (
     _format_notebook_style_layout,
     _strip_fast_qa_noise_sections,
 )
-from .injection import _inject_inline_citations, render_fast_citation_links
+from .injection import (
+    _diversify_repeated_ref_numbers,
+    _enforce_paragraph_citation_coverage,
+    _guard_citation_dominance,
+    _inject_claim_level_bracket_citations,
+    _inject_inline_citations,
+    _realign_bracket_ref_numbers,
+    render_fast_citation_links,
+)
 from .refs import resolve_required_citation_mode
 from .resolution import _extract_info_refs, _extract_refs_from_answer_citation_section, _resolve_citation_refs
 
@@ -21,6 +29,50 @@ _AGENT_CITATION_SECTION_RE = re.compile(
     r"^##\s+(?:Evidence Citations|Sources|References)\s*$",
     re.MULTILINE,
 )
+_RAW_PAGE_PROSE_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"\b[Pp]age\s+\d{1,4}\s+(?=(?:explicitly\s+)?(?:identifies|states|notes|shows|confirms|indicates|documents|reports|describes|prescribes)\b)"
+        ),
+        "The cited source ",
+    ),
+    (
+        re.compile(
+            r"\b(?:on|from)\s+[Pp]age\s+\d{1,4}\b",
+        ),
+        "in the cited source",
+    ),
+    (
+        re.compile(
+            r"\bper\s+[Pp]age\s+\d{1,4}(?:'s)?\b",
+        ),
+        "in the cited source",
+    ),
+)
+
+
+def _normalize_explicit_page_prose(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return value
+    normalized = value
+    for pattern, replacement in _RAW_PAGE_PROSE_REPLACEMENTS:
+        normalized = pattern.sub(replacement, normalized)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
+    normalized = re.sub(r"\bin the cited source's\b", "in the cited source", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _repair_marker_level_citations(text: str, refs: list[dict]) -> str:
+    repaired = str(text or "")
+    if not repaired or not refs:
+        return repaired
+    repaired = _realign_bracket_ref_numbers(repaired, refs)
+    repaired = _diversify_repeated_ref_numbers(repaired, refs)
+    repaired = _enforce_paragraph_citation_coverage(repaired, refs)
+    repaired = _guard_citation_dominance(repaired, refs)
+    repaired = _inject_claim_level_bracket_citations(repaired, refs)
+    return repaired
 
 
 def enforce_required_citations(
@@ -47,23 +99,46 @@ def enforce_required_citations(
             return text
         info_refs = _extract_info_refs(info_html) if info_html else []
         if info_refs:
+            info_by_id: dict[int, dict] = {}
             info_by_url: dict[str, dict] = {}
             for iref in info_refs:
+                ref_id = int(iref.get("id", 0) or 0)
+                if ref_id > 0 and ref_id not in info_by_id:
+                    info_by_id[ref_id] = iref
                 url_key = str(iref.get("source_url") or "").strip().lower().rstrip("/")
                 if url_key and url_key not in info_by_url:
                     info_by_url[url_key] = iref
             for ref in refs:
-                url_key = str(ref.get("source_url") or "").strip().lower().rstrip("/")
-                if not url_key or url_key not in info_by_url:
+                ref_id = int(ref.get("id", 0) or 0)
+                iref = info_by_id.get(ref_id)
+                if iref is None:
+                    url_key = str(ref.get("source_url") or "").strip().lower().rstrip("/")
+                    if url_key and url_key in info_by_url:
+                        iref = info_by_url[url_key]
+                if iref is None:
                     continue
-                iref = info_by_url[url_key]
-                for key in ("phrase", "highlight_boxes", "unit_id", "match_quality",
-                            "strength_score", "char_start", "char_end", "source_id"):
+                for key in (
+                    "phrase",
+                    "highlight_boxes",
+                    "evidence_units",
+                    "unit_id",
+                    "match_quality",
+                    "strength_score",
+                    "char_start",
+                    "char_end",
+                    "source_id",
+                    "source_url",
+                    "page_label",
+                    "source_name",
+                    "label",
+                ):
                     if not ref.get(key) and iref.get(key):
                         ref[key] = iref[key]
         mode = resolve_required_citation_mode(citation_mode)
-        enriched_body = render_fast_citation_links(answer=body, refs=refs, citation_mode=mode)
+        repaired_body = _repair_marker_level_citations(body, refs)
+        enriched_body = render_fast_citation_links(answer=repaired_body, refs=refs, citation_mode=mode)
         enriched_body = _inject_inline_citations(enriched_body, refs)
+        enriched_body = _normalize_explicit_page_prose(enriched_body)
         enriched_body = _dedupe_duplicate_answer_passes(enriched_body)
         return f"{enriched_body.rstrip()}\n\n{tail.lstrip()}"
 
@@ -71,15 +146,24 @@ def enforce_required_citations(
     # only augment them with metadata from info_html — do not strip and reinject.
     if "class='citation'" in text or 'class="citation"' in text:
         refs = _resolve_citation_refs(info_html=info_html, answer=text)
-        if refs:
-            text = _augment_existing_citation_anchors(text, refs)
-        return _dedupe_duplicate_answer_passes(text)
+        if not refs:
+            return _dedupe_duplicate_answer_passes(text)
+        mode = resolve_required_citation_mode(citation_mode)
+        marker_text = _anchors_to_bracket_markers(_augment_existing_citation_anchors(text, refs))
+        marker_text = _format_notebook_style_layout(marker_text)
+        marker_text = _repair_marker_level_citations(marker_text, refs)
+        enriched = render_fast_citation_links(answer=marker_text, refs=refs, citation_mode=mode)
+        enriched = _inject_inline_citations(enriched, refs)
+        enriched = _normalize_explicit_page_prose(enriched)
+        return _dedupe_duplicate_answer_passes(enriched)
 
     mode = resolve_required_citation_mode(citation_mode)
     refs = _resolve_citation_refs(info_html=info_html, answer=text)
     layout_seed = _format_notebook_style_layout(text)
+    layout_seed = _repair_marker_level_citations(layout_seed, refs)
     enriched = render_fast_citation_links(answer=layout_seed, refs=refs, citation_mode=mode)
     enriched = _inject_inline_citations(enriched, refs)
+    enriched = _normalize_explicit_page_prose(enriched)
     if "class='citation'" in enriched or 'class="citation"' in enriched:
         return _dedupe_duplicate_answer_passes(enriched)
     if refs:
@@ -117,7 +201,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
                 if not url_key or url_key not in info_by_url:
                     continue
                 iref = info_by_url[url_key]
-                for key in ("phrase", "highlight_boxes", "unit_id", "match_quality",
+                for key in ("phrase", "highlight_boxes", "evidence_units", "unit_id", "match_quality",
                             "strength_score", "char_start", "char_end", "source_id"):
                     if not ref.get(key) and iref.get(key):
                         ref[key] = iref[key]
@@ -127,6 +211,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
         layout_body = _format_notebook_style_layout(layout_body)
         enriched = render_fast_citation_links(answer=layout_body, refs=refs, citation_mode="inline")
         enriched = _inject_inline_citations(enriched, refs)
+        enriched = _normalize_explicit_page_prose(enriched)
         from .visible import _normalize_visible_inline_citations
 
         enriched = _normalize_visible_inline_citations(enriched)
@@ -152,6 +237,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
             citation_mode="inline",
         )
         enriched = _inject_inline_citations(enriched, refs)
+        enriched = _normalize_explicit_page_prose(enriched)
         from .visible import _normalize_visible_inline_citations
 
         enriched = _normalize_visible_inline_citations(enriched)

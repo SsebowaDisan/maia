@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from .citation_sections.shared import _sentence_grade_extract
+
 VERIFICATION_CONTRACT_VERSION = "2026-03-08.v1"
 
 
@@ -147,6 +149,43 @@ def _normalize_highlight_boxes(raw: Any, *, limit: int = 24) -> list[dict[str, f
     return output
 
 
+def _normalize_evidence_units(raw: Any, *, limit: int = 12) -> list[dict[str, Any]]:
+    rows = raw if isinstance(raw, list) else []
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = _clean_text(row.get("text"), max_len=240)
+        if len(text) < 8:
+            continue
+        boxes = _normalize_highlight_boxes(row.get("highlight_boxes"))
+        if not boxes:
+            continue
+        char_start = _to_int(row.get("char_start"))
+        char_end = _to_int(row.get("char_end"))
+        if char_start is not None and char_start <= 0:
+            char_start = None
+        if char_end is not None and (char_start is None or char_end <= char_start):
+            char_end = None
+        key = f"{char_start or 0}|{char_end or 0}|{text[:120].lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        item: dict[str, Any] = {
+            "text": text,
+            "highlight_boxes": boxes,
+        }
+        if char_start is not None:
+            item["char_start"] = char_start
+        if char_end is not None:
+            item["char_end"] = char_end
+        output.append(item)
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
 def _strength_tier(score: float | None) -> int | None:
     if score is None or score <= 0:
         return None
@@ -256,6 +295,7 @@ def _normalize_item(*, row: dict[str, Any], fallback_id: str) -> dict[str, Any]:
         ),
         max_len=2000,
     )
+    extract = _sentence_grade_extract(extract, limit=720, min_chars=72, max_sentences=2) or extract
     if not extract:
         extract = "No extract available for this citation."
 
@@ -356,7 +396,24 @@ def _normalize_item(*, row: dict[str, Any], fallback_id: str) -> dict[str, Any]:
         max_len=280,
     )
     review_surface = "web" if source_type == "web" else "pdf" if source_type == "pdf" else "file"
-    citation_quote = _clean_text(_best_value(citation_map.get("quote"), target_map.get("phrase"), extract), max_len=1200)
+    citation_quote = _clean_text(
+        _sentence_grade_extract(
+            _best_value(citation_map.get("quote"), target_map.get("phrase"), extract),
+            limit=720,
+            min_chars=72,
+            max_sentences=2,
+        )
+        or _best_value(citation_map.get("quote"), target_map.get("phrase"), extract),
+        max_len=1200,
+    )
+    evidence_units = _normalize_evidence_units(
+        _best_value(
+            row.get("evidence_units"),
+            row.get("evidenceUnits"),
+            target_map.get("units"),
+            target_map.get("evidence_units"),
+        )
+    )
     citation_label = _clean_text(_best_value(citation_map.get("label"), evidence_id.replace("evidence-", "")), max_len=40)
 
     normalized: dict[str, Any] = {
@@ -395,6 +452,7 @@ def _normalize_item(*, row: dict[str, Any], fallback_id: str) -> dict[str, Any]:
         },
         "highlight_target": {
             "boxes": highlight_boxes,
+            "units": evidence_units,
             "unit_id": unit_id or None,
             "char_start": char_start,
             "char_end": char_end,
@@ -436,6 +494,8 @@ def _normalize_item(*, row: dict[str, Any], fallback_id: str) -> dict[str, Any]:
     if highlight_boxes:
         normalized["highlight_boxes"] = highlight_boxes
         normalized["region"] = highlight_boxes[0]
+    if evidence_units:
+        normalized["evidence_units"] = evidence_units
     return normalized
 
 

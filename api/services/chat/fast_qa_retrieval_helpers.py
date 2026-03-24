@@ -307,12 +307,78 @@ def _extract_highlight_boxes(metadata: dict[str, Any]) -> list[dict[str, float]]
     return boxes
 
 
+def _extract_evidence_units(metadata: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    raw_units = metadata.get("evidence_units")
+    if not isinstance(raw_units, list) or not raw_units:
+        return []
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_unit in raw_units:
+        if not isinstance(raw_unit, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(raw_unit.get("text", "") or "")).strip()
+        if len(text) < 8:
+            continue
+        boxes = _extract_highlight_boxes(raw_unit)
+        if not boxes:
+            continue
+        char_start = _to_intish(raw_unit.get("char_start"))
+        char_end = _to_intish(raw_unit.get("char_end"))
+        key = f"{char_start or 0}|{char_end or 0}|{text[:120].lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        item: dict[str, Any] = {
+            "text": text[:240],
+            "highlight_boxes": boxes,
+        }
+        if char_start is not None and char_start > 0:
+            item["char_start"] = char_start
+        if char_end is not None and char_start is not None and char_end > char_start:
+            item["char_end"] = char_end
+        output.append(item)
+        if len(output) >= max(1, int(limit)):
+            break
+    return output
+
+
+def _to_intish(value: Any) -> int | None:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return None
+    return parsed
+
+
 def _ranked_chunk_selection(rows: list[dict[str, Any]], *, chunk_limit: int) -> list[dict[str, Any]]:
     ranked_rows = sorted(rows, key=lambda item: int(item.get("score", 0)), reverse=True)
     source_cap = max(1, int(API_FAST_QA_MAX_CHUNKS_PER_SOURCE))
     max_distinct_sources = max(1, int(API_FAST_QA_MAX_SOURCES))
     chosen: list[dict[str, Any]] = []
     per_source_count: dict[str, int] = {}
+    seen_source_pages: set[tuple[str, str]] = set()
+
+    for item in ranked_rows:
+        source_key = str(item.get("source_key", ""))
+        if not source_key:
+            continue
+        page_key = str(item.get("page_label", "") or "")
+        source_seen = source_key in per_source_count
+        if not source_seen and len(per_source_count) >= max_distinct_sources:
+            continue
+        source_hits = per_source_count.get(source_key, 0)
+        if source_hits >= source_cap:
+            continue
+        if page_key:
+            pair = (source_key, page_key)
+            if pair in seen_source_pages:
+                continue
+            seen_source_pages.add(pair)
+        chosen.append(item)
+        per_source_count[source_key] = source_hits + 1
+        if len(chosen) >= chunk_limit:
+            return chosen
+
     for item in ranked_rows:
         source_key = str(item.get("source_key", ""))
         if not source_key:

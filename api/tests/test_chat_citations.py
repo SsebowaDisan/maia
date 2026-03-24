@@ -4,6 +4,7 @@ import re
 from api.services.chat.citations import (
     assign_fast_source_refs,
     append_required_citation_suffix,
+    build_claim_signal_summary,
     build_source_usage,
     build_fast_info_html,
     collect_cited_ref_ids,
@@ -12,6 +13,7 @@ from api.services.chat.citations import (
     normalize_info_evidence_html,
     resolve_required_citation_mode,
 )
+from api.services.chat.citation_sections.context import _best_ref_for_context
 
 
 def test_resolve_required_citation_mode_never_returns_off() -> None:
@@ -563,6 +565,111 @@ def test_assign_fast_source_refs_merges_duplicate_excerpt_boxes() -> None:
     assert len(highlight_boxes) == 2
 
 
+def test_assign_fast_source_refs_keeps_distinct_refs_for_distinct_char_spans() -> None:
+    snippets = [
+        {
+            "source_id": "file-1",
+            "source_name": "Doc.pdf",
+            "page_label": "69",
+            "text": "Residual chloride ions catalyze hydrolytic degradation in humid environments.",
+            "char_start": 100,
+            "char_end": 180,
+        },
+        {
+            "source_id": "file-1",
+            "source_name": "Doc.pdf",
+            "page_label": "69",
+            "text": "Thermal sintering begins near 425 C and irreversibly coalesces microspheres.",
+            "char_start": 410,
+            "char_end": 492,
+        },
+    ]
+    _enriched, refs = assign_fast_source_refs(snippets)
+    assert len(refs) == 2
+    assert refs[0].get("char_start") == 100
+    assert refs[1].get("char_start") == 410
+
+
+def test_best_ref_for_context_prefers_explicit_page_match_over_dominant_phrase_overlap() -> None:
+    refs = [
+        {
+            "id": 1,
+            "source_name": "Doc.pdf",
+            "page_label": "67",
+            "label": "Doc.pdf (page 67)",
+            "phrase": "Residual chloride ions catalyze hydrolytic degradation and thermal sintering.",
+        },
+        {
+            "id": 2,
+            "source_name": "Doc.pdf",
+            "page_label": "66",
+            "label": "Doc.pdf (page 66)",
+            "phrase": "The post-reduction salt mass is required to be essential for purity.",
+        },
+    ]
+    ref_id, score = _best_ref_for_context(
+        "Page 66 explicitly identifies the post-reduction salt mass as essential for purity.",
+        refs,
+    )
+    assert ref_id == 2
+    assert score > 0.2
+
+
+def test_enforce_required_citations_uses_matching_page_ref_when_paragraph_names_page() -> None:
+    info_html = build_fast_info_html(
+        [
+            {
+                "ref_id": 1,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "67",
+                "text": "Residual chloride ions catalyze hydrolytic degradation in humid environments.",
+            },
+            {
+                "ref_id": 2,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "66",
+                "text": "The post-reduction salt mass is required to be essential for purity.",
+            },
+        ]
+    )
+    answer = enforce_required_citations(
+        answer=(
+            "Residual chloride ions catalyze hydrolytic degradation in humid environments.\n\n"
+            "Page 66 explicitly identifies the post-reduction salt mass as essential for purity."
+        ),
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "data-page='67'" in answer
+    assert "Page 66 explicitly identifies" not in answer
+    assert "The cited source explicitly identifies the post-reduction salt mass as essential for purity. <a " in answer
+    assert "data-page='66'" in answer
+
+
+def test_enforce_required_citations_normalizes_per_page_prose_into_citation_led_language() -> None:
+    info_html = build_fast_info_html(
+        [
+            {
+                "ref_id": 1,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "8",
+                "text": "The assembly uses two balsa-wood blocks affixed to a wooden board.",
+            }
+        ]
+    )
+    answer = enforce_required_citations(
+        answer="The tripartite system uses kiln-dried balsa wood, per page 8's block assembly details.",
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "page 8" not in answer.lower()
+    assert "in the cited source" in answer
+    assert "data-page='8'" in answer
+
+
 def test_assign_fast_source_refs_preserves_selector_metadata() -> None:
     snippets = [
         {
@@ -576,6 +683,55 @@ def test_assign_fast_source_refs_preserves_selector_metadata() -> None:
     _enriched, refs = assign_fast_source_refs(snippets)
     assert len(refs) == 1
     assert refs[0].get("selector") == "article p:nth-of-type(4)"
+
+
+def test_assign_fast_source_refs_promotes_sentence_grade_phrase_over_word_fragment() -> None:
+    snippets = [
+        {
+            "source_id": "file-1",
+            "source_name": "Doc.pdf",
+            "page_label": "126",
+            "text": (
+                "Crystal field splitting explains the observed color variation in first-row transition-metal "
+                "aqua complexes. The ligand-field splitting parameter controls the wavelength of the dominant "
+                "d-d transition."
+            ),
+        }
+    ]
+    _enriched, refs = assign_fast_source_refs(snippets)
+    assert len(refs) == 1
+    phrase = str(refs[0].get("phrase") or "")
+    assert "Crystal field splitting explains the observed color variation" in phrase
+    assert phrase.endswith(".")
+    assert len(phrase.split()) >= 10
+
+
+def test_assign_fast_source_refs_strength_ordering_penalizes_word_only_fragment() -> None:
+    snippets = [
+        {
+            "source_id": "file-word",
+            "source_name": "Weak.pdf",
+            "page_label": "1",
+            "text": "cobalt",
+            "llm_trulens_score": 0.95,
+            "rerank_score": 0.4,
+            "vector_score": 0.3,
+        },
+        {
+            "source_id": "file-sentence",
+            "source_name": "Strong.pdf",
+            "page_label": "2",
+            "text": (
+                "Cobalt sulfate hydrates in aqueous solution show a measurable optical response that enables "
+                "selective concentration analysis under controlled pH conditions."
+            ),
+            "llm_trulens_score": 0.55,
+            "rerank_score": 0.15,
+            "vector_score": 0.12,
+        },
+    ]
+    _enriched, refs = assign_fast_source_refs(snippets, strength_ordering=True)
+    assert refs[0]["source_name"] == "Strong.pdf"
 
 
 def test_build_fast_info_html_emits_data_boxes_attribute() -> None:
@@ -833,6 +989,37 @@ def test_enforce_required_citations_normalizes_visible_numbers_and_preserves_cla
     assert "href='#evidence-1'" in answer
 
 
+def test_enforce_required_citations_diversifies_repeated_single_ref_markers_when_context_matches_distinct_evidence() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
+        "<summary><i>Evidence [1] - page 1</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> model performance improved on benchmark accuracy</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-2' data-file-id='file-2' data-page='2'>"
+        "<summary><i>Evidence [2] - page 2</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> inference cost increased because serving latency remained high</div>"
+        "</details>"
+        "<details class='evidence' id='evidence-3' data-file-id='file-3' data-page='3'>"
+        "<summary><i>Evidence [3] - page 3</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> governance controls were required for safety policy reviews</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer=(
+            "Model performance improved on benchmark accuracy [1]. "
+            "Inference cost increased because serving latency remained high [1]. "
+            "Governance controls were required for safety policy reviews [1]."
+        ),
+        info_html=info_html,
+        citation_mode="inline",
+    )
+
+    assert "href='#evidence-1'" in answer
+    assert "href='#evidence-2'" in answer
+    assert "href='#evidence-3'" in answer
+    assert answer.count("class='citation'") >= 3
+
+
 def test_enforce_required_citations_removes_stale_raw_markers_outside_anchors() -> None:
     info_html = (
         "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='1' open>"
@@ -991,3 +1178,60 @@ def test_enforce_required_citations_agent_path_anchor_url_matches_citation_list(
     assert virginia_url not in first_anchor, (
         f"First anchor must not contain Virginia URL, got: {first_anchor!r}"
     )
+
+
+def test_build_claim_signal_summary_strips_anchor_html_from_claim_text() -> None:
+    refs = [
+        {
+            "id": 1,
+            "source_name": "Doc.pdf",
+            "label": "Doc.pdf (page 66)",
+            "page_label": "66",
+            "phrase": "The post-reduction salt mass is essential for purity.",
+        }
+    ]
+    answer = (
+        "The cited source explicitly identifies the post-reduction salt mass as essential for purity "
+        "<a href='#evidence-1' id='citation-1' class='citation' data-citation-number='1'>[1]</a>."
+    )
+    summary = build_claim_signal_summary(answer_text=answer, refs=refs)
+    assert summary
+    assert summary["rows"]
+    claim = str(summary["rows"][0]["claim"])
+    assert "<a " not in claim
+    assert "data-citation-number" not in claim
+    assert "post-reduction salt mass" in claim
+
+
+def test_enforce_required_citations_existing_anchor_path_injects_missing_sentence_level_citation() -> None:
+    info_html = build_fast_info_html(
+        [
+            {
+                "ref_id": 1,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "66",
+                "text": "The post-reduction salt mass is required to be essential for purity.",
+            },
+            {
+                "ref_id": 2,
+                "source_id": "file-1",
+                "source_name": "Doc.pdf",
+                "page_label": "8",
+                "text": "The paper is mounted taut between two balsa-wood blocks attached to a wooden board.",
+            },
+        ]
+    )
+    answer = (
+        "The cited source explicitly identifies the post-reduction salt mass as essential for purity "
+        "<a href='#evidence-1' id='citation-1' class='citation'>[1]</a>. "
+        "The assembly uses two balsa-wood blocks attached to a wooden board."
+    )
+    enriched = enforce_required_citations(
+        answer=answer,
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert "data-page='66'" in enriched
+    assert "data-page='8'" in enriched
+    assert enriched.count("class='citation'") >= 2

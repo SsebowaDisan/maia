@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from maia.base import BaseComponent, Document, Node, Param
 from maia.embeddings import BaseEmbeddings
 from maia.indices import VectorIndexing
+from maia.indices.qa.highlight_boxes import merge_adjacent_highlight_boxes, normalize_highlight_boxes
 from maia.indices.splitters import BaseSplitter
 
 from .settings import default_token_func
@@ -61,8 +62,11 @@ class IndexPipeline(BaseComponent):
         thumbnail_docs: list[Document],
         file_id: str,
     ) -> None:
+        max_evidence_units_per_chunk = 12
         page_text_by_label: dict[str, str] = {}
         page_cursor_by_label: dict[str, int] = {}
+        raw_page_units_by_label: dict[str, list[dict[str, object]]] = {}
+        anchored_page_units_by_label: dict[str, list[dict[str, object]]] = {}
 
         for row in text_docs:
             metadata = row.metadata if isinstance(row.metadata, dict) else {}
@@ -74,6 +78,45 @@ class IndexPipeline(BaseComponent):
             page_text_by_label[page_label] = joined
             if page_label not in page_cursor_by_label:
                 page_cursor_by_label[page_label] = 0
+            page_units = metadata.get("page_units")
+            if isinstance(page_units, list) and page_units:
+                raw_page_units_by_label.setdefault(page_label, []).extend(
+                    [dict(item) for item in page_units if isinstance(item, dict)]
+                )
+
+        for page_label, page_units in raw_page_units_by_label.items():
+            page_text = page_text_by_label.get(page_label, "")
+            if not page_text:
+                continue
+            unit_cursor = 0
+            anchored_units: list[dict[str, object]] = []
+            for unit in page_units:
+                unit_text = self._normalize_anchor_text(str(unit.get("text", "") or ""))
+                if not unit_text:
+                    continue
+                start = page_text.find(unit_text, unit_cursor)
+                if start < 0:
+                    start = page_text.lower().find(unit_text.lower(), unit_cursor)
+                if start < 0 and len(unit_text) >= 12:
+                    probe = unit_text[: min(42, len(unit_text))]
+                    start = page_text.lower().find(probe.lower(), unit_cursor)
+                if start < 0:
+                    start = page_text.lower().find(unit_text.lower())
+                if start < 0:
+                    continue
+                end = min(len(page_text), start + len(unit_text))
+                highlight_boxes = normalize_highlight_boxes(unit.get("highlight_boxes") or [])
+                anchored_units.append(
+                    {
+                        "text": unit_text,
+                        "char_start": start,
+                        "char_end": end,
+                        "highlight_boxes": highlight_boxes,
+                    }
+                )
+                unit_cursor = max(unit_cursor, end)
+            if anchored_units:
+                anchored_page_units_by_label[page_label] = anchored_units
 
         for chunk in all_chunks:
             metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
@@ -110,6 +153,89 @@ class IndexPipeline(BaseComponent):
                     metadata.pop("char_start", None)
                     metadata.pop("char_end", None)
 
+            chunk_boxes: list[dict[str, float]] = []
+            chunk_units: list[dict[str, object]] = []
+            try:
+                chunk_char_start = int(metadata.get("char_start", 0) or 0)
+                chunk_char_end = int(metadata.get("char_end", 0) or 0)
+            except Exception:
+                chunk_char_start = 0
+                chunk_char_end = 0
+            anchored_units = anchored_page_units_by_label.get(page_label, [])
+            if anchored_units:
+                if chunk_char_end > chunk_char_start:
+                    for unit in anchored_units:
+                        unit_start = int(unit.get("char_start", 0) or 0)
+                        unit_end = int(unit.get("char_end", 0) or 0)
+                        if unit_end <= chunk_char_start or unit_start >= chunk_char_end:
+                            continue
+                        boxes = normalize_highlight_boxes(unit.get("highlight_boxes") or [])
+                        if boxes:
+                            chunk_boxes.extend(boxes)
+                        if len(chunk_units) < max_evidence_units_per_chunk:
+                            chunk_units.append(
+                                {
+                                    "text": str(unit.get("text", "") or "")[:240],
+                                    "char_start": unit_start,
+                                    "char_end": unit_end,
+                                    "highlight_boxes": boxes,
+                                }
+                            )
+                if not chunk_boxes and normalized_chunk:
+                    normalized_chunk_lower = normalized_chunk.lower()
+                    for unit in anchored_units:
+                        unit_text = str(unit.get("text", "") or "")
+                        if not unit_text:
+                            continue
+                        if unit_text.lower() in normalized_chunk_lower or normalized_chunk_lower[: min(42, len(normalized_chunk_lower))] in unit_text.lower():
+                            boxes = normalize_highlight_boxes(unit.get("highlight_boxes") or [])
+                            if boxes:
+                                chunk_boxes.extend(boxes)
+                            if len(chunk_units) < max_evidence_units_per_chunk:
+                                chunk_units.append(
+                                    {
+                                        "text": unit_text[:240],
+                                        "char_start": int(unit.get("char_start", 0) or 0),
+                                        "char_end": int(unit.get("char_end", 0) or 0),
+                                        "highlight_boxes": boxes,
+                                    }
+                                )
+                merged_boxes = merge_adjacent_highlight_boxes(chunk_boxes) if chunk_boxes else []
+                if merged_boxes:
+                    metadata["highlight_boxes"] = merged_boxes
+                if chunk_units:
+                    deduped_units: list[dict[str, object]] = []
+                    seen_unit_keys: set[str] = set()
+                    for unit in chunk_units:
+                        unit_boxes = normalize_highlight_boxes(unit.get("highlight_boxes") or [])
+                        if not unit_boxes:
+                            continue
+                        unit_text = self._normalize_anchor_text(str(unit.get("text", "") or ""))
+                        try:
+                            unit_start = int(unit.get("char_start", 0) or 0)
+                            unit_end = int(unit.get("char_end", 0) or 0)
+                        except Exception:
+                            unit_start = 0
+                            unit_end = 0
+                        unit_key = (
+                            f"{unit_start}|{unit_end}|{sha1(unit_text.encode('utf-8')).hexdigest()[:12]}"
+                        )
+                        if unit_key in seen_unit_keys:
+                            continue
+                        seen_unit_keys.add(unit_key)
+                        deduped_units.append(
+                            {
+                                "text": unit_text[:240],
+                                "char_start": unit_start if unit_start > 0 else None,
+                                "char_end": unit_end if unit_end > unit_start else None,
+                                "highlight_boxes": unit_boxes,
+                            }
+                        )
+                        if len(deduped_units) >= max_evidence_units_per_chunk:
+                            break
+                    if deduped_units:
+                        metadata["evidence_units"] = deduped_units
+
             span_key = (
                 f"{file_id}|{page_label}|{metadata.get('char_start', 0)}|"
                 f"{metadata.get('char_end', 0)}|"
@@ -120,6 +246,7 @@ class IndexPipeline(BaseComponent):
                 f"eu-{sha1(span_key.encode('utf-8')).hexdigest()[:20]}",
             )
             metadata.setdefault("match_quality", match_quality)
+            metadata.pop("page_units", None)
             chunk.metadata = metadata
 
         for row in [*non_text_docs, *thumbnail_docs]:
@@ -135,6 +262,12 @@ class IndexPipeline(BaseComponent):
                 f"eu-{sha1(span_key.encode('utf-8')).hexdigest()[:20]}",
             )
             metadata.setdefault("match_quality", "estimated")
+            metadata.pop("page_units", None)
+            row.metadata = metadata
+
+        for row in text_docs:
+            metadata = row.metadata if isinstance(row.metadata, dict) else {}
+            metadata.pop("page_units", None)
             row.metadata = metadata
 
     def handle_docs(self, docs, file_id, file_name) -> Generator[Document, None, int]:

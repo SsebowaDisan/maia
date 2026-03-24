@@ -683,12 +683,82 @@ function repairCitationBrokenLinks(input: string): string {
   return text;
 }
 
+function splitDenseParagraphBlock(block: string): string {
+  const text = String(block || "").trim();
+  if (!text) {
+    return block;
+  }
+  const looksStructured =
+    /(^|\n)\s*(#{1,6}\s|[-*+]\s|\d+\.\s|>|```|\|)/.test(text) ||
+    text.includes("$$") ||
+    text.includes("\n");
+  if (looksStructured || text.length < 520) {
+    return text;
+  }
+
+  const sentenceMatches = text.match(/.+?(?:[.!?](?=\s+[A-Z(])|[.!?]$|$)/g) || [];
+  const sentences = sentenceMatches.map((sentence) => sentence.trim()).filter(Boolean);
+  if (sentences.length < 4) {
+    return text;
+  }
+
+  const paragraphs: string[] = [];
+  let current = "";
+  let sentenceCount = 0;
+  for (const sentence of sentences) {
+    const next = current ? `${current} ${sentence}` : sentence;
+    current = next;
+    sentenceCount += 1;
+    const shouldBreak =
+      (sentenceCount >= 2 && current.length >= 280) ||
+      sentenceCount >= 3;
+    if (shouldBreak) {
+      paragraphs.push(current.trim());
+      current = "";
+      sentenceCount = 0;
+    }
+  }
+  if (current.trim()) {
+    paragraphs.push(current.trim());
+  }
+  return paragraphs.length >= 2 ? paragraphs.join("\n\n") : text;
+}
+
+function splitDenseParagraphs(input: string): string {
+  const raw = String(input || "");
+  if (!raw.trim()) {
+    return raw;
+  }
+  const blocks = raw.split(/\n{2,}/);
+  return blocks.map((block) => splitDenseParagraphBlock(block)).join("\n\n");
+}
+
+export function splitDenseParagraphsForTest(input: string): string {
+  return splitDenseParagraphs(input);
+}
+
 function normalizeMarkdownBlocks(input: string): string {
   let normalized = repairCitationBrokenLinks(input.replace(/\r\n/g, "\n"));
+  normalized = splitDenseParagraphs(normalized);
   // Some streamed payloads may lose newline before headings or list markers.
   normalized = normalized.replace(/([^\n])\s(#{1,6}\s+)/g, "$1\n\n$2");
   normalized = normalized.replace(/(#{1,6}[^\n]+)\s+(\d+\.\s+)/g, "$1\n$2");
   normalized = normalized.replace(/(#{1,6}[^\n]+)\s+([-*]\s+)/g, "$1\n$2");
+  // Promote inline bold pseudo-headings into real markdown headings when the
+  // model emits section titles inside prose instead of on their own lines.
+  normalized = normalized.replace(
+    /([.!?])\s+\*\*([^*\n]{4,90})\*\*\s+(?=[A-Z(])/g,
+    "$1\n\n## $2\n\n",
+  );
+  normalized = normalized.replace(/^\s*\*\*([^*\n]{4,90})\*\*\s*$/gm, "## $1");
+  normalized = normalized.replace(
+    /^\s*\*\*([^*\n]{4,90})\*\*\s+(?=[A-Z(])/gm,
+    "## $1\n\n",
+  );
+  normalized = normalized.replace(/([^\n])\n(##\s+)/g, "$1\n\n$2");
+  normalized = normalized.replace(/(##[^\n]+)\n([^\n#*-])/g, "$1\n\n$2");
+  normalized = normalized.replace(/(\$\$[\s\S]*?\$\$)([^\n])/g, "$1\n\n$2");
+  normalized = normalized.replace(/([^\n])(\$\$[\s\S]*?\$\$)/g, "$1\n\n$2");
   return normalized;
 }
 

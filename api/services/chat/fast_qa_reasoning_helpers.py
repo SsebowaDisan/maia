@@ -5,6 +5,35 @@ from typing import Any
 
 from .fast_qa_outline_helpers import plan_adaptive_outline
 
+
+_BROAD_QUESTION_HINT_RE = re.compile(
+    r"\b("
+    r"why|how|explain|compare|comparison|trade[- ]?off|implication|impact|mechanism|"
+    r"modification|required|requirements|environment|deployment|analy[sz]e|analysis|"
+    r"advantages|disadvantages|constraints|limitations|risks|mitigation"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_broad_pdf_coverage(question: str) -> bool:
+    text = " ".join(str(question or "").split()).strip()
+    if not text:
+        return False
+    if len(text) >= 96:
+        return True
+    return bool(_BROAD_QUESTION_HINT_RE.search(text))
+
+
+def _distinct_page_count(rows: list[dict[str, Any]]) -> int:
+    return len(
+        {
+            " ".join(str(row.get("page_label", "") or "").split()).strip()
+            for row in rows
+            if " ".join(str(row.get("page_label", "") or "").split()).strip()
+        }
+    )
+
 def normalize_outline(raw_outline: dict[str, Any] | None) -> dict[str, Any]:
     fallback = {
         "style": "adaptive-detailed",
@@ -239,6 +268,7 @@ def select_relevant_snippets_with_llm(
         "- Remove snippets that are off-topic or implementation detail not asked by the user.\n"
         "- If a candidate is marked primary=yes, prefer it over primary=no when relevance is similar.\n"
         "- Keep non-primary snippets only as secondary context.\n"
+        "- When the user selected one PDF/file and asks for an analytical explanation, comparison, mechanisms, deployment constraints, or required modifications, keep multiple relevant snippets from different pages when available instead of collapsing to a single page.\n"
         "- If the question includes a URL/domain and candidates do not match it, return an empty keep_ids list.\n"
         f"- Keep between 0 and {keep_limit} snippet ids.\n"
         "- IDs are 1-based and must reference only the provided candidate list.\n"
@@ -510,6 +540,34 @@ def finalize_retrieved_snippets(
             max_keep=max_keep,
             max_secondary=secondary_cap,
         )
+
+    selected_primary_sources = {
+        str(row.get("source_id", "") or row.get("source_key", "") or "").strip()
+        for row in selected
+        if bool(row.get("is_primary_source"))
+    }
+    prioritized_primary_rows = [row for row in prioritized_pool if bool(row.get("is_primary_source"))]
+    prioritized_primary_sources = {
+        str(row.get("source_id", "") or row.get("source_key", "") or "").strip()
+        for row in prioritized_primary_rows
+        if str(row.get("source_id", "") or row.get("source_key", "") or "").strip()
+    }
+    if (
+        not target_urls
+        and len(prioritized_primary_sources) == 1
+        and len(selected_primary_sources) <= 1
+        and len(selected) <= 1
+        and _requires_broad_pdf_coverage(question)
+        and _distinct_page_count(prioritized_primary_rows) >= 3
+    ):
+        coverage_target = min(max_keep, 3)
+        broadened = prioritize_primary_evidence_fn(
+            prioritized_primary_rows,
+            max_keep=coverage_target,
+            max_secondary=0,
+        )
+        if len(broadened) > len(selected):
+            selected = broadened
 
     if target_urls and selected and not any(bool(row.get("is_primary_source")) for row in selected):
         return [], primary_source_note, "no_primary_after_selection", focus_meta

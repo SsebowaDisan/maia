@@ -2,6 +2,7 @@ from api.services.chat.fast_qa import (
     _assess_evidence_sufficiency_with_llm,
     _build_no_relevant_evidence_answer,
     _expand_retrieval_query_for_gap,
+    _finalize_retrieved_snippets,
     _rewrite_followup_question_for_retrieval,
     _resolve_contextual_url_targets,
 )
@@ -218,3 +219,30 @@ def test_prioritize_primary_evidence_can_disable_secondary_sources() -> None:
     ]
     kept = _prioritize_primary_evidence(snippets, max_keep=5, max_secondary=0)
     assert all(bool(row.get("is_primary_source")) for row in kept)
+
+
+def test_finalize_retrieved_snippets_broad_single_pdf_question_preserves_page_diversity(monkeypatch) -> None:
+    snippets = [
+        {"source_id": "file-1", "source_key": "file-1", "source_name": "Doc.pdf", "page_label": "69", "score": 15.0, "text": "humidity degradation and chloride"},
+        {"source_id": "file-1", "source_key": "file-1", "source_name": "Doc.pdf", "page_label": "66", "score": 14.0, "text": "white heat and fused spheres"},
+        {"source_id": "file-1", "source_key": "file-1", "source_name": "Doc.pdf", "page_label": "8", "score": 13.0, "text": "balsa wood and copper sulfate paper"},
+    ]
+
+    monkeypatch.setattr(
+        "api.services.chat.fast_qa._select_relevant_snippets_with_llm",
+        lambda **kwargs: [kwargs["snippets"][0]],
+    )
+
+    selected, _note, reason, _meta = _finalize_retrieved_snippets(
+        question="If this system were deployed in a different environment, what modifications would be required?",
+        chat_history=[],
+        retrieved_snippets=snippets,
+        selected_payload={"1": ["select", ["file-1"], "user-1"]},
+        target_urls=[],
+        mindmap_focus=None,
+        max_keep=6,
+    )
+
+    assert reason == ""
+    assert len(selected) >= 3
+    assert [str(item.get("page_label")) for item in selected[:3]] == ["69", "66", "8"]

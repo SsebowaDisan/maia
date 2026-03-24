@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -51,6 +51,7 @@ from api.services.upload_service import (
     rename_file_group,
     resolve_indexed_file_path,
 )
+from api.services.upload.pdf_highlight_locator import locate_pdf_highlight_target
 from .uploads_support import (
     bytes_to_human,
     cleanup_persisted_uploads,
@@ -437,12 +438,22 @@ def get_file_raw(
     user_id: str = Depends(get_current_user_id),
 ):
     context = get_context()
-    file_path, file_name = resolve_indexed_file_path(
-        context=context,
-        user_id=user_id,
-        file_id=file_id,
-        index_id=index_id,
-    )
+    try:
+        file_path, file_name = resolve_indexed_file_path(
+            context=context,
+            user_id=user_id,
+            file_id=file_id,
+            index_id=index_id,
+        )
+    except HTTPException as exc:
+        if index_id is None or exc.status_code != 404:
+            raise
+        file_path, file_name = resolve_indexed_file_path(
+            context=context,
+            user_id=user_id,
+            file_id=file_id,
+            index_id=None,
+        )
     media_type = guess_type(file_name)[0] or "application/octet-stream"
     disposition_type = "attachment" if download else "inline"
 
@@ -452,3 +463,42 @@ def get_file_raw(
         filename=file_name,
         content_disposition_type=disposition_type,
     )
+
+
+@router.post("/files/{file_id}/highlight-target")
+async def get_file_highlight_target(
+    file_id: str,
+    payload: dict[str, object] = Body(default_factory=dict),
+    user_id: str = Depends(get_current_user_id),
+):
+    context = get_context()
+    page = payload.get("page")
+    text = str(payload.get("text") or "").strip()
+    claim_text = str(payload.get("claim_text") or "").strip()
+    index_id_value = payload.get("index_id")
+    index_id = index_id_value if isinstance(index_id_value, int) else None
+    try:
+        file_path, _ = resolve_indexed_file_path(
+            context=context,
+            user_id=user_id,
+            file_id=file_id,
+            index_id=index_id,
+        )
+    except HTTPException as exc:
+        if index_id is None or exc.status_code != 404:
+            raise
+        file_path, _ = resolve_indexed_file_path(
+            context=context,
+            user_id=user_id,
+            file_id=file_id,
+            index_id=None,
+        )
+    result = await run_in_threadpool(
+        locate_pdf_highlight_target,
+        file_path=file_path,
+        page=page or 1,
+        text=text,
+        claim_text=claim_text,
+    )
+    result["file_id"] = file_id
+    return result

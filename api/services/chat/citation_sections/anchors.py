@@ -14,6 +14,7 @@ from .shared import (
     _INLINE_REF_TOKEN_RE,
     _normalize_source_url,
     _score_value,
+    _serialize_evidence_units,
     _serialize_highlight_boxes,
     _strength_tier,
 )
@@ -41,10 +42,12 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     strength_score = _score_value(ref.get("strength_score"))
     strength_tier = _strength_tier(strength_score)
     boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
+    units_payload = _serialize_evidence_units(ref.get("evidence_units"))
     attrs = [
         f"href='#evidence-{ref_id}'",
         f"id='citation-{ref_id}'",
         "class='citation'",
+        f"data-citation-number='{ref_id}'",
         f"data-evidence-id='evidence-{ref_id}'",
     ]
     if file_id:
@@ -76,6 +79,8 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
             attrs.append(f"data-strength-tier='{strength_tier}'")
     if boxes_payload:
         attrs.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
+    if units_payload:
+        attrs.append(f"data-evidence-units='{html.escape(units_payload, quote=True)}'")
     return f"<a {' '.join(attrs)}>[{ref_id}]</a>"
 
 
@@ -179,6 +184,7 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
         strength_score = _score_value(ref.get("strength_score"))
         strength_tier = _strength_tier(strength_score)
         boxes_payload = _serialize_highlight_boxes(ref.get("highlight_boxes"))
+        units_payload = _serialize_evidence_units(ref.get("evidence_units"))
 
         if file_id and not re.search(r"\bdata-file-id=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-file-id='{html.escape(file_id, quote=True)}'")
@@ -237,6 +243,8 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
                 additions.append(f"data-strength-tier='{strength_tier}'")
         if boxes_payload and not re.search(r"\bdata-boxes=['\"]", normalized_open, flags=re.IGNORECASE):
             additions.append(f"data-boxes='{html.escape(boxes_payload, quote=True)}'")
+        if units_payload and not re.search(r"\bdata-evidence-units=['\"]", normalized_open, flags=re.IGNORECASE):
+            additions.append(f"data-evidence-units='{html.escape(units_payload, quote=True)}'")
 
         if not additions:
             return normalized_open

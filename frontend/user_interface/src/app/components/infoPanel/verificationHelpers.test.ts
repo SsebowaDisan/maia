@@ -53,7 +53,7 @@ describe("verificationHelpers", () => {
     expect(result.citationUsesWebsite).toBe(false);
     expect(result.citationIsPdf).toBe(true);
     expect(result.citationRawUrl).toContain("/api/uploads/files/file-22/raw");
-    expect(result.citationRawUrl).toContain("index_id=42");
+    expect(result.citationRawUrl).not.toContain("index_id=");
   });
 
   it("resolves website citation when only web URL is available", () => {
@@ -109,6 +109,22 @@ describe("verificationHelpers", () => {
     expect(result.citationIsPdf).toBe(true);
     expect(result.citationUsesWebsite).toBe(false);
     expect(result.citationOpenUrl).toBe("https://sec.gov/filings/q3-2023.pdf");
+  });
+
+  it("rejects malformed file ids instead of emitting broken raw urls", () => {
+    const result = resolveCitationOpenUrl({
+      citation: {
+        sourceName: "Broken PDF",
+        extract: "Citation extract",
+        sourceType: "file" as const,
+        fileId: "not a real id / ???",
+        evidenceId: "evidence-9",
+      },
+      evidenceCards: [],
+      indexId: 42,
+    });
+    expect(result.citationRawUrl).toBeNull();
+    expect(result.citationIsPdf).toBe(false);
   });
 
   it("maps pure web source without fileId as website type", () => {

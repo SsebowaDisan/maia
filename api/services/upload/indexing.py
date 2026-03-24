@@ -16,6 +16,7 @@ from . import indexing_paddle_helpers as _paddle_helpers
 from . import indexing_pdf_page_helpers as _page_helpers
 from . import indexing_pdf_route_helpers as _route_helpers
 from . import indexing_startup_helpers as _startup_helpers
+from .pdf_highlight_locator import precompute_page_units_background
 
 _PADDLE_OCR_ENGINE: Any | None = None
 _PADDLE_OCR_LOCK = threading.Lock()
@@ -404,6 +405,8 @@ def _should_route_pdf_to_paddle(
 
 
 IndexingCanceledError = _ops_helpers.IndexingCanceledError
+_resolve_existing_file_id_for_upload = _ops_helpers.resolve_existing_file_id_for_upload_impl
+_is_already_indexed_error = _ops_helpers.is_already_indexed_error_impl
 
 def collect_index_stream(
     output_stream,
@@ -459,6 +462,9 @@ def index_files(
         fallback_reader_mode_for_pdf_fn=_fallback_reader_mode_for_pdf,
         select_reader_mode_for_file_fn=_select_reader_mode_for_file,
         apply_upload_scope_to_sources_fn=apply_upload_scope_to_sources,
+        schedule_pdf_precompute_fn=precompute_page_units_background,
+        resolve_existing_file_id_for_upload_fn=_resolve_existing_file_id_for_upload,
+        is_already_indexed_error_fn=_is_already_indexed_error,
         indexing_canceled_error_cls=IndexingCanceledError,
         upload_paddleocr_enabled=UPLOAD_PADDLEOCR_ENABLED,
         upload_paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,

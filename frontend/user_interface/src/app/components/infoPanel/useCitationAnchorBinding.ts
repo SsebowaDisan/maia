@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from "react";
+import { getPdfHighlightTargetCached } from "../../../api/client/uploads";
 import type { ChatTurn, CitationFocus } from "../../types";
 import type { EvidenceCard } from "../../utils/infoInsights";
 import { normalizeEvidenceId } from "./urlHelpers";
@@ -16,6 +17,7 @@ type UseCitationAnchorBindingParams = {
   userPrompt: string;
   assistantHtml: string;
   infoHtml: string;
+  infoPanel?: Record<string, unknown> | null;
   evidenceCards: EvidenceCard[];
   onSelectCitationFocus?: (citation: CitationFocus) => void;
 };
@@ -26,6 +28,7 @@ function useCitationAnchorBinding({
   userPrompt,
   assistantHtml,
   infoHtml,
+  infoPanel,
   evidenceCards,
   onSelectCitationFocus,
 }: UseCitationAnchorBindingParams) {
@@ -60,6 +63,49 @@ function useCitationAnchorBinding({
 
   useEffect(() => {
     const container = containerRef.current;
+    if (!container || !renderedInfoHtml) {
+      return;
+    }
+    const turnForCitation: ChatTurn = {
+      user: String(userPrompt || ""),
+      assistant: String(assistantHtml || ""),
+      info: String(infoHtml || ""),
+      infoPanel: infoPanel || undefined,
+      attachments: [],
+    };
+    const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation")).slice(0, 4);
+    if (!anchors.length) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      for (const anchor of anchors) {
+        const resolved = resolveCitationFocusFromAnchor({
+          turn: turnForCitation,
+          citationAnchor: anchor,
+          evidenceCards,
+        });
+        const focus = resolved.focus;
+        if (
+          !focus.fileId ||
+          !focus.page ||
+          (!focus.extract && !focus.claimText) ||
+          (Array.isArray(focus.highlightBoxes) && focus.highlightBoxes.length > 0) ||
+          (Array.isArray(focus.evidenceUnits) && focus.evidenceUnits.length > 0)
+        ) {
+          continue;
+        }
+        void getPdfHighlightTargetCached(focus.fileId, {
+          page: focus.page,
+          text: focus.extract || "",
+          claim_text: focus.claimText || "",
+        }).catch(() => undefined);
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [assistantHtml, containerRef, evidenceCards, infoHtml, infoPanel, renderedInfoHtml, userPrompt]);
+
+  useEffect(() => {
+    const container = containerRef.current;
     if (!container) {
       return;
     }
@@ -67,6 +113,7 @@ function useCitationAnchorBinding({
       user: String(userPrompt || ""),
       assistant: String(assistantHtml || ""),
       info: String(infoHtml || ""),
+      infoPanel: infoPanel || undefined,
       attachments: [],
     };
 
@@ -123,6 +170,29 @@ function useCitationAnchorBinding({
       onSelectCitationFocus(resolved.focus);
       focusEvidenceDetails(resolved.focus.evidenceId);
       return true;
+    };
+
+    const prefetchCitationHighlight = (anchor: HTMLAnchorElement) => {
+      const resolved = resolveCitationFocusFromAnchor({
+        turn: turnForCitation,
+        citationAnchor: anchor,
+        evidenceCards,
+      });
+      const focus = resolved.focus;
+      if (
+        !focus.fileId ||
+        !focus.page ||
+        (!focus.extract && !focus.claimText) ||
+        (Array.isArray(focus.highlightBoxes) && focus.highlightBoxes.length > 0) ||
+        (Array.isArray(focus.evidenceUnits) && focus.evidenceUnits.length > 0)
+      ) {
+        return;
+      }
+      void getPdfHighlightTargetCached(focus.fileId, {
+        page: focus.page,
+        text: focus.extract || "",
+        claim_text: focus.claimText || "",
+      }).catch(() => undefined);
     };
 
     const onClick = (event: MouseEvent) => {
@@ -194,15 +264,25 @@ function useCitationAnchorBinding({
       event.stopPropagation();
     };
 
+    const onPointerEnter = (event: PointerEvent) => {
+      const anchor = findCitationAnchor(event.target);
+      if (!anchor || !isCitationAnchor(anchor)) {
+        return;
+      }
+      prefetchCitationHighlight(anchor);
+    };
+
     container.addEventListener("click", onClick);
     container.addEventListener("auxclick", onAuxClick);
     container.addEventListener("keydown", onKeyDown);
+    container.addEventListener("pointerenter", onPointerEnter, true);
     return () => {
       container.removeEventListener("click", onClick);
       container.removeEventListener("auxclick", onAuxClick);
       container.removeEventListener("keydown", onKeyDown);
+      container.removeEventListener("pointerenter", onPointerEnter, true);
     };
-  }, [assistantHtml, containerRef, evidenceCards, infoHtml, onSelectCitationFocus, userPrompt]);
+  }, [assistantHtml, containerRef, evidenceCards, infoHtml, infoPanel, onSelectCitationFocus, userPrompt]);
 }
 
 export { useCitationAnchorBinding };

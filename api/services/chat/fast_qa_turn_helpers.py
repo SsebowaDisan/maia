@@ -1,12 +1,91 @@
 from __future__ import annotations
 
 import time
+import uuid
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from api.services.canvas.document_store import create_document, document_to_dict
 from api.services.chat.block_builder import build_turn_blocks
+
+
+def _selected_scope_file_ids(selected_payload: dict[str, Any]) -> list[str]:
+    selected_ids: list[str] = []
+    seen: set[str] = set()
+    for payload in selected_payload.values():
+        if not isinstance(payload, list) or len(payload) < 2:
+            continue
+        mode = str(payload[0] or "").strip().lower()
+        if mode != "select":
+            continue
+        file_ids = payload[1] if isinstance(payload[1], list) else []
+        for raw_file_id in file_ids:
+            file_id = str(raw_file_id or "").strip()
+            if not file_id or file_id in seen:
+                continue
+            seen.add(file_id)
+            selected_ids.append(file_id)
+    return selected_ids
+
+
+def _build_sources_used(
+    *,
+    snippets_with_refs: list[dict[str, Any]],
+    refs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    candidates = list(snippets_with_refs) + list(refs)
+    for row in candidates:
+        if not isinstance(row, dict):
+            continue
+        source_id = str(row.get("file_id") or row.get("source_id") or "").strip()
+        source_name = str(row.get("source_name") or row.get("label") or "Indexed source").strip() or "Indexed source"
+        source_url = str(
+            row.get("source_url") or row.get("page_url") or row.get("url") or ""
+        ).strip()
+        source_key = source_id or source_url or source_name.lower()
+        if not source_key or source_key in seen:
+            continue
+        seen.add(source_key)
+        source_type = str(row.get("source_type", "") or "").strip().lower()
+        if not source_type:
+            source_type = "web" if source_url.startswith(("http://", "https://")) and not source_id else "file"
+        rows.append(
+            {
+                "source_type": source_type,
+                "label": source_name,
+                "url": source_url or None,
+                "file_id": source_id or None,
+                "score": row.get("strength_score") or row.get("score"),
+                "metadata": {
+                    "page_label": str(row.get("page_label", "") or "").strip() or None,
+                    "unit_id": str(row.get("unit_id", "") or "").strip() or None,
+                },
+            }
+        )
+    return rows
+
+
+def _derive_rag_canvas_title(question: str, answer: str) -> str:
+    first_heading = ""
+    for line in str(answer or "").splitlines():
+        candidate = str(line or "").strip()
+        if not candidate:
+            continue
+        if candidate.startswith("#"):
+            first_heading = candidate.lstrip("#").strip()
+            break
+        if len(candidate) > 24:
+            break
+    if first_heading:
+        return first_heading[:140]
+    normalized_question = str(question or "").strip().rstrip("?.! ")
+    if normalized_question:
+        return normalized_question[:140]
+    return "RAG workspace draft"
 
 
 def run_fast_chat_turn_impl(
@@ -43,6 +122,9 @@ def run_fast_chat_turn_impl(
     persist_conversation_fn,
     normalize_request_attachments_fn,
     constants: dict[str, Any],
+    emit_stream_event_fn: Callable[[dict[str, Any]], None] | None = None,
+    make_activity_event_fn: Callable[..., dict[str, Any]] | None = None,
+    chunk_text_for_stream_fn: Callable[[str, int], list[str]] | None = None,
 ) -> dict[str, Any] | None:
     message = request.message.strip()
     if not message:
@@ -98,10 +180,84 @@ def run_fast_chat_turn_impl(
     )
 
     _turn_start_ms = int(time.monotonic() * 1000)
+    setting_overrides = (
+        dict(request.setting_overrides)
+        if isinstance(request.setting_overrides, dict)
+        else {}
+    )
+    rag_enabled = str(setting_overrides.get("__rag_mode_enabled") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    mode_variant = (
+        "rag"
+        if str(request.agent_mode or "").strip().lower() == "ask"
+        and rag_enabled
+        else ""
+    )
+    display_mode = mode_variant or "ask"
+    activity_run_id = f"rag_{uuid.uuid4().hex}"
+    event_seq = 0
+
+    def emit_stream_event(payload: dict[str, Any]) -> None:
+        if emit_stream_event_fn is None:
+            return
+        emit_stream_event_fn(payload)
+
+    def emit_activity(
+        *,
+        event_type: str,
+        title: str,
+        detail: str = "",
+        data: dict[str, Any] | None = None,
+        stage: str | None = None,
+        status: str | None = None,
+    ) -> None:
+        nonlocal event_seq
+        if emit_stream_event_fn is None or make_activity_event_fn is None:
+            return
+        event_seq += 1
+        emit_stream_event(
+            {
+                "type": "activity",
+                "event": make_activity_event_fn(
+                    run_id=activity_run_id,
+                    event_type=event_type,
+                    title=title,
+                    detail=detail,
+                    data=data or {},
+                    seq=event_seq,
+                    stage=stage,
+                    status=status,
+                ),
+            }
+        )
 
     retrieval_max_sources = max(constants["API_FAST_QA_SOURCE_SCAN"], constants["API_FAST_QA_MAX_SOURCES"])
     retrieval_max_chunks = max(18, int(constants["API_FAST_QA_MAX_SNIPPETS"]) * 3)
     max_keep = max(1, int(constants["API_FAST_QA_MAX_SNIPPETS"]))
+    selected_scope_ids = _selected_scope_file_ids(selected_payload)
+    if mode_variant == "rag":
+        scope_detail = (
+            f"Checking {len(selected_scope_ids)} selected files before answering."
+            if selected_scope_ids
+            else "Checking indexed files and URLs already selected in Maia."
+        )
+        emit_activity(
+            event_type="document_review_started",
+            title="Reviewing selected knowledge sources",
+            detail=scope_detail,
+            data={
+                "scene_surface": "document",
+                "scene_family": "document",
+                "selected_file_count": len(selected_scope_ids),
+                "query": retrieval_query,
+                "mode_variant": mode_variant,
+            },
+            stage="planning",
+        )
 
     raw_snippets = load_recent_chunks_for_fast_qa_fn(
         context=context,
@@ -119,6 +275,47 @@ def run_fast_chat_turn_impl(
         if _name:
             _seen_sources[_name] = None
     all_project_sources = list(_seen_sources.keys())
+    if mode_variant == "rag":
+        reviewed_sources: dict[str, dict[str, Any]] = {}
+        for row in raw_snippets:
+            if not isinstance(row, dict):
+                continue
+            source_id = str(row.get("source_id", "") or "").strip()
+            source_name = str(row.get("source_name", "") or source_id or "Indexed file").strip() or "Indexed file"
+            if not source_id or source_id in reviewed_sources:
+                continue
+            reviewed_sources[source_id] = {
+                "source_id": source_id,
+                "source_name": source_name,
+                "page_label": str(row.get("page_label", "") or "").strip(),
+                "source_url": str(row.get("source_url", "") or "").strip(),
+            }
+        for source_id in selected_scope_ids:
+            review = reviewed_sources.get(source_id)
+            emit_activity(
+                event_type="pdf_review_checkpoint",
+                title=review["source_name"] if review else "Selected file scanned",
+                detail=(
+                    f"Scanning page {review['page_label']} for relevant evidence."
+                    if review and review.get("page_label")
+                    else (
+                        "Scanned this selected file for relevant evidence."
+                        if review
+                        else "No directly relevant evidence surfaced from this selected file."
+                    )
+                ),
+                data={
+                    "scene_surface": "document",
+                    "scene_family": "document",
+                    "file_id": source_id,
+                    "source_id": source_id,
+                    "file_name": review["source_name"] if review else "Selected file",
+                    "source_name": review["source_name"] if review else "Selected file",
+                    "source_url": review["source_url"] if review else "",
+                    "page_label": review["page_label"] if review else "",
+                },
+                stage="execution",
+            )
 
     _retrieval_end_ms = int(time.monotonic() * 1000)
     snippets, primary_source_note, selection_reason, _focus_meta = finalize_retrieved_snippets_fn(
@@ -189,6 +386,8 @@ def run_fast_chat_turn_impl(
             constants["truncate_for_log_fn"](message, 220),
         )
         return None
+
+    selected_scope_count = len(selected_scope_ids)
 
     evidence_sufficient, evidence_confidence, evidence_reason = assess_evidence_sufficiency_with_llm_fn(
         question=message,
@@ -278,6 +477,38 @@ def run_fast_chat_turn_impl(
                         constants["truncate_for_log_fn"](evidence_reason, 180),
                     )
 
+    covered_scope_ids = {
+        str(row.get("source_id", "") or "").strip()
+        for row in snippets
+        if isinstance(row, dict) and str(row.get("source_id", "") or "").strip()
+    }
+    covered_scope_count = len(covered_scope_ids.intersection(set(selected_scope_ids))) if selected_scope_ids else len(covered_scope_ids)
+    scope_review_note = ""
+    if selected_scope_ids:
+        scope_review_note = (
+            f"Selected scope review: {covered_scope_count} of {selected_scope_count} selected files surfaced relevant evidence during retrieval."
+        )
+        if primary_source_note:
+            primary_source_note = f"{primary_source_note}\n{scope_review_note}"
+        else:
+            primary_source_note = scope_review_note
+
+    if mode_variant == "rag":
+        emit_activity(
+            event_type="document_synthesis_started",
+            title="Synthesizing answer from selected sources",
+            detail=scope_review_note or "Reconciling evidence across the indexed selection.",
+            data={
+                "scene_surface": "document",
+                "scene_family": "document",
+                "selected_file_count": selected_scope_count,
+                "covered_file_count": covered_scope_count,
+                "evidence_confidence": round(float(evidence_confidence), 4),
+                "evidence_reason": evidence_reason,
+            },
+            stage="planning",
+        )
+
     if bool(url_targets) and not evidence_sufficient:
         logger.warning(
             "fast_qa_skipped reason=insufficient_evidence_for_url targets=%s confidence=%.3f note=%s question=%s",
@@ -340,6 +571,21 @@ def run_fast_chat_turn_impl(
             )
             used_general_fallback = False
 
+    if mode_variant == "rag":
+        emit_activity(
+            event_type="doc_writing_started",
+            title="Drafting evidence-grounded answer",
+            detail="Writing the answer from the reviewed PDFs and indexed sources.",
+            data={
+                "scene_surface": "document",
+                "scene_family": "document",
+                "document_name": "RAG answer draft",
+                "selected_file_count": selected_scope_count,
+                "covered_file_count": covered_scope_count,
+            },
+            stage="execution",
+        )
+
     resolved_citation_mode = resolve_required_citation_mode_fn(request.citation)
     if refs:
         answer = render_fast_citation_links_fn(
@@ -348,13 +594,53 @@ def run_fast_chat_turn_impl(
             citation_mode=resolved_citation_mode,
         )
 
-    info_text = build_fast_info_html_fn(snippets_with_refs, max_blocks=6)
+    info_block_budget = max(12, min(max(len(refs), len(snippets_with_refs)), 24))
+    info_text = build_fast_info_html_fn(snippets_with_refs, max_blocks=info_block_budget)
     if refs or not used_general_fallback:
         answer = enforce_required_citations_fn(
             answer=answer,
             info_html=info_text,
             citation_mode=resolved_citation_mode,
         )
+        try:
+            from api.services.chat.citation_sections.anchors import _anchors_to_bracket_markers
+            from api.services.chat.citation_sections.refs import evaluate_citation_quality_gate
+
+            citation_gate = evaluate_citation_quality_gate(answer_text=answer, refs=refs)
+            if refs and not bool(citation_gate.get("passed", True)):
+                repaired_answer = enforce_required_citations_fn(
+                    answer=_anchors_to_bracket_markers(answer),
+                    info_html=info_text,
+                    citation_mode=resolved_citation_mode,
+                )
+                repaired_gate = evaluate_citation_quality_gate(answer_text=repaired_answer, refs=refs)
+                if bool(repaired_gate.get("passed", False)) or repaired_answer != answer:
+                    answer = repaired_answer
+                citation_gate = repaired_gate
+        except Exception:
+            citation_gate = {}
+    else:
+        citation_gate = {}
+
+    if mode_variant == "rag" and chunk_text_for_stream_fn is not None:
+        typed_preview = ""
+        for chunk in chunk_text_for_stream_fn(answer, 260):
+            if not chunk:
+                continue
+            typed_preview += chunk
+            emit_activity(
+                event_type="doc_type_text",
+                title="Writing answer",
+                detail=chunk,
+                data={
+                    "scene_surface": "document",
+                    "scene_family": "document",
+                    "typed_preview": typed_preview,
+                    "document_name": "RAG answer draft",
+                },
+                stage="execution",
+            )
+            emit_stream_event({"type": "chat_delta", "delta": chunk, "text": typed_preview})
 
     logger.warning(
         "fast_qa_completed snippets=%d refs=%d answer_chars=%d",
@@ -389,6 +675,10 @@ def run_fast_chat_turn_impl(
         if source_dominance_detected
         else ""
     )
+    sources_used = _build_sources_used(
+        snippets_with_refs=snippets_with_refs,
+        refs=refs,
+    )
     info_panel = build_info_panel_copy_fn(
         request_message=message,
         answer_text=answer,
@@ -397,6 +687,8 @@ def run_fast_chat_turn_impl(
         next_steps=[],
         web_summary={},
     )
+    if mode_variant:
+        info_panel["mode_variant"] = mode_variant
 
     mindmap_payload: dict[str, Any] = {}
     if bool(request.use_mindmap):
@@ -439,6 +731,12 @@ def run_fast_chat_turn_impl(
 
     if source_usage:
         info_panel["source_usage"] = source_usage
+    if selected_scope_ids:
+        info_panel["selected_scope"] = {
+            "file_count": selected_scope_count,
+            "covered_file_count": covered_scope_count,
+            "file_ids": selected_scope_ids[:40],
+        }
     if _focus_meta.get("focus_applied"):
         info_panel["mindmap_focus_metadata"] = _focus_meta
     info_panel["verification_contract_version"] = constants["VERIFICATION_CONTRACT_VERSION"]
@@ -456,6 +754,8 @@ def run_fast_chat_turn_impl(
         info_panel["claim_signal_summary"] = claim_signal_summary
     if citation_quality_metrics:
         info_panel["citation_quality_metrics"] = citation_quality_metrics
+    if citation_gate:
+        info_panel["citation_quality_gate"] = citation_gate
     if source_dominance_warning:
         info_panel["source_dominance_warning"] = source_dominance_warning
     if primary_source_note:
@@ -467,6 +767,37 @@ def run_fast_chat_turn_impl(
         "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."
     )
     blocks, documents = build_turn_blocks(answer_text=answer, question=message)
+    chat_answer = answer
+    if mode_variant == "rag":
+        canvas_title = _derive_rag_canvas_title(message, answer)
+        canvas_doc = create_document(
+            user_id,
+            canvas_title,
+            answer,
+            info_html=info_text,
+            info_panel=info_panel,
+            user_prompt=message,
+            mode_variant="rag",
+            source_agent_id="rag",
+        )
+        canvas_record = {
+            **document_to_dict(canvas_doc),
+            "mode_variant": "rag",
+        }
+        documents = [canvas_record]
+        blocks = [
+            {
+                "type": "document_action",
+                "action": {
+                    "kind": "open_canvas",
+                    "title": canvas_title,
+                    "documentId": canvas_doc.id,
+                },
+            }
+        ]
+        chat_answer = ""
+        info_panel["rag_canvas_document_id"] = canvas_doc.id
+        info_panel["rag_canvas_title"] = canvas_title
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
@@ -492,8 +823,8 @@ def run_fast_chat_turn_impl(
         "retrieval_score_p50": None,
         "context_tokens_used": _focus_meta.get("context_budget_used", 0),
         "context_tokens_budget": _focus_meta.get("context_budget_limit", 6000),
-        "mode_requested": "ask",
-        "mode_actually_used": "ask",
+        "mode_requested": display_mode,
+        "mode_actually_used": display_mode,
         "halt_reason": None,
         "mindmap_generated": bool(mindmap_payload),
         "focus_applied": bool(_focus_meta.get("focus_applied")),
@@ -504,15 +835,33 @@ def run_fast_chat_turn_impl(
         "total_turn_ms": _turn_end_ms - _turn_start_ms,
     }
     info_panel["perf"] = _perf
+    if mode_variant == "rag":
+        emit_activity(
+            event_type="document_review_completed",
+            title="RAG review complete",
+            detail=(
+                f"Answered from {covered_scope_count} reviewed file(s) with citations."
+                if selected_scope_ids
+                else "Answered from indexed sources with citations."
+            ),
+            data={
+                "scene_surface": "document",
+                "scene_family": "document",
+                "selected_file_count": selected_scope_count,
+                "covered_file_count": covered_scope_count,
+            },
+            stage="verification",
+            status="success",
+        )
 
     message_meta = deepcopy(data_source.get("message_meta", []))
     turn_attachments = normalize_request_attachments_fn(request)
     message_meta.append(
         {
             "mode": "ask",
-            "activity_run_id": None,
+            "activity_run_id": activity_run_id if mode_variant == "rag" else None,
             "actions_taken": [],
-            "sources_used": [],
+            "sources_used": sources_used,
             "source_usage": source_usage,
             "attachments": turn_attachments,
             "claim_signal_summary": claim_signal_summary,
@@ -523,7 +872,8 @@ def run_fast_chat_turn_impl(
             "blocks": blocks,
             "documents": documents,
             "halt_reason": None,
-            "mode_actually_used": "ask",
+            "mode_requested": display_mode,
+            "mode_actually_used": display_mode,
             "perf": _perf,
         }
     )
@@ -543,7 +893,7 @@ def run_fast_chat_turn_impl(
         "conversation_id": conversation_id,
         "conversation_name": conversation_name,
         "message": message,
-        "answer": answer,
+        "answer": chat_answer,
         "blocks": blocks,
         "documents": documents,
         "info": info_text,
@@ -551,14 +901,15 @@ def run_fast_chat_turn_impl(
         "state": chat_state,
         "mode": "ask",
         "actions_taken": [],
-        "sources_used": [],
+        "sources_used": sources_used,
         "source_usage": source_usage,
         "claim_signal_summary": claim_signal_summary,
         "citation_quality_metrics": citation_quality_metrics,
         "next_recommended_steps": [],
-        "activity_run_id": None,
+        "activity_run_id": activity_run_id if mode_variant == "rag" else None,
         "info_panel": info_panel,
         "mindmap": mindmap_payload,
         "halt_reason": None,
-        "mode_actually_used": "ask",
+        "mode_requested": display_mode,
+        "mode_actually_used": display_mode,
     }

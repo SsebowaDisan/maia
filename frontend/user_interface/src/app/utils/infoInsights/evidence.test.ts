@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
 import { parseEvidence } from "./evidence";
@@ -142,5 +143,30 @@ describe("parseEvidence", () => {
     expect(cards[0].charStart).toBe(33);
     expect(cards[0].charEnd).toBe(79);
     expect(cards[0].highlightBoxes?.length).toBe(1);
+  });
+
+  it("parses sentence-level evidence units from info_html details", () => {
+    const cards = parseEvidence(
+      `
+        <details
+          class="evidence"
+          id="evidence-2"
+          data-file-id="file-2"
+          data-page="126"
+          data-evidence-units='[{"text":"CAPEX for a gigafactory-scale solid-state line is ~35% higher.","char_start":55,"char_end":120,"highlight_boxes":[{"x":0.1,"y":0.28,"width":0.52,"height":0.05}]}]'
+        >
+          <summary>Evidence [2]</summary>
+          <div>Source: Solid-state battery benchmark</div>
+          <div>Extract: CAPEX for a gigafactory-scale solid-state line is ~35% higher.</div>
+        </details>
+      `,
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].fileId).toBe("file-2");
+    expect(cards[0].page).toBe("126");
+    expect(cards[0].evidenceUnits).toHaveLength(1);
+    expect(cards[0].evidenceUnits?.[0]?.text).toContain("CAPEX");
+    expect(cards[0].evidenceUnits?.[0]?.highlightBoxes).toHaveLength(1);
   });
 });

@@ -15,15 +15,19 @@ from .shared import (
     _DETAILS_BOXES_RE,
     _DETAILS_CHAR_END_RE,
     _DETAILS_CHAR_START_RE,
+    _DETAILS_EVIDENCE_UNITS_RE,
     _DETAILS_MATCH_QUALITY_RE,
     _DETAILS_SOURCE_URL_RE,
     _DETAILS_STRENGTH_RE,
     _DETAILS_UNIT_ID_RE,
     _clean_text,
+    _load_evidence_units_attr,
     _load_highlight_boxes_attr,
     _normalize_info_evidence_html,
     _normalize_source_url,
     _score_value,
+    _sentence_grade_extract,
+    _serialize_evidence_units,
     _serialize_highlight_boxes,
     _snippet_signature_text,
     _strength_tier,
@@ -60,6 +64,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         match_quality_match = _DETAILS_MATCH_QUALITY_RE.search(tag)
         char_start_match = _DETAILS_CHAR_START_RE.search(tag)
         char_end_match = _DETAILS_CHAR_END_RE.search(tag)
+        evidence_units_match = _DETAILS_EVIDENCE_UNITS_RE.search(tag)
         if not page_match:
             summary_match = re.search(
                 r"<summary[^>]*>[\s\S]*?page\s+(\d{1,4})[\s\S]*?</summary>",
@@ -82,6 +87,9 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         if not source_url:
             source_url = _extract_source_url_from_details_body(body_html)
         highlight_boxes = _load_highlight_boxes_attr(boxes_match.group(1) if boxes_match else "")
+        evidence_units = _load_evidence_units_attr(
+            evidence_units_match.group(1) if evidence_units_match else ""
+        )
         refs.append(
             {
                 "id": ref_id,
@@ -92,6 +100,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
                 "source_name": source_name_extracted,
                 "phrase": phrase,
                 "highlight_boxes": highlight_boxes,
+                "evidence_units": evidence_units,
                 "unit_id": unit_id_match.group(1).strip() if unit_id_match else "",
                 "match_quality": (
                     match_quality_match.group(1).strip().lower() if match_quality_match else "estimated"
@@ -245,10 +254,13 @@ def _resolve_citation_refs(*, info_html: str, answer: str) -> list[dict[str, Any
 
 
 def _compact_evidence_extract(text: str, *, max_chars: int = 520) -> str:
-    cleaned = _clean_text(text)
+    raw_cleaned = _clean_text(text)
+    cleaned = _sentence_grade_extract(text, limit=max_chars, min_chars=72, max_sentences=2) or raw_cleaned
     if not cleaned:
         return ""
     if len(cleaned) <= max_chars:
+        if len(raw_cleaned) > max_chars and not cleaned.endswith("..."):
+            return f"{cleaned.rstrip(' .')}..."
         return cleaned
     clipped = cleaned[:max_chars]
     if " " in clipped:
@@ -318,6 +330,12 @@ def build_fast_info_html(
         )
         boxes_payload = _serialize_highlight_boxes(snippet.get("highlight_boxes"))
         details_boxes_attr = f" data-boxes='{html.escape(boxes_payload, quote=True)}'" if boxes_payload else ""
+        evidence_units_payload = _serialize_evidence_units(snippet.get("evidence_units"))
+        details_units_attr = (
+            f" data-evidence-units='{html.escape(evidence_units_payload, quote=True)}'"
+            if evidence_units_payload
+            else ""
+        )
         source_label = f"[{ref_id}] {source_name}" if ref_id > 0 else source_name
         link_block = ""
         if source_url:
@@ -344,6 +362,7 @@ def build_fast_info_html(
             f"{details_match_quality_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
             f"{details_char_start_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
             f"{details_char_end_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
+            f"{details_units_attr if MAIA_CITATION_ANCHOR_INDEX_ENABLED else ''}"
             f"{details_strength_attr}{details_strength_tier_attr}{details_boxes_attr} {'open' if not info_blocks else ''}>"
             f"<summary><i>{summary_label}</i></summary>"
             f"<div><b>Source:</b> {source_label}</div>"

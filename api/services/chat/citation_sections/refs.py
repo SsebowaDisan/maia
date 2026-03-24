@@ -8,6 +8,8 @@ from ..constants import MAIA_CITATION_CONTRADICTION_SIGNALS_ENABLED, MAIA_CITATI
 from .context import _tokens
 from .shared import (
     CITATION_MODE_INLINE,
+    _CITATION_ANCHOR_RE,
+    _HTML_TAG_RE,
     _INLINE_REF_TOKEN_RE,
     _SENTENCE_SEGMENT_RE,
     _merge_highlight_boxes,
@@ -20,11 +22,62 @@ from .shared import (
 )
 
 
+def _plain_text_for_claim_analysis(answer_text: str) -> str:
+    text = str(answer_text or "")
+    if not text:
+        return ""
+    text = _CITATION_ANCHOR_RE.sub(lambda match: str(match.group(2) or ""), text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text
+
+
 def assign_fast_source_refs(
     snippets: list[dict[str, Any]],
     *,
     strength_ordering: bool | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _normalize_evidence_units(raw: Any, *, limit: int = 12) -> list[dict[str, Any]]:
+        rows = raw if isinstance(raw, list) else []
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            text = " ".join(str(row.get("text", "") or "").split()).strip()
+            if len(text) < 8:
+                continue
+            try:
+                char_start = int(row.get("char_start", 0) or 0) if str(row.get("char_start", "")).strip() else 0
+            except Exception:
+                char_start = 0
+            try:
+                char_end = int(row.get("char_end", 0) or 0) if str(row.get("char_end", "")).strip() else 0
+            except Exception:
+                char_end = 0
+            boxes = _normalize_highlight_boxes(row.get("highlight_boxes"))
+            if not boxes:
+                continue
+            key = f"{char_start}|{char_end}|{text[:120].lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            item: dict[str, Any] = {
+                "text": text[:240],
+                "highlight_boxes": boxes,
+            }
+            if char_start > 0:
+                item["char_start"] = char_start
+            if char_end > char_start:
+                item["char_end"] = char_end
+            output.append(item)
+            if len(output) >= max(1, int(limit)):
+                break
+        return output
+
+    def _merge_evidence_units(existing: Any, incoming: Any, *, limit: int = 12) -> list[dict[str, Any]]:
+        return _normalize_evidence_units([*_normalize_evidence_units(existing, limit=limit), *_normalize_evidence_units(incoming, limit=limit)], limit=limit)
+
     ref_by_key: dict[tuple[str, str, str], int] = {}
     ref_index_by_id: dict[int, int] = {}
     refs: list[dict[str, Any]] = []
@@ -34,7 +87,8 @@ def assign_fast_source_refs(
     )
 
     for snippet in snippets:
-        source_id = str(snippet.get("source_id", "") or "").strip()
+        file_id = str(snippet.get("file_id", "") or "").strip()
+        source_id = file_id or str(snippet.get("source_id", "") or "").strip()
         source_name = str(snippet.get("source_name", "Indexed file"))
         is_primary_source = bool(snippet.get("is_primary_source"))
         source_name_url = source_name if source_name.strip().lower().startswith(("http://", "https://")) else ""
@@ -59,9 +113,21 @@ def assign_fast_source_refs(
         except Exception:
             char_end = 0
         snippet_boxes = _normalize_highlight_boxes(snippet.get("highlight_boxes"))
+        snippet_units = _normalize_evidence_units(snippet.get("evidence_units"))
         phrase = _snippet_signature_text(snippet.get("text", ""))
         snippet_strength = _snippet_strength_score(snippet)
-        dedup_span = unit_id if unit_id else snippet_selector or phrase
+        dedup_span = (
+            unit_id
+            if unit_id
+            else (
+                snippet_selector
+                or (
+                    f"{char_start}:{char_end}"
+                    if char_start > 0 and char_end > char_start
+                    else phrase
+                )
+            )
+        )
         key = (source_id or source_name, page_label, dedup_span)
         ref_id = ref_by_key.get(key)
         if ref_id is None:
@@ -86,6 +152,7 @@ def assign_fast_source_refs(
                     "char_end": char_end,
                     "match_quality": match_quality,
                     "highlight_boxes": snippet_boxes,
+                    "evidence_units": snippet_units,
                     "strength_score": snippet_strength,
                     "is_primary_source": is_primary_source,
                     "source_type": _source_type_from_name(source_name),
@@ -99,6 +166,11 @@ def assign_fast_source_refs(
                     existing_ref["highlight_boxes"] = _merge_highlight_boxes(
                         _normalize_highlight_boxes(existing_ref.get("highlight_boxes")),
                         snippet_boxes,
+                    )
+                if snippet_units:
+                    existing_ref["evidence_units"] = _merge_evidence_units(
+                        existing_ref.get("evidence_units"),
+                        snippet_units,
                     )
                 from .shared import _normalize_source_url
 
@@ -135,6 +207,8 @@ def assign_fast_source_refs(
         enriched_item["is_primary_source"] = is_primary_source
         if snippet_boxes:
             enriched_item["highlight_boxes"] = snippet_boxes
+        if snippet_units:
+            enriched_item["evidence_units"] = snippet_units
         if source_url:
             enriched_item["source_url"] = source_url
         enriched.append(enriched_item)
@@ -316,7 +390,7 @@ def build_claim_signal_summary(
     if not enabled:
         return {}
 
-    text = str(answer_text or "")
+    text = _plain_text_for_claim_analysis(answer_text)
     if not text.strip() or not refs:
         return {}
 
@@ -349,13 +423,13 @@ def build_claim_signal_summary(
         if not ref_ids:
             continue
 
-        from .shared import _CITATION_ANCHOR_RE, _clean_text
+        from .shared import _clean_text
 
         cleaned_claim = _clean_text(
             re.sub(
                 r"(?:\[|【|ã€|\{)\s*(\d{1,4})\s*(?:\]|】|ã€‘|\})",
                 "",
-                _CITATION_ANCHOR_RE.sub("", segment),
+                segment,
             )
         )
         if len(cleaned_claim) < 16:
@@ -446,6 +520,90 @@ def build_citation_quality_metrics(
             else 0.0
         ),
         "match_quality_counts": match_quality_counter,
+    }
+
+
+def evaluate_citation_quality_gate(
+    *,
+    answer_text: str,
+    refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate whether citation quality meets minimum standards.
+
+    Returns a dict with:
+      - passed: bool — whether the answer's citations are acceptable
+      - issues: list[str] — human-readable issues found
+      - dominance_ratio: float — how much the top ref dominates (0-1)
+      - uncited_paragraph_count: int — paragraphs without any citation
+      - unique_refs_cited: int — number of distinct refs used
+    """
+    text = str(answer_text or "")
+    if not text.strip() or not refs:
+        return {"passed": True, "issues": [], "dominance_ratio": 0.0,
+                "uncited_paragraph_count": 0, "unique_refs_cited": 0}
+
+    cited_ids = collect_cited_ref_ids(text)
+    unique_cited = set(cited_ids)
+    total_citations = len(cited_ids)
+
+    issues: list[str] = []
+
+    # Check dominance — one ref shouldn't account for >65% of all citations
+    dominance_ratio = 0.0
+    if total_citations >= 3:
+        freq: dict[int, int] = {}
+        for cid in cited_ids:
+            freq[cid] = freq.get(cid, 0) + 1
+        dominant_count = max(freq.values()) if freq else 0
+        dominance_ratio = dominant_count / max(1, total_citations)
+        if dominance_ratio > 0.65 and len(refs) >= 3:
+            issues.append(
+                f"Citation dominance: ref [{max(freq, key=lambda k: freq[k])}] "
+                f"accounts for {dominance_ratio:.0%} of all citations"
+            )
+
+    # Check paragraph coverage — count uncited substantive paragraphs
+    paragraphs = re.split(r"\n\s*\n", text)
+    substantive_paras = 0
+    uncited_paras = 0
+    for para in paragraphs:
+        stripped = para.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("```"):
+            continue
+        if stripped.startswith("<") and stripped.endswith(">"):
+            continue
+        if len(stripped) < 40:
+            continue
+        substantive_paras += 1
+        # Check if this paragraph has any citation marker
+        has_ref = bool(
+            re.search(r"\[\d{1,4}\]", stripped)
+            or "class='citation'" in stripped
+            or 'class="citation"' in stripped
+        )
+        if not has_ref:
+            uncited_paras += 1
+
+    if substantive_paras >= 3 and uncited_paras > substantive_paras * 0.5:
+        issues.append(
+            f"Low citation coverage: {uncited_paras}/{substantive_paras} "
+            f"substantive paragraphs have no citation"
+        )
+
+    # Check ref diversity — for multi-page questions, expect 2+ unique refs
+    if len(refs) >= 3 and len(unique_cited) <= 1 and total_citations >= 2:
+        issues.append(
+            f"No citation diversity: only {len(unique_cited)} unique ref(s) "
+            f"cited despite {len(refs)} available"
+        )
+
+    passed = len(issues) == 0
+    return {
+        "passed": passed,
+        "issues": issues,
+        "dominance_ratio": round(dominance_ratio, 4),
+        "uncited_paragraph_count": uncited_paras,
+        "unique_refs_cited": len(unique_cited),
     }
 
 
