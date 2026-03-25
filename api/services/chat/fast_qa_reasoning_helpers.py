@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -14,6 +15,14 @@ _BROAD_QUESTION_HINT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+
+def _should_skip_auxiliary_llm_calls(*, base_url: str) -> bool:
+    raw_flag = str(os.getenv("MAIA_FAST_QA_SKIP_AUX_LLM_CALLS", "") or "").strip().lower()
+    if raw_flag in {"1", "true", "yes", "on"}:
+        return True
+    normalized = str(base_url or "").strip().lower()
+    return "generativelanguage.googleapis.com" in normalized
 
 
 def _requires_broad_pdf_coverage(question: str) -> bool:
@@ -225,6 +234,8 @@ def select_relevant_snippets_with_llm(
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
         return candidates[:keep_limit]
+    if _should_skip_auxiliary_llm_calls(base_url=base_url):
+        return candidates[:keep_limit]
 
     history_rows: list[str] = []
     for row in chat_history[-4:]:
@@ -351,6 +362,8 @@ def assess_evidence_sufficiency_with_llm(
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
         return True, 0.5, "Classifier unavailable."
+    if _should_skip_auxiliary_llm_calls(base_url=base_url):
+        return True, 0.5, "Auxiliary sufficiency check skipped for provider."
 
     history_rows: list[str] = []
     for row in chat_history[-4:]:
@@ -579,7 +592,9 @@ def finalize_retrieved_snippets(
     # ── Token budget trimming pass ──────────────────────────────────────────────
     # Walk the already-prioritised list and drop snippets that would exceed the
     # declared token budget.  Highest-priority snippets are kept first.
-    budget = max(200, int(max_context_tokens))
+    # Reserve tokens for system prompt overhead (~2000) + response headroom (~500)
+    prompt_overhead = 2500
+    budget = max(200, int(max_context_tokens) - prompt_overhead)
     tokens_used = 0
     budget_trimmed: list[dict[str, Any]] = []
     for row in selected:

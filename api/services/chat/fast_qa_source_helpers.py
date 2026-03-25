@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlparse
+
+
+_FORMULA_TEXT_RE = re.compile(
+    r"(?:\$\$.*?=\s*.*?\$\$|[FDVBLMQW]\s*[xXyYzZ]?\s*_\{?[A-Za-z0-9,+\-]+\}?\s*=\s*.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+_LOW_VALUE_PREFIX_RE = re.compile(
+    r"^\s*(?:#\s*)?(?:figure|fig\.|table|chapter|contents|appendix|nomenclature)\b",
+    re.IGNORECASE,
+)
+_STREAM_TERMS = ("feed", "feeds", "vapor", "vapour", "liquid", "distillate", "bottoms", "reboiler", "condenser")
+_BALANCE_TERMS = ("material balance", "component balance", "mass balance", "distillation column")
 
 
 def selected_source_ids(selected_payload: dict[str, list[Any]]) -> set[str]:
@@ -22,9 +35,30 @@ def selected_source_ids(selected_payload: dict[str, list[Any]]) -> set[str]:
 
 def snippet_score(row: dict[str, Any]) -> float:
     try:
-        return float(row.get("score", 0.0) or 0.0)
+        if bool(row.get("_score_adjusted")):
+            return float(row.get("score", 0.0) or 0.0)
+        base_score = float(row.get("_base_score", row.get("score", 0.0)) or 0.0)
     except Exception:
-        return 0.0
+        base_score = 0.0
+
+    text = str(row.get("text", "") or "")
+    lowered = text.lower()
+    bonus = 0.0
+    if _FORMULA_TEXT_RE.search(text):
+        bonus += 10.0
+    balance_hits = sum(1 for term in _BALANCE_TERMS if term in lowered)
+    if balance_hits:
+        bonus += min(8.0, float(balance_hits) * 2.5)
+    stream_hits = sum(1 for term in _STREAM_TERMS if term in lowered)
+    if stream_hits:
+        bonus += min(5.0, float(stream_hits) * 1.0)
+    if _LOW_VALUE_PREFIX_RE.search(lowered):
+        bonus -= 12.0
+    elif "figure " in lowered and "$$" not in text and "=" not in text:
+        bonus -= 6.0
+    if len(lowered.strip()) < 80:
+        bonus -= 2.5
+    return base_score + bonus
 
 
 def annotate_primary_sources(
@@ -93,7 +127,13 @@ def annotate_primary_sources(
         item["is_primary_source"] = bool(is_primary)
         if is_primary:
             primary_count += 1
+            if "_base_score" not in item:
+                try:
+                    item["_base_score"] = float(item.get("score", 0.0) or 0.0)
+                except Exception:
+                    item["_base_score"] = 0.0
             item["score"] = snippet_score_fn(item) + 80.0
+            item["_score_adjusted"] = True
         annotated.append(item)
 
     if primary_count <= 0:

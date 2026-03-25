@@ -1,8 +1,8 @@
 from api.services.chat.fast_qa_retrieval_helpers import _ranked_chunk_selection
-from api.services.chat.fast_qa_source_helpers import prioritize_primary_evidence
+from api.services.chat.fast_qa_source_helpers import prioritize_primary_evidence, snippet_score
 
 
-def test_ranked_chunk_selection_prefers_page_diversity_within_one_source() -> None:
+def test_ranked_chunk_selection_allows_multiple_chunks_from_one_page_for_single_source() -> None:
     rows = [
         {"source_key": "file-1", "page_label": "69", "score": 15, "text": "page 69 chunk a"},
         {"source_key": "file-1", "page_label": "69", "score": 14, "text": "page 69 chunk b"},
@@ -13,7 +13,7 @@ def test_ranked_chunk_selection_prefers_page_diversity_within_one_source() -> No
     selected = _ranked_chunk_selection(rows, chunk_limit=3)
 
     assert len(selected) == 3
-    assert [str(item.get("page_label")) for item in selected] == ["69", "66", "8"]
+    assert [str(item.get("page_label")) for item in selected] == ["69", "69", "66"]
 
 
 def test_prioritize_primary_evidence_prefers_page_diversity_within_one_primary_source() -> None:
@@ -33,3 +33,16 @@ def test_prioritize_primary_evidence_prefers_page_diversity_within_one_primary_s
 
     assert len(selected) == 3
     assert [str(item.get("page_label")) for item in selected] == ["69", "66", "8"]
+
+
+def test_snippet_score_prefers_formula_balance_chunks_over_figure_caption() -> None:
+    figure_row = {
+        "score": 10.0,
+        "text": "Figure 4.4 reversible distillation for binary mixtures.",
+    }
+    formula_row = {
+        "score": 10.0,
+        "text": "Fx_{iF}=Dx_{iD}+Bx_{iB} gives the component material balance for the distillation column feed and products.",
+    }
+
+    assert snippet_score(formula_row) > snippet_score(figure_row)

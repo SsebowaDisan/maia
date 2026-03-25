@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import urlparse
+
+_logger = logging.getLogger(__name__)
 
 from ..constants import (
     MAIA_CITATION_ANCHOR_INDEX_ENABLED,
@@ -312,6 +315,15 @@ def _serialize_highlight_boxes(raw: Any) -> str:
         return ""
     payload = json.dumps(boxes, ensure_ascii=True, separators=(",", ":"))
     if len(payload) > CITATION_BOXES_MAX_CHARS:
+        _logger.warning(
+            "citation_boxes_truncated boxes=%d payload_len=%d max=%d — highlight will be missing",
+            len(boxes), len(payload), CITATION_BOXES_MAX_CHARS,
+        )
+        # Keep the first N boxes that fit instead of dropping all
+        while boxes and len(json.dumps(boxes, ensure_ascii=True, separators=(",", ":"))) > CITATION_BOXES_MAX_CHARS:
+            boxes.pop()
+        if boxes:
+            return json.dumps(boxes, ensure_ascii=True, separators=(",", ":"))
         return ""
     return payload
 

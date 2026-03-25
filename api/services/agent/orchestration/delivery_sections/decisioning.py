@@ -46,7 +46,8 @@ def _report_requires_redraft(report_body: str) -> bool:
         return True
     if lowered.startswith("subject:") and "objective:" in lowered and "working context" in lowered:
         return True
-    if len(clean) < 180 and "http" not in lowered and not clean.startswith("#"):
+    # Only reject truly empty/stub responses — short factual answers are valid
+    if len(clean) < 80 and "http" not in lowered and not clean.startswith("#"):
         return True
     return False
 

@@ -1,4 +1,5 @@
 import { pdfjs } from "react-pdf";
+import { buildAuthHeaders } from "../../../api/client/core";
 
 type ClaimTrace = {
   id: string;
@@ -169,7 +170,11 @@ async function flattenOutlineItems(
 }
 
 async function loadPdfOutline(fileUrl: string): Promise<OutlineEntry[]> {
-  const task = pdfjs.getDocument({ url: fileUrl });
+  const headers = buildAuthHeaders();
+  const task = pdfjs.getDocument({
+    url: fileUrl,
+    ...(Object.keys(headers).length > 0 ? { httpHeaders: headers } : {}),
+  });
   const pdfDocument = await task.promise;
   try {
     const outline = await pdfDocument.getOutline();

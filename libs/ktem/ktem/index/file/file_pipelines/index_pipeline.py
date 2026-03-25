@@ -15,6 +15,7 @@ from llama_index.core.readers.file.base import default_file_metadata_func
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from api.services.observability.citation_trace import record_trace_event
 from maia.base import BaseComponent, Document, Node, Param
 from maia.embeddings import BaseEmbeddings
 from maia.indices import VectorIndexing
@@ -285,6 +286,27 @@ class IndexPipeline(BaseComponent):
             else:
                 non_text_docs.append(doc)
 
+        page_labels = sorted(
+            {
+                str(doc.metadata.get("page_label", "")).strip()
+                for doc in text_docs
+                if str(doc.metadata.get("page_label", "")).strip()
+            }
+        )
+        record_trace_event(
+            "index.docs_loaded",
+            {
+                "file_name": file_name,
+                "file_id": file_id,
+                "doc_count": len(docs),
+                "text_doc_count": len(text_docs),
+                "non_text_doc_count": len(non_text_docs),
+                "thumbnail_doc_count": len(thumbnail_docs),
+                "page_count": len(page_labels),
+                "page_labels_preview": page_labels[:10],
+            },
+        )
+
         print(f"Got {len(thumbnail_docs)} page thumbnails")
         page_label_to_thumbnail = {
             doc.metadata["page_label"]: doc.doc_id for doc in thumbnail_docs
@@ -294,6 +316,15 @@ class IndexPipeline(BaseComponent):
             all_chunks = self.splitter(text_docs)
         else:
             all_chunks = text_docs
+
+        record_trace_event(
+            "index.chunks_created",
+            {
+                "file_name": file_name,
+                "file_id": file_id,
+                "text_chunk_count": len(all_chunks),
+            },
+        )
 
         for chunk in all_chunks:
             page_label = chunk.metadata.get("page_label", None)
@@ -353,6 +384,15 @@ class IndexPipeline(BaseComponent):
             yield from insert_chunks_to_vectorstore()
 
         print("indexing step took", time.time() - s_time)
+        record_trace_event(
+            "index.persisted",
+            {
+                "file_name": file_name,
+                "file_id": file_id,
+                "chunk_count": n_chunks,
+                "duration_seconds": round(time.time() - s_time, 3),
+            },
+        )
         return n_chunks
 
     def handle_chunks_docstore(self, chunks, file_id):
@@ -554,6 +594,16 @@ class IndexPipeline(BaseComponent):
             row = uploaded_file_meta.get(resolved_key)
             if isinstance(row, dict):
                 file_meta = row
+        record_trace_event(
+            "index.stream_started",
+            {
+                "file_name": file_path.name if isinstance(file_path, Path) else str(file_path),
+                "is_path": isinstance(file_path, Path),
+                "reindex": bool(reindex),
+                "ingestion_route": str(file_meta.get("ingestion_route") or ""),
+                "reader_mode": str(file_meta.get("ingestion_reader_mode") or ""),
+            },
+        )
 
         stored_file_path: Path | None = None
         file_id = self.get_id_if_exists(file_path)
@@ -569,6 +619,13 @@ class IndexPipeline(BaseComponent):
                     precomputed_size = None
             if file_id is not None:
                 if not reindex:
+                    record_trace_event(
+                        "index.stream_duplicate_blocked",
+                        {
+                            "file_name": file_path.name,
+                            "existing_file_id": file_id,
+                        },
+                    )
                     raise ValueError(
                         f"File {file_path.name} already indexed. Please rerun with "
                         "reindex=True to force reindexing."
@@ -587,6 +644,15 @@ class IndexPipeline(BaseComponent):
                     precomputed_sha256=precomputed_sha256,
                     precomputed_size=precomputed_size,
                 )
+            record_trace_event(
+                "index.file_stored",
+                {
+                    "file_name": file_path.name,
+                    "file_id": file_id,
+                    "checksum": str(file_meta.get("checksum") or "")[:16],
+                    "size": file_meta.get("size"),
+                },
+            )
             stored_file_path = self.get_stored_file_path(file_id)
         else:
             if file_id is not None:
@@ -599,6 +665,11 @@ class IndexPipeline(BaseComponent):
 
         if isinstance(file_path, Path):
             extra_info = default_file_metadata_func(str(file_path))
+            if isinstance(file_meta, dict) and file_meta:
+                for key, value in file_meta.items():
+                    if value is None:
+                        continue
+                    extra_info[key] = value
             if stored_file_path is not None:
                 extra_info["file_path"] = str(stored_file_path)
             file_name = file_path.name
@@ -611,10 +682,26 @@ class IndexPipeline(BaseComponent):
 
         yield Document(f" => Converting {file_name} to text", channel="debug")
         docs = self.loader.load_data(file_path, extra_info=extra_info)
+        record_trace_event(
+            "index.loader_completed",
+            {
+                "file_name": file_name,
+                "file_id": file_id,
+                "loader": self.loader.__class__.__name__,
+                "doc_count": len(docs),
+            },
+        )
         yield Document(f" => Converted {file_name} to text", channel="debug")
         yield from self.handle_docs(docs, file_id, file_name)
 
         self.finish(file_id, file_path)
+        record_trace_event(
+            "index.stream_completed",
+            {
+                "file_name": file_name,
+                "file_id": file_id,
+            },
+        )
 
         yield Document(f" => Finished indexing {file_name}", channel="debug")
         return file_id, docs

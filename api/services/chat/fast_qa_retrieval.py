@@ -21,6 +21,144 @@ from .fast_qa_retrieval_helpers import (
 )
 
 
+_LOW_VALUE_PREFIXES = (
+    "figure ",
+    "fig. ",
+    "table ",
+    "chapter ",
+    "contents ",
+    "appendix ",
+    "# figure ",
+    "# table ",
+    "# nomenclature",
+    "## nomenclature",
+)
+
+_STREAM_TERMS = (
+    "feed",
+    "feeds",
+    "vapor",
+    "vapour",
+    "liquid",
+    "distillate",
+    "bottoms",
+    "column",
+    "stream",
+    "reflux",
+)
+
+_BALANCE_TERMS = (
+    "material balance",
+    "component balance",
+    "mass balance",
+    "distillation column",
+    "component material balance",
+)
+
+_FORMULA_VALUE_RE = re.compile(
+    r"(?:\$\$.*?=\s*.*?\$\$|[FDVBLMQW]\s*[xXyYzZ]?\s*_\{?[A-Za-z0-9,+\-]+\}?\s*=\s*.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_low_value_chunk(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered.startswith(_LOW_VALUE_PREFIXES):
+        return True
+    if lowered.startswith(("figure", "table")) and len(lowered) < 80:
+        return True
+    if "nomenclature" in lowered and "=" not in lowered and "$$" not in lowered:
+        return True
+    if lowered.count("figure ") >= 1 and len(lowered) < 120:
+        return True
+    return False
+
+
+def _is_heading_like_chunk(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return True
+    if len(lowered) <= 60 and lowered.startswith(("# ", "## ", "### ")):
+        return True
+    if lowered.startswith("#") and "$$" not in lowered and "=" not in lowered and len(lowered) < 120:
+        return True
+    return False
+
+
+def _technical_query_relevance_boost(*, query_lower: str, text: str, query_terms: list[str]) -> float:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return -8.0
+
+    wants_technical = any(
+        token in query_lower
+        for token in (
+            "derive",
+            "equation",
+            "formula",
+            "balance",
+            "stream",
+            "vapor",
+            "vapour",
+            "liquid",
+            "feed",
+            "distillation",
+            "column",
+        )
+    )
+    if not wants_technical:
+        return 0.0
+    wants_derivation = any(
+        token in query_lower
+        for token in ("derive", "equation", "formula", "balance", "material balance", "component balance")
+    )
+
+    boost = 0.0
+    if _is_low_value_chunk(lowered):
+        boost -= 24.0
+    if _is_heading_like_chunk(lowered):
+        boost -= 10.0
+    if len(lowered) < 90:
+        boost -= 6.0
+
+    formula_hits = len(_FORMULA_VALUE_RE.findall(text or ""))
+    if formula_hits:
+        boost += min(20.0, 8.0 + (formula_hits * 4.0))
+    elif "$$" in text or re.search(r"[A-Za-z]\s*[=]\s*[^=]", text or ""):
+        boost += 8.0
+
+    stream_hits = sum(1 for term in _STREAM_TERMS if term in lowered)
+    balance_hits = sum(1 for term in _BALANCE_TERMS if term in lowered)
+    if stream_hits:
+        boost += min(10.0, stream_hits * 2.5)
+    if balance_hits:
+        boost += min(12.0, balance_hits * 4.0)
+
+    if wants_derivation:
+        if formula_hits and balance_hits:
+            boost += 22.0
+        elif formula_hits:
+            boost += 12.0
+        elif balance_hits:
+            boost += 8.0
+        else:
+            boost -= 14.0
+        if stream_hits == 0:
+            boost -= 3.0
+
+    query_overlap = sum(1 for term in query_terms if term and term in lowered)
+    if query_overlap >= 4:
+        boost += min(10.0, float(query_overlap))
+
+    if "figure " in lowered and formula_hits == 0:
+        boost -= 10.0
+    if "nomenclature" in lowered and formula_hits == 0:
+        boost -= 12.0
+    return boost
+
+
 def load_recent_chunks_for_fast_qa(
     context: ApiContext,
     user_id: str,
@@ -108,6 +246,7 @@ def load_recent_chunks_for_fast_qa(
         return []
 
     query_terms = _extract_query_terms(query, max_terms=20)
+    query_lower = str(query or "").lower()
     broad_query = len(query_terms) <= 2
     target_hosts = set(_extract_target_hosts(query))
 
@@ -123,6 +262,28 @@ def load_recent_chunks_for_fast_qa(
         page_label = str(metadata.get("page_label", "") or "")
         highlight_boxes = _extract_highlight_boxes(metadata)
         evidence_units = _extract_evidence_units(metadata)
+
+        # Fallback: if no boxes from index metadata, try precomputed page cache
+        if not highlight_boxes and page_label:
+            try:
+                from api.services.upload.pdf_highlight_locator import _extract_page_units
+                file_path_meta = metadata.get("file_path") or metadata.get("source_path") or ""
+                if file_path_meta:
+                    from pathlib import Path
+                    cached = _extract_page_units(Path(str(file_path_meta)), max(1, int(page_label) if page_label.isdigit() else 1))
+                    cached_units = cached.get("units") or []
+                    if cached_units:
+                        # Extract boxes from cached page units
+                        text_snippet = str(metadata.get("text", "") or "")[:100]
+                        for cu in cached_units:
+                            cu_text = str(cu.get("text", "") or "")
+                            if text_snippet and text_snippet[:40].lower() in cu_text.lower():
+                                cu_boxes = cu.get("highlight_boxes") or []
+                                if cu_boxes:
+                                    highlight_boxes = cu_boxes[:6]
+                                    break
+            except Exception:
+                pass  # Best-effort fallback — don't block retrieval
 
         source_id = target_to_source.get(doc_id, "")
         source_name = str(metadata.get("file_name", "") or "") or source_name_by_id.get(
@@ -171,8 +332,43 @@ def load_recent_chunks_for_fast_qa(
             continue
 
         lowered = text.lower()
-        score = sum(lowered.count(term) for term in query_terms)
-        score += 4 * sum(source_name_lower.count(term) for term in query_terms)
+
+        # Lexical score: keyword frequency
+        lexical_score = sum(lowered.count(term) for term in query_terms)
+        lexical_score += 4 * sum(source_name_lower.count(term) for term in query_terms)
+
+        # Semantic scores from index metadata (computed during indexing)
+        vector_score = _to_float(metadata.get("vector_score")) or _to_float(metadata.get("score")) or 0.0
+        rerank_score = _to_float(metadata.get("rerank_score")) or 0.0
+
+        # Hybrid score: lexical (0.5) + vector (0.3) + rerank (0.2)
+        # Normalize lexical to 0-1 range (cap at 25 keyword hits)
+        lexical_normalized = min(1.0, lexical_score / 25.0) if lexical_score > 0 else 0.0
+        score = (
+            lexical_normalized * 12.5  # Scale back to original score range (~0-12)
+            + vector_score * 8.0       # Vector similarity contributes significantly
+            + rerank_score * 5.0       # Reranker contributes if available
+        )
+
+        # Formula boost: if user asks a calculation question and chunk contains math
+        _has_math = bool(
+            "$" in text or "\\frac" in text or "\\sum" in text
+            or any(c in text for c in "∑∫√∂∇≈≠≤≥±×÷")
+            or re.search(r"[a-zA-Z]\s*[=]\s*[^=]", text)
+        )
+        _wants_calc = any(t in query_lower for t in ("calculate", "compute", "formula", "equation", "solve", "derive"))
+        if _has_math and _wants_calc:
+            score += 12  # Strong boost: user wants calculation, chunk has formulas
+        elif _has_math:
+            score += 3   # Mild boost: formulas are always high-value content
+
+        score += _technical_query_relevance_boost(
+            query_lower=query_lower,
+            text=text,
+            query_terms=query_terms,
+        )
+
+        # Heuristic boosts (preserved from original)
         if doc_type == "ocr":
             score += 4
         elif doc_type == "table":
@@ -223,6 +419,22 @@ def load_recent_chunks_for_fast_qa(
 
     if not scored_text and not image_by_source:
         return []
+
+    # Deduplicate near-identical chunks — include source + page so distinct
+    # pages of the same document are never collapsed even when their opening
+    # text is similar (common in textbooks that repeat definitions).
+    _dedup_seen: set[str] = set()
+    _deduped: list[dict[str, Any]] = []
+    for item in scored_text:
+        source_key = str(item.get("source_key", "") or "")
+        page_label = str(item.get("page_label", "") or "")
+        text_fingerprint = "".join(str(item.get("text", ""))[:200].lower().split())
+        dedup_key = f"{source_key}|{page_label}|{text_fingerprint}"
+        if dedup_key in _dedup_seen:
+            continue
+        _dedup_seen.add(dedup_key)
+        _deduped.append(item)
+    scored_text = _deduped
 
     if target_hosts:
         host_matched_text = [row for row in scored_text if bool(row.get("target_host_match"))]

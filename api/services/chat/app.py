@@ -85,6 +85,7 @@ _auto_url_cache_put = _index_helpers._auto_url_cache_put
 _normalized_request_selection = _index_helpers._normalized_request_selection
 _selected_index_ids_for_deep_search = _index_helpers._selected_index_ids_for_deep_search
 _list_index_source_ids = _index_helpers._list_index_source_ids
+_apply_attachment_index_selection = _index_helpers._apply_attachment_index_selection
 
 
 def _should_auto_web_fallback(
@@ -189,6 +190,10 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         user_id=user_id,
         request=request,
         settings=None,
+    )
+    request = _apply_attachment_index_selection(
+        context=context,
+        request=request,
     )
     requested_mode = str(request.agent_mode or "").strip().lower() or "ask"
     if API_CHAT_FAST_PATH and not _is_orchestrator_mode(requested_mode):

@@ -70,6 +70,27 @@ def _is_placeholder_api_key(value: Any) -> bool:
     return normalized in PLACEHOLDER_KEYS
 
 
+def _compatible_llm_env(primary_key: str, legacy_key: str, default: str = "") -> str:
+    primary_value = str(config(primary_key, default="") or "").strip()
+    if primary_value:
+        return primary_value
+    legacy_value = str(config(legacy_key, default="") or "").strip()
+    if legacy_value:
+        return legacy_value
+    return default
+
+
+def _has_explicit_compatible_llm_config(*, require_embeddings: bool = False) -> bool:
+    api_key = _compatible_llm_env("MAIA_LLM_API_KEY", "OPENAI_API_KEY", "")
+    base_url = _compatible_llm_env("MAIA_LLM_API_BASE", "OPENAI_API_BASE", "")
+    model_key = "MAIA_LLM_EMBEDDINGS_MODEL" if require_embeddings else "MAIA_LLM_CHAT_MODEL"
+    legacy_model_key = "OPENAI_EMBEDDINGS_MODEL" if require_embeddings else "OPENAI_CHAT_MODEL"
+    model = _compatible_llm_env(model_key, legacy_model_key, "")
+    if _is_placeholder_api_key(api_key):
+        return False
+    return bool(base_url and model)
+
+
 def _default_embedding_uses_placeholder_key() -> bool:
     try:
         default_name = embedding_models_manager.get_default_name()
@@ -149,18 +170,17 @@ def _ensure_local_embedding_default() -> None:
 
 
 def _ensure_openai_llm_default() -> None:
-    env_openai_key = str(config("OPENAI_API_KEY", default="") or "").strip()
-    if _is_placeholder_api_key(env_openai_key):
+    if not _has_explicit_compatible_llm_config():
         return
+    env_llm_key = _compatible_llm_env("MAIA_LLM_API_KEY", "OPENAI_API_KEY", "")
 
     openai_name = "openai"
     openai_spec = {
         "__type__": "maia.llms.ChatOpenAI",
         "temperature": 0,
-        "base_url": str(config("OPENAI_API_BASE", default="https://api.openai.com/v1"))
-        or "https://api.openai.com/v1",
-        "api_key": env_openai_key,
-        "model": str(config("OPENAI_CHAT_MODEL", default="gpt-4o-mini")) or "gpt-4o-mini",
+        "base_url": _compatible_llm_env("MAIA_LLM_API_BASE", "OPENAI_API_BASE", ""),
+        "api_key": env_llm_key,
+        "model": _compatible_llm_env("MAIA_LLM_CHAT_MODEL", "OPENAI_CHAT_MODEL", ""),
         "timeout": 20,
     }
 
@@ -227,18 +247,16 @@ def _ensure_viable_llm_default() -> None:
 
 
 def _ensure_openai_embedding_default() -> None:
-    env_openai_key = str(config("OPENAI_API_KEY", default="") or "").strip()
-    if _is_placeholder_api_key(env_openai_key):
+    if not _has_explicit_compatible_llm_config(require_embeddings=True):
         return
+    env_llm_key = _compatible_llm_env("MAIA_LLM_API_KEY", "OPENAI_API_KEY", "")
 
     openai_name = "openai"
     openai_spec = {
         "__type__": "maia.embeddings.OpenAIEmbeddings",
-        "base_url": str(config("OPENAI_API_BASE", default="https://api.openai.com/v1"))
-        or "https://api.openai.com/v1",
-        "api_key": env_openai_key,
-        "model": str(config("OPENAI_EMBEDDINGS_MODEL", default="text-embedding-3-large"))
-        or "text-embedding-3-large",
+        "base_url": _compatible_llm_env("MAIA_LLM_API_BASE", "OPENAI_API_BASE", ""),
+        "api_key": env_llm_key,
+        "model": _compatible_llm_env("MAIA_LLM_EMBEDDINGS_MODEL", "OPENAI_EMBEDDINGS_MODEL", ""),
         "timeout": 20,
         "context_length": 8191,
     }

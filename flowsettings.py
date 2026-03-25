@@ -127,6 +127,16 @@ KH_LLMS = {}
 KH_EMBEDDINGS = {}
 KH_RERANKINGS = {}
 
+
+def _compatible_config(primary_name: str, legacy_name: str, default: str = "") -> str:
+    primary_value = str(config(primary_name, default="") or "").strip()
+    if primary_value:
+        return primary_value
+    legacy_value = str(config(legacy_name, default="") or "").strip()
+    if legacy_value:
+        return legacy_value
+    return str(default or "").strip()
+
 # populate options from config
 if config("AZURE_OPENAI_API_KEY", default="") and config(
     "AZURE_OPENAI_ENDPOINT", default=""
@@ -162,31 +172,36 @@ if config("AZURE_OPENAI_API_KEY", default="") and config(
         }
 
 OPENAI_DEFAULT = "<YOUR_OPENAI_KEY>"
-OPENAI_API_KEY = config("OPENAI_API_KEY", default=OPENAI_DEFAULT)
+OPENAI_API_KEY = _compatible_config("MAIA_LLM_API_KEY", "OPENAI_API_KEY", OPENAI_DEFAULT)
+OPENAI_API_BASE = _compatible_config("MAIA_LLM_API_BASE", "OPENAI_API_BASE", "")
+OPENAI_CHAT_MODEL = _compatible_config("MAIA_LLM_CHAT_MODEL", "OPENAI_CHAT_MODEL", "")
+OPENAI_EMBEDDINGS_MODEL = _compatible_config(
+    "MAIA_LLM_EMBEDDINGS_MODEL",
+    "OPENAI_EMBEDDINGS_MODEL",
+    "",
+)
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", default="your-key")
 IS_OPENAI_DEFAULT = len(OPENAI_API_KEY) > 0 and OPENAI_API_KEY != OPENAI_DEFAULT
 
-if OPENAI_API_KEY:
+if OPENAI_API_KEY and OPENAI_API_BASE and OPENAI_CHAT_MODEL:
     KH_LLMS["openai"] = {
         "spec": {
             "__type__": "maia.llms.ChatOpenAI",
             "temperature": 0,
-            "base_url": config("OPENAI_API_BASE", default="")
-            or "https://api.openai.com/v1",
+            "base_url": OPENAI_API_BASE,
             "api_key": OPENAI_API_KEY,
-            "model": config("OPENAI_CHAT_MODEL", default="gpt-4o-mini"),
+            "model": OPENAI_CHAT_MODEL,
             "timeout": 20,
         },
         "default": IS_OPENAI_DEFAULT,
     }
+if OPENAI_API_KEY and OPENAI_API_BASE and OPENAI_EMBEDDINGS_MODEL:
     KH_EMBEDDINGS["openai"] = {
         "spec": {
             "__type__": "maia.embeddings.OpenAIEmbeddings",
-            "base_url": config("OPENAI_API_BASE", default="https://api.openai.com/v1"),
+            "base_url": OPENAI_API_BASE,
             "api_key": OPENAI_API_KEY,
-            "model": config(
-                "OPENAI_EMBEDDINGS_MODEL", default="text-embedding-3-large"
-            ),
+            "model": OPENAI_EMBEDDINGS_MODEL,
             "timeout": 10,
             "context_length": 8191,
         },
@@ -363,7 +378,7 @@ KH_REASONINGS = [
 KH_REASONINGS_USE_MULTIMODAL = config("USE_MULTIMODAL", default=False, cast=bool)
 KH_VLM_ENDPOINT = "{0}/openai/deployments/{1}/chat/completions?api-version={2}".format(
     config("AZURE_OPENAI_ENDPOINT", default=""),
-    config("OPENAI_VISION_DEPLOYMENT_NAME", default="gpt-4o"),
+    config("OPENAI_VISION_DEPLOYMENT_NAME", default=""),
     config("OPENAI_API_VERSION", default=""),
 )
 

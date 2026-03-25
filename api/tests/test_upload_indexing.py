@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from api.services.upload import indexing
+from api.services.observability.citation_trace import begin_trace, end_trace, snapshot_trace
 
 
 class _DummyPipeline:
@@ -580,6 +581,57 @@ def test_index_files_schedules_pdf_precompute_after_duplicate_reuse(monkeypatch)
     assert result["items"][0]["status"] == "success"
     assert scheduled == [Path("/tmp/sample.pdf")]
     assert any("scheduled page-unit precompute" in message for message in result["debug"])
+
+
+def test_index_files_emits_trace_events_for_pdf_route(monkeypatch) -> None:
+    pipeline = _DummyPipeline()
+    index = _DummyIndex(index_id=22, pipeline=pipeline)
+
+    monkeypatch.setattr(indexing, "get_index", lambda context, index_id: index)
+    monkeypatch.setattr(indexing, "apply_upload_scope_to_sources", lambda **kwargs: None)
+    monkeypatch.setattr(
+        indexing,
+        "_classify_pdf_ingestion_route",
+        lambda _path, **_kwargs: {
+            "route": "heavy",
+            "use_ocr": True,
+            "reason": "heavy-image-ratio",
+            "image_ratio_all": 0.8,
+            "low_text_ratio_sampled": 0.9,
+        },
+    )
+    monkeypatch.setattr(indexing, "UPLOAD_PADDLEOCR_ENABLED", True)
+    monkeypatch.setattr(
+        indexing,
+        "_index_pdf_with_paddleocr_route",
+        lambda **kwargs: {
+            "file_ids": ["trace-1"],
+            "errors": [],
+            "items": [{"file_name": "trace.pdf", "status": "success", "file_id": "trace-1"}],
+            "debug": [],
+        },
+    )
+    monkeypatch.setattr(indexing, "precompute_page_units_background", lambda _path: None)
+
+    handle = begin_trace(kind="upload", user_id="trace-user")
+    try:
+        indexing.index_files(
+            context=object(),  # type: ignore[arg-type]
+            user_id="trace-user",
+            file_paths=[Path("/tmp/trace.pdf")],
+            index_id=22,
+            reindex=False,
+            settings={},
+        )
+        trace = snapshot_trace()
+    finally:
+        end_trace(handle, emit_log=False)
+
+    event_types = [event["type"] for event in trace["events"]]
+    assert "index.started" in event_types
+    assert "index.route_selected" in event_types
+    assert "index.ocr_route_started" in event_types
+    assert "index.file_completed" in event_types
 
 
 def test_index_files_reuses_existing_file_when_pipeline_returns_duplicate_failure_item(

@@ -1,9 +1,88 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+from collections import OrderedDict
 from typing import Any
 
 from urllib.error import HTTPError
+
+
+_FAST_QA_RESPONSE_CACHE: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _cache_limit() -> int:
+    raw = str(os.getenv("MAIA_FAST_QA_RESPONSE_CACHE_SIZE", "") or "").strip()
+    try:
+        value = int(raw) if raw else 64
+    except Exception:
+        value = 64
+    return max(0, min(value, 512))
+
+
+def _snippet_cache_projection(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ref_id": int(row.get("ref_id", 0) or 0),
+        "source_id": str(row.get("source_id", "") or "").strip(),
+        "source_name": str(row.get("source_name", "") or "").strip(),
+        "page_label": str(row.get("page_label", "") or "").strip(),
+        "text": " ".join(str(row.get("text", "") or "").split())[:900],
+    }
+
+
+def _build_fast_qa_cache_key(
+    *,
+    question: str,
+    snippets: list[dict[str, Any]],
+    refs: list[dict[str, Any]],
+    citation_mode: str | None,
+    primary_source_note: str,
+    requested_language: str | None,
+    allow_general_knowledge: bool,
+    is_follow_up: bool,
+    base_url: str,
+    model: str,
+) -> str:
+    payload = {
+        "question": " ".join(str(question or "").split()),
+        "snippets": [_snippet_cache_projection(row) for row in snippets[:12]],
+        "refs": [
+            {
+                "id": int(ref.get("id", 0) or 0),
+                "label": str(ref.get("label", "") or "").strip(),
+            }
+            for ref in refs[:20]
+            if isinstance(ref, dict)
+        ],
+        "citation_mode": str(citation_mode or "").strip(),
+        "primary_source_note": " ".join(str(primary_source_note or "").split())[:240],
+        "requested_language": str(requested_language or "").strip(),
+        "allow_general_knowledge": bool(allow_general_knowledge),
+        "is_follow_up": bool(is_follow_up),
+        "base_url": str(base_url or "").strip().lower(),
+        "model": str(model or "").strip(),
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> str | None:
+    cached = _FAST_QA_RESPONSE_CACHE.get(key)
+    if cached is None:
+        return None
+    _FAST_QA_RESPONSE_CACHE.move_to_end(key)
+    return cached
+
+
+def _cache_put(key: str, value: str) -> None:
+    limit = _cache_limit()
+    if limit <= 0:
+        return
+    _FAST_QA_RESPONSE_CACHE[key] = value
+    _FAST_QA_RESPONSE_CACHE.move_to_end(key)
+    while len(_FAST_QA_RESPONSE_CACHE) > limit:
+        _FAST_QA_RESPONSE_CACHE.popitem(last=False)
 
 
 def call_openai_fast_qa_impl(
@@ -29,28 +108,62 @@ def call_openai_fast_qa_impl(
     API_FAST_QA_MAX_SNIPPETS: int,
     API_FAST_QA_MAX_IMAGES: int,
     API_FAST_QA_TEMPERATURE: float,
+    infer_provider_label_fn=None,
 ) -> str | None:
     api_key, base_url, model, config_source = resolve_fast_qa_llm_config_fn()
+    provider_label = (
+        infer_provider_label_fn(base_url=base_url, model=model)
+        if callable(infer_provider_label_fn)
+        else "openai-compatible"
+    )
     logger.warning(
-        "fast_qa_llm_config source=%s model=%s base=%s key_present=%s",
+        "fast_qa_llm_config source=%s provider=%s model=%s base=%s key_present=%s",
         config_source,
+        provider_label,
         model,
         base_url,
         bool(api_key),
     )
     if is_placeholder_api_key_fn(api_key):
         logger.warning(
-            "fast_qa_disabled reason=missing_openai_key source=%s question=%s",
+            "fast_qa_disabled reason=missing_openai_compatible_key source=%s provider=%s question=%s",
             config_source,
+            provider_label,
             truncate_for_log_fn(question, 220),
         )
         return None
 
+    cache_key = _build_fast_qa_cache_key(
+        question=question,
+        snippets=snippets,
+        refs=refs,
+        citation_mode=citation_mode,
+        primary_source_note=primary_source_note,
+        requested_language=requested_language,
+        allow_general_knowledge=allow_general_knowledge,
+        is_follow_up=is_follow_up,
+        base_url=base_url,
+        model=model,
+    )
+    cached_answer = _cache_get(cache_key)
+    if cached_answer:
+        logger.warning(
+            "fast_qa_cache_hit model=%s provider=%s question=%s",
+            model,
+            provider_label,
+            truncate_for_log_fn(question, 220),
+        )
+        return cached_answer
+
     context_blocks = []
-    for snippet in snippets[:API_FAST_QA_MAX_SNIPPETS]:
+    context_snippet_limit = min(
+        API_FAST_QA_MAX_SNIPPETS,
+        6 if provider_label not in {"openai", "azure-openai"} else API_FAST_QA_MAX_SNIPPETS,
+    )
+    for snippet in snippets[:context_snippet_limit]:
         source_name = str(snippet.get("source_name", "Indexed file"))
         page_label = str(snippet.get("page_label", "") or "").strip()
-        text = str(snippet.get("text", "") or "").strip()
+        text = str(snippet.get("text", "") or "").strip()[:700]
         doc_type = str(snippet.get("doc_type", "") or "").strip()
         ref_id = int(snippet.get("ref_id", 0) or 0)
         is_primary = bool(snippet.get("is_primary_source"))
@@ -79,6 +192,7 @@ def call_openai_fast_qa_impl(
         if len(visual_evidence) >= max(0, API_FAST_QA_MAX_IMAGES):
             break
 
+    general_knowledge_mode = bool(allow_general_knowledge and not context_blocks)
     history_blocks = []
     # Only include conversation history when the question is a confirmed follow-up.
     # For independent questions, suppress history so prior conversations don't leak
@@ -103,7 +217,6 @@ def call_openai_fast_qa_impl(
     history_text = "\n\n".join(history_blocks) if history_blocks else "(none)"
     context_text = "\n\n".join(context_blocks)
     refs_text = "\n".join([f"[{ref['id']}] {ref['label']}" for ref in refs[: min(len(refs), 20)]])
-    general_knowledge_mode = bool(allow_general_knowledge and not context_blocks)
     mode = resolve_required_citation_mode_fn(citation_mode)
 
     if general_knowledge_mode:
@@ -126,16 +239,42 @@ def call_openai_fast_qa_impl(
         )
 
     temperature = max(0.0, min(1.0, float(API_FAST_QA_TEMPERATURE)))
-    outline = plan_adaptive_outline_fn(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        temperature=temperature,
-        question=question,
-        history_text=history_text,
-        refs_text=refs_text,
-        context_text=context_text,
+    use_planner = not (
+        len(refs) >= 6
+        or len(context_text) >= 2400
+        or provider_label not in {"openai", "azure-openai"}
     )
+    if use_planner:
+        outline = plan_adaptive_outline_fn(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            question=question,
+            history_text=history_text,
+            refs_text=refs_text,
+            context_text=context_text,
+        )
+    else:
+        outline = {
+            "style": "adaptive-detailed",
+            "detail_level": "high",
+            "sections": [
+                {
+                    "title": "Answer",
+                    "goal": "Respond directly with evidence-grounded detail.",
+                    "format": "mixed",
+                }
+            ],
+            "tone": "professional",
+        }
+        logger.warning(
+            "fast_qa_planner_skipped provider=%s refs=%d context_chars=%d question=%s",
+            provider_label,
+            len(refs),
+            len(context_text),
+            truncate_for_log_fn(question, 220),
+        )
 
     output_instruction = (
         "Output format rules:\n"
@@ -169,6 +308,13 @@ def call_openai_fast_qa_impl(
         "- When multiple sources agree or disagree, call it out explicitly with specifics.\n"
         "- If multiple indexed PDFs or files are in the selected scope, reconcile the answer across that full selected set before concluding; do not anchor the answer to a single file unless you explicitly state the others contained no relevant evidence.\n"
         "- When indexed excerpts contain formulas, equations, symbolic definitions, or numeric tables, use those exact formulas and values first. Cite every substituted value and state when different files disagree.\n"
+        "- FORMULA APPLICATION RULE: if the user asks to calculate/compute something AND the indexed evidence contains a relevant formula, you MUST: "
+        "(1) quote the exact formula from the source with its citation [N], "
+        "(2) identify each variable in the formula, "
+        "(3) substitute the user's provided values (or values from the evidence), "
+        "(4) show every arithmetic step, "
+        "(5) state the final result with units. "
+        "Never skip the formula extraction step — the user expects you to USE the PDF's formulas, not invent your own.\n"
         "- Do not lead with isolated quoted fragments or decorative callouts unless the user explicitly asks.\n"
         "- Prefer complete sentences and coherent paragraphs over stylized snippets.\n"
         "- Keep section titles specific to the request domain; avoid generic reusable labels.\n"
@@ -178,7 +324,9 @@ def call_openai_fast_qa_impl(
         "(1) state the final numerical answer with units in the very first sentence, "
         "(2) write the governing formula as a LaTeX display equation using $$...$$, "
         "(3) show every substitution step with numbers, "
-        "(4) box or bold the final result. "
+        "(4) box or bold the final result, "
+        "(5) SELF-VERIFY: compute the result a second way if possible (e.g., plug the answer back into the original equation, "
+        "or compute using an alternative method) and confirm both methods agree. If they disagree, flag it explicitly. "
         "Use $...$ for inline math values and $$...$$ for stand-alone equations. "
         "Example for a thin-lens calculation: state di = 22.5 cm, then show "
         "$$\\frac{1}{f} = \\frac{1}{d_o} + \\frac{1}{d_i}$$ and each algebraic step.\n"
@@ -265,7 +413,7 @@ def call_openai_fast_qa_impl(
         request_payload = {
             "model": model,
             "temperature": temperature,
-            "max_tokens": 8192,
+            "max_tokens": 3072,
             "messages": [
                 {
                     "role": "system",
@@ -332,6 +480,8 @@ def call_openai_fast_qa_impl(
                 model,
                 truncate_for_log_fn(question, 220),
             )
+        if answer:
+            _cache_put(cache_key, answer)
         return answer or None
     except HTTPError as exc:
         logger.warning(

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
+import { buildAuthHeaders } from "../../api/client/core";
 import type { CitationEvidenceUnit, CitationHighlightBox } from "../types";
 import {
   buildOverlayPath,
@@ -82,6 +83,13 @@ export function CitationPdfPreview({
   const [activeTargetPage, setActiveTargetPage] = useState(
     requestedPageSafe,
   );
+  const pdfFileSource = useMemo(() => {
+    const headers = buildAuthHeaders();
+    return Object.keys(headers).length > 0
+      ? { url: fileUrl, httpHeaders: headers }
+      : fileUrl;
+  }, [fileUrl]);
+
   const searchCandidates = useMemo(() => {
     const primary = buildSearchCandidates(highlightText);
     const secondary = buildSearchCandidates(highlightQuery || "");
@@ -403,7 +411,7 @@ export function CitationPdfPreview({
         style={{ height: `${effectiveViewerHeight}px` }}
       >
         <Document
-          file={fileUrl}
+          file={pdfFileSource}
           onLoadSuccess={({ numPages: loadedPages }) => {
             const safePages = loadedPages > 0 ? loadedPages : 1;
             setNumPages(safePages);

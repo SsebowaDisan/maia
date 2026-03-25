@@ -356,7 +356,7 @@ def _enforce_paragraph_citation_coverage(answer: str, refs: list[dict[str, Any]]
         # Find best ref for this paragraph
         cleaned = _clean_text(_INLINE_REF_TOKEN_RE.sub("", stripped))
         best_ref_id, score = _best_ref_for_context(cleaned, refs)
-        if best_ref_id is not None and score >= 0.10:
+        if best_ref_id is not None and score >= 0.18:
             para = f"{para.rstrip()} [{best_ref_id}]"
             changed = True
         out_paragraphs.append(para)
@@ -421,7 +421,7 @@ def _guard_citation_dominance(answer: str, refs: list[dict[str, Any]]) -> str:
         non_dominant_refs = [r for r in refs if int(r.get("id", 0) or 0) != dominant_id]
         best_alt_id, alt_score = _best_ref_for_context(cleaned, non_dominant_refs)
 
-        if best_alt_id is not None and best_alt_id in valid_ref_ids and alt_score >= 0.12:
+        if best_alt_id is not None and best_alt_id in valid_ref_ids and alt_score >= 0.22:
             replaced = _INLINE_REF_TOKEN_RE.sub(f"[{best_alt_id}]", segment)
             rebuilt.append(replaced)
             changed = True
@@ -434,6 +434,64 @@ def _guard_citation_dominance(answer: str, refs: list[dict[str, Any]]) -> str:
         return text
 
     rewritten_body = "".join(rebuilt)
+    if tail:
+        return f"{rewritten_body.rstrip()}\n\n{tail.lstrip()}"
+    return rewritten_body
+
+
+def _collapse_single_ref_citation_noise(answer: str, refs: list[dict[str, Any]]) -> str:
+    """Collapse repeated same-ref markers to one citation per paragraph.
+
+    When only one ref is available, sentence-level repair can make the answer look
+    amateur by appending the same citation to every sentence. Keep the answer
+    grounded, but show a single citation at the end of each substantive paragraph.
+    """
+    text = str(answer or "")
+    if not text.strip() or len(refs) != 1:
+        return text
+
+    ref_id = int(refs[0].get("id", 0) or 0)
+    if ref_id <= 0:
+        return text
+
+    body, tail = _split_answer_for_inline_injection(text)
+    paragraphs = re.split(r"\n\s*\n", body)
+    changed = False
+    rebuilt: list[str] = []
+    marker_re = re.compile(rf"(?:\[\s*{ref_id}\s*\]\s*)+")
+
+    for para in paragraphs:
+        stripped = para.strip()
+        if (
+            not stripped
+            or stripped.startswith("#")
+            or stripped.startswith("```")
+            or stripped.startswith("<")
+            or len(stripped) < 40
+        ):
+            rebuilt.append(para)
+            continue
+
+        marker_count = len(re.findall(rf"\[\s*{ref_id}\s*\]", para))
+        if marker_count <= 1:
+            rebuilt.append(para)
+            continue
+
+        normalized = marker_re.sub(" ", para)
+        normalized = re.sub(r"\s+([,.;:])", r"\1", normalized)
+        normalized = re.sub(r"[ \t]{2,}", " ", normalized).strip()
+        normalized = normalized.rstrip()
+        if normalized.endswith((".", "!", "?")):
+            normalized = f"{normalized} [{ref_id}]"
+        else:
+            normalized = f"{normalized}. [{ref_id}]"
+        rebuilt.append(normalized)
+        changed = True
+
+    if not changed:
+        return text
+
+    rewritten_body = "\n\n".join(rebuilt)
     if tail:
         return f"{rewritten_body.rstrip()}\n\n{tail.lstrip()}"
     return rewritten_body
@@ -452,12 +510,16 @@ def render_fast_citation_links(
     answer = _enforce_paragraph_citation_coverage(answer, refs)
     answer = _guard_citation_dominance(answer, refs)
     answer = _inject_claim_level_bracket_citations(answer, refs)
+    answer = _collapse_single_ref_citation_noise(answer, refs)
 
     if "class='citation'" in answer or 'class="citation"' in answer:
         marker_text = _anchors_to_bracket_markers(_augment_existing_citation_anchors(answer, refs))
         marker_text = _realign_bracket_ref_numbers(marker_text, refs)
         marker_text = _diversify_repeated_ref_numbers(marker_text, refs)
+        marker_text = _enforce_paragraph_citation_coverage(marker_text, refs)
+        marker_text = _guard_citation_dominance(marker_text, refs)
         marker_text = _inject_claim_level_bracket_citations(marker_text, refs)
+        marker_text = _collapse_single_ref_citation_noise(marker_text, refs)
         ref_by_id: dict[int, dict[str, Any]] = {
             int(ref.get("id", 0) or 0): ref for ref in refs if int(ref.get("id", 0) or 0) > 0
         }

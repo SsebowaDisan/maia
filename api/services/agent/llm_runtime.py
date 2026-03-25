@@ -22,8 +22,13 @@ PLACEHOLDER_API_KEYS = {
     "null",
 }
 JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
-DEFAULT_OPENAI_BASE = "https://api.openai.com/v1"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_BASE = ""
+DEFAULT_OPENAI_MODEL = ""
+
+
+def _is_google_gemini_compatible_base(base_url: str) -> bool:
+    normalized = str(base_url or "").strip().lower()
+    return "generativelanguage.googleapis.com" in normalized
 
 
 def _env_or_config(name: str, default: str = "") -> str:
@@ -36,6 +41,16 @@ def _env_or_config(name: str, default: str = "") -> str:
         return str(config(name, default=default) or "").strip()
     except Exception:
         return str(default or "").strip()
+
+
+def _compatible_env(primary_name: str, legacy_name: str, default: str = "") -> str:
+    primary_value = _env_or_config(primary_name, "")
+    if primary_value:
+        return primary_value
+    legacy_value = _env_or_config(legacy_name, "")
+    if legacy_value:
+        return legacy_value
+    return str(default or "").strip()
 
 
 def env_bool(name: str, *, default: bool) -> bool:
@@ -61,27 +76,27 @@ def _env_int(name: str, *, default: int, minimum: int, maximum: int) -> int:
 
 
 def openai_api_key() -> str:
-    return _env_or_config("OPENAI_API_KEY", "")
+    return _compatible_env("MAIA_LLM_API_KEY", "OPENAI_API_KEY", "")
 
 
 def has_openai_credentials() -> bool:
     key = openai_api_key()
     if key.lower() not in PLACEHOLDER_API_KEYS:
-        return True
+        return bool(_openai_base_url() and _openai_chat_model())
     # Local OpenAI-compatible runtimes often run without a real key.
-    return _openai_base_url().rstrip("/") != DEFAULT_OPENAI_BASE
+    return bool(_openai_base_url() and _openai_chat_model())
 
 
 def _openai_base_url() -> str:
-    return _env_or_config("OPENAI_API_BASE", DEFAULT_OPENAI_BASE) or DEFAULT_OPENAI_BASE
+    return _compatible_env("MAIA_LLM_API_BASE", "OPENAI_API_BASE", DEFAULT_OPENAI_BASE).strip()
 
 
 def _openai_chat_model() -> str:
-    return _env_or_config("OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL) or DEFAULT_OPENAI_MODEL
+    return _compatible_env("MAIA_LLM_CHAT_MODEL", "OPENAI_CHAT_MODEL", DEFAULT_OPENAI_MODEL).strip()
 
 
 def _openai_fallback_models() -> list[str]:
-    raw = _env_or_config("OPENAI_CHAT_MODEL_FALLBACKS", "")
+    raw = _compatible_env("MAIA_LLM_CHAT_MODEL_FALLBACKS", "OPENAI_CHAT_MODEL_FALLBACKS", "")
     if not raw:
         raw = _env_or_config("MAIA_AGENT_LLM_MODEL_FALLBACKS", "")
     if not raw:
@@ -100,7 +115,7 @@ def _candidate_models(model: str | None, *, include_fallbacks: bool) -> list[str
         if not item or item in deduped:
             continue
         deduped.append(item)
-    return deduped or [DEFAULT_OPENAI_MODEL]
+    return deduped
 
 
 def extract_text_content(raw_content: Any) -> str:
@@ -205,6 +220,17 @@ def call_openai_chat(
             )
             if isinstance(thinking_flag, bool):
                 payload["enable_thinking"] = thinking_flag
+            if _is_google_gemini_compatible_base(base_url):
+                extra_body = payload.get("extra_body")
+                merged_extra = dict(extra_body) if isinstance(extra_body, dict) else {}
+                google_block = merged_extra.get("google")
+                merged_google = dict(google_block) if isinstance(google_block, dict) else {}
+                thinking_block = merged_google.get("thinking_config")
+                merged_thinking = dict(thinking_block) if isinstance(thinking_block, dict) else {}
+                merged_thinking.setdefault("thinking_budget", 0)
+                merged_google["thinking_config"] = merged_thinking
+                merged_extra["google"] = merged_google
+                payload["extra_body"] = merged_extra
             request_obj = Request(
                 base_url,
                 method="POST",

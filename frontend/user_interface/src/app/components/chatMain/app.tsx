@@ -2,15 +2,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
-  useState,
   type MouseEvent as ReactMouseEvent,
-  type UIEvent as ReactUIEvent,
 } from "react";
 import { ArrowDown } from "lucide-react";
-import { toast } from "sonner";
-import { approveAgentRunGate, listPendingGates, rejectAgentRunGate } from "../../../api/client";
-import { getPdfHighlightTargetCached } from "../../../api/client/uploads";
+import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
 import { ClarificationResumeModal } from "./ClarificationResumeModal";
 import { useCanvasStore } from "../../stores/canvasStore";
 import { useAgentRunStore } from "../../stores/agentRunStore";
@@ -24,42 +19,16 @@ import { EmptyState } from "./EmptyState";
 import { GateApprovalCard } from "./GateApprovalCard";
 import {
   CITATION_ANCHOR_SELECTOR,
-  prefetchCitationSources,
   resolveCitationAnchorInteractionPolicy,
   resolveCitationFocusFromAnchor,
   shouldOpenCitationSourceUrlForPointerEvent,
 } from "./citationFocus";
-import { readEventPayload } from "../../utils/eventPayload";
 import type { ChatMainProps } from "./types";
 import { TurnsPanel } from "./TurnsPanel";
 import { useChatMainInteractions } from "./useChatMainInteractions";
-
-const SCROLL_ICON_SETTLE_MS = 1600;
-const SCROLL_TO_LATEST_THRESHOLD_PX = 140;
-
-type PendingGateView = {
-  runId: string;
-  gateId: string;
-  toolId: string;
-  paramsPreview: string;
-  actionLabel?: string;
-  preview?: Record<string, unknown> | null;
-  costEstimateUsd: number | null;
-};
-
-function toPreviewText(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (value && typeof value === "object") {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value || "").trim();
-}
+import { useCitationPrefetch } from "./chatMainSections/useCitationPrefetch";
+import { usePendingGate } from "./chatMainSections/usePendingGate";
+import { useScrollControls } from "./chatMainSections/useScrollControls";
 
 function ChatMain({
   chatTurns,
@@ -90,21 +59,10 @@ function ChatMain({
   onDismissClarificationPrompt,
   onSubmitClarificationPrompt,
 }: ChatMainProps) {
-  const contentScrollRef = useRef<HTMLDivElement | null>(null);
-  const scrollIconHideTimeoutRef = useRef<number | null>(null);
-  const programmaticScrollRef = useRef(false);
-  const programmaticScrollTimerRef = useRef<number | null>(null);
-  const pendingGateToastRef = useRef<string>("");
-  const [scrollIconSettling, setScrollIconSettling] = useState(false);
-  const [scrollIconHovering, setScrollIconHovering] = useState(false);
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
-  const [composerCollapsed, setComposerCollapsed] = useState(false);
-  const [composerHovering, setComposerHovering] = useState(false);
-  const [composerFocused, setComposerFocused] = useState(false);
-  const [pendingGateFromApi, setPendingGateFromApi] = useState<PendingGateView | null>(null);
   const upsertDocuments = useCanvasStore((state) => state.upsertDocuments);
   const hydrateRunSnapshot = useAgentRunStore((state) => state.hydrateFromActivityEvent);
   const clearRunSnapshot = useAgentRunStore((state) => state.clear);
+
   const activeRunId = useMemo(() => {
     for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
       const runId = String(activityEvents[index]?.run_id || "").trim();
@@ -114,65 +72,19 @@ function ChatMain({
     }
     return "";
   }, [activityEvents]);
-  const pendingGateFromEvents = useMemo(() => {
-    const orderedEvents = Array.isArray(activityEvents) ? [...activityEvents] : [];
-    if (!orderedEvents.length) {
-      return null;
-    }
-    let latestPending: PendingGateView | null = null;
-    const resolvedGates = new Set<string>();
-    for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
-      const event = orderedEvents[index];
-      const eventType = String(event?.event_type || event?.type || "").trim().toLowerCase();
-      const payload = readEventPayload(event);
-      const gateId = String(payload.gate_id || "").trim();
-      if (eventType === "gate_approved" || eventType === "gate_rejected" || eventType === "gate_resolved") {
-        if (gateId) {
-          resolvedGates.add(gateId);
-        }
-        continue;
-      }
-      const isApprovalEvent = eventType === "gate_pending" || eventType === "approval_required";
-      if (!isApprovalEvent || (gateId && resolvedGates.has(gateId))) {
-        continue;
-      }
-      const runId = String(event?.run_id || payload.run_id || "").trim();
-      const toolId = String(payload.tool_id || payload.action_label || event.title || "tool").trim();
-      const previewPayload = (payload.preview ?? null) as
-        | Record<string, unknown>
-        | null;
-      const paramsPreview = toPreviewText(
-        payload.params_preview ||
-          previewPayload ||
-          event.detail ||
-          "Review tool call parameters before continuing.",
-      );
-      const numericCost = Number(payload.cost_estimate ?? Number.NaN);
-      latestPending = {
-        runId: runId || activeRunId || "",
-        gateId,
-        toolId: toolId || "tool",
-        paramsPreview: paramsPreview || "Review tool call parameters before continuing.",
-        actionLabel: String(payload.action_label || "").trim() || undefined,
-        preview: previewPayload,
-        costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
-      };
-      break;
-    }
-    return latestPending;
-  }, [activeRunId, activityEvents]);
-  const pendingGate = pendingGateFromEvents || pendingGateFromApi;
-  useEffect(() => {
-    const gateId = String(pendingGate?.gateId || "").trim();
-    if (!gateId) {
-      return;
-    }
-    if (pendingGateToastRef.current === gateId) {
-      return;
-    }
-    pendingGateToastRef.current = gateId;
-    toast.info(`Approval required for ${pendingGate?.toolId || "tool action"}.`);
-  }, [pendingGate?.gateId, pendingGate?.toolId]);
+
+  const pendingGate = usePendingGate({
+    activeRunId,
+    activityEvents: activityEvents as Array<Record<string, unknown>>,
+  });
+
+  const scroll = useScrollControls({
+    chatTurnCount: chatTurns.length,
+    selectedTurnIndex,
+    isSending,
+    isActivityStreaming,
+  });
+
   const interactions = useChatMainInteractions({
     accessMode,
     activityEvents,
@@ -279,276 +191,21 @@ function ChatMain({
     hydrateRunSnapshot((latestEvent || {}) as Record<string, unknown>);
   }, [activityEvents, clearRunSnapshot, hydrateRunSnapshot]);
 
-  useEffect(
-    () => () => {
-      if (scrollIconHideTimeoutRef.current !== null) {
-        window.clearTimeout(scrollIconHideTimeoutRef.current);
-      }
-    },
-    [],
-  );
+  useCitationPrefetch({
+    contentScrollRef: scroll.contentScrollRef,
+    chatTurns,
+  });
 
-  useEffect(() => {
-    if (!activeRunId || pendingGateFromEvents) {
-      setPendingGateFromApi(null);
-      return;
-    }
-    let disposed = false;
-    const poll = async () => {
-      try {
-        const rows = await listPendingGates(activeRunId);
-        if (disposed || !Array.isArray(rows) || !rows.length) {
-          if (!disposed) {
-            setPendingGateFromApi(null);
-          }
-          return;
-        }
-        const gate = rows[0];
-        const numericCost = Number(gate.cost_estimate ?? Number.NaN);
-        const previewPayload =
-          gate.preview && typeof gate.preview === "object"
-            ? (gate.preview as Record<string, unknown>)
-            : null;
-        const paramsPreview = toPreviewText(
-          gate.params_preview || previewPayload || "Review tool call parameters before continuing.",
-        );
-        setPendingGateFromApi({
-          runId: String(gate.run_id || activeRunId),
-          gateId: String(gate.gate_id || ""),
-          toolId: String(gate.tool_id || "tool"),
-          paramsPreview,
-          actionLabel: String(gate.action_label || "").trim() || undefined,
-          preview: previewPayload,
-          costEstimateUsd: Number.isFinite(numericCost) ? numericCost : null,
-        });
-      } catch {
-        if (!disposed) {
-          setPendingGateFromApi(null);
-        }
-      }
-    };
-    void poll();
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 3000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [activeRunId, pendingGateFromEvents]);
-
-  const scrollLatestTurnToTop = useCallback(() => {
-    const element = contentScrollRef.current;
-    if (!element) {
-      return;
-    }
-    const latestTurnIndex = chatTurns.length - 1;
-    const latestTurnNode = element.querySelector<HTMLElement>(
-      `[data-turn-index="${String(latestTurnIndex)}"]`,
-    );
-    const prefersReducedMotion =
-      typeof window !== "undefined" &&
-      (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
-    const behavior: ScrollBehavior = prefersReducedMotion ? "auto" : "smooth";
-    if (latestTurnNode) {
-      latestTurnNode.scrollIntoView({
-        behavior,
-        block: "start",
-        inline: "nearest",
-      });
-      return;
-    }
-    element.scrollTo({ top: element.scrollHeight, behavior });
-  }, [chatTurns.length]);
-
-  const refreshScrollToLatestVisibility = useCallback(
-    (element?: HTMLDivElement | null) => {
-      if (programmaticScrollRef.current) return;
-      const container = element || contentScrollRef.current;
-      if (!container || chatTurns.length === 0) {
-        setShowScrollToLatest(false);
-        return;
-      }
-      const distanceToBottom =
-        container.scrollHeight - (container.scrollTop + container.clientHeight);
-      setShowScrollToLatest(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
-    },
-    [chatTurns.length],
-  );
-
-  const scrollToLatestMessage = useCallback(() => {
-    const element = contentScrollRef.current;
-    if (!element) {
-      return;
-    }
-    const prefersReducedMotion =
-      typeof window !== "undefined" &&
-      (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false);
-
-    // Lock out scroll-driven composer/button state updates for the duration of
-    // the animation. Without this, the composer expanding mid-scroll changes
-    // clientHeight, which changes distanceToBottom, which collapses/expands the
-    // composer in a feedback loop that fights the animation.
-    programmaticScrollRef.current = true;
-    if (programmaticScrollTimerRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimerRef.current);
-    }
-    programmaticScrollTimerRef.current = window.setTimeout(() => {
-      programmaticScrollRef.current = false;
-      programmaticScrollTimerRef.current = null;
-      setComposerCollapsed(false);
-      setShowScrollToLatest(false);
-    }, prefersReducedMotion ? 50 : 600);
-
-    element.scrollTo({
-      top: element.scrollHeight,
-      behavior: prefersReducedMotion ? "auto" : "smooth",
-    });
-  }, []);
-
-  const handleContentScroll = (event: ReactUIEvent<HTMLDivElement>) => {
-    const container = event.currentTarget;
-    setScrollIconSettling(true);
-    refreshScrollToLatestVisibility(container);
-    if (!composerFocused && !programmaticScrollRef.current && !isActivityStreaming) {
-      const distanceToBottom =
-        container.scrollHeight - (container.scrollTop + container.clientHeight);
-      setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
-    }
-    if (scrollIconHideTimeoutRef.current !== null) {
-      window.clearTimeout(scrollIconHideTimeoutRef.current);
-    }
-    scrollIconHideTimeoutRef.current = window.setTimeout(() => {
-      setScrollIconSettling(false);
-      scrollIconHideTimeoutRef.current = null;
-    }, SCROLL_ICON_SETTLE_MS);
-  };
-
-  // Keep composer expanded while agent is streaming, and restore it when streaming ends.
-  useEffect(() => {
-    if (isActivityStreaming || isSending) {
-      setComposerCollapsed(true);
-      setComposerHovering(false);
-      setComposerFocused(false);
-      return;
-    }
-    setComposerCollapsed(false);
-  }, [isActivityStreaming, isSending]);
-
-  useEffect(() => {
-    if (!isSending || showScrollToLatest) {
-      return;
-    }
-    const rafId = window.requestAnimationFrame(() => {
-      scrollLatestTurnToTop();
-    });
-    return () => window.cancelAnimationFrame(rafId);
-  }, [isSending, isActivityStreaming, scrollLatestTurnToTop, showScrollToLatest]);
-
-  useEffect(() => {
-    const rafId = window.requestAnimationFrame(() => {
-      refreshScrollToLatestVisibility();
-    });
-    return () => window.cancelAnimationFrame(rafId);
-  }, [
-    chatTurns.length,
-    isSending,
-    isActivityStreaming,
-    selectedTurnIndex,
-    refreshScrollToLatestVisibility,
-  ]);
-
-  useEffect(() => {
-    const container = contentScrollRef.current;
-    if (!container || composerFocused || programmaticScrollRef.current || isActivityStreaming) {
-      return;
-    }
-    const distanceToBottom =
-      container.scrollHeight - (container.scrollTop + container.clientHeight);
-    setComposerCollapsed(distanceToBottom > SCROLL_TO_LATEST_THRESHOLD_PX);
-  }, [chatTurns.length, composerFocused, isActivityStreaming, selectedTurnIndex]);
-
-  // Prefetch citation source URLs after new turns render — warms the backend cache
-  useEffect(() => {
-    const container = contentScrollRef.current;
-    if (!container || chatTurns.length === 0) return;
-    const timer = window.setTimeout(() => prefetchCitationSources(container), 500);
-    return () => window.clearTimeout(timer);
-  }, [chatTurns.length]);
-
-  useEffect(() => {
-    const container = contentScrollRef.current;
-    if (!container || chatTurns.length === 0) {
-      return;
-    }
-
-    const prefetchCitationGeometry = (anchor: HTMLAnchorElement) => {
-      const turnNode = anchor.closest<HTMLElement>("[data-turn-index]");
-      const turnIndex = Number(turnNode?.dataset.turnIndex || Number.NaN);
-      if (!Number.isFinite(turnIndex) || turnIndex < 0 || turnIndex >= chatTurns.length) {
-        return;
-      }
-      const turn = chatTurns[turnIndex];
-      if (!turn) {
-        return;
-      }
-      const resolved = resolveCitationFocusFromAnchor({ turn, citationAnchor: anchor });
-      const focus = resolved.focus;
-      if (
-        !focus.fileId ||
-        !focus.page ||
-        (!focus.extract && !focus.claimText) ||
-        (Array.isArray(focus.highlightBoxes) && focus.highlightBoxes.length > 0) ||
-        (Array.isArray(focus.evidenceUnits) && focus.evidenceUnits.length > 0)
-      ) {
-        return;
-      }
-      void getPdfHighlightTargetCached(focus.fileId, {
-        page: focus.page,
-        text: focus.extract || "",
-        claim_text: focus.claimText || "",
-      }).catch(() => undefined);
-    };
-
-    const warmVisibleCitations = () => {
-      const anchors = Array.from(
-        container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"),
-      ).slice(0, 8);
-      for (const anchor of anchors) {
-        prefetchCitationGeometry(anchor);
-      }
-    };
-
-    const onPointerEnter = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      const anchor = target?.closest?.(CITATION_ANCHOR_SELECTOR) as HTMLAnchorElement | null;
-      if (!anchor) {
-        return;
-      }
-      prefetchCitationGeometry(anchor);
-    };
-
-    const timer = window.setTimeout(warmVisibleCitations, 320);
-    container.addEventListener("pointerenter", onPointerEnter, true);
-    return () => {
-      window.clearTimeout(timer);
-      container.removeEventListener("pointerenter", onPointerEnter, true);
-    };
-  }, [chatTurns]);
-
-  // Once a run starts, keep the composer out of the viewport until the run ends.
-  // Hover/focus should not resurrect it mid-run because that obscures the theatre.
   const hasActiveRun = isSending || isActivityStreaming;
   const isBrainActive = interactions.composerMode === "brain" && hasActiveRun;
   const composerVisible = hasActiveRun
     ? false
-    : !composerCollapsed || composerHovering || composerFocused;
+    : !scroll.composerCollapsed || scroll.composerHovering || scroll.composerFocused;
 
   const handleSelectWorkflow = useCallback(
     (workflow: WorkflowCommandSelection) => {
       const steps = Array.isArray(workflow.definition?.steps) ? workflow.definition.steps : [];
       if (steps.length === 0) {
-        toast.warning("This workflow has no steps.");
         return;
       }
       interactions.setActiveWorkflow({
@@ -567,9 +224,7 @@ function ChatMain({
   );
 
   return (
-    <div
-      className="relative h-full flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]"
-    >
+    <div className="relative h-full flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]">
       <div className="shrink-0 border-b border-black/[0.06] px-5 py-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">Dialogue</p>
@@ -578,9 +233,9 @@ function ChatMain({
       </div>
       <div className="relative min-h-0 flex-1 grow">
         <div
-          ref={contentScrollRef}
+          ref={scroll.contentScrollRef}
           className="absolute inset-0 overflow-y-auto overscroll-none px-6 pb-3 pt-6"
-          onScroll={handleContentScroll}
+          onScroll={scroll.handleContentScroll}
         >
           {pendingGate ? (
             <div className="mb-4">
@@ -606,7 +261,7 @@ function ChatMain({
           ) : (
             <TurnsPanel
               activityEvents={activityEvents}
-              autoFollowLatest={!showScrollToLatest}
+              autoFollowLatest={!scroll.showScrollToLatest}
               beginInlineEdit={interactions.beginInlineEdit}
               cancelInlineEdit={interactions.cancelInlineEdit}
               chatTurns={chatTurns}
@@ -627,14 +282,14 @@ function ChatMain({
             />
           )}
         </div>
-        {showScrollToLatest && (scrollIconSettling || scrollIconHovering) ? (
+        {scroll.showScrollToLatest && (scroll.scrollIconSettling || scroll.scrollIconHovering) ? (
           <button
             type="button"
             tabIndex={-1}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={scrollToLatestMessage}
-            onMouseEnter={() => setScrollIconHovering(true)}
-            onMouseLeave={() => setScrollIconHovering(false)}
+            onClick={scroll.scrollToLatestMessage}
+            onMouseEnter={() => scroll.setScrollIconHovering(true)}
+            onMouseLeave={() => scroll.setScrollIconHovering(false)}
             className="absolute inset-y-0 right-4 z-20 my-auto inline-flex h-10 w-10 items-center justify-center rounded-full border border-black/[0.08] bg-white/96 text-[#1d1d1f] shadow-[0_10px_24px_-18px_rgba(0,0,0,0.55)] transition hover:bg-white"
             aria-label="Scroll to latest message"
             title="Scroll to latest message"
@@ -647,12 +302,12 @@ function ChatMain({
         className="z-20 mt-auto shrink-0"
         onMouseEnter={() => {
           if (!hasActiveRun) {
-            setComposerHovering(true);
+            scroll.setComposerHovering(true);
           }
         }}
         onMouseLeave={() => {
           if (!hasActiveRun) {
-            setComposerHovering(false);
+            scroll.setComposerHovering(false);
           }
         }}
       >
@@ -700,9 +355,9 @@ function ChatMain({
               setMessage={interactions.setMessage}
               submit={interactions.submit}
               onFocusWithinChange={(focused) => {
-                setComposerFocused(focused);
+                scroll.setComposerFocused(focused);
                 if (focused) {
-                  setComposerCollapsed(false);
+                  scroll.setComposerCollapsed(false);
                 }
               }}
             />
@@ -712,7 +367,7 @@ function ChatMain({
             <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
           </div>
         ) : (
-          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pt-3 pb-[42px]">
+          <div className="border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-[42px] pt-3">
             <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
           </div>
         )}

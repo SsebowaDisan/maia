@@ -322,7 +322,7 @@ def polish_final_response(
     deep_mode_rule = (
         "- Deep research mode: produce a comprehensive, multi-section response that fully develops the topic.\n"
         "- Deep research mode: use 6-10 substantive sections, each with 3-5 developed paragraphs.\n"
-        "- Deep research mode: preserve source richness, cite heavily, and keep citation density high.\n"
+        "- Deep research mode: preserve source richness with distributed citations — cite each claim inline but avoid stacking 3+ markers on a single sentence.\n"
         "- Deep research mode: do not collapse or summarize — expand and develop every section fully.\n"
         "- Deep research mode: include specific statistics, mechanisms, trade-offs, expert perspectives, and implications.\n"
         f"- Deep research mode: target approximately {target_min_chars}-{target_max_chars} characters excluding citation appendix.\n"
@@ -405,8 +405,15 @@ def polish_final_response(
     if len(cleaned) > int(target_max_chars * 1.35):
         return fallback_answer or raw_answer
 
+    # If polish LLM dropped all inline citation markers, reject the polish.
+    # A polished answer without citations is worse than the raw answer with them.
+    raw_has_citations = contains_citation_markers(raw_answer)
+    polished_has_citations = contains_citation_markers(cleaned)
+    if raw_has_citations and not polished_has_citations:
+        return fallback_answer or raw_answer
+
     citation_tail = extract_citation_tail(raw_answer)
-    if citation_tail and not contains_citation_markers(cleaned):
+    if citation_tail and not polished_has_citations:
         cleaned = f"{cleaned}\n\n{citation_tail}".strip()
 
     cleaned = strip_wrapping_markdown_fence(cleaned)

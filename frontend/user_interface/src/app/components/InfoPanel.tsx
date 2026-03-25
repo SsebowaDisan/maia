@@ -8,6 +8,7 @@ import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { MindmapArtifactDialog } from "./MindmapArtifactDialog";
 import { TeamConversationTab } from "./agentActivityPanel/TeamConversationTab";
 import { getMindmapPayload } from "./infoPanelDerived";
+import { getTraceSummary } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
 import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
 import { parseWebReviewSourceMap, resolveWebReviewSource } from "./infoPanel/review/webReviewContent";
@@ -211,6 +212,7 @@ export function InfoPanel({
   );
 
   const mindmapPayload = useMemo(() => getMindmapPayload(infoPanel, mindmap), [infoPanel, mindmap]);
+  const traceSummary = useMemo(() => getTraceSummary(infoPanel), [infoPanel]);
   const hasMindmapPayload = Array.isArray((mindmapPayload as { nodes?: unknown[] }).nodes)
     ? ((mindmapPayload as { nodes?: unknown[] }).nodes as unknown[]).length > 0
     : false;
@@ -535,6 +537,44 @@ export function InfoPanel({
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#f6f6f7] via-[#f6f6f7]/92 to-transparent" />
         ) : null}
       </div>
+
+      {traceSummary ? (
+        <div className="shrink-0 border-t border-black/[0.06] bg-[#fbfbfc] px-4 py-3">
+          <div className="rounded-2xl border border-black/[0.06] bg-white px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                  Turn Trace
+                </p>
+                <p className="mt-1 text-[12px] font-medium text-[#17171b]">
+                  {traceSummary.kind || "chat"} - {traceSummary.eventCount} events
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#8e8e93]">Last event</p>
+                <p className="mt-1 text-[11px] font-medium text-[#374151]">
+                  {traceSummary.lastEventType || "n/a"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 rounded-xl bg-[#f8f8fb] px-3 py-2 text-[11px] text-[#6b7280]">
+              Trace ID: <span className="font-mono text-[#111827]">{traceSummary.traceId}</span>
+            </div>
+            {traceSummary.eventTypes.length ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {traceSummary.eventTypes.map((eventType) => (
+                  <span
+                    key={eventType}
+                    className="rounded-full border border-black/[0.06] bg-white px-2.5 py-1 text-[10px] font-medium text-[#4b5563]"
+                  >
+                    {eventType}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* Footer — matches sidebar footer and composer pill height (60px) */}
       <div className="shrink-0 border-t border-black/[0.06] bg-[#f6f6f7] px-3 py-3">

@@ -85,6 +85,9 @@ def assign_fast_source_refs(
     ordering_enabled = (
         MAIA_CITATION_STRENGTH_ORDERING_ENABLED if strength_ordering is None else bool(strength_ordering)
     )
+    # Sequential counter to ensure distinct chunks never collapse when all
+    # metadata differentiators (unit_id, selector, char offsets) are missing.
+    _seq_by_source: dict[str, int] = {}
 
     for snippet in snippets:
         file_id = str(snippet.get("file_id", "") or "").strip()
@@ -129,6 +132,16 @@ def assign_fast_source_refs(
             )
         )
         key = (source_id or source_name, page_label, dedup_span)
+        # When no strong identifier exists, use a sequential index to prevent
+        # chunks with genuinely different text from collapsing into one ref.
+        if not unit_id and not snippet_selector and not (char_start > 0 and char_end > char_start):
+            source_slot = source_id or source_name
+            if dedup_span:
+                key = (source_slot, page_label, dedup_span)
+            else:
+                seq_idx = _seq_by_source.get(source_slot, 0)
+                _seq_by_source[source_slot] = seq_idx + 1
+                key = (source_slot, page_label, f"seq::{seq_idx}")
         ref_id = ref_by_key.get(key)
         if ref_id is None:
             ref_id = len(refs) + 1

@@ -1,5 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { getWorkflowRecord, listAgents } from "../../../api/client";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { ChatTurn } from "../../types";
 import { buildWorkspaceModeOverride } from "./workspaceModeOverride";
 import type { ChatMainProps, ComposerAttachment } from "./types";
@@ -12,7 +11,11 @@ import {
 import { ComposerMode, WEB_SEARCH_SETTING_OVERRIDES } from "./interactions/constants";
 import { RAG_SETTING_OVERRIDES } from "../../appShell/conversationChat/constants";
 import { handleComposerFileChange } from "./interactions/fileUpload";
-import { useWorkflowViewStore } from "../../stores/workflowViewStore";
+import {
+  type ActiveAgentSelection,
+  type ActiveWorkflowSelection,
+  useComposerPrefillEffects,
+} from "./interactions/prefill";
 
 type UseChatMainInteractionsParams = Pick<
   ChatMainProps,
@@ -36,19 +39,6 @@ type UseChatMainInteractionsParams = Pick<
   | "availableGroups"
   | "availableProjects"
 >;
-
-type ActiveAgentSelection = {
-  agent_id: string;
-  name: string;
-};
-
-type ActiveWorkflowSelection = {
-  workflow_id: string;
-  name: string;
-  description: string;
-  steps: Array<{ step_id: string; agent_id: string; description?: string }>;
-  missing_connectors?: string[];
-};
 
 function useChatMainInteractions({
   accessMode,
@@ -85,8 +75,6 @@ function useChatMainInteractions({
   const statusTimerRef = useRef<number | null>(null);
   const lastClipboardEventRef = useRef<string>("");
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
-  const consumedAgentPrefillRef = useRef("");
-  const consumedWorkflowPrefillRef = useRef("");
 
   const revokeAttachmentUrl = (attachment: ComposerAttachment) => {
     const url = String(attachment.localUrl || "");
@@ -200,8 +188,8 @@ function useChatMainInteractions({
       agentMode === "rag"
         ? { ...RAG_SETTING_OVERRIDES, ...workspaceModeOverride }
         : agentMode === "deep_search" && deepSearchProfile === "web_search"
-        ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
-        : workspaceModeOverride;
+          ? { ...WEB_SEARCH_SETTING_OVERRIDES, ...workspaceModeOverride }
+          : workspaceModeOverride;
     return {
       citationMode,
       useMindmap: mindmapEnabled,
@@ -228,7 +216,6 @@ function useChatMainInteractions({
       }
       return;
     }
-    // If a workflow is active, prepend the workflow context to the user's input
     let payload = userInput;
     if (activeWorkflow) {
       const lines: string[] = [];
@@ -238,13 +225,11 @@ function useChatMainInteractions({
       }
       lines.push("");
       lines.push("Steps:");
-      for (let i = 0; i < activeWorkflow.steps.length; i++) {
+      for (let i = 0; i < activeWorkflow.steps.length; i += 1) {
         const step = activeWorkflow.steps[i];
         const label = String(step.description || step.agent_id || `Step ${i + 1}`).trim();
         const agentId = String(step.agent_id || "").trim();
-        lines.push(
-          `${i + 1}. ${label}${agentId && agentId !== label ? ` (agent: ${agentId})` : ""}`,
-        );
+        lines.push(`${i + 1}. ${label}${agentId && agentId !== label ? ` (agent: ${agentId})` : ""}`);
       }
       lines.push("");
       lines.push(`User input: ${userInput}`);
@@ -405,7 +390,7 @@ function useChatMainInteractions({
     setDeepSearchProfile("default");
     setActiveAgent(null);
     onAgentModeChange("brain");
-    showActionStatus("Maia Brain mode — describe what you want and the Brain will assemble a team.");
+    showActionStatus("Maia Brain mode � describe what you want and the Brain will assemble a team.");
   };
 
   const composerMode: ComposerMode =
@@ -473,154 +458,15 @@ function useChatMainInteractions({
     attachmentsRef.current = attachments;
   }, [attachments]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const params = new URLSearchParams(window.location.search);
-    const requestedAgentId = String(params.get("agent") || "").trim();
-    if (!requestedAgentId) {
-      return;
-    }
-    if (consumedAgentPrefillRef.current === requestedAgentId) {
-      return;
-    }
-    consumedAgentPrefillRef.current = requestedAgentId;
-    let disposed = false;
-    const prefill = async () => {
-      let agentName = requestedAgentId;
-      let resolvedAgentId = requestedAgentId;
-      try {
-        const rows = await listAgents();
-        const match = (rows || []).find((row) => {
-          const rowAgentId = String(row.agent_id || "").trim();
-          const rowId = String(row.id || "").trim();
-          return rowAgentId === requestedAgentId || rowId === requestedAgentId;
-        });
-        const nextName = String(match?.name || "").trim();
-        if (nextName) {
-          agentName = nextName;
-        }
-        const nextAgentId = String(match?.agent_id || match?.id || "").trim();
-        if (nextAgentId) {
-          resolvedAgentId = nextAgentId;
-        }
-      } catch {
-        // Keep prefill resilient even if the agents API is unavailable.
-      }
-      if (disposed) {
-        return;
-      }
-      setActiveAgent({
-        agent_id: resolvedAgentId,
-        name: agentName,
-      });
-      setAgentControlsVisible(true);
-      setDeepSearchProfile("default");
-      onAgentModeChange("company_agent");
-      setMessage((previous) => {
-        const current = previous.trim();
-        if (current) {
-          return current;
-        }
-        return `Run ${agentName} for me`;
-      });
-      showActionStatus(`Prepared prompt for ${agentName}.`);
-      params.delete("agent");
-      const nextQuery = params.toString();
-      const nextPath = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
-      window.history.replaceState({}, "", nextPath);
-    };
-    void prefill();
-    return () => {
-      disposed = true;
-    };
-  }, [onAgentModeChange, showActionStatus]);
-
-  
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const params = new URLSearchParams(window.location.search);
-    const requestedWorkflowId = String(params.get("workflow") || "").trim();
-    if (!requestedWorkflowId) {
-      return;
-    }
-    if (consumedWorkflowPrefillRef.current === requestedWorkflowId) {
-      return;
-    }
-    consumedWorkflowPrefillRef.current = requestedWorkflowId;
-    let disposed = false;
-    const prefill = async () => {
-      let workflowName = "Workflow";
-      let workflowDescription = "";
-      let workflowSteps: Array<{ step_id: string; agent_id: string; description?: string }> = [];
-      try {
-        const workflow = await getWorkflowRecord(requestedWorkflowId);
-        const definition = (workflow?.definition || {}) as Record<string, unknown>;
-        workflowName = String(workflow?.name || definition.name || "Workflow").trim() || "Workflow";
-        workflowDescription = String(workflow?.description || definition.description || "").trim();
-        const steps = Array.isArray((definition as { steps?: unknown[] }).steps)
-          ? ((definition as { steps?: Array<Record<string, unknown>> }).steps || [])
-          : [];
-        workflowSteps = steps.map((step) => ({
-          step_id: String(step.step_id || "").trim(),
-          agent_id: String(step.agent_id || "").trim(),
-          description: String(step.description || "").trim() || undefined,
-        }));
-      } catch {
-        // Keep resilient if workflow API is unavailable.
-      }
-      if (disposed) {
-        return;
-      }
-      const missingConnectorsRaw = String(params.get("missing_connectors") || "").trim();
-      const missingConnectors = missingConnectorsRaw
-        ? missingConnectorsRaw
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [];
-      setActiveWorkflow({
-        workflow_id: requestedWorkflowId,
-        name: workflowName,
-        description: workflowDescription,
-        steps: workflowSteps,
-        missing_connectors: missingConnectors,
-      });
-      setMessage((previous) => {
-        const current = previous.trim();
-        if (current) {
-          return current;
-        }
-        return `Run workflow \"${workflowName}\" with my latest context`;
-      });
-      showActionStatus(`Workflow \"${workflowName}\" is staged.`);
-      params.delete("workflow");
-      params.delete("missing_connectors");
-      const nextQuery = params.toString();
-      const nextPath = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
-      window.history.replaceState({}, "", nextPath);
-    };
-    void prefill();
-    return () => {
-      disposed = true;
-    };
-  }, [showActionStatus]);
-
-  // Pick up staged workflow message â€” pre-fills composer so user can review/attach before sending
-  useEffect(() => {
-    let prev = "";
-    return useWorkflowViewStore.subscribe((state) => {
-      const staged = state.stagedMessage;
-      if (staged && staged !== prev) {
-        prev = staged;
-        setMessage(staged);
-        useWorkflowViewStore.setState({ stagedMessage: "" });
-      }
-    });
-  }, []);
+  useComposerPrefillEffects({
+    setActiveAgent,
+    setActiveWorkflow,
+    setAgentControlsVisible,
+    setDeepSearchProfile,
+    setMessage,
+    onAgentModeChange,
+    showActionStatus,
+  });
 
   useEffect(
     () => () => {
@@ -673,4 +519,3 @@ function useChatMainInteractions({
 }
 
 export { useChatMainInteractions };
-

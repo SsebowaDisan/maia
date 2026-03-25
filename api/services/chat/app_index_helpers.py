@@ -398,6 +398,33 @@ def _selected_index_ids_for_deep_search(
     return [fallback_index] if fallback_index is not None else []
 
 
+def _apply_attachment_index_selection(
+    *,
+    context: ApiContext,
+    request: ChatRequest,
+) -> ChatRequest:
+    attachments = _normalize_request_attachments(request)
+    file_ids = [
+        str(item.get("file_id") or "").strip()
+        for item in attachments
+        if isinstance(item, dict)
+    ]
+    file_ids = [item for item in file_ids if item]
+    if not file_ids:
+        return request
+
+    index_id = _pick_target_index_id(request, context)
+    if index_id is None:
+        return request
+
+    merged_selection = _merge_request_index_selection(
+        request,
+        index_id=index_id,
+        file_ids=file_ids,
+    )
+    return _request_with_updates(request, {"index_selection": merged_selection})
+
+
 def _list_index_source_ids(
     *,
     context: ApiContext,

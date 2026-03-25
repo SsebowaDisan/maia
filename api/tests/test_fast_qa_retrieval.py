@@ -11,6 +11,7 @@ from api.services.chat.fast_qa_retrieval import (
     _extract_query_terms,
     _extract_target_hosts,
     _matches_target_hosts,
+    _technical_query_relevance_boost,
 )
 
 
@@ -246,3 +247,53 @@ def test_finalize_retrieved_snippets_broad_single_pdf_question_preserves_page_di
     assert reason == ""
     assert len(selected) >= 3
     assert [str(item.get("page_label")) for item in selected[:3]] == ["69", "66", "8"]
+
+
+def test_technical_query_relevance_boost_prefers_balance_equation_over_nomenclature() -> None:
+    query = "Derive the full component material balance for component i across the distillation column, then extend it to include vapor and liquid feeds separately."
+    terms = _extract_query_terms(query)
+    formula_text = (
+        "Component material balance across the distillation column: "
+        "$$ Fx_{iF}=Dx_{iD}+Bx_{iB} $$ "
+        "With separate vapor and liquid feeds, the balance includes feed vapor and liquid stream terms."
+    )
+    nomenclature_text = (
+        "## Nomenclature y mole fraction of vapor phase z mole fraction of liquid-vapor mixture "
+        "1, 2, 3... component labels and symbols used throughout the chapter."
+    )
+
+    formula_boost = _technical_query_relevance_boost(
+        query_lower=query.lower(),
+        text=formula_text,
+        query_terms=terms,
+    )
+    nomenclature_boost = _technical_query_relevance_boost(
+        query_lower=query.lower(),
+        text=nomenclature_text,
+        query_terms=terms,
+    )
+
+    assert formula_boost > 0
+    assert nomenclature_boost < 0
+    assert formula_boost > nomenclature_boost
+
+
+def test_technical_query_relevance_boost_penalizes_short_figure_caption() -> None:
+    query = "Derive the component balance equation for the distillation column."
+    terms = _extract_query_terms(query)
+    caption_text = "Figure 1.1."
+    equation_text = "The material balance is $$ Fx_{iF}=Dx_{iD}+Bx_{iB} $$ for the distillation column."
+
+    caption_boost = _technical_query_relevance_boost(
+        query_lower=query.lower(),
+        text=caption_text,
+        query_terms=terms,
+    )
+    equation_boost = _technical_query_relevance_boost(
+        query_lower=query.lower(),
+        text=equation_text,
+        query_terms=terms,
+    )
+
+    assert caption_boost < 0
+    assert equation_boost > caption_boost

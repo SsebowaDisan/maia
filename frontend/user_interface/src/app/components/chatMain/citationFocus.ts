@@ -640,11 +640,40 @@ function prefetchCitationSources(container: HTMLElement): void {
   }
 }
 
+/**
+ * Fetch highlight boxes from the server when they're missing from the anchor.
+ * This is the fallback path: anchor had no boxes → ask the server to compute them.
+ */
+async function fetchHighlightBoxesFromServer(
+  fileId: string,
+  page: string,
+  text: string,
+  claimText?: string,
+): Promise<{ highlightBoxes: CitationHighlightBox[]; evidenceUnits?: EvidenceUnit[] } | null> {
+  if (!fileId || !page) return null;
+  try {
+    const response = await fetch(`/api/uploads/files/${encodeURIComponent(fileId)}/highlight-target`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page, text, claim_text: claimText || "" }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const boxes = parseHighlightBoxes(JSON.stringify(data.highlight_boxes || []));
+    const units = parseEvidenceUnits(JSON.stringify(data.evidence_units || []));
+    if (boxes.length === 0) return null;
+    return { highlightBoxes: boxes, evidenceUnits: units };
+  } catch {
+    return null;
+  }
+}
+
 export {
   CITATION_ANCHOR_SELECTOR,
   normalizeCitationExtract,
   parseEvidenceRefId,
   prefetchCitationSources,
+  fetchHighlightBoxesFromServer,
   resolveCitationFocusFromAnchor,
   resolveCitationAnchorInteractionPolicy,
   resolveStrengthTier,

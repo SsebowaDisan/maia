@@ -115,6 +115,27 @@ function withUserIdHeaders(initHeaders?: HeadersInit) {
   return headers;
 }
 
+/** Plain-object version of auth headers — for libraries like react-pdf that don't accept Headers. */
+function buildAuthHeaders(): Record<string, string> {
+  const result: Record<string, string> = {};
+  try {
+    const raw = window.localStorage.getItem("maia.auth");
+    if (raw) {
+      const parsed = JSON.parse(raw) as { state?: { accessToken?: string } };
+      const token = parsed?.state?.accessToken;
+      if (token) {
+        result["Authorization"] = `Bearer ${token}`;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  if (ACTIVE_USER_ID && !result["Authorization"]) {
+    result["X-User-Id"] = ACTIVE_USER_ID;
+  }
+  return result;
+}
+
 function readPersistedAuthState(): Record<string, unknown> | null {
   if (typeof window === "undefined") {
     return null;
@@ -306,6 +327,7 @@ export {
   ACTIVE_USER_ID,
   API_BASE,
   buildApiBaseCandidates,
+  buildAuthHeaders,
   buildNetworkError,
   buildRequestUrl,
   fetchApi,

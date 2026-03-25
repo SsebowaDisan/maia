@@ -58,6 +58,7 @@ from .fast_qa_retrieval import load_recent_chunks_for_fast_qa
 from .fast_qa_runtime_helpers import (
     call_openai_chat_text as call_openai_chat_text_impl,
     extract_text_content as extract_text_content_impl,
+    infer_openai_compatible_provider as infer_openai_compatible_provider_impl,
     normalize_request_attachments as normalize_request_attachments_impl,
     parse_json_object as parse_json_object_impl,
     resolve_fast_qa_llm_config as resolve_fast_qa_llm_config_impl,
@@ -137,6 +138,10 @@ def _parse_json_object(raw_text: str) -> dict[str, Any] | None:
 
 def _truncate_for_log(value: Any, limit: int = 1600) -> str:
     return truncate_for_log_impl(value, limit)
+
+
+def _infer_openai_compatible_provider(*, base_url: str, model: str) -> str:
+    return infer_openai_compatible_provider_impl(base_url=base_url, model=model)
 
 
 def _extract_first_url(text: str) -> str:
@@ -448,6 +453,7 @@ def call_openai_fast_qa(
         build_response_language_rule_fn=build_response_language_rule,
         plan_adaptive_outline_fn=_plan_adaptive_outline,
         call_openai_chat_text_fn=_call_openai_chat_text,
+        infer_provider_label_fn=_infer_openai_compatible_provider,
         API_FAST_QA_MAX_SNIPPETS=API_FAST_QA_MAX_SNIPPETS,
         API_FAST_QA_MAX_IMAGES=API_FAST_QA_MAX_IMAGES,
         API_FAST_QA_TEMPERATURE=API_FAST_QA_TEMPERATURE,

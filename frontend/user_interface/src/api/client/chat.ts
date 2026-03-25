@@ -114,6 +114,7 @@ function sendChat(
   options?: {
     indexSelection?: Record<string, IndexSelection>;
     citation?: string;
+    language?: string;
     useMindmap?: boolean;
     mindmapSettings?: Record<string, unknown>;
     mindmapFocus?: Record<string, unknown>;
@@ -133,6 +134,7 @@ function sendChat(
       conversation_id: conversationId,
       index_selection: options?.indexSelection ?? {},
       citation: options?.citation,
+      language: options?.language,
       use_mindmap: options?.useMindmap,
       mindmap_settings: options?.mindmapSettings ?? {},
       mindmap_focus: options?.mindmapFocus ?? {},
@@ -185,6 +187,7 @@ async function sendChatStream(
   options: {
     indexSelection?: Record<string, IndexSelection>;
     citation?: string;
+    language?: string;
     useMindmap?: boolean;
     mindmapSettings?: Record<string, unknown>;
     mindmapFocus?: Record<string, unknown>;
@@ -222,6 +225,7 @@ async function sendChatStream(
       conversation_id: conversationId,
       index_selection: options?.indexSelection ?? {},
       citation: options?.citation,
+      language: options?.language,
       use_mindmap: options?.useMindmap,
       mindmap_settings: options?.mindmapSettings ?? {},
       mindmap_focus: options?.mindmapFocus ?? {},

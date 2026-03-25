@@ -319,6 +319,44 @@ def test_auto_index_urls_for_request_skips_when_marker_present(monkeypatch) -> N
     assert updated.setting_overrides.get("__auto_url_indexed") is True
 
 
+def test_apply_attachment_index_selection_merges_attachment_file_ids() -> None:
+    class _DummyContext:
+        app = SimpleNamespace(index_manager=SimpleNamespace(indices=[SimpleNamespace(id=5)]))
+
+    request = ChatRequest(
+        message="Use this uploaded PDF",
+        attachments=[{"name": "distillation.pdf", "file_id": "file-123"}],
+    )
+
+    updated = chat_app._apply_attachment_index_selection(
+        context=_DummyContext(),  # type: ignore[arg-type]
+        request=request,
+    )
+
+    assert "5" in updated.index_selection
+    assert updated.index_selection["5"].mode == "select"
+    assert updated.index_selection["5"].file_ids == ["file-123"]
+
+
+def test_apply_attachment_index_selection_keeps_existing_selected_ids() -> None:
+    class _DummyContext:
+        app = SimpleNamespace(index_manager=SimpleNamespace(indices=[SimpleNamespace(id=5)]))
+
+    request = ChatRequest(
+        message="Use these uploaded PDFs",
+        index_selection={"5": {"mode": "select", "file_ids": ["existing-file"]}},
+        attachments=[{"name": "distillation.pdf", "file_id": "file-123"}],
+    )
+
+    updated = chat_app._apply_attachment_index_selection(
+        context=_DummyContext(),  # type: ignore[arg-type]
+        request=request,
+    )
+
+    assert updated.index_selection["5"].mode == "select"
+    assert updated.index_selection["5"].file_ids == ["existing-file", "file-123"]
+
+
 def test_apply_deep_search_defaults_expands_selected_sources(monkeypatch) -> None:
     class _DummyContext:
         app = SimpleNamespace(index_manager=SimpleNamespace(indices=[SimpleNamespace(id=7)]))

@@ -40,12 +40,12 @@ def test_enforce_required_citations_uses_info_panel_refs() -> None:
     assert "href='#evidence-1'" in answer
 
 
-def test_append_required_citation_suffix_adds_internal_trace_when_refs_missing() -> None:
+def test_append_required_citation_suffix_leaves_clean_answer_when_refs_missing() -> None:
     answer = append_required_citation_suffix(
         answer="Answer without refs",
         info_html="",
     )
-    assert "Evidence: internal execution trace" in answer
+    assert answer == "Answer without refs"
 
 
 def test_enforce_required_citations_injects_inline_citation_when_only_tail_exists() -> None:
@@ -1235,3 +1235,23 @@ def test_enforce_required_citations_existing_anchor_path_injects_missing_sentenc
     assert "data-page='66'" in enriched
     assert "data-page='8'" in enriched
     assert enriched.count("class='citation'") >= 2
+
+
+def test_enforce_required_citations_collapses_single_ref_noise_to_one_citation_per_paragraph() -> None:
+    info_html = (
+        "<details class='evidence' id='evidence-1' data-file-id='file-1' data-page='7' open>"
+        "<summary><i>Evidence [1] - page 7</i></summary>"
+        "<div class='evidence-content'><b>Extract:</b> the feasible solution set is defined by two equality constraints and nonnegativity</div>"
+        "</details>"
+    )
+    answer = enforce_required_citations(
+        answer=(
+            "The feasible solution set is convex [1]. "
+            "It is defined by two equality constraints [1]. "
+            "Nonnegativity applies to every component [1]."
+        ),
+        info_html=info_html,
+        citation_mode="inline",
+    )
+    assert answer.count("class='citation'") == 1
+    assert "href='#evidence-1'" in answer

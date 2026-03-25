@@ -16,6 +16,7 @@ from .conversation_store import (
     get_or_create_conversation,
     maybe_autoname_conversation,
 )
+from .app_index_helpers import _apply_attachment_index_selection
 from .fast_qa import stream_fast_chat_turn
 from .app_stream_orchestrator import run_orchestrator_stream_turn
 from .app_stream_pipeline import run_pipeline_stream_turn
@@ -126,6 +127,10 @@ def stream_chat_turn(
         user_id=user_id,
         request=request,
         settings=settings,
+    )
+    request = _apply_attachment_index_selection(
+        context=context,
+        request=request,
     )
     request = apply_deep_search_defaults_fn(
         context=context,

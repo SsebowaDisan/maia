@@ -132,8 +132,8 @@ UPLOAD_PADDLEOCR_RENDER_DPI = max(
     96, int(config("MAIA_UPLOAD_PADDLEOCR_RENDER_DPI", default=150, cast=int))
 )
 UPLOAD_PADDLEOCR_MAX_PAGES = max(
-    0, int(config("MAIA_UPLOAD_PADDLEOCR_MAX_PAGES", default=50, cast=int))
-)
+    0, int(config("MAIA_UPLOAD_PADDLEOCR_MAX_PAGES", default=0, cast=int))
+)  # 0 = all pages (no cap). Set to a positive number to limit OCR pages.
 UPLOAD_PADDLEOCR_VL_API_ENABLED = bool(
     config("MAIA_UPLOAD_PADDLEOCR_VL_API_ENABLED", default=True, cast=bool)
 )

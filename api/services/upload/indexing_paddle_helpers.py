@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import base64
 from copy import deepcopy
+import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 from typing import Any, Callable
 import uuid
 
 import httpx
+from sqlalchemy import select
+from sqlmodel import Session
+
+from ktem.db.engine import engine
+
+from api.services.observability.citation_trace import record_trace_event
 
 
 def get_paddle_ocr_engine_impl(
@@ -86,7 +95,11 @@ def extract_text_lines_from_vlm_page_impl(
 ) -> list[str]:
     prompt = (
         "Extract all meaningful visible text from this page image, including text in diagrams, "
-        "tables, formulas, and chart labels. Return plain text only with one logical line per line. "
+        "tables, formulas, equations, and chart labels. "
+        "For mathematical formulas and equations, preserve them in LaTeX notation "
+        "(e.g., $x^2 + y^2 = z^2$, $\\sum_{t=1}^{n} \\frac{CF_t}{(1+r)^t}$). "
+        "For Greek letters use LaTeX: alpha→$\\alpha$, sigma→$\\sigma$, etc. "
+        "Return one logical line per line. "
         f"Page number: {page_number}."
     )
     raw = run_ollama_vlm_for_image_fn(
@@ -126,6 +139,15 @@ def extract_pdf_text_with_paddleocr_impl(
 ) -> tuple[Path, list[str]]:
     remote_configured = bool(
         str(paddleocr_vl_api_url or "").strip() and str(paddleocr_vl_api_token or "").strip()
+    )
+    record_trace_event(
+        "index.ocr_started",
+        {
+            "file_name": file_path.name,
+            "route": "heavy-pdf-paddleocr-vl-api"
+            if bool(paddleocr_vl_api_enabled) and remote_configured
+            else "heavy-pdf-paddleocr",
+        },
     )
     if bool(paddleocr_vl_api_enabled) and remote_configured:
         return _extract_pdf_text_with_paddleocr_vl_api_impl(
@@ -174,6 +196,17 @@ def extract_pdf_text_with_paddleocr_impl(
             render_dpi = max(render_dpi, int(vlm_extract_render_dpi))
         if use_vlm_extract:
             vlm_client = httpx.Client(timeout=ollama_timeout_fn(vlm_extract_timeout_seconds))
+        record_trace_event(
+            "index.ocr_page_plan",
+            {
+                "file_name": file_path.name,
+                "total_pages": total_pages,
+                "pages_to_process": max_pages,
+                "render_dpi": render_dpi,
+                "vlm_extract_enabled": use_vlm_extract,
+                "vlm_extract_page_limit": vlm_extract_page_limit,
+            },
+        )
         page_blocks: list[str] = []
         for page_index in range(max_pages):
             if should_cancel and should_cancel():
@@ -204,6 +237,17 @@ def extract_pdf_text_with_paddleocr_impl(
             else:
                 page_blocks.append(f"# Page {page_index + 1}\n")
         text_path.write_text("\n\n".join(page_blocks).strip() + "\n", encoding="utf-8")
+        record_trace_event(
+            "index.ocr_completed",
+            {
+                "file_name": file_path.name,
+                "pages_processed": max_pages,
+                "total_pages": total_pages,
+                "output_path": str(text_path),
+                "vlm_pages_processed": vlm_pages_processed,
+                "vlm_pages_failed": vlm_pages_failed,
+            },
+        )
         debug_rows.append(
             f"PaddleOCR extracted text for {max_pages}/{total_pages} page(s) at {render_dpi} DPI."
         )
@@ -300,7 +344,7 @@ def _extract_pdf_text_with_paddleocr_vl_api_impl(
     if not isinstance(layout_results, list) or not layout_results:
         raise RuntimeError("PaddleOCR-VL API response did not include layoutParsingResults.")
 
-    blocks: list[str] = []
+    page_blocks: dict[str, list[str]] = {}
     markdown_docs = 0
     for idx, row in enumerate(layout_results, start=1):
         if should_cancel and should_cancel():
@@ -316,12 +360,48 @@ def _extract_pdf_text_with_paddleocr_vl_api_impl(
         if not markdown_text:
             continue
         markdown_docs += 1
-        blocks.append(f"# Layout Result {idx}\n{markdown_text}")
+        page_value = (
+            row.get("pageNumber")
+            or row.get("page_number")
+            or row.get("pageNo")
+            or row.get("page_no")
+            or idx
+        )
+        page_label = str(page_value).strip() or str(idx)
+        page_blocks.setdefault(page_label, []).append(markdown_text)
 
-    if not blocks:
+    if not page_blocks:
         raise RuntimeError("PaddleOCR-VL API response contained no markdown/text content.")
 
-    text_path.write_text("\n\n".join(blocks).strip() + "\n", encoding="utf-8")
+    ordered_blocks: list[str] = []
+    for page_label in sorted(
+        page_blocks.keys(),
+        key=lambda value: (0, int(value)) if str(value).isdigit() else (1, str(value)),
+    ):
+        joined = "\n\n".join(
+            str(block).strip()
+            for block in page_blocks.get(page_label, [])
+            if str(block).strip()
+        ).strip()
+        if not joined:
+            continue
+        ordered_blocks.append(f"# Page {page_label}\n{joined}")
+
+    if not ordered_blocks:
+        raise RuntimeError("PaddleOCR-VL API response contained no markdown/text content.")
+
+    text_path.write_text("\n\n".join(ordered_blocks).strip() + "\n", encoding="utf-8")
+    record_trace_event(
+        "index.ocr_completed",
+        {
+            "file_name": file_path.name,
+            "pages_processed": len(ordered_blocks),
+            "total_layout_results": len(layout_results),
+            "markdown_docs": markdown_docs,
+            "output_path": str(text_path),
+            "api_route": "paddleocr-vl-api",
+        },
+    )
     debug_rows.append(
         "PaddleOCR-VL API extracted markdown text for "
         f"{markdown_docs}/{len(layout_results)} parsed layout result(s)."
@@ -360,6 +440,69 @@ def build_target_uploaded_meta_impl(
     return meta_map
 
 
+def preserve_original_pdf_for_indexed_source_impl(
+    *,
+    index: Any,
+    file_id: str,
+    source_path: Path,
+) -> None:
+    if str(source_path.suffix or "").lower() != ".pdf":
+        return
+    if not source_path.exists() or not source_path.is_file():
+        return
+
+    Source = index._resources["Source"]
+    fs_path = Path(index._resources["FileStoragePath"])
+    with Session(engine) as session:
+        source_row = session.execute(select(Source).where(Source.id == file_id)).first()
+        if not source_row:
+            return
+        row = source_row[0]
+        stored_name = str(row.path or "").strip()
+        if not stored_name:
+            return
+        stored_path = fs_path / stored_name
+        if not stored_path.exists():
+            return
+
+        pdf_storage_name = f"{stored_path.name}.pdf"
+        pdf_storage_path = stored_path.with_name(pdf_storage_name)
+        if not pdf_storage_path.exists():
+            try:
+                os.link(source_path, pdf_storage_path)
+            except Exception:
+                shutil.copy2(source_path, pdf_storage_path)
+
+        note = row.note
+        if isinstance(note, str):
+            try:
+                note = json.loads(note)
+            except Exception:
+                note = {}
+        if not isinstance(note, dict):
+            note = {}
+        note["indexed_text_storage_name"] = stored_path.name
+        note["indexed_text_storage_path"] = str(stored_path)
+        note["source_original_pdf_storage_name"] = pdf_storage_name
+        note["source_original_pdf_storage_path"] = str(pdf_storage_path)
+        note["source_original_pdf_name"] = source_path.name
+        row.note = note
+        row.name = source_path.name
+        row.path = pdf_storage_name
+        row.size = int(source_path.stat().st_size)
+        session.add(row)
+        session.commit()
+
+    record_trace_event(
+        "index.original_pdf_preserved",
+        {
+            "file_id": file_id,
+            "source_name": source_path.name,
+            "pdf_storage_name": pdf_storage_name,
+        },
+    )
+
+
 def run_index_pipeline_for_file_impl(
     *,
     index: Any,
@@ -381,6 +524,15 @@ def run_index_pipeline_for_file_impl(
     request_settings[f"{prefix}reader_mode"] = str(reader_mode or "default")
     request_settings.setdefault(f"{prefix}quick_index_mode", upload_index_quick_mode)
     indexing_pipeline = index.get_indexing_pipeline(request_settings, user_id)
+    record_trace_event(
+        "index.pipeline_prepared",
+        {
+            "source_name": source_path.name,
+            "target_name": target_path.name,
+            "reader_mode": str(reader_mode or "default"),
+            "route": route,
+        },
+    )
     effective_meta = build_target_uploaded_meta_fn(
         target_path=target_path,
         source_path=source_path,
@@ -396,6 +548,17 @@ def run_index_pipeline_for_file_impl(
     file_ids, errors, items, debug = collect_index_stream_fn(
         stream,
         should_cancel=should_cancel,
+    )
+    record_trace_event(
+        "index.pipeline_completed",
+        {
+            "source_name": source_path.name,
+            "target_name": target_path.name,
+            "route": route,
+            "file_ids": list(file_ids),
+            "error_count": len(errors),
+            "item_count": len(items),
+        },
     )
     return {
         "file_ids": file_ids,
@@ -422,6 +585,13 @@ def index_pdf_with_paddleocr_route_impl(
         file_path=file_path,
         should_cancel=should_cancel,
     )
+    record_trace_event(
+        "index.ocr_routed_file_ready",
+        {
+            "file_name": file_path.name,
+            "extracted_text_path": str(extracted_text_path),
+        },
+    )
     try:
         response = run_index_pipeline_for_file_fn(
             index=index,
@@ -436,6 +606,22 @@ def index_pdf_with_paddleocr_route_impl(
             should_cancel=should_cancel,
             route="heavy-pdf-paddleocr",
         )
+        for file_id in list(response.get("file_ids") or []):
+            try:
+                preserve_original_pdf_for_indexed_source_impl(
+                    index=index,
+                    file_id=str(file_id),
+                    source_path=file_path,
+                )
+            except Exception as exc:
+                record_trace_event(
+                    "index.original_pdf_preserve_failed",
+                    {
+                        "file_id": str(file_id),
+                        "source_name": file_path.name,
+                        "error": str(exc),
+                    },
+                )
         response["debug"] = [*route_debug, *list(response.get("debug") or [])]
         return response
     finally:

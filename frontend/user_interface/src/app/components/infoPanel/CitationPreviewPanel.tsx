@@ -59,6 +59,7 @@ function CitationPreviewPanel({
   const [resolvedGeometry, setResolvedGeometry] = useState<{
     highlightBoxes: CitationFocus["highlightBoxes"];
     evidenceUnits: CitationFocus["evidenceUnits"];
+    traceId?: string;
   } | null>(null);
   const [isResolvingGeometry, setIsResolvingGeometry] = useState(false);
 
@@ -116,6 +117,7 @@ function CitationPreviewPanel({
         setResolvedGeometry({
           highlightBoxes,
           evidenceUnits,
+          traceId: String(result.trace_id || "").trim() || undefined,
         });
         setIsResolvingGeometry(false);
       })
@@ -124,6 +126,7 @@ function CitationPreviewPanel({
           setResolvedGeometry({
             highlightBoxes: [],
             evidenceUnits: [],
+            traceId: undefined,
           });
           setIsResolvingGeometry(false);
         }
@@ -155,6 +158,11 @@ function CitationPreviewPanel({
     }
     return resolvedGeometry?.evidenceUnits || [];
   }, [citationFocus.evidenceUnits, resolvedGeometry?.evidenceUnits]);
+
+  const highlightTraceId = useMemo(
+    () => String(resolvedGeometry?.traceId || "").trim(),
+    [resolvedGeometry?.traceId],
+  );
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[#d2d2d7] bg-white shadow-sm">
@@ -224,6 +232,11 @@ function CitationPreviewPanel({
           <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#eadfbe] bg-[#fff9eb] px-3 py-2 text-[12px] text-[#7a5a12]">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>Locating the cited passage and preparing the highlight…</span>
+          </div>
+        ) : null}
+        {highlightTraceId ? (
+          <div className="mb-3 rounded-xl border border-black/[0.06] bg-[#f8f8fb] px-3 py-2 text-[11px] text-[#6b7280]">
+            Highlight trace: <span className="font-mono text-[#111827]">{highlightTraceId}</span>
           </div>
         ) : null}
         {citationRawUrl && citationIsPdf ? (

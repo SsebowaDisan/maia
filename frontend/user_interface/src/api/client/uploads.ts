@@ -2,6 +2,7 @@ import {
   ACTIVE_USER_ID,
   API_BASE,
   buildApiBaseCandidates,
+  fetchApi,
   buildNetworkError,
   buildRequestUrl,
   isNetworkError,
@@ -22,7 +23,8 @@ import type {
 } from "./types";
 
 function getRawFileUrl(fileId: string): string {
-  return `${API_BASE}/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
+  const base = `${API_BASE}/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
+  return ACTIVE_USER_ID ? `${base}?user_id=${encodeURIComponent(ACTIVE_USER_ID)}` : base;
 }
 
 function getPdfHighlightTarget(
@@ -34,10 +36,20 @@ function getPdfHighlightTarget(
     index_id?: number;
   },
 ) {
-  return request<HighlightTargetResponse>(`/api/uploads/files/${encodeURIComponent(fileId)}/highlight-target`, {
+  return fetchApi(`/api/uploads/files/${encodeURIComponent(fileId)}/highlight-target`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed: ${response.status}`);
+    }
+    const body = (await response.json()) as HighlightTargetResponse;
+    const traceId = String(response.headers.get("X-Maia-Trace-Id") || "").trim();
+    if (traceId) {
+      body.trace_id = traceId;
+    }
+    return body;
   });
 }
 
@@ -518,6 +530,9 @@ function cancelIngestionJob(jobId: string) {
 
 function buildRawFileUrl(fileId: string, options?: { indexId?: number; download?: boolean }) {
   const query = new URLSearchParams();
+  if (ACTIVE_USER_ID) {
+    query.set("user_id", ACTIVE_USER_ID);
+  }
   if (typeof options?.indexId === "number") {
     query.set("index_id", String(options.indexId));
   }

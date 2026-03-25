@@ -1,93 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ACTIVE_USER_ID } from "../../api/client/core";
-import {
-  createConversation,
-  deleteConversation,
-  getAgentRunEvents,
-  getConversation,
-  listConversations,
-  updateConversation,
-  type ConversationSummary,
-} from "../../api/client";
-import { buildConversationTurns, extractAgentEvents } from "./eventHelpers";
+import { getAgentRunEvents, type ConversationSummary } from "../../api/client";
 import { DEFAULT_PROJECT_ID } from "./constants";
 import type { SidebarProject } from "./types";
-import type {
-  AgentActivityEvent,
-  ChatTurn,
-  CitationFocus,
-  ClarificationPrompt,
-} from "../types";
-import { clarificationPromptFromEvent } from "./conversationChat/clarification";
+import type { AgentActivityEvent, ChatTurn, CitationFocus, ClarificationPrompt } from "../types";
 import {
   MINDMAP_SETTINGS_STORAGE_KEY,
-  normalizeMindmapMapType,
   type AccessMode,
   type AgentMode,
   type ConversationMindmapSettings,
   type MindmapMapType,
   type SendMessageOptions,
 } from "./conversationChat/constants";
-import { sendConversationMessage } from "./conversationChat/sendMessage";
-import { readStoredJson, readStoredText } from "./storage";
-
-type UseConversationChatParams = {
-  projects: SidebarProject[];
-  selectedProjectId: string;
-  setSelectedProjectId: (projectId: string) => void;
-  conversationProjects: Record<string, string>;
-  setConversationProjects: Dispatch<SetStateAction<Record<string, string>>>;
-  conversationModes: Record<string, AgentMode>;
-  setConversationModes: Dispatch<SetStateAction<Record<string, AgentMode>>>;
-  defaultIndexId: number | null;
-};
-
-type CachedConversationSnapshot = {
-  turns: ChatTurn[];
-  selectedTurnIndex: number | null;
-  infoText: string;
-  composerMode: AgentMode;
-};
-
-function storageScopeForUser(rawUserId: string | null): string {
-  const normalized = String(rawUserId || "default").trim().replace(/[^a-zA-Z0-9._-]/g, "_");
-  return normalized || "default";
-}
-
-function readStoredMindmapSettings(
-  key: string,
-  fallbackKey: string,
-): Record<string, ConversationMindmapSettings> {
-  if (typeof window === "undefined") {
-    return {};
-  }
-  try {
-    const raw = window.localStorage.getItem(key) || window.localStorage.getItem(fallbackKey);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as Record<string, ConversationMindmapSettings>;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const normalized: Record<string, ConversationMindmapSettings> = {};
-    for (const [conversationId, value] of Object.entries(parsed)) {
-      if (!value || typeof value !== "object") {
-        continue;
-      }
-      const candidate = value as Partial<ConversationMindmapSettings>;
-      normalized[conversationId] = {
-        enabled: Boolean(candidate.enabled),
-        maxDepth: Math.max(2, Math.min(8, Number(candidate.maxDepth || 4))),
-        includeReasoningMap: Boolean(candidate.includeReasoningMap),
-        mapType: normalizeMindmapMapType(candidate.mapType),
-      };
-    }
-    return normalized;
-  } catch {
-    return {};
-  }
-}
+import { buildConversationTurns, extractAgentEvents } from "./eventHelpers";
+import {
+  buildClarificationContinuation,
+  createConversationForProject,
+  deleteConversationWithState,
+  hydrateInitialConversation,
+  refreshConversations as refreshConversationsAction,
+  renameConversation,
+  resetConversationDetail,
+  selectConversation,
+  sendConversationMessageFromHook,
+  syncFallbackProject,
+} from "./useConversationChatSections/actions";
+import {
+  deriveInitialSelectedTurnIndex,
+  getInitialConversationCache,
+  readStoredJson,
+  readStoredMindmapSettings,
+  storageScopeForUser,
+  stripTurnActivityForCache,
+  type CachedConversationSnapshot,
+  type UseConversationChatParams,
+} from "./useConversationChatSections/common";
 
 export function useConversationChat({
   projects,
@@ -101,33 +48,22 @@ export function useConversationChat({
 }: UseConversationChatParams) {
   const userStorageScope = storageScopeForUser(ACTIVE_USER_ID);
   const mindmapSettingsStorageKey = `${MINDMAP_SETTINGS_STORAGE_KEY}:${userStorageScope}`;
-  const lastConversationStorageKey = `maia.last-conversation-id:${userStorageScope}`;
-  const conversationsCacheStorageKey = `maia.conversations-cache:${userStorageScope}`;
-  const conversationDetailCacheStorageKey = `maia.conversation-detail-cache:${userStorageScope}`;
-  const cachedConversationId = readStoredText(lastConversationStorageKey, "").trim() || null;
-  const cachedConversationSnapshots = readStoredJson<Record<string, CachedConversationSnapshot>>(
+  const {
+    cachedConversationId,
+    conversationsCacheStorageKey,
     conversationDetailCacheStorageKey,
-    {},
-  );
-  const initialCachedSnapshot = cachedConversationId
-    ? cachedConversationSnapshots[cachedConversationId] || null
-    : null;
+    initialCachedSnapshot,
+    lastConversationStorageKey,
+  } = getInitialConversationCache(userStorageScope);
 
   const [conversations, setConversations] = useState<ConversationSummary[]>(() =>
     readStoredJson<ConversationSummary[]>(conversationsCacheStorageKey, []),
   );
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(cachedConversationId);
   const [chatTurns, setChatTurns] = useState<ChatTurn[]>(() => initialCachedSnapshot?.turns || []);
-  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(() => {
-    if (!initialCachedSnapshot?.turns?.length) {
-      return null;
-    }
-    const candidate = Number(initialCachedSnapshot.selectedTurnIndex);
-    if (Number.isFinite(candidate) && candidate >= 0 && candidate < initialCachedSnapshot.turns.length) {
-      return candidate;
-    }
-    return initialCachedSnapshot.turns.length - 1;
-  });
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(() =>
+    deriveInitialSelectedTurnIndex(initialCachedSnapshot),
+  );
   const [infoText, setInfoText] = useState(() => initialCachedSnapshot?.infoText || "");
   const [citationMode, setCitationMode] = useState("inline");
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
@@ -148,63 +84,6 @@ export function useConversationChat({
   const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
   const selectedTurnIndexRef = useRef<number | null>(selectedTurnIndex);
 
-  const applyConversationState = useCallback(
-    (
-      conversationId: string,
-      turns: ChatTurn[],
-      mode: AgentMode,
-      preferredTurnIndex?: number | null,
-      fallbackInfoText = "",
-    ) => {
-      setChatTurns(turns);
-      setComposerMode(mode);
-      const mapSettings = conversationMindmapSettings[conversationId];
-      if (mapSettings) {
-        setMindmapEnabled(Boolean(mapSettings.enabled));
-        setMindmapMaxDepth(Math.max(2, Math.min(8, Number(mapSettings.maxDepth || 4))));
-        setMindmapIncludeReasoning(Boolean(mapSettings.includeReasoningMap));
-        setMindmapMapType(normalizeMindmapMapType(mapSettings.mapType));
-      } else {
-        setMindmapEnabled(true);
-        setMindmapMaxDepth(4);
-        setMindmapIncludeReasoning(true);
-        setMindmapMapType("structure");
-      }
-
-      if (!turns.length) {
-        setSelectedTurnIndex(null);
-        setInfoText("");
-        setActivityEvents([]);
-        return;
-      }
-
-      const requestedIndex = Number(preferredTurnIndex);
-      const safeIndex =
-        Number.isFinite(requestedIndex) && requestedIndex >= 0 && requestedIndex < turns.length
-          ? requestedIndex
-          : turns.length - 1;
-      setSelectedTurnIndex(safeIndex);
-      setInfoText(turns[safeIndex]?.info || fallbackInfoText || "");
-      setActivityEvents(turns[safeIndex]?.activityEvents || []);
-    },
-    [conversationMindmapSettings],
-  );
-
-  const stripTurnActivityForCache = useCallback(
-    (turns: ChatTurn[]): ChatTurn[] =>
-      turns.map((turn) =>
-        turn.activityEvents && turn.activityEvents.length > 0
-          ? { ...turn, activityEvents: [] }
-          : turn,
-      ),
-    [],
-  );
-
-  const refreshConversations = useCallback(async () => {
-    const items = await listConversations();
-    setConversations(items);
-  }, []);
-
   const visibleConversations = useMemo(
     () =>
       conversations.filter(
@@ -214,11 +93,13 @@ export function useConversationChat({
     [conversations, conversationProjects, selectedProjectId],
   );
 
-  const resetConversationDetail = useCallback(() => {
-    setChatTurns([]);
-    setSelectedTurnIndex(null);
-    setInfoText("");
-    setActivityEvents([]);
+  const refreshConversations = useCallback(
+    async () => refreshConversationsAction(setConversations),
+    [],
+  );
+
+  const resetConversationDetailState = useCallback(() => {
+    resetConversationDetail({ setChatTurns, setSelectedTurnIndex, setInfoText, setActivityEvents });
   }, []);
 
   useEffect(() => {
@@ -228,9 +109,9 @@ export function useConversationChat({
     const selectedConversationProject = conversationProjects[selectedConversationId] || DEFAULT_PROJECT_ID;
     if (selectedConversationProject !== selectedProjectId) {
       setSelectedConversationId(null);
-      resetConversationDetail();
+      resetConversationDetailState();
     }
-  }, [conversationProjects, resetConversationDetail, selectedConversationId, selectedProjectId]);
+  }, [conversationProjects, resetConversationDetailState, selectedConversationId, selectedProjectId]);
 
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
@@ -301,130 +182,54 @@ export function useConversationChat({
     infoText,
     selectedConversationId,
     selectedTurnIndex,
-    stripTurnActivityForCache,
   ]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
-      setSelectedConversationId(conversationId);
-      const cachedSnapshots = readStoredJson<Record<string, CachedConversationSnapshot>>(
+      await selectConversation({
+        conversationId,
         conversationDetailCacheStorageKey,
-        {},
-      );
-      const cachedSnapshot = cachedSnapshots[conversationId] || null;
-      const savedMode = conversationModes[conversationId] || cachedSnapshot?.composerMode || "ask";
-      if (cachedSnapshot) {
-        applyConversationState(
-          conversationId,
-          cachedSnapshot.turns || [],
-          savedMode,
-          cachedSnapshot.selectedTurnIndex,
-          cachedSnapshot.infoText,
-        );
-      }
-      try {
-        const detail = await getConversation(conversationId);
-        const { turns, runIds } = buildConversationTurns(detail);
-        const baseTurns = turns.map((turn) => ({
-          ...turn,
-          activityEvents: turn.activityEvents || [],
-        }));
-        applyConversationState(
-          conversationId,
-          baseTurns,
-          savedMode,
-          cachedSnapshot?.selectedTurnIndex,
-          cachedSnapshot?.infoText || "",
-        );
-
-        if (runIds.length > 0) {
-          void Promise.all(
-            runIds.map(async (runId) => {
-              try {
-                const rows = await getAgentRunEvents(runId);
-                return [runId, extractAgentEvents(rows)] as const;
-              } catch {
-                return [runId, [] as AgentActivityEvent[]] as const;
-              }
-            }),
-          ).then((entries) => {
-            if (selectedConversationIdRef.current !== conversationId) {
-              return;
-            }
-            const runEventsMap = Object.fromEntries(entries);
-            const hydratedTurns = baseTurns.map((turn) =>
-              turn.activityRunId
-                ? { ...turn, activityEvents: runEventsMap[turn.activityRunId] || [] }
-                : turn,
-            );
-            setChatTurns(hydratedTurns);
-            const activeIndex = selectedTurnIndexRef.current;
-            if (
-              Number.isFinite(activeIndex) &&
-              activeIndex !== null &&
-              activeIndex >= 0 &&
-              activeIndex < hydratedTurns.length
-            ) {
-              setActivityEvents(hydratedTurns[activeIndex]?.activityEvents || []);
-            }
-          });
-        }
-      } catch (error) {
-        const reason =
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message.trim()
-            : "This chat could not be loaded from the server.";
-        if (!cachedSnapshot) {
-          setChatTurns([]);
-          setSelectedTurnIndex(null);
-          setActivityEvents([]);
-        }
-        setInfoText(`Unable to open this chat right now. ${reason}`);
-        void refreshConversations().catch(() => undefined);
-      }
+        conversationModes,
+        conversationMindmapSettings,
+        selectedConversationIdRef,
+        selectedTurnIndexRef,
+        setSelectedConversationId,
+        setChatTurns,
+        setComposerMode,
+        setMindmapEnabled,
+        setMindmapMaxDepth,
+        setMindmapIncludeReasoning,
+        setMindmapMapType,
+        setSelectedTurnIndex,
+        setInfoText,
+        setActivityEvents,
+        refreshConversations,
+      });
     },
-    [
-      applyConversationState,
-      conversationDetailCacheStorageKey,
-      conversationModes,
-      refreshConversations,
-    ],
+    [conversationDetailCacheStorageKey, conversationModes, conversationMindmapSettings, refreshConversations],
   );
 
   const handleCreateConversation = useCallback(
     async (preferredProjectId?: string) => {
-      const requestedProjectId = String(preferredProjectId || "").trim();
-      const activeProjectId = projects.some((project) => project.id === requestedProjectId)
-        ? requestedProjectId
-        : projects.some((project) => project.id === selectedProjectId)
-          ? selectedProjectId
-          : projects[0]?.id || DEFAULT_PROJECT_ID;
-      if (activeProjectId !== selectedProjectId) {
-        setSelectedProjectId(activeProjectId);
-      }
-
-      try {
-        const created = await createConversation();
-        setConversationProjects((prev) => ({
-          ...prev,
-          [created.id]: activeProjectId,
-        }));
-        setConversationModes((prev) => ({
-          ...prev,
-          [created.id]: composerMode,
-        }));
-        setSelectedConversationId(created.id);
-        resetConversationDetail();
-        await refreshConversations();
-      } catch (error) {
-        setInfoText(`Failed to create a new conversation: ${String(error)}`);
-      }
+      await createConversationForProject({
+        preferredProjectId,
+        projects,
+        selectedProjectId,
+        composerMode,
+        setSelectedProjectId,
+        setConversationProjects,
+        setConversationModes,
+        setSelectedConversationId,
+        resetConversationDetail: resetConversationDetailState,
+        refreshConversations,
+        setInfoText,
+      });
     },
     [
       composerMode,
       projects,
       refreshConversations,
-      resetConversationDetail,
+      resetConversationDetailState,
       selectedProjectId,
       setConversationModes,
       setConversationProjects,
@@ -434,38 +239,26 @@ export function useConversationChat({
 
   const handleRenameConversation = useCallback(
     async (conversationId: string, name: string) => {
-      const normalizedName = name.trim();
-      if (!normalizedName) {
-        return;
-      }
-      await updateConversation(conversationId, { name: normalizedName });
-      await refreshConversations();
+      await renameConversation(conversationId, name, refreshConversations);
     },
     [refreshConversations],
   );
 
   const handleDeleteConversation = useCallback(
     async (conversationId: string) => {
-      await deleteConversation(conversationId);
-      setConversationProjects((prev) => {
-        const next = { ...prev };
-        delete next[conversationId];
-        return next;
+      await deleteConversationWithState({
+        conversationId,
+        selectedConversationId,
+        setConversationProjects,
+        setConversationModes,
+        setSelectedConversationId,
+        resetConversationDetail: resetConversationDetailState,
+        refreshConversations,
       });
-      setConversationModes((prev) => {
-        const next = { ...prev };
-        delete next[conversationId];
-        return next;
-      });
-      if (selectedConversationId === conversationId) {
-        setSelectedConversationId(null);
-        resetConversationDetail();
-      }
-      await refreshConversations();
     },
     [
       refreshConversations,
-      resetConversationDetail,
+      resetConversationDetailState,
       selectedConversationId,
       setConversationModes,
       setConversationProjects,
@@ -474,7 +267,7 @@ export function useConversationChat({
 
   const handleSendMessage = useCallback(
     async (message: string, attachments?: ChatTurn["attachments"], options?: SendMessageOptions) => {
-      await sendConversationMessage({
+      await sendConversationMessageFromHook({
         message,
         attachments,
         options,
@@ -524,52 +317,27 @@ export function useConversationChat({
   );
 
   useEffect(() => {
-    if (!conversations.length || visibleConversations.length > 0) {
-      return;
-    }
-    const fallbackConversation = conversations[0];
-    if (!fallbackConversation) {
-      return;
-    }
-    const fallbackProjectId =
-      conversationProjects[fallbackConversation.id] || DEFAULT_PROJECT_ID;
-    if (fallbackProjectId !== selectedProjectId) {
-      setSelectedProjectId(fallbackProjectId);
-    }
-  }, [
-    conversationProjects,
-    conversations,
-    selectedProjectId,
-    setSelectedProjectId,
-    visibleConversations.length,
-  ]);
+    syncFallbackProject({
+      conversations,
+      visibleConversationsLength: visibleConversations.length,
+      conversationProjects,
+      selectedProjectId,
+      setSelectedProjectId,
+    });
+  }, [conversationProjects, conversations, selectedProjectId, setSelectedProjectId, visibleConversations.length]);
 
   useEffect(() => {
-    if (selectedConversationId && !initialConversationHydrated) {
-      setInitialConversationHydrated(true);
-      void handleSelectConversation(selectedConversationId).catch(() => {
-        // Keep the app usable even if hydration selection fails.
-      });
+    if (typeof window === "undefined") {
       return;
     }
-    if (!conversations.length || initialConversationHydrated || selectedConversationId) {
-      return;
-    }
-    if (!visibleConversations.length) {
-      return;
-    }
-    const storedConversationId = readStoredText(lastConversationStorageKey, "").trim();
-    const visibleIds = new Set(visibleConversations.map((item) => item.id));
-    const candidateConversationId = visibleIds.has(storedConversationId)
-      ? storedConversationId
-      : visibleConversations[0].id;
-    if (!candidateConversationId) {
-      setInitialConversationHydrated(true);
-      return;
-    }
-    setInitialConversationHydrated(true);
-    void handleSelectConversation(candidateConversationId).catch(() => {
-      // Keep the app usable even if hydration selection fails.
+    hydrateInitialConversation({
+      selectedConversationId,
+      initialConversationHydrated,
+      conversationsLength: conversations.length,
+      visibleConversations,
+      lastConversationStorageKey,
+      handleSelectConversation,
+      setInitialConversationHydrated,
     });
   }, [
     conversations.length,
@@ -597,7 +365,9 @@ export function useConversationChat({
         .then((rows) => {
           const events = extractAgentEvents(rows);
           setActivityEvents(events);
-          setChatTurns((prev) => prev.map((turn, index) => (index === turnIndex ? { ...turn, activityEvents: events } : turn)));
+          setChatTurns((prev) =>
+            prev.map((turn, index) => (index === turnIndex ? { ...turn, activityEvents: events } : turn)),
+          );
         })
         .catch(() => setActivityEvents([]));
       return;
@@ -674,30 +444,7 @@ export function useConversationChat({
       if (!clarificationPrompt) {
         return;
       }
-      const rows = clarificationPrompt.questions.length
-        ? clarificationPrompt.questions
-        : clarificationPrompt.missingRequirements;
-      const answeredRows = rows
-        .map((row, index) => {
-          const answer = String(answers[index] || "").trim();
-          if (!answer) {
-            return "";
-          }
-          return `- ${row}: ${answer}`;
-        })
-        .filter((item) => item.length > 0);
-      if (!answeredRows.length) {
-        throw new Error("Provide the required clarification details before continuing.");
-      }
-
-      const continuationMessage = [
-        `Continue the paused task from run ${clarificationPrompt.runId || "previous run"}.`,
-        `Original request: ${clarificationPrompt.originalRequest}`,
-        "Clarification details:",
-        ...answeredRows,
-        "Proceed with execution now and complete the requested actions.",
-      ].join("\n");
-
+      const { answeredRows, continuationMessage } = buildClarificationContinuation(clarificationPrompt, answers);
       const snapshot = clarificationPrompt;
       setClarificationPrompt(null);
       try {

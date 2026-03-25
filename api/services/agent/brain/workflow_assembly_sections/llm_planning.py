@@ -168,13 +168,14 @@ def _request_json_from_llm(*, system_prompt: str, user_prompt: str, timeout_seco
 
 def _diagnose_openai_runtime_issue(*, timeout_seconds: float) -> str:
     try:
-        from api.services.agent.llm_runtime import openai_api_key
+        from api.services.agent.llm_runtime import openai_api_key, _openai_base_url, _openai_chat_model
         key = str(openai_api_key() or "").strip()
         if not key:
             return "openai credentials missing"
-        import os
-        base = str(os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")).strip().rstrip("/")
-        model = str(os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")).strip() or "gpt-4o-mini"
+        base = str(_openai_base_url() or "").strip().rstrip("/")
+        model = str(_openai_chat_model() or "").strip()
+        if not base or not model:
+            return "openai runtime incomplete"
         request_obj = Request(
             f"{base}/chat/completions",
             method="POST",

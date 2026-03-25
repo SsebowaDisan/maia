@@ -16,6 +16,14 @@ export type ClaimSignalSummary = {
   rows: ClaimSignalRow[];
 };
 
+export type TraceSummary = {
+  traceId: string;
+  kind: string;
+  eventCount: number;
+  eventTypes: string[];
+  lastEventType: string;
+};
+
 export function getCitationStrengthTier(citationFocus?: CitationFocus | null): number {
   if (!citationFocus) {
     return 0;
@@ -193,5 +201,27 @@ export function getClaimSignalSummary(infoPanel?: InfoPanelData): ClaimSignalSum
     contradictedClaims: Math.max(0, Number(record.contradicted_claims || 0)),
     mixedClaims: Math.max(0, Number(record.mixed_claims || 0)),
     rows: rows.slice(0, 6),
+  };
+}
+
+export function getTraceSummary(infoPanel?: InfoPanelData): TraceSummary | null {
+  const panel = infoPanel && typeof infoPanel === "object" ? infoPanel : {};
+  const raw = (panel as { trace_summary?: unknown }).trace_summary;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const traceId = String(record.trace_id || "").trim();
+  if (!traceId) {
+    return null;
+  }
+  return {
+    traceId,
+    kind: String(record.kind || "").trim(),
+    eventCount: Math.max(0, Number(record.event_count || 0)),
+    eventTypes: Array.isArray(record.event_types)
+      ? record.event_types.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    lastEventType: String(record.last_event_type || "").trim(),
   };
 }

@@ -180,7 +180,7 @@ def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
             for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
                 note = _clean(metadata.get(key))
                 if note:
-                    return note[:260]
+                    return note[:420]
         for bucket_key in ("__latest_report_sources", "__latest_web_sources"):
             rows = ctx.runtime_settings.get(bucket_key)
             if not isinstance(rows, list):
@@ -195,12 +195,12 @@ def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
                 for key in ("snippet", "excerpt", "summary", "text", "quote"):
                     note = _clean(row.get(key))
                     if note:
-                        return note[:260]
+                        return note[:420]
                 metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
                 for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
                     note = _clean(metadata.get(key))
                     if note:
-                        return note[:260]
+                        return note[:420]
         return ""
 
     numbered_sources: list[str] = []

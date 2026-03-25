@@ -150,8 +150,7 @@ def _best_ref_for_context(
                 score += 0.45
             elif page_label:
                 score -= 0.18
-            else:
-                score -= 0.08
+            # No penalty when ref has no page info — it might still be correct
         if score > best_score:
             best_score = score
             best_ref_id = ref_id

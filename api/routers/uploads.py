@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter
 import uuid
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -38,6 +38,7 @@ from api.services.ingestion_service import (
     get_ingestion_manager,
 )
 from api.services.settings_service import load_user_settings
+from api.services.observability.citation_trace import begin_trace, end_trace, record_trace_event
 from api.services.upload_service import (
     create_file_group,
     delete_file_group,
@@ -74,6 +75,22 @@ async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[di
     if not files:
         raise HTTPException(status_code=400, detail="No files were provided.")
 
+    # Validate file types before persisting
+    _SUPPORTED_EXTENSIONS = {
+        ".pdf", ".txt", ".md", ".csv", ".json", ".html", ".htm", ".xml",
+        ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf", ".odt",
+        ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp",
+        ".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs", ".rb",
+    }
+    for upload in files:
+        name = str(upload.filename or "").strip()
+        ext = name[name.rfind("."):].lower() if "." in name else ""
+        if ext and ext not in _SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: '{ext}'. Supported: PDF, images, documents, text, code files.",
+            )
+
     job_dir = INGEST_WORKDIR / "incoming" / uuid.uuid4().hex
     job_dir.mkdir(parents=True, exist_ok=True)
     persisted: list[dict[str, object]] = []
@@ -95,6 +112,7 @@ async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[di
 @router.post("/files", response_model=UploadResponse)
 async def upload_files(
     request: Request,
+    response: Response,
     files: list[UploadFile] = File(default_factory=list),
     index_id: int | None = Form(default=None),
     reindex: bool = Form(default=True),
@@ -106,13 +124,41 @@ async def upload_files(
     settings = load_user_settings(context=context, user_id=user_id)
     started_at = perf_counter()
     persisted_files: list[dict[str, object]] = []
+    trace = begin_trace(
+        kind="upload",
+        user_id=user_id,
+        metadata={
+            "index_id": index_id,
+            "reindex": bool(reindex),
+            "scope": str(scope or "persistent"),
+        },
+    )
+    response.headers["X-Maia-Trace-Id"] = trace.trace_id
 
     try:
+        record_trace_event(
+            "upload.received",
+            {
+                "file_count": len(files),
+                "file_names": [str(item.filename or "") for item in files[:20]],
+                "scope": str(scope or "persistent"),
+                "index_id": index_id,
+                "reindex": bool(reindex),
+            },
+        )
         if UPLOAD_USE_UNIFIED_PERSIST:
             persisted_files = await persist_uploaded_files(files)
         else:
             persisted_files = await _persist_uploaded_files_sequential(files)
 
+        record_trace_event(
+            "upload.persisted",
+            {
+                "persisted_file_count": len(persisted_files),
+                "persisted_bytes": sum(int((item or {}).get("size") or 0) for item in persisted_files),
+                "persisted_names": [str((item or {}).get("name") or "") for item in persisted_files[:20]],
+            },
+        )
         file_paths = [Path(str(item.get("path", ""))) for item in persisted_files]
         uploaded_file_meta: dict[str, dict[str, object]] = {}
         for item in persisted_files:
@@ -135,10 +181,33 @@ async def upload_files(
             scope=scope,
             uploaded_file_meta=uploaded_file_meta,
         )
+        if isinstance(response, dict):
+            debug_rows = response.setdefault("debug", [])
+            if isinstance(debug_rows, list):
+                debug_rows.append(f"trace_id={trace.trace_id}")
+            record_trace_event(
+                "upload.index_completed",
+                {
+                    "index_id": response.get("index_id"),
+                    "file_ids": list(response.get("file_ids") or []),
+                    "error_count": len(response.get("errors") or []),
+                    "item_count": len(response.get("items") or []),
+                },
+            )
         return response
+    except HTTPException as exc:
+        record_trace_event(
+            "upload.http_error",
+            {"status_code": exc.status_code, "detail": str(exc.detail or "")[:500]},
+        )
+        raise
+    except Exception as exc:
+        record_trace_event("upload.exception", {"detail": str(exc)[:500]})
+        raise
     finally:
         cleanup_persisted_uploads(persisted_files)
         elapsed_ms = int((perf_counter() - started_at) * 1000)
+        record_trace_event("upload.completed", {"elapsed_ms": elapsed_ms})
         logger.info(
             "Sync file upload request completed",
             extra={
@@ -151,11 +220,13 @@ async def upload_files(
                 "elapsed_ms": elapsed_ms,
             },
         )
+        end_trace(trace, level=logging.INFO)
 
 
 @router.post("/files/jobs", response_model=IngestionJobResponse)
 async def create_file_ingestion_job(
     request: Request,
+    response: Response,
     files: list[UploadFile] = File(default_factory=list),
     index_id: int | None = Form(default=None),
     reindex: bool = Form(default=True),
@@ -165,34 +236,75 @@ async def create_file_ingestion_job(
 ):
     enforce_upload_limits(files, request)
     started_at = perf_counter()
-    persisted = (
-        await persist_uploaded_files(files)
-        if UPLOAD_USE_UNIFIED_PERSIST
-        else await _persist_uploaded_files_sequential(files)
-    )
-    total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
-    manager = get_ingestion_manager()
-    job = manager.create_file_job(
+    trace = begin_trace(
+        kind="upload_job",
         user_id=user_id,
-        index_id=index_id,
-        reindex=reindex,
-        files=persisted,
-        group_id=group_id,
-        scope=scope,
-    )
-    logger.info(
-        "Queued file ingestion job",
-        extra={
-            "user_id": user_id,
+        metadata={
             "index_id": index_id,
-            "group_id": group_id,
-            "scope": scope,
-            "file_count": len(persisted),
-            "persisted_bytes": total_bytes,
-            "elapsed_ms": int((perf_counter() - started_at) * 1000),
+            "reindex": bool(reindex),
+            "group_id": str(group_id or ""),
+            "scope": str(scope or "persistent"),
         },
     )
-    return job
+    response.headers["X-Maia-Trace-Id"] = trace.trace_id
+    try:
+        persisted = (
+            await persist_uploaded_files(files)
+            if UPLOAD_USE_UNIFIED_PERSIST
+            else await _persist_uploaded_files_sequential(files)
+        )
+        record_trace_event(
+            "upload_job.persisted",
+            {
+                "file_count": len(persisted),
+                "persisted_names": [str((item or {}).get("name") or "") for item in persisted[:20]],
+            },
+        )
+        total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
+        manager = get_ingestion_manager()
+        job = manager.create_file_job(
+            user_id=user_id,
+            index_id=index_id,
+            reindex=reindex,
+            files=persisted,
+            group_id=group_id,
+            scope=scope,
+        )
+        if hasattr(job, "debug") and isinstance(job.debug, list):
+            job.debug.append(f"trace_id={trace.trace_id}")
+        record_trace_event(
+            "upload_job.queued",
+            {
+                "job_id": getattr(job, "id", ""),
+                "file_count": len(persisted),
+                "persisted_bytes": total_bytes,
+            },
+        )
+        logger.info(
+            "Queued file ingestion job",
+            extra={
+                "user_id": user_id,
+                "index_id": index_id,
+                "group_id": group_id,
+                "scope": scope,
+                "file_count": len(persisted),
+                "persisted_bytes": total_bytes,
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+            },
+        )
+        return job
+    except HTTPException as exc:
+        record_trace_event(
+            "upload_job.http_error",
+            {"status_code": exc.status_code, "detail": str(exc.detail or "")[:500]},
+        )
+        raise
+    except Exception as exc:
+        record_trace_event("upload_job.exception", {"detail": str(exc)[:500]})
+        raise
+    finally:
+        record_trace_event("upload_job.completed", {"elapsed_ms": int((perf_counter() - started_at) * 1000)})
+        end_trace(trace, level=logging.INFO)
 
 
 @router.post("/urls", response_model=UploadResponse)
@@ -468,9 +580,19 @@ def get_file_raw(
 @router.post("/files/{file_id}/highlight-target")
 async def get_file_highlight_target(
     file_id: str,
+    response: Response,
     payload: dict[str, object] = Body(default_factory=dict),
     user_id: str = Depends(get_current_user_id),
 ):
+    trace = begin_trace(
+        kind="highlight",
+        user_id=user_id,
+        metadata={
+            "file_id": file_id,
+            "page": payload.get("page"),
+        },
+    )
+    response.headers["X-Maia-Trace-Id"] = trace.trace_id
     context = get_context()
     page = payload.get("page")
     text = str(payload.get("text") or "").strip()
@@ -478,27 +600,55 @@ async def get_file_highlight_target(
     index_id_value = payload.get("index_id")
     index_id = index_id_value if isinstance(index_id_value, int) else None
     try:
-        file_path, _ = resolve_indexed_file_path(
-            context=context,
-            user_id=user_id,
-            file_id=file_id,
-            index_id=index_id,
+        record_trace_event(
+            "highlight.requested",
+            {
+                "file_id": file_id,
+                "page": page,
+                "text_length": len(text),
+                "claim_text_length": len(claim_text),
+                "index_id": index_id,
+            },
         )
-    except HTTPException as exc:
-        if index_id is None or exc.status_code != 404:
-            raise
-        file_path, _ = resolve_indexed_file_path(
-            context=context,
-            user_id=user_id,
-            file_id=file_id,
-            index_id=None,
+        try:
+            file_path, _ = resolve_indexed_file_path(
+                context=context,
+                user_id=user_id,
+                file_id=file_id,
+                index_id=index_id,
+            )
+        except HTTPException as exc:
+            if index_id is None or exc.status_code != 404:
+                raise
+            file_path, _ = resolve_indexed_file_path(
+                context=context,
+                user_id=user_id,
+                file_id=file_id,
+                index_id=None,
+            )
+        result = await run_in_threadpool(
+            locate_pdf_highlight_target,
+            file_path=file_path,
+            page=page or 1,
+            text=text,
+            claim_text=claim_text,
         )
-    result = await run_in_threadpool(
-        locate_pdf_highlight_target,
-        file_path=file_path,
-        page=page or 1,
-        text=text,
-        claim_text=claim_text,
-    )
-    result["file_id"] = file_id
-    return result
+        result["file_id"] = file_id
+        record_trace_event(
+            "highlight.completed",
+            {
+                "file_id": file_id,
+                "page": result.get("page"),
+                "box_count": len(list(result.get("highlight_boxes") or [])),
+                "unit_count": len(list(result.get("evidence_units") or [])),
+            },
+        )
+        return result
+    except HTTPException:
+        record_trace_event("highlight.http_error", {"file_id": file_id})
+        raise
+    except Exception as exc:
+        record_trace_event("highlight.exception", {"file_id": file_id, "error": str(exc)})
+        raise
+    finally:
+        end_trace(trace)

@@ -229,7 +229,10 @@ def rewrite_followup_question_for_retrieval(
 
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
-        return normalized_question, False, "llm-unavailable"
+        rewritten = normalized_question
+        if urls and not extract_urls_fn(rewritten, max_urls=2):
+            rewritten = f"{rewritten} {urls[0]}".strip()
+        return rewritten, bool(urls), "llm-unavailable"
 
     history_rows: list[str] = []
     for row in chat_history[-3:]:
@@ -325,7 +328,10 @@ def expand_retrieval_query_for_gap(
 
     api_key, base_url, model, _config_source = resolve_fast_qa_llm_config_fn()
     if is_placeholder_api_key_fn(api_key):
-        return normalized_current, "llm-unavailable"
+        expanded = normalized_current
+        if urls and not extract_urls_fn(expanded, max_urls=2):
+            expanded = f"{expanded} {urls[0]}".strip()
+        return expanded, "llm-unavailable"
 
     history_rows: list[str] = []
     for row in chat_history[-3:]:

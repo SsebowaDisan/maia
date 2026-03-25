@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -8,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.services.observability.citation_trace import record_trace_event
 from ktem.db.engine import engine
 
 
@@ -196,6 +198,15 @@ def index_files_impl(
         raise HTTPException(status_code=400, detail="No files were provided.")
 
     index = get_index_fn(context, index_id)
+    record_trace_event(
+        "index.started",
+        {
+            "index_id": getattr(index, "id", None),
+            "file_count": len(file_paths),
+            "reindex": bool(reindex),
+            "scope": str(scope or ""),
+        },
+    )
     prefix = f"index.options.{index.id}."
     base_settings = deepcopy(settings)
     configured_reader_mode = str(
@@ -218,6 +229,15 @@ def index_files_impl(
         route: str,
         classification: dict[str, Any],
     ) -> dict[str, Any]:
+        record_trace_event(
+            "index.pipeline_started",
+            {
+                "file_name": file_path.name,
+                "reader_mode": reader_mode,
+                "route": route,
+                "classification_route": str(classification.get("route") or ""),
+            },
+        )
         try:
             return run_index_pipeline_for_file_fn(
                 index=index,
@@ -245,6 +265,14 @@ def index_files_impl(
                 if reused_file_id:
                     all_debug.append(
                         f"{file_path.name}: already indexed; reusing existing file {reused_file_id}."
+                    )
+                    record_trace_event(
+                        "index.duplicate_reused",
+                        {
+                            "file_name": file_path.name,
+                            "file_id": reused_file_id,
+                            "route": route,
+                        },
                     )
                     return {
                         "file_ids": [reused_file_id],
@@ -297,6 +325,13 @@ def index_files_impl(
         all_debug.append(
             f"{file_path.name}: already indexed response detected; reusing existing file {reused_file_id}."
         )
+        record_trace_event(
+            "index.duplicate_response_reused",
+            {
+                "file_name": file_path.name,
+                "file_id": reused_file_id,
+            },
+        )
         return {
             "file_ids": [reused_file_id],
             "errors": [],
@@ -315,6 +350,15 @@ def index_files_impl(
         ext = str(file_path.suffix or "").lower()
         is_pdf = ext == ".pdf"
         classification: dict[str, Any] = {}
+        record_trace_event(
+            "index.file_started",
+            {
+                "file_name": file_path.name,
+                "file_path": str(file_path),
+                "extension": ext,
+                "is_pdf": is_pdf,
+            },
+        )
         if is_pdf:
             content_hash = ""
             if uploaded_file_meta:
@@ -325,6 +369,17 @@ def index_files_impl(
                 meta = uploaded_file_meta.get(resolved_key) or {}
                 content_hash = str(meta.get("checksum") or "").strip()
             classification = classify_pdf_ingestion_route_fn(file_path, content_hash=content_hash)
+            record_trace_event(
+                "index.route_selected",
+                {
+                    "file_name": file_path.name,
+                    "route": str(classification.get("route") or "normal"),
+                    "reason": str(classification.get("reason") or ""),
+                    "image_ratio_all": classification.get("image_ratio_all"),
+                    "low_text_ratio_sampled": classification.get("low_text_ratio_sampled"),
+                    "content_hash": content_hash[:16] if content_hash else "",
+                },
+            )
             all_debug.append(
                 (
                     f"{file_path.name}: pdf route={classification.get('route', 'normal')} "
@@ -342,6 +397,13 @@ def index_files_impl(
         response: dict[str, Any]
         try:
             if route_to_paddle:
+                record_trace_event(
+                    "index.ocr_route_started",
+                    {
+                        "file_name": file_path.name,
+                        "route": "heavy-pdf-paddleocr",
+                    },
+                )
                 if not (upload_paddleocr_enabled or remote_paddle_api_configured):
                     raise RuntimeError("PaddleOCR routing is disabled by configuration.")
                 response = index_pdf_with_paddleocr_route_fn(
@@ -368,6 +430,14 @@ def index_files_impl(
                         file_path=file_path,
                     )
                     route_name = "normal"
+                record_trace_event(
+                    "index.pipeline_route_started",
+                    {
+                        "file_name": file_path.name,
+                        "route": route_name,
+                        "reader_mode": selected_mode,
+                    },
+                )
                 response = _run_parser_or_reuse(
                     file_path=file_path,
                     reader_mode=selected_mode,
@@ -378,6 +448,14 @@ def index_files_impl(
             raise
         except Exception as exc:
             if not route_to_paddle:
+                record_trace_event(
+                    "index.file_failed",
+                    {
+                        "file_name": file_path.name,
+                        "route": "normal",
+                        "error": str(exc),
+                    },
+                )
                 raise
             else:
                 fallback_mode = fallback_reader_mode_for_pdf_fn(
@@ -387,6 +465,14 @@ def index_files_impl(
                 )
                 all_debug.append(
                     f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}."
+                )
+                record_trace_event(
+                    "index.ocr_route_failed",
+                    {
+                        "file_name": file_path.name,
+                        "error": str(exc),
+                        "fallback_reader_mode": fallback_mode,
+                    },
                 )
                 response = _run_parser_or_reuse(
                     file_path=file_path,
@@ -415,14 +501,38 @@ def index_files_impl(
                     all_debug.append(
                         f"{file_path.name}: scheduled page-unit precompute."
                     )
+                    record_trace_event(
+                        "index.precompute_scheduled",
+                        {
+                            "file_name": file_path.name,
+                            "file_ids": list(file_ids),
+                        },
+                    )
                 except Exception as exc:
                     all_debug.append(
                         f"{file_path.name}: page-unit precompute scheduling failed ({exc})."
+                    )
+                    record_trace_event(
+                        "index.precompute_failed",
+                        {
+                            "file_name": file_path.name,
+                            "error": str(exc),
+                        },
                     )
         all_file_ids.extend(file_ids)
         all_errors.extend(errors)
         all_items.extend(items)
         all_debug.extend(debug)
+        record_trace_event(
+            "index.file_completed",
+            {
+                "file_name": file_path.name,
+                "file_ids": list(file_ids),
+                "error_count": len(errors),
+                "item_count": len(items),
+                "debug_count": len(debug),
+            },
+        )
     apply_upload_scope_to_sources_fn(
         index=index,
         user_id=user_id,
@@ -561,14 +671,39 @@ def resolve_indexed_file_path_impl(
 
         stored_name = str(row.name or "file")
         stored_path = str(row.path or "").strip()
+        stored_note = row.note
 
     if not stored_path:
         raise HTTPException(status_code=404, detail="Indexed file path is missing.")
+
+    note_dict: dict[str, Any] = {}
+    if isinstance(stored_note, dict):
+        note_dict = dict(stored_note)
+    elif isinstance(stored_note, str):
+        try:
+            parsed_note = json.loads(stored_note)
+            if isinstance(parsed_note, dict):
+                note_dict = parsed_note
+        except Exception:
+            note_dict = {}
 
     candidate = Path(stored_path)
     if not candidate.is_absolute():
         candidate = fs_path / candidate
     candidate = candidate.resolve()
+
+    if candidate.exists() and candidate.is_file():
+        original_pdf_storage_name = str(note_dict.get("source_original_pdf_storage_name") or "").strip()
+        original_pdf_name = str(note_dict.get("source_original_pdf_name") or "").strip()
+        fallback_pdf_candidate: Path | None = None
+        if original_pdf_storage_name:
+            fallback_pdf_candidate = fs_path / original_pdf_storage_name
+        elif not candidate.suffix and len(candidate.name) == 64:
+            fallback_pdf_candidate = candidate.with_name(f"{candidate.name}.pdf")
+        if fallback_pdf_candidate is not None:
+            fallback_pdf_candidate = fallback_pdf_candidate.resolve()
+            if fallback_pdf_candidate.exists() and fallback_pdf_candidate.is_file():
+                return fallback_pdf_candidate, (original_pdf_name or stored_name)
 
     if not candidate.exists() or not candidate.is_file():
         raise HTTPException(

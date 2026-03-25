@@ -82,7 +82,7 @@ async function trackQueuedIngestionJob({
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error || "Upload failed.");
-    const compact = errorMessage.length > 120 ? `${errorMessage.slice(0, 117)}...` : errorMessage;
+    const compact = errorMessage.length > 250 ? `${errorMessage.slice(0, 247)}...` : errorMessage;
     setAttachments((previous) =>
       previous.map((attachment) =>
         pendingIds.has(attachment.id)
@@ -149,7 +149,7 @@ function applyUploadResult({
 
   if (failedMessages.length > 0) {
     const reason = String(failedMessages[0] || "Upload failed.").trim();
-    const compact = reason.length > 120 ? `${reason.slice(0, 117)}...` : reason;
+    const compact = reason.length > 250 ? `${reason.slice(0, 247)}...` : reason;
     showActionStatus(`Upload failed: ${compact}`);
     return;
   }
@@ -272,7 +272,7 @@ async function handleComposerFileChange({
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error || "Upload failed.");
-    const compact = errorMessage.length > 120 ? `${errorMessage.slice(0, 117)}...` : errorMessage;
+    const compact = errorMessage.length > 250 ? `${errorMessage.slice(0, 247)}...` : errorMessage;
     setAttachments((previous) =>
       previous.map((attachment) =>
         pending.some((item) => item.id === attachment.id)

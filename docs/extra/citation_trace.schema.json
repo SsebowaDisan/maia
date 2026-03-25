@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://maia.local/schemas/citation_trace.schema.json",
+  "title": "CitationTrace",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "question",
+    "upload",
+    "index",
+    "retrieval",
+    "citation",
+    "answer_gate",
+    "highlight",
+    "delivery"
+  ],
+  "properties": {
+    "trace_id": {
+      "type": "string"
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "conversation_id": {
+      "type": "string"
+    },
+    "question": {
+      "type": "string"
+    },
+    "upload": {
+      "type": "object",
+      "properties": {
+        "upload_id": { "type": "string" },
+        "file_id": { "type": "string" },
+        "original_name": { "type": "string" },
+        "stored_path": { "type": "string" },
+        "mime_type": { "type": "string" },
+        "size_bytes": { "type": "integer" },
+        "source_hash": { "type": "string" },
+        "scope": { "type": "string" },
+        "reused_existing": { "type": "boolean" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "index": {
+      "type": "object",
+      "properties": {
+        "route": { "type": "string" },
+        "ocr_route": { "type": "string" },
+        "page_count": { "type": "integer" },
+        "chunk_count": { "type": "integer" },
+        "indexed_chunks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/indexed_chunk" }
+        },
+        "duration_ms": { "type": "integer" },
+        "status": { "type": "string" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "retrieval": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "rewritten_query": { "type": "string" },
+        "selected_file_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "candidate_chunk_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "selected_chunk_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "page_spread": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "support_ratio": { "type": "number" },
+        "evidence_confidence": { "type": "number" },
+        "evidence_reason": { "type": "string" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "citation": {
+      "type": "object",
+      "properties": {
+        "paragraph_count": { "type": "integer" },
+        "supported_paragraph_count": { "type": "integer" },
+        "citation_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/citation_ref" }
+        },
+        "uncited_paragraph_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "dominance_ratio": { "type": "number" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "answer_gate": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "boolean" },
+        "answer_origin": { "type": "string" },
+        "unsupported_reason": { "type": "string" },
+        "off_topic": { "type": "boolean" },
+        "single_ref_dominance_ratio": { "type": "number" },
+        "unsupported_paragraph_count": { "type": "integer" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "highlight": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref_id": { "type": "integer" },
+              "file_id": { "type": "string" },
+              "page": { "type": "string" },
+              "used_stored_geometry": { "type": "boolean" },
+              "used_page_units": { "type": "boolean" },
+              "used_ocr_fallback": { "type": "boolean" },
+              "duration_ms": { "type": "integer" },
+              "success": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "response_id": { "type": "string" },
+        "canvas_document_id": { "type": "string" },
+        "mode": { "type": "string" },
+        "timings": {
+          "type": "object",
+          "properties": {
+            "retrieval_ms": { "type": "integer" },
+            "llm_ms": { "type": "integer" },
+            "total_turn_ms": { "type": "integer" }
+          },
+          "additionalProperties": true
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/event" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["type", "at"],
+      "properties": {
+        "type": { "type": "string" },
+        "at": { "type": "string" },
+        "data": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "indexed_chunk": {
+      "type": "object",
+      "required": ["file_id", "page", "text", "unit_id", "source_hash"],
+      "properties": {
+        "file_id": { "type": "string" },
+        "page": { "type": "string" },
+        "text": { "type": "string" },
+        "unit_id": { "type": "string" },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            },
+            "required": ["x0", "y0", "x1", "y1"],
+            "additionalProperties": false
+          }
+        },
+        "char_range": {
+          "type": "object",
+          "properties": {
+            "start": { "type": "integer" },
+            "end": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        "source_hash": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "citation_ref": {
+      "type": "object",
+      "required": ["ref_id", "file_id", "page", "quoted_text"],
+      "properties": {
+        "ref_id": { "type": "integer" },
+        "file_id": { "type": "string" },
+        "page": { "type": "string" },
+        "quoted_text": { "type": "string" },
+        "unit_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "highlight_boxes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x0": { "type": "number" },
+              "y0": { "type": "number" },
+              "x1": { "type": "number" },
+              "y1": { "type": "number" }
+            },
+            "required": ["x0", "y0", "x1", "y1"],
+            "additionalProperties": false
+          }
+        },
+        "strength": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

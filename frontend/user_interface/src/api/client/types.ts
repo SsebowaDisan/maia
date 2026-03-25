@@ -240,6 +240,7 @@ type HighlightTargetResponse = {
   page: string;
   highlight_boxes: CitationHighlightBox[];
   evidence_units: CitationEvidenceUnit[];
+  trace_id?: string;
 };
 
 type IngestionJob = {

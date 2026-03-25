@@ -9,12 +9,59 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from api.services.observability.citation_trace import record_trace_event
+
 
 _PAGE_UNIT_CACHE_VERSION = "v1"
 
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+# Unicode math symbol → LaTeX mapping for common PDF extractions
+_MATH_UNICODE_MAP = {
+    "∑": r"$\sum$", "∫": r"$\int$", "∂": r"$\partial$",
+    "∇": r"$\nabla$", "√": r"$\sqrt{}$", "∞": r"$\infty$",
+    "α": r"$\alpha$", "β": r"$\beta$", "γ": r"$\gamma$",
+    "δ": r"$\delta$", "ε": r"$\epsilon$", "θ": r"$\theta$",
+    "λ": r"$\lambda$", "μ": r"$\mu$", "π": r"$\pi$",
+    "σ": r"$\sigma$", "τ": r"$\tau$", "φ": r"$\phi$",
+    "ω": r"$\omega$", "Δ": r"$\Delta$", "Σ": r"$\Sigma$",
+    "Π": r"$\Pi$", "Ω": r"$\Omega$",
+    "≈": r"$\approx$", "≠": r"$\neq$", "≤": r"$\leq$",
+    "≥": r"$\geq$", "±": r"$\pm$", "×": r"$\times$",
+    "÷": r"$\div$", "→": r"$\rightarrow$", "←": r"$\leftarrow$",
+    "⇒": r"$\Rightarrow$", "∈": r"$\in$", "∉": r"$\notin$",
+    "⊂": r"$\subset$", "∪": r"$\cup$", "∩": r"$\cap$",
+}
+
+# Common PDF superscript/subscript patterns
+_SUPERSCRIPT_MAP = {"⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
+                    "⁵": "^5", "⁶": "^6", "⁷": "^7", "⁸": "^8", "⁹": "^9",
+                    "ⁿ": "^n", "ⁱ": "^i"}
+_SUBSCRIPT_MAP = {"₀": "_0", "₁": "_1", "₂": "_2", "₃": "_3", "₄": "_4",
+                  "₅": "_5", "₆": "_6", "₇": "_7", "₈": "_8", "₉": "_9",
+                  "ₙ": "_n", "ᵢ": "_i", "ₜ": "_t"}
+
+
+def _normalize_math_text(text: str) -> str:
+    """Normalize Unicode math symbols and superscripts/subscripts for better LLM comprehension."""
+    if not text:
+        return text
+    result = text
+    # Convert Unicode math symbols to LaTeX
+    for sym, latex in _MATH_UNICODE_MAP.items():
+        if sym in result:
+            result = result.replace(sym, f" {latex} ")
+    # Convert superscripts/subscripts
+    for sym, rep in _SUPERSCRIPT_MAP.items():
+        result = result.replace(sym, rep)
+    for sym, rep in _SUBSCRIPT_MAP.items():
+        result = result.replace(sym, rep)
+    # Clean up double spaces
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
 
 
 def _normalize_bbox(
@@ -183,6 +230,29 @@ def _extract_page_units_cached(file_path_str: str, page_number: int) -> dict[str
                     }
                 )
                 cursor = end + 1
+
+        # Post-process: normalize math symbols in extracted text to LaTeX
+        for unit in units:
+            unit["text"] = _normalize_math_text(unit.get("text", ""))
+
+        # Detect formula-heavy image blocks (type=1) and flag page as math-heavy
+        image_block_count = sum(
+            1 for block in list(text_dict.get("blocks") or [])
+            if int(block.get("type", 0) or 0) == 1
+        )
+        page_has_math = (
+            image_block_count > 2
+            or any(
+                any(c in unit.get("text", "") for c in "$∑∫√∂∇=±×÷")
+                for unit in units
+            )
+        )
+        if page_has_math:
+            # Tag units so retrieval can boost formula chunks
+            for unit in units:
+                if any(c in unit.get("text", "") for c in "$∑∫√∂∇=±×÷") or "frac" in unit.get("text", ""):
+                    unit["has_math"] = True
+
         if not units:
             try:
                 engine = _get_rapidocr_engine()
@@ -309,23 +379,31 @@ def precompute_page_units_for_pdf(
 
 
 def precompute_page_units_background(file_path: Path) -> None:
-    """Fire-and-forget background precomputation.
+    """Background precomputation of page units for PDF highlight resolution.
 
-    Call this after indexing a PDF. Spawns a daemon thread that
-    pre-caches all page units (text + OCR). The user's upload
-    returns immediately — precomputation happens in the background.
+    Call after indexing a PDF. Non-daemon thread so it survives brief
+    server lifecycle events. Logs failures instead of silencing them.
     """
+    import logging
     import threading
+
+    _log = logging.getLogger(__name__)
 
     def _run() -> None:
         try:
-            precompute_page_units_for_pdf(file_path)
-        except Exception:
-            pass  # background — never crash the server
+            result = precompute_page_units_for_pdf(file_path)
+            _log.info(
+                "pdf_precompute_done file=%s pages=%d ocr=%d",
+                file_path.name,
+                result.get("pages_processed", 0),
+                result.get("pages_with_ocr", 0),
+            )
+        except Exception as exc:
+            _log.warning("pdf_precompute_failed file=%s error=%s", file_path.name, exc)
 
     thread = threading.Thread(
         target=_run,
-        daemon=True,
+        daemon=False,
         name=f"precompute-pages-{file_path.stem}",
     )
     thread.start()
@@ -440,12 +518,29 @@ def locate_pdf_highlight_target(
     text: str,
     claim_text: str = "",
 ) -> dict[str, Any]:
+    record_trace_event(
+        "highlight.locator_started",
+        {
+            "file_name": file_path.name,
+            "page": page,
+            "text_length": len(str(text or "")),
+            "claim_text_length": len(str(claim_text or "")),
+        },
+    )
     try:
         page_number = max(1, int(page))
     except Exception:
         page_number = 1
     page_payload = _extract_page_units(file_path, page_number)
     units = list(page_payload.get("units") or [])
+    record_trace_event(
+        "highlight.page_units_loaded",
+        {
+            "file_name": file_path.name,
+            "page": page_number,
+            "unit_count": len(units),
+        },
+    )
     if not units:
         return {
             "page": str(page_number),
@@ -454,6 +549,14 @@ def locate_pdf_highlight_target(
         }
 
     candidates = _build_candidates(text=text, claim_text=claim_text)
+    record_trace_event(
+        "highlight.candidates_built",
+        {
+            "file_name": file_path.name,
+            "page": page_number,
+            "candidate_count": len(candidates),
+        },
+    )
     if not candidates:
         return {
             "page": str(page_number),
@@ -489,6 +592,14 @@ def locate_pdf_highlight_target(
                     best_indexes = list(range(start, end))
 
     if best_score < 0.21 or not best_indexes:
+        record_trace_event(
+            "highlight.unresolved",
+            {
+                "file_name": file_path.name,
+                "page": page_number,
+                "best_score": round(float(best_score), 4),
+            },
+        )
         return {
             "page": str(page_number),
             "highlight_boxes": [],
@@ -513,6 +624,16 @@ def locate_pdf_highlight_target(
         )
 
     highlight_boxes = _merge_adjacent_boxes(highlight_boxes)
+    record_trace_event(
+        "highlight.resolved",
+        {
+            "file_name": file_path.name,
+            "page": page_number,
+            "best_score": round(float(best_score), 4),
+            "box_count": len(highlight_boxes),
+            "unit_count": len(evidence_units),
+        },
+    )
 
     return {
         "page": str(page_number),
@@ -530,8 +651,14 @@ def _merge_adjacent_boxes(boxes: list[dict[str, float]]) -> list[dict[str, float
     if len(boxes) <= 1:
         return boxes
 
+    # Filter out malformed boxes missing required keys
+    required = ("x", "y", "width", "height")
+    valid_boxes = [b for b in boxes if all(k in b for k in required)]
+    if len(valid_boxes) <= 1:
+        return valid_boxes
+
     # Sort by y (top), then x (left)
-    sorted_boxes = sorted(boxes, key=lambda b: (b.get("y", 0), b.get("x", 0)))
+    sorted_boxes = sorted(valid_boxes, key=lambda b: (b["y"], b["x"]))
     merged: list[dict[str, float]] = []
     current = dict(sorted_boxes[0])
 

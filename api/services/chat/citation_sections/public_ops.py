@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from api.services.observability.citation_trace import record_trace_event
+
 from .anchors import _anchors_to_bracket_markers, _augment_existing_citation_anchors
 from .cleanup import (
     _dedupe_duplicate_answer_passes,
@@ -84,6 +86,14 @@ def enforce_required_citations(
     text = (answer or "").strip()
     if not text:
         return text
+    record_trace_event(
+        "citation.enforce_started",
+        {
+            "answer_length": len(text),
+            "citation_mode": str(citation_mode or ""),
+            "has_info_html": bool(str(info_html or "").strip()),
+        },
+    )
 
     # Agent-format answers have a structured ## Evidence Citations tail.
     # Inject anchors into the body only; preserve the citation section unchanged.
@@ -140,6 +150,14 @@ def enforce_required_citations(
         enriched_body = _inject_inline_citations(enriched_body, refs)
         enriched_body = _normalize_explicit_page_prose(enriched_body)
         enriched_body = _dedupe_duplicate_answer_passes(enriched_body)
+        record_trace_event(
+            "citation.enforce_completed",
+            {
+                "ref_count": len(refs),
+                "path": "agent_section",
+                "answer_length": len(enriched_body),
+            },
+        )
         return f"{enriched_body.rstrip()}\n\n{tail.lstrip()}"
 
     # If inline citation anchors already exist (placed by render_fast_citation_links),
@@ -155,6 +173,14 @@ def enforce_required_citations(
         enriched = render_fast_citation_links(answer=marker_text, refs=refs, citation_mode=mode)
         enriched = _inject_inline_citations(enriched, refs)
         enriched = _normalize_explicit_page_prose(enriched)
+        record_trace_event(
+            "citation.enforce_completed",
+            {
+                "ref_count": len(refs),
+                "path": "existing_anchors",
+                "answer_length": len(enriched),
+            },
+        )
         return _dedupe_duplicate_answer_passes(enriched)
 
     mode = resolve_required_citation_mode(citation_mode)
@@ -165,13 +191,34 @@ def enforce_required_citations(
     enriched = _inject_inline_citations(enriched, refs)
     enriched = _normalize_explicit_page_prose(enriched)
     if "class='citation'" in enriched or 'class="citation"' in enriched:
+        record_trace_event(
+            "citation.enforce_completed",
+            {
+                "ref_count": len(refs),
+                "path": "fresh_render",
+                "answer_length": len(enriched),
+            },
+        )
         return _dedupe_duplicate_answer_passes(enriched)
     if refs:
+        record_trace_event(
+            "citation.enforce_completed",
+            {
+                "ref_count": len(refs),
+                "path": "fresh_render_no_anchor_class",
+                "answer_length": len(enriched),
+            },
+        )
         return _dedupe_duplicate_answer_passes(enriched)
-    return (
-        f"{enriched}\n\n"
-        "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
+    record_trace_event(
+        "citation.enforce_completed",
+        {
+            "ref_count": 0,
+            "path": "no_refs_passthrough",
+            "answer_length": len(enriched),
+        },
     )
+    return _dedupe_duplicate_answer_passes(enriched)
 
 
 def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
@@ -252,10 +299,7 @@ def append_required_citation_suffix(*, answer: str, info_html: str) -> str:
         from .visible import _normalize_visible_inline_citations
 
         return _dedupe_duplicate_answer_passes(_normalize_visible_inline_citations(raw_text))
-    return (
-        f"{raw_text}\n\n"
-        "Evidence: internal execution trace (no external source references were returned by the retrieval pipeline)."
-    )
+    return _dedupe_duplicate_answer_passes(raw_text)
 
 
 _FAST_QA_FILLER_OPENING_RE = re.compile(
@@ -282,11 +326,16 @@ def normalize_fast_answer(answer: str, *, question: str = "") -> str:
         return ""
 
     # Strip filler openings (safety net — system prompt instructs model to avoid these)
+    # Preserve any citation markers [N] that appear in the stripped preamble
     filler_match = _FAST_QA_FILLER_OPENING_RE.match(text)
     if filler_match and filler_match.end() < len(text):
+        stripped_part = text[:filler_match.end()]
         remaining = text[filler_match.end():].strip()
         if len(remaining) >= 40:
-            text = remaining[0].upper() + remaining[1:] if remaining else text
+            # Move any citation markers from the stripped preamble to the start of remaining text
+            preamble_citations = re.findall(r"\[\d{1,4}\]", stripped_part)
+            prefix = " ".join(preamble_citations) + " " if preamble_citations else ""
+            text = prefix + (remaining[0].upper() + remaining[1:] if remaining else text)
 
     # Normalize heading hierarchy: H1 → H2, H4+ → H3
     text = re.sub(r"(^|\n)#\s+", r"\1## ", text)

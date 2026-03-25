@@ -33,7 +33,7 @@ def should_auto_web_fallback(
 
     try:
         router_response = call_json_response_fn(
-            model="gpt-5-mini",
+            model=None,
             system_prompt=(
                 "You route a user message to either local indexed context or live web research. "
                 "Return JSON only with keys: route ('local'|'web'), confidence (0..1), reason."

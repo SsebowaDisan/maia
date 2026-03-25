@@ -320,8 +320,7 @@ def _extract_evidence_units(metadata: dict[str, Any], *, limit: int = 12) -> lis
         if len(text) < 8:
             continue
         boxes = _extract_highlight_boxes(raw_unit)
-        if not boxes:
-            continue
+        # Keep evidence units even without boxes — text evidence is still valuable
         char_start = _to_intish(raw_unit.get("char_start"))
         char_end = _to_intish(raw_unit.get("char_end"))
         key = f"{char_start or 0}|{char_end or 0}|{text[:120].lower()}"
@@ -330,7 +329,7 @@ def _extract_evidence_units(metadata: dict[str, Any], *, limit: int = 12) -> lis
         seen.add(key)
         item: dict[str, Any] = {
             "text": text[:240],
-            "highlight_boxes": boxes,
+            "highlight_boxes": boxes if boxes else [],
         }
         if char_start is not None and char_start > 0:
             item["char_start"] = char_start
@@ -354,6 +353,15 @@ def _ranked_chunk_selection(rows: list[dict[str, Any]], *, chunk_limit: int) -> 
     ranked_rows = sorted(rows, key=lambda item: int(item.get("score", 0)), reverse=True)
     source_cap = max(1, int(API_FAST_QA_MAX_CHUNKS_PER_SOURCE))
     max_distinct_sources = max(1, int(API_FAST_QA_MAX_SOURCES))
+
+    # When there is only one source file, relax the per-source cap so that
+    # multiple pages/sections can each contribute a chunk — critical for
+    # multi-page PDFs where different pages support different claims.
+    distinct_source_keys = {str(r.get("source_key", "")) for r in ranked_rows if str(r.get("source_key", ""))}
+    single_source = len(distinct_source_keys) == 1
+    if single_source:
+        source_cap = max(source_cap, chunk_limit)
+
     chosen: list[dict[str, Any]] = []
     per_source_count: dict[str, int] = {}
     seen_source_pages: set[tuple[str, str]] = set()
@@ -369,7 +377,9 @@ def _ranked_chunk_selection(rows: list[dict[str, Any]], *, chunk_limit: int) -> 
         source_hits = per_source_count.get(source_key, 0)
         if source_hits >= source_cap:
             continue
-        if page_key:
+        # In single-source mode, skip the one-chunk-per-page restriction
+        # so multiple chunks from a rich page are available as separate refs.
+        if page_key and not single_source:
             pair = (source_key, page_key)
             if pair in seen_source_pages:
                 continue
