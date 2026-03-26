@@ -38,9 +38,16 @@ class AgentTeamChatService:
         speaker_role: str = "",
         content: str,
         step_id: str = "",
+        thread_id: str = "",
+        task_id: str = "",
+        task_title: str = "",
         reply_to_id: str = "",
         message_type: str = "message",
         mood: str = "neutral",
+        mentions: list[str] | None = None,
+        requires_ack: bool = False,
+        delivery_status: str = "delivered",
+        acked_by: list[str] | None = None,
         reaction_to_id: str = "",
         reaction: str = "",
         to_agent: str = "team",
@@ -52,9 +59,16 @@ class AgentTeamChatService:
             speaker_role=speaker_role,
             content=content,
             step_id=step_id,
+            thread_id=thread_id or conversation.conversation_id,
+            task_id=task_id or step_id,
+            task_title=task_title or conversation.topic,
             reply_to_id=reply_to_id,
             message_type=message_type,
             mood=mood,
+            mentions=mentions,
+            requires_ack=requires_ack,
+            delivery_status=delivery_status,
+            acked_by=acked_by,
             reaction_to_id=reaction_to_id,
             reaction=reaction,
         )
@@ -64,6 +78,7 @@ class AgentTeamChatService:
                 get_collaboration_service,
             )
 
+            normalized_entry_type = "summary" if message_type == "summary" else "chat"
             metadata = msg.to_dict()
             metadata.update(
                 {
@@ -71,7 +86,16 @@ class AgentTeamChatService:
                     "from_agent": msg.speaker_id,
                     "to_agent": to_agent,
                     "message": msg.content,
-                    "entry_type": "chat",
+                    "entry_type": normalized_entry_type,
+                    "message_id": msg.message_id,
+                    "reply_to_id": msg.reply_to_id,
+                    "thread_id": msg.thread_id,
+                    "task_id": msg.task_id,
+                    "task_title": msg.task_title,
+                    "requires_ack": msg.requires_ack,
+                    "delivery_status": msg.delivery_status,
+                    "mentions": list(msg.mentions),
+                    "acked_by": list(msg.acked_by),
                 }
             )
             get_collaboration_service().record(
@@ -79,7 +103,7 @@ class AgentTeamChatService:
                 from_agent=msg.speaker_id,
                 to_agent=to_agent,
                 message=msg.content,
-                entry_type="chat",
+                entry_type=normalized_entry_type,
                 metadata=metadata,
             )
         except Exception:

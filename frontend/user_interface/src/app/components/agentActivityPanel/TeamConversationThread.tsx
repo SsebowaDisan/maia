@@ -88,6 +88,11 @@ export function TeamConversationThread({
                         {group.mood}
                       </span>
                     ) : null}
+                    {group.threadLabel ? (
+                      <span className="rounded-full border border-[#e4e7ec] bg-white px-2 py-0.5 text-[10px] font-medium text-[#475467]">
+                        {group.threadLabel}
+                      </span>
+                    ) : null}
                     <span className="text-[10px] font-medium text-[#98a2b3]">{formatTime(group.startedAt)}</span>
                   </div>
 
@@ -113,6 +118,21 @@ export function TeamConversationThread({
                             {bubble.action ? (
                               <span className="rounded-full bg-white/90 px-2 py-0.5 font-medium text-[#475467] ring-1 ring-black/[0.06]">
                                 {bubble.action}
+                              </span>
+                            ) : null}
+                            {bubble.deliveryStatus ? (
+                              <span className="rounded-full bg-white/90 px-2 py-0.5 font-medium text-[#475467] ring-1 ring-black/[0.06]">
+                                {bubble.deliveryStatus}
+                              </span>
+                            ) : null}
+                            {bubble.requiresAck ? (
+                              <span className="rounded-full border border-[#fcd34d] bg-[#fffbeb] px-2 py-0.5 font-semibold text-[#b54708]">
+                                ack required
+                              </span>
+                            ) : null}
+                            {bubble.mentions.length > 0 ? (
+                              <span className="rounded-full bg-white/90 px-2 py-0.5 font-medium text-[#475467] ring-1 ring-black/[0.06]">
+                                {bubble.mentions.map((mention) => `@${mention}`).join(" ")}
                               </span>
                             ) : null}
                             {bubbleIndex > 0 ? (

@@ -1,0 +1,48 @@
+{
+  "name": "@maia/theatre",
+  "version": "0.1.0",
+  "description": "Live agent visualization SDK - watch AI agents collaborate in real-time",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external react",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external react",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@maia/acp": "workspace:*",
+    "@maia/computer-use": "workspace:*",
+    "lucide-react": "^0.487.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": ["ai", "agent", "visualization", "theatre", "react", "observability", "maia"],
+  "author": "Maia AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maia-ai/maia-sdk"
+  }
+}

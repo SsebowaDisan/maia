@@ -1,7 +1,10 @@
 /** Full-screen modal wrapper for the Developer Portal page. */
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Code2, X } from "lucide-react";
-import { DeveloperPortalPage } from "../../pages/DeveloperPortalPage";
+
+const DeveloperPortalPage = lazy(async () => ({
+  default: (await import("../../pages/DeveloperPortalPage")).DeveloperPortalPage,
+}));
 
 type Props = {
   open: boolean;
@@ -50,7 +53,9 @@ export function DeveloperPortalModal({ open, onClose }: Props) {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <DeveloperPortalPage />
+          <Suspense fallback={<div className="h-full bg-[#f6f6f7]" />}>
+            <DeveloperPortalPage />
+          </Suspense>
         </div>
       </div>
     </div>

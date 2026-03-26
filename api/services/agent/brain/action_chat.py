@@ -339,6 +339,15 @@ class StepActionChatBridge:
         if not teammate_reply:
             teammate_reply = "Before you move on, confirm the visible evidence actually supports the claim."
 
+        live_thread_id = (
+            f"{self._conversation.conversation_id}:"
+            f"{str(self.step_id or 'general').strip() or 'general'}:live"
+        )
+        task_id = str(self.step_id or self._conversation.conversation_id).strip() or self._conversation.conversation_id
+        task_title = " ".join(
+            str(self.step_description or self.original_task or self._conversation.topic).split()
+        ).strip()
+
         chat.send_message(
             conversation=self._conversation,
             speaker_id=actor["id"],
@@ -346,8 +355,13 @@ class StepActionChatBridge:
             speaker_role=actor["role"],
             content=actor_message,
             step_id=self.step_id,
+            thread_id=live_thread_id,
+            task_id=task_id,
+            task_title=task_title,
             message_type="message",
             mood="confident",
+            mentions=[teammate["id"]],
+            requires_ack=True,
             to_agent=teammate["id"],
             on_event=self.on_event,
         )
@@ -358,8 +372,13 @@ class StepActionChatBridge:
             speaker_role=teammate["role"],
             content=teammate_reply,
             step_id=self.step_id,
+            thread_id=live_thread_id,
+            task_id=task_id,
+            task_title=task_title,
             message_type="message",
             mood="skeptical",
+            mentions=[actor["id"]],
+            acked_by=[teammate["id"]],
             to_agent=actor["id"],
             on_event=self.on_event,
         )

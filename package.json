@@ -1,0 +1,26 @@
+{
+  "name": "maia-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.17.1",
+  "workspaces": [
+    "frontend/user_interface",
+    "packages/acp-js",
+    "packages/brain-runtime",
+    "packages/cli",
+    "packages/computer-use",
+    "packages/connectors",
+    "packages/sdk-js",
+    "packages/teamchat",
+    "packages/theatre-react"
+  ],
+  "scripts": {
+    "build:app": "pnpm --dir frontend/user_interface build",
+    "test:app": "pnpm --dir frontend/user_interface test"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "6.3.5"
+    }
+  }
+}

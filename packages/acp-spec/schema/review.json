@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://maia.ai/acp/v1/review.json",
+  "title": "ACP Review",
+  "description": "One agent evaluates another agent's output.",
+  "type": "object",
+  "required": ["reviewer", "author", "verdict"],
+  "properties": {
+    "reviewer": {
+      "type": "string",
+      "pattern": "^agent://",
+      "description": "Agent performing the review."
+    },
+    "author": {
+      "type": "string",
+      "pattern": "^agent://",
+      "description": "Agent whose work is being reviewed."
+    },
+    "artifact_id": {
+      "type": "string",
+      "description": "Reference to the artifact being reviewed."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "revise", "reject", "escalate"],
+      "description": "The review decision."
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Optional quality score (0.0 to 1.0)."
+    },
+    "feedback": {
+      "type": "string",
+      "description": "Detailed review feedback."
+    },
+    "revision_instructions": {
+      "type": "string",
+      "description": "Specific instructions for revision (when verdict is 'revise')."
+    },
+    "strengths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What was good about the work."
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["minor", "major", "critical"] },
+          "description": { "type": "string" },
+          "location": { "type": "string" }
+        },
+        "required": ["severity", "description"]
+      },
+      "description": "Specific issues found."
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Which review round this is (1, 2, 3...)."
+    },
+    "max_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Maximum review rounds before escalation."
+    }
+  },
+  "additionalProperties": false
+}

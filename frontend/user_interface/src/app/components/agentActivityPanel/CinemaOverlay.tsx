@@ -2,9 +2,9 @@
 
 import { Pause, Play } from "lucide-react";
 import { useRef, useState } from "react";
+import { ResearchTodoList } from "@maia/theatre";
 import { DesktopViewer } from "./DesktopViewer";
 import { visibleTimelineEvents } from "./replayModePolicy";
-import { ResearchTodoList } from "./ResearchTodoList";
 import type { AgentActivityEvent } from "../../types";
 
 type PhaseTimelineEntry = {

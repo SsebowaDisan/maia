@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://maia.ai/acp/v1/capabilities.json",
+  "title": "ACP Capabilities",
+  "description": "Declares what an agent can do — used for discovery and team assembly.",
+  "type": "object",
+  "required": ["agent_id", "name", "skills"],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "pattern": "^agent://",
+      "description": "The agent's URI."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable agent name."
+    },
+    "description": {
+      "type": "string",
+      "description": "What this agent does."
+    },
+    "role": {
+      "type": "string",
+      "description": "The agent's role (e.g., 'researcher', 'analyst', 'writer')."
+    },
+    "personality": {
+      "type": "object",
+      "properties": {
+        "style": {
+          "type": "string",
+          "enum": ["concise", "detailed", "conversational", "formal", "creative"],
+          "description": "Communication style."
+        },
+        "traits": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Personality traits (e.g., 'skeptical', 'methodical', 'enthusiastic')."
+        },
+        "avatar_color": {
+          "type": "string",
+          "description": "Hex color for Theatre visualization."
+        },
+        "avatar_emoji": {
+          "type": "string",
+          "description": "Emoji for Theatre visualization."
+        }
+      },
+      "additionalProperties": true,
+      "description": "Personality for Theatre rendering and team chat."
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["skill_id", "description"],
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "description": "Unique skill identifier."
+          },
+          "description": {
+            "type": "string",
+            "description": "What this skill does."
+          },
+          "input_schema": {
+            "type": "object",
+            "description": "JSON Schema for skill input."
+          },
+          "output_schema": {
+            "type": "object",
+            "description": "JSON Schema for skill output."
+          }
+        }
+      },
+      "description": "List of skills this agent can perform."
+    },
+    "connectors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "External tools/services this agent can use (e.g., 'gmail', 'slack', 'jira')."
+    },
+    "accepts_intents": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Which message intents this agent responds to."
+    },
+    "max_concurrent_tasks": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "How many tasks the agent can handle simultaneously."
+    },
+    "presence": {
+      "type": "object",
+      "properties": {
+        "availability": {
+          "type": "string",
+          "enum": ["available", "focused", "busy", "offline"]
+        },
+        "status_text": {
+          "type": "string",
+          "description": "Free-form status supplied by the host agent runtime."
+        },
+        "current_focus": {
+          "type": "string",
+          "description": "What the agent is currently focused on."
+        },
+        "current_task_id": {
+          "type": "string",
+          "description": "Task currently owned by the agent."
+        },
+        "active_task_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_seen_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true,
+      "description": "Live availability and workload hints for routing and Theatre."
+    },
+    "cost_per_invocation": {
+      "type": "object",
+      "properties": {
+        "currency": { "type": "string", "default": "USD" },
+        "estimated_tokens": { "type": "integer" },
+        "estimated_cost": { "type": "number" }
+      },
+      "description": "Estimated cost metadata for budget planning."
+    }
+  },
+  "additionalProperties": false
+}

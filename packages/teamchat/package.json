@@ -1,0 +1,35 @@
+{
+  "name": "@maia/teamchat",
+  "version": "0.1.0",
+  "description": "Live agent conversation UI — watch AI agents talk to each other in real-time",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external react",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch --external react"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "@maia/acp": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": ["ai", "agent", "chat", "conversation", "multi-agent", "teamchat", "maia"],
+  "author": "Maia AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maia-sdk/maia"
+  }
+}

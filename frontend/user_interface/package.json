@@ -9,6 +9,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@maia/acp": "workspace:*",
+    "@maia/computer-use": "workspace:*",
+    "@maia/theatre": "workspace:*",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
     "@mui/icons-material": "7.3.5",
@@ -92,11 +95,6 @@
     },
     "react-dom": {
       "optional": true
-    }
-  },
-  "pnpm": {
-    "overrides": {
-      "vite": "6.3.5"
     }
   }
 }

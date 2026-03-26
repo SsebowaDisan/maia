@@ -1,19 +1,23 @@
 import { useState, type RefObject } from "react";
 import { toast } from "sonner";
+import {
+  AssemblyProgressPanel,
+  BrainReviewPanel,
+  FullscreenViewerOverlay,
+  PhaseTimeline,
+  ResearchTodoList,
+  type FullscreenTimelineItem,
+} from "@maia/theatre";
 
 import { approveAgentRunGate, rejectAgentRunGate } from "../../../api/client";
 import { readEventPayload } from "../../utils/eventPayload";
 import { resolvePreferredRunId } from "../../utils/runIdSelection";
 import { ApprovalGateCard } from "./ApprovalGateCard";
 import { AgentHandoffRelay } from "./AgentHandoffRelay";
-import { AssemblyProgressPanel } from "./AssemblyProgressPanel";
-import { BrainReviewPanel } from "./BrainReviewPanel";
 import { DesktopViewer } from "./DesktopViewer";
-import { FullscreenViewerOverlay } from "./FullscreenViewerOverlay";
-import { PhaseTimeline } from "./PhaseTimeline";
 import { ReplayControls } from "./ReplayControls";
+import { visibleTimelineEvents } from "./replayModePolicy";
 import { ReplayTimeline } from "./ReplayTimeline";
-import { ResearchTodoList } from "./ResearchTodoList";
 import { TeamConversationTab } from "./TeamConversationTab";
 import type { TheatreStage } from "./deriveTheatreStage";
 import type { AgentActivityEvent } from "../../types";
@@ -88,6 +92,15 @@ function ActivityPanelBody({
 }: ActivityPanelBodyProps) {
   const [panelTab, setPanelTab] = useState<"timeline" | "conversation">("timeline");
   const conversationRunId = resolvePreferredRunId(activityRunId, orderedEvents);
+  const timelineItems: FullscreenTimelineItem[] = visibleTimelineEvents(visibleEvents).map((event) => {
+    const index = visibleEvents.findIndex((candidate) => candidate.event_id === event.event_id);
+    return {
+      id: String(event.event_id || index),
+      title: String(event.title || "Untitled event"),
+      detail: String(event.detail || ""),
+      onSelect: () => onSelectEvent(event, index),
+    };
+  });
   const activeEventType = String(activeEvent?.event_type || "").trim().toLowerCase();
   const executionStarted = orderedEvents.some(
     (event) => String(event.event_type || "").trim().toLowerCase() === "execution_starting",
@@ -224,10 +237,9 @@ function ActivityPanelBody({
             onOpenFullscreen={() => setIsFullscreenViewer(true)}
           />
         }
-        visibleEvents={visibleEvents}
-        activeEvent={activeEvent}
-        sceneText={sceneText}
-        onSelectEvent={onSelectEvent}
+        activeTitle={String(activeEvent?.title || "")}
+        activeDetail={String(sceneText || activeEvent?.detail || "")}
+        timelineItems={timelineItems}
       />
 
       {(() => {

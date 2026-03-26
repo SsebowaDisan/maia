@@ -8,6 +8,7 @@ import {
   deriveFromEvents,
   filterConversationRows,
   mergeRows,
+  toConversationRoster,
   toConversationGroups,
   toTimestamp,
 } from "./teamConversationModel";
@@ -42,6 +43,7 @@ export function TeamConversationTab({ runId, events }: TeamConversationTabProps)
     ].join("|");
   }, [events]);
   const groups = useMemo(() => toConversationGroups(rows), [rows]);
+  const roster = useMemo(() => toConversationRoster(rows), [rows]);
   const latestRowKey = useMemo(() => {
     const lastRow = rows[rows.length - 1];
     if (!lastRow) {
@@ -177,6 +179,70 @@ export function TeamConversationTab({ runId, events }: TeamConversationTabProps)
         <p className="mb-2 rounded-xl border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[12px] text-[#b42318]">
           {loadError}
         </p>
+      ) : null}
+
+      {roster.length > 0 ? (
+        <div className="mb-3 overflow-x-auto rounded-[20px] border border-[#eaecf0] bg-white/90 px-2 py-2">
+          <div className="flex min-w-max gap-2">
+            {roster.map((member) => {
+              const statusStyles =
+                member.status === "active"
+                  ? "border-[#bbf7d0] bg-[#ecfdf3] text-[#027a48]"
+                  : member.status === "engaged"
+                    ? "border-[#fed7aa] bg-[#fff7ed] text-[#c4320a]"
+                    : member.status === "watching"
+                      ? "border-[#d9d6fe] bg-[#f5f3ff] text-[#6941c6]"
+                      : "border-[#e4e7ec] bg-[#f8fafc] text-[#475467]";
+
+              return (
+                <div
+                  key={member.id}
+                  className="min-w-[168px] rounded-[18px] border border-[#e4e7ec] bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] px-3 py-2 shadow-[0_1px_2px_rgba(16,24,40,0.04)]"
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/80 text-[10px] font-semibold text-[#1f2937] shadow-[0_1px_2px_rgba(16,24,40,0.08)]"
+                      style={{ backgroundColor: member.avatarColor }}
+                    >
+                      {member.avatarLabel}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="truncate text-[12px] font-semibold text-[#111827]">{member.name}</p>
+                        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.04em] ${statusStyles}`}>
+                          {member.status}
+                        </span>
+                      </div>
+                      {member.role ? (
+                        <p className="truncate text-[10px] text-[#667085]">{member.role}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="rounded-full bg-[#f8fafc] px-2 py-0.5 text-[10px] font-medium text-[#475467]">
+                      {member.threadCount} {member.threadCount === 1 ? "thread" : "threads"}
+                    </span>
+                    {member.pendingAckCount > 0 ? (
+                      <span className="rounded-full border border-[#fcd34d] bg-[#fffbeb] px-2 py-0.5 text-[10px] font-semibold text-[#b54708]">
+                        {member.pendingAckCount} waiting
+                      </span>
+                    ) : null}
+                    {member.mentionCount > 0 ? (
+                      <span className="rounded-full border border-[#dbeafe] bg-[#eff6ff] px-2 py-0.5 text-[10px] font-medium text-[#1d4ed8]">
+                        {member.mentionCount} mentions
+                      </span>
+                    ) : null}
+                  </div>
+                  {member.focusLabel ? (
+                    <p className="mt-2 text-[10px] leading-[1.45] text-[#667085]">
+                      Focus: {member.focusLabel}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
 
       {!loading && !hasRows ? (

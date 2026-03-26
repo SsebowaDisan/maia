@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maia-sdk"
+version = "0.1.0"
+description = "Maia SDK — the collaboration and observability layer for AI agents. One install, everything you need."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Maia AI" }]
+keywords = [
+    "ai", "agent", "protocol", "multi-agent", "collaboration",
+    "observability", "acp", "maia", "langchain", "crewai", "autogen",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "maia-acp>=0.1.0",
+]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2.0"]
+crewai = ["crewai>=0.50.0"]
+autogen = ["autogen-agentchat>=0.4.0"]
+all = [
+    "langchain-core>=0.2.0",
+    "crewai>=0.50.0",
+    "autogen-agentchat>=0.4.0",
+]
+
+[project.urls]
+Homepage = "https://maia.ai"
+Documentation = "https://docs.maia.ai"
+Repository = "https://github.com/maia-ai/maia-sdk"
+
+[tool.hatch.build.targets.wheel]
+packages = ["maia_sdk"]

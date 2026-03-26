@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maia-acp"
+version = "0.1.0"
+description = "Agent Collaboration Protocol — Python client for agent-to-agent communication"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Maia AI" }]
+keywords = ["ai", "agent", "protocol", "multi-agent", "collaboration", "acp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=0.2.0"]
+crewai = ["crewai>=0.50.0"]
+autogen = ["autogen-agentchat>=0.4.0"]
+
+[project.urls]
+Homepage = "https://github.com/maia-ai/maia-sdk"
+Documentation = "https://docs.maia.ai/acp"
+
+[tool.hatch.build.targets.wheel]
+packages = ["maia_acp"]

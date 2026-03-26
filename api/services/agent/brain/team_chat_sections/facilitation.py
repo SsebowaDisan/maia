@@ -25,6 +25,12 @@ from .participants import (
 logger = logging.getLogger(__name__)
 
 
+def _thread_id(conversation: TeamConversation, step_id: str, lane: str) -> str:
+    step_token = str(step_id or "general").strip() or "general"
+    lane_token = str(lane or "thread").strip() or "thread"
+    return f"{conversation.conversation_id}:{step_token}:{lane_token}"
+
+
 def brain_facilitates(
     service,
     *,
@@ -80,6 +86,9 @@ def brain_facilitates(
     messages: list[ChatMessage] = []
     topic = str(decision.get("topic", original_task[:200]))
     conversation.topic = topic
+    discussion_thread_id = _thread_id(conversation, step_id, "discussion")
+    task_id = str(step_id or conversation.conversation_id).strip() or conversation.conversation_id
+    task_title = " ".join(str(topic or original_task or conversation.topic).split()).strip()
     agent_map = {str(a["id"]).strip(): a for a in normalized_agents}
     facilitator = _resolve_facilitator_agent(normalized_agents)
     facilitator_id = str(facilitator.get("id")).strip() if facilitator else "brain"
@@ -110,8 +119,12 @@ def brain_facilitates(
         speaker_role=facilitator_role,
         content=opening,
         step_id=step_id,
+        thread_id=discussion_thread_id,
+        task_id=task_id,
+        task_title=task_title,
         message_type="message",
         mood="curious",
+        mentions=list(participants),
         to_agent="team",
         on_event=on_event,
     )
@@ -130,8 +143,12 @@ def brain_facilitates(
                 speaker_role=agent_info.get("role", "agent"),
                 content="thinking...",
                 step_id=step_id,
+                thread_id=discussion_thread_id,
+                task_id=task_id,
+                task_title=task_title,
                 message_type="thinking",
                 mood="curious",
+                mentions=[facilitator_id],
                 to_agent=facilitator_id,
                 on_event=on_event,
             )
@@ -165,9 +182,14 @@ def brain_facilitates(
                 speaker_role=agent_info.get("role", "agent"),
                 content=response,
                 step_id=step_id,
+                thread_id=discussion_thread_id,
+                task_id=task_id,
+                task_title=task_title,
                 reply_to_id=brain_msg.message_id,
                 message_type="message",
                 mood=mood,
+                acked_by=[pid],
+                mentions=[facilitator_id],
                 to_agent=facilitator_id,
                 on_event=on_event,
             )
@@ -223,8 +245,13 @@ def brain_facilitates(
                 speaker_role=facilitator_role,
                 content=followup_question,
                 step_id=step_id,
+                thread_id=discussion_thread_id,
+                task_id=task_id,
+                task_title=task_title,
                 message_type="message",
                 mood="curious",
+                mentions=[target, challenge_from] if challenge_from else [target],
+                requires_ack=True,
                 to_agent=target,
                 on_event=on_event,
             )
@@ -243,8 +270,12 @@ def brain_facilitates(
                 speaker_role=target_info.get("role", "agent"),
                 content="thinking...",
                 step_id=step_id,
+                thread_id=discussion_thread_id,
+                task_id=task_id,
+                task_title=task_title,
                 message_type="thinking",
                 mood="curious",
+                mentions=[facilitator_id],
                 to_agent=facilitator_id,
                 on_event=on_event,
             )
@@ -276,9 +307,14 @@ def brain_facilitates(
                 speaker_role=target_info.get("role", "agent"),
                 content=response2,
                 step_id=step_id,
+                thread_id=discussion_thread_id,
+                task_id=task_id,
+                task_title=task_title,
                 reply_to_id=poke_msg.message_id,
                 message_type="message",
                 mood=mood2,
+                acked_by=[target],
+                mentions=[challenge_from] if challenge_from else [facilitator_id],
                 to_agent=challenge_from or "brain",
                 on_event=on_event,
             )
@@ -307,9 +343,13 @@ def brain_facilitates(
                     speaker_role=from_info.get("role", "agent"),
                     content=reaction_response,
                     step_id=step_id,
+                    thread_id=discussion_thread_id,
+                    task_id=task_id,
+                    task_title=task_title,
                     reply_to_id=resp2_msg.message_id,
                     message_type="message",
                     mood=_infer_mood_from_response(reaction_response),
+                    mentions=[target],
                     to_agent=target,
                     on_event=on_event,
                 )
@@ -339,8 +379,12 @@ def brain_facilitates(
             speaker_role=facilitator_role,
             content=summary,
             step_id=step_id,
+            thread_id=discussion_thread_id,
+            task_id=task_id,
+            task_title=task_title,
             message_type="summary",
             mood="confident",
+            mentions=list(participants),
             to_agent="team",
             on_event=on_event,
         )

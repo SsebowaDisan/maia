@@ -1,30 +1,38 @@
+import { Suspense } from "react";
 import { RoutePlaceholderPage } from "../RoutePlaceholderPage";
 import { HubShell } from "../HubShell";
-import { AdminReviewQueuePage } from "../../pages/AdminReviewQueuePage";
-import { MarketplacePage } from "../../pages/MarketplacePage";
-import { MarketplaceAgentDetailPage } from "../../pages/MarketplaceAgentDetailPage";
-import { WorkspacePage } from "../../pages/WorkspacePage";
-import { MyAgentsPage } from "../../pages/MyAgentsPage";
-import { ConnectorsPage } from "../../pages/ConnectorsPage";
-import { ConnectorMarketplacePage } from "../../pages/ConnectorMarketplacePage";
-import { DeveloperPortalPage } from "../../pages/DeveloperPortalPage";
-import { DeveloperDocsPage } from "../../pages/DeveloperDocsPage";
-import { AgentBuilderPage } from "../../pages/AgentBuilderPage";
-import { AgentDetailPage } from "../../pages/AgentDetailPage";
-import { OperationsDashboardPage } from "../../pages/OperationsDashboardPage";
-import { WorkflowBuilderPage } from "../../pages/WorkflowBuilderPage";
-import { MarketplaceBrowsePage } from "../../pages/hub/MarketplaceBrowsePage";
-import { HubAgentDetailPage } from "../../pages/hub/HubAgentDetailPage";
-import { TeamDetailPage } from "../../pages/hub/TeamDetailPage";
-import { CreatorProfilePage } from "../../pages/hub/CreatorProfilePage";
-import { EditProfilePage } from "../../pages/hub/EditProfilePage";
-import { CreatorDashboardPage } from "../../pages/hub/CreatorDashboardPage";
-import { ExplorePage } from "../../pages/hub/ExplorePage";
-import { FeedPage } from "../../pages/hub/FeedPage";
-import { SearchResultsPage } from "../../pages/hub/SearchResultsPage";
 import { AppRouteOverlayModal } from "../../components/AppRouteOverlayModal";
 import { resolveSidebarOverlayForPath } from "./common";
 import { resolveAppRouteShell } from "../routeShells";
+import { RouteLoadingFallback } from "./RouteLoadingFallback";
+import {
+  AdminReviewQueuePage,
+  AgentBuilderPage,
+  AgentDetailPage,
+  ConnectorsPage,
+  ConnectorMarketplacePage,
+  CreatorDashboardPage,
+  CreatorProfilePage,
+  DeveloperDocsPage,
+  DeveloperPortalPage,
+  EditProfilePage,
+  ExplorePage,
+  FeedPage,
+  HubAgentDetailPage,
+  MarketplaceAgentDetailPage,
+  MarketplaceBrowsePage,
+  MarketplacePage,
+  MyAgentsPage,
+  OperationsDashboardPage,
+  SearchResultsPage,
+  TeamDetailPage,
+  WorkflowBuilderPage,
+  WorkspacePage,
+} from "./lazyPages";
+
+function withRouteSuspense(node: React.ReactNode) {
+  return <Suspense fallback={<RouteLoadingFallback />}>{node}</Suspense>;
+}
 
 function renderStandaloneRoute(params: {
   pathname: string;
@@ -45,28 +53,28 @@ function renderStandaloneRoute(params: {
     return null;
   }
   if (routeShell.key === "hub_marketplace") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <MarketplaceBrowsePage onNavigate={params.navigateToPath} />
       </HubShell>
     );
   }
   if (routeShell.key === "hub_marketplace_agent") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <HubAgentDetailPage slug={String(routeShell.params?.slug || "")} onNavigate={params.navigateToPath} />
       </HubShell>
     );
   }
   if (routeShell.key === "hub_marketplace_team") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <TeamDetailPage slug={String(routeShell.params?.slug || "")} onNavigate={params.navigateToPath} />
       </HubShell>
     );
   }
   if (routeShell.key === "hub_creator_profile") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <CreatorProfilePage
           username={String(routeShell.params?.username || "")}
@@ -76,14 +84,14 @@ function renderStandaloneRoute(params: {
     );
   }
   if (routeShell.key === "hub_creator_edit") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <EditProfilePage onNavigate={params.navigateToPath} />
       </HubShell>
     );
   }
   if (routeShell.key === "hub_creator_dashboard") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <CreatorDashboardPage onNavigate={params.navigateToPath} />
       </HubShell>
@@ -92,7 +100,7 @@ function renderStandaloneRoute(params: {
   if (routeShell.key === "hub_explore") {
     const paramsQuery = new URLSearchParams(params.locationSearch || "");
     const query = String(paramsQuery.get("q") || "").trim();
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         {query ? (
           <SearchResultsPage query={query} onNavigate={params.navigateToPath} />
@@ -103,16 +111,16 @@ function renderStandaloneRoute(params: {
     );
   }
   if (routeShell.key === "hub_feed") {
-    return (
+    return withRouteSuspense(
       <HubShell currentPath={params.pathname || "/"} onNavigate={params.navigateToPath}>
         <FeedPage onNavigate={params.navigateToPath} />
       </HubShell>
     );
   }
-  if (routeShell.key === "admin_review") return <AdminReviewQueuePage />;
-  if (routeShell.key === "marketplace") return <MarketplacePage />;
+  if (routeShell.key === "admin_review") return withRouteSuspense(<AdminReviewQueuePage />);
+  if (routeShell.key === "marketplace") return withRouteSuspense(<MarketplacePage />);
   if (routeShell.key === "marketplace_agent_detail") {
-    return (
+    return withRouteSuspense(
       <div className="size-full bg-[#f6f6f7]">
         <MarketplacePage />
         <AppRouteOverlayModal
@@ -125,24 +133,26 @@ function renderStandaloneRoute(params: {
       </div>
     );
   }
-  if (routeShell.key === "workspace") return <WorkspacePage />;
-  if (routeShell.key === "my_agents") return <MyAgentsPage />;
-  if (routeShell.key === "connectors") return <ConnectorsPage />;
-  if (routeShell.key === "connector_marketplace") return <ConnectorMarketplacePage />;
-  if (routeShell.key === "developer") return <DeveloperPortalPage />;
-  if (routeShell.key === "developer_docs") return <DeveloperDocsPage />;
-  if (routeShell.key === "agent_builder") return <AgentBuilderPage />;
+  if (routeShell.key === "workspace") return withRouteSuspense(<WorkspacePage />);
+  if (routeShell.key === "my_agents") return withRouteSuspense(<MyAgentsPage />);
+  if (routeShell.key === "connectors") return withRouteSuspense(<ConnectorsPage />);
+  if (routeShell.key === "connector_marketplace") return withRouteSuspense(<ConnectorMarketplacePage />);
+  if (routeShell.key === "developer") return withRouteSuspense(<DeveloperPortalPage />);
+  if (routeShell.key === "developer_docs") return withRouteSuspense(<DeveloperDocsPage />);
+  if (routeShell.key === "agent_builder") return withRouteSuspense(<AgentBuilderPage />);
   if (routeShell.key === "agent_edit") {
-    return <AgentBuilderPage initialAgentId={String(routeShell.params?.agentId || "")} />;
+    return withRouteSuspense(<AgentBuilderPage initialAgentId={String(routeShell.params?.agentId || "")} />);
   }
   if (routeShell.key === "agent_detail") {
-    return <AgentDetailPage agentId={String(routeShell.params?.agentId || "")} />;
+    return withRouteSuspense(<AgentDetailPage agentId={String(routeShell.params?.agentId || "")} />);
   }
   if (routeShell.key === "agent_run") {
-    return <AgentDetailPage agentId={String(routeShell.params?.agentId || "")} initialTab="history" />;
+    return withRouteSuspense(
+      <AgentDetailPage agentId={String(routeShell.params?.agentId || "")} initialTab="history" />,
+    );
   }
-  if (routeShell.key === "operations") return <OperationsDashboardPage />;
-  if (routeShell.key === "workflow_builder") return <WorkflowBuilderPage />;
+  if (routeShell.key === "operations") return withRouteSuspense(<OperationsDashboardPage />);
+  if (routeShell.key === "workflow_builder") return withRouteSuspense(<WorkflowBuilderPage />);
   return null;
 }
 

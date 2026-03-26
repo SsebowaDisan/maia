@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://maia.ai/acp/v1/execution-activity.json",
+  "title": "Maia Execution Activity Extension",
+  "description": "Optional execution-focused extension payload for ACP activity events. Encodes the richer Theatre and computer-use state used by Maia applications.",
+  "type": "object",
+  "properties": {
+    "stage": {
+      "type": "string",
+      "description": "High-level theatre stage such as understand, breakdown, analyze, execute, review, confirm, done, blocked, or error."
+    },
+    "status": {
+      "type": "string",
+      "description": "Execution status such as pending, running, completed, failed, blocked, or needs_input."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short user-facing label for the current activity."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Longer user-facing description for the current activity."
+    },
+    "scene_surface": {
+      "type": "string",
+      "description": "Primary surface being rendered, such as system, browser, email, document, docs, sheets, pdf, snapshot, api, or chat."
+    },
+    "scene_family": {
+      "type": "string",
+      "description": "Logical family grouping used for routing and skinning."
+    },
+    "ui_target": {
+      "type": "string",
+      "description": "Hint describing the intended target region or UI element class."
+    },
+    "event_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic event index for replay-aware UIs."
+    },
+    "render_mode": {
+      "type": "string",
+      "description": "Rendering hint for Theatre consumers."
+    },
+    "replay_importance": {
+      "type": "string",
+      "description": "Replay importance hint for trimming or emphasizing events."
+    },
+    "scene_ref": {
+      "type": ["string", "null"],
+      "description": "Optional reference to a scene identity shared across events."
+    },
+    "snapshot_ref": {
+      "type": ["string", "null"],
+      "description": "Optional reference to a snapshot identity shared across events."
+    },
+    "graph_node_id": {
+      "type": ["string", "null"],
+      "description": "Optional graph node identifier from upstream orchestration."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Execution-specific metadata for Theatre and runtime consumers.",
+      "additionalProperties": true
+    },
+    "raw_data": {
+      "type": "object",
+      "description": "Original source event data from the host application.",
+      "additionalProperties": true
+    },
+    "raw_metadata": {
+      "type": "object",
+      "description": "Original source event metadata from the host application.",
+      "additionalProperties": true
+    },
+    "browser_state": {
+      "type": "object",
+      "description": "Browser and computer-use state used by rich Theatre browser scenes.",
+      "properties": {
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "action": { "type": "string" },
+        "computer_use_session_id": { "type": "string" },
+        "computer_use_task": { "type": "string" },
+        "computer_use_model": { "type": "string" },
+        "computer_use_max_iterations": { "type": "integer", "minimum": 1 },
+        "screenshot_url": { "type": "string" },
+        "screenshot_b64": { "type": "string" },
+        "cursor_x": { "type": "number", "minimum": 0, "maximum": 100 },
+        "cursor_y": { "type": "number", "minimum": 0, "maximum": 100 },
+        "scroll_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "zoom_level": { "type": "number", "minimum": 0 },
+        "page_index": { "type": "integer", "minimum": 1 },
+        "narration": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "email_state": {
+      "type": "object",
+      "description": "Email composition state used by Theatre email scenes.",
+      "properties": {
+        "recipient": { "type": "string" },
+        "subject": { "type": "string" },
+        "body_preview": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "document_state": {
+      "type": "object",
+      "description": "Document and PDF viewing state used by Theatre document scenes.",
+      "properties": {
+        "document_url": { "type": "string" },
+        "spreadsheet_url": { "type": "string" },
+        "body_preview": { "type": "string" },
+        "content_before": { "type": "string" },
+        "content_after": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
