@@ -29,7 +29,8 @@ import logging
 import urllib.error
 import urllib.request
 import json
-from typing import Any, Callable
+from enum import Enum
+from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 logger = logging.getLogger(__name__)
 
@@ -76,25 +77,120 @@ def tool(
 def _infer_params(fn: Callable) -> dict[str, Any]:
     """Derive JSON Schema params dict from function signature type hints."""
     sig = inspect.signature(fn)
+    type_hints = get_type_hints(fn)
     props: dict[str, Any] = {}
     required: list[str] = []
     for name, param in sig.parameters.items():
         if name == "self":
             continue
-        ann = param.annotation
-        json_type = "string"
-        if ann in (int,):
-            json_type = "integer"
-        elif ann in (float,):
-            json_type = "number"
-        elif ann in (bool,):
-            json_type = "boolean"
-        elif ann in (list, List := "list"):
-            json_type = "array"
-        props[name] = {"type": json_type}
+        props[name] = _annotation_to_schema(type_hints.get(name, param.annotation))
         if param.default is inspect.Parameter.empty:
             required.append(name)
     return {"type": "object", "properties": props, "required": required}
+
+
+def _annotation_to_schema(annotation: Any) -> dict[str, Any]:
+    if annotation is inspect.Parameter.empty:
+        return {"type": "string"}
+
+    origin = get_origin(annotation)
+    args = [arg for arg in get_args(annotation) if arg is not type(None)]
+    if origin is not None and args:
+        if origin in (list, tuple, set):
+            item_schema = _annotation_to_schema(args[0]) if args else {"type": "string"}
+            return {"type": "array", "items": {"type": item_schema.get("type", "string")}}
+        if origin is dict:
+            return {"type": "object"}
+        return _annotation_to_schema(args[0])
+
+    if annotation in (str,):
+        return {"type": "string"}
+    if annotation in (int,):
+        return {"type": "integer"}
+    if annotation in (float,):
+        return {"type": "number"}
+    if annotation in (bool,):
+        return {"type": "boolean"}
+    if annotation in (list, tuple, set):
+        return {"type": "array", "items": {"type": "string"}}
+    if annotation in (dict,):
+        return {"type": "object"}
+    if inspect.isclass(annotation) and issubclass(annotation, Enum):
+        enum_values = [str(member.value) for member in annotation]
+        return {"type": "string", "enum": enum_values}
+    return {"type": "string"}
+
+
+def _normalize_tool_parameters(raw_params: Any) -> list[Any]:
+    from api.schemas.connector_definition.tool_schema import ToolParameter, ToolParameterType
+
+    if raw_params is None:
+        return []
+
+    if isinstance(raw_params, list):
+        normalized: list[ToolParameter] = []
+        for item in raw_params:
+            if isinstance(item, ToolParameter):
+                normalized.append(item)
+                continue
+            if isinstance(item, dict):
+                normalized.append(ToolParameter(**item))
+        return normalized
+
+    if not isinstance(raw_params, dict):
+        return []
+
+    schema = dict(raw_params)
+    if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+        properties = dict(schema.get("properties") or {})
+        required_names = {
+            str(name).strip()
+            for name in (schema.get("required") or [])
+            if str(name).strip()
+        }
+    else:
+        properties = schema
+        required_names = set()
+
+    normalized_params: list[ToolParameter] = []
+    for name, prop in properties.items():
+        if not isinstance(prop, dict):
+            prop = {"type": "string"}
+        param_type = _coerce_parameter_type(prop.get("type"))
+        items = prop.get("items") if isinstance(prop.get("items"), dict) else {}
+        items_type = (
+            _coerce_parameter_type(items.get("type"))
+            if param_type == ToolParameterType.array and items.get("type")
+            else None
+        )
+        nested_properties = (
+            dict(prop.get("properties") or {})
+            if param_type == ToolParameterType.object and isinstance(prop.get("properties"), dict)
+            else None
+        )
+        normalized_params.append(
+            ToolParameter(
+                name=str(name),
+                type=param_type,
+                description=str(prop.get("description") or ""),
+                required=str(name) in required_names if required_names else bool(prop.get("required", True)),
+                default=prop.get("default"),
+                enum=[str(item) for item in prop.get("enum", [])] if isinstance(prop.get("enum"), list) else None,
+                items_type=items_type,
+                properties=nested_properties,
+            )
+        )
+    return normalized_params
+
+
+def _coerce_parameter_type(value: Any):
+    from api.schemas.connector_definition.tool_schema import ToolParameterType
+
+    text = str(value or "string").strip().lower()
+    try:
+        return ToolParameterType(text)
+    except Exception:
+        return ToolParameterType.string
 
 
 # ── ConnectorBase ──────────────────────────────────────────────────────────────
@@ -118,7 +214,7 @@ class ConnectorBase:
     def build_definition(self):
         """Generate a ConnectorDefinitionSchema from this class's metadata."""
         from api.schemas.connector_definition.schema import ConnectorDefinitionSchema
-        from api.schemas.connector_definition.tool_schema import ToolSchema
+        from api.schemas.connector_definition.tool_schema import ToolActionClass, ToolSchema
         from api.schemas.connector_definition.auth_config import ApiKeyAuthConfig, NoAuthConfig
 
         tools = self._collect_tools()
@@ -130,7 +226,7 @@ class ConnectorBase:
 
         return ConnectorDefinitionSchema(
             id=self.connector_id or type(self).__name__.lower(),
-            display_name=self.display_name or type(self).__name__,
+            name=self.display_name or type(self).__name__,
             description=self.description,
             auth=auth,
             tools=[
@@ -138,7 +234,12 @@ class ConnectorBase:
                     id=f"{self.connector_id}.{name}",
                     name=name,
                     description=str(fn.__tool_description__),
-                    parameters=fn.__tool_params__,
+                    parameters=_normalize_tool_parameters(fn.__tool_params__),
+                    action_class=(
+                        ToolActionClass.read
+                        if bool(getattr(fn, "__tool_read_only__", True))
+                        else ToolActionClass.execute
+                    ),
                 )
                 for name, fn in tools.items()
             ],
