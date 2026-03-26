@@ -1,31 +1,20 @@
-import { Suspense, lazy } from "react";
 import { AppRouteOverlayModal } from "../../components/AppRouteOverlayModal";
 import { ChatMain } from "../../components/ChatMain";
 import { ChatSidebar } from "../../components/ChatSidebar";
+import { InfoPanel } from "../../components/InfoPanel";
 import { WorkspaceOverlayModal } from "../../components/WorkspaceOverlayModal";
 import { NodeFollowUpModal } from "../../components/mindmapViewer/NodeFollowUpModal";
 import { MarketplaceHeaderControls, type MarketplacePricingFilter } from "../../components/marketplace/MarketplaceHeaderControls";
 import { ResizeHandle } from "../ResizeHandle";
 import { renderWorkspaceTabContent, type WorkspaceModalTab } from "../workspaceHelpers";
+import { WorkflowBuilderPage } from "../../pages/WorkflowBuilderPage";
+import { ConnectorsPage } from "../../pages/ConnectorsPage";
+import { WorkspacePage } from "../../pages/WorkspacePage";
+import { MyAgentsPage } from "../../pages/MyAgentsPage";
+import { AdminReviewQueuePage } from "../../pages/AdminReviewQueuePage";
+import { MarketplacePage } from "../../pages/MarketplacePage";
+import { OperationsDashboardPage } from "../../pages/OperationsDashboardPage";
 import { WorkflowBuilderHeaderActions, type MindmapNodeFollowUpDraft, type SidebarOverlayConfig } from "./common";
-import { RouteLoadingFallback } from "./RouteLoadingFallback";
-import {
-  AdminReviewQueuePage,
-  ConnectorsPage,
-  MarketplacePage,
-  MyAgentsPage,
-  OperationsDashboardPage,
-  WorkflowBuilderPage,
-  WorkspacePage,
-} from "./lazyPages";
-
-function withOverlaySuspense(node: React.ReactNode) {
-  return <Suspense fallback={<RouteLoadingFallback />}>{node}</Suspense>;
-}
-
-const InfoPanel = lazy(async () => ({
-  default: (await import("../../components/InfoPanel")).InfoPanel,
-}));
 
 function renderSidebarOverlayContent(params: {
   sidebarOverlay: SidebarOverlayConfig | null;
@@ -40,12 +29,12 @@ function renderSidebarOverlayContent(params: {
   if (!sidebarOverlay) {
     return null;
   }
-  if (sidebarOverlay.key === "admin_review") return withOverlaySuspense(<AdminReviewQueuePage />);
-  if (sidebarOverlay.key === "connectors") return withOverlaySuspense(<ConnectorsPage />);
-  if (sidebarOverlay.key === "workspace") return withOverlaySuspense(<WorkspacePage />);
-  if (sidebarOverlay.key === "my_agents") return withOverlaySuspense(<MyAgentsPage />);
+  if (sidebarOverlay.key === "admin_review") return <AdminReviewQueuePage />;
+  if (sidebarOverlay.key === "connectors") return <ConnectorsPage />;
+  if (sidebarOverlay.key === "workspace") return <WorkspacePage />;
+  if (sidebarOverlay.key === "my_agents") return <MyAgentsPage />;
   if (sidebarOverlay.key === "marketplace") {
-    return withOverlaySuspense(
+    return (
       <MarketplacePage
         query={params.marketplaceQuery}
         onQueryChange={params.setMarketplaceQuery}
@@ -56,8 +45,8 @@ function renderSidebarOverlayContent(params: {
       />
     );
   }
-  if (sidebarOverlay.key === "workflow_builder") return withOverlaySuspense(<WorkflowBuilderPage />);
-  if (sidebarOverlay.key === "operations") return withOverlaySuspense(<OperationsDashboardPage />);
+  if (sidebarOverlay.key === "workflow_builder") return <WorkflowBuilderPage />;
+  if (sidebarOverlay.key === "operations") return <OperationsDashboardPage />;
   return null;
 }
 
@@ -203,43 +192,41 @@ function AppChatWorkspaceLayout(props: AppChatWorkspaceLayoutProps) {
             ) : null}
 
             {props.isInfoPanelVisible ? (
-              <Suspense fallback={<div style={{ width: `${Math.round(props.layout.infoPanelWidth)}px` }} className="min-h-0 rounded-[28px] border border-black/[0.06] bg-[#f6f6f7] shadow-[0_14px_40px_rgba(15,23,42,0.06)]" />}>
-                <InfoPanel
-                  width={props.layout.infoPanelWidth}
-                  citationFocus={props.chatState.citationFocus}
-                  selectedConversationId={props.chatState.selectedConversationId}
-                  userPrompt={props.activeTurn?.user || ""}
-                  attachments={props.activeTurn?.attachments || []}
-                  assistantHtml={props.activeTurn?.assistant || ""}
-                  infoHtml={props.activeTurn?.info || ""}
-                  infoPanel={props.activeTurn?.infoPanel || {}}
-                  mindmap={props.effectiveMindmapPayload}
-                  activityEvents={props.chatState.activityEvents}
-                  activityRunId={props.activeTurn?.activityRunId || null}
-                  sourcesUsed={props.activeTurn?.sourcesUsed || []}
-                  webSummary={props.activeTurn?.webSummary || {}}
-                  sourceUsage={props.activeTurn?.sourceUsage || []}
-                  indexId={props.fileLibrary.defaultIndexId}
-                  onClearCitationFocus={() => props.chatState.setCitationFocus(null)}
-                  onSelectCitationFocus={(citation) => props.chatState.setCitationFocus(citation)}
-                  onAskMindmapNode={(node) => {
-                    const focusText = String(node.text || "").trim();
-                    const focusTitle = String(node.title || "").trim();
-                    const defaultPrompt = focusTitle
-                      ? `What are the most important details about "${focusTitle}"?`
-                      : "What are the most important details about this selected topic?";
-                    props.setMindmapNodeFollowUp({
-                      nodeId: node.nodeId,
-                      title: focusTitle,
-                      text: focusText,
-                      pageRef: node.pageRef,
-                      sourceId: node.sourceId,
-                      sourceName: node.sourceName,
-                      defaultPrompt,
-                    });
-                  }}
-                />
-              </Suspense>
+              <InfoPanel
+                width={props.layout.infoPanelWidth}
+                citationFocus={props.chatState.citationFocus}
+                selectedConversationId={props.chatState.selectedConversationId}
+                userPrompt={props.activeTurn?.user || ""}
+                attachments={props.activeTurn?.attachments || []}
+                assistantHtml={props.activeTurn?.assistant || ""}
+                infoHtml={props.activeTurn?.info || ""}
+                infoPanel={props.activeTurn?.infoPanel || {}}
+                mindmap={props.effectiveMindmapPayload}
+                activityEvents={props.chatState.activityEvents}
+                activityRunId={props.activeTurn?.activityRunId || null}
+                sourcesUsed={props.activeTurn?.sourcesUsed || []}
+                webSummary={props.activeTurn?.webSummary || {}}
+                sourceUsage={props.activeTurn?.sourceUsage || []}
+                indexId={props.fileLibrary.defaultIndexId}
+                onClearCitationFocus={() => props.chatState.setCitationFocus(null)}
+                onSelectCitationFocus={(citation) => props.chatState.setCitationFocus(citation)}
+                onAskMindmapNode={(node) => {
+                  const focusText = String(node.text || "").trim();
+                  const focusTitle = String(node.title || "").trim();
+                  const defaultPrompt = focusTitle
+                    ? `What are the most important details about "${focusTitle}"?`
+                    : "What are the most important details about this selected topic?";
+                  props.setMindmapNodeFollowUp({
+                    nodeId: node.nodeId,
+                    title: focusTitle,
+                    text: focusText,
+                    pageRef: node.pageRef,
+                    sourceId: node.sourceId,
+                    sourceName: node.sourceName,
+                    defaultPrompt,
+                  });
+                }}
+              />
             ) : null}
 
             {props.mindmapNodeFollowUp ? (

@@ -17,12 +17,6 @@ from .participants import (
 )
 
 
-def _thread_id(conversation: TeamConversation, step_id: str, lane: str) -> str:
-    step_token = str(step_id or "general").strip() or "general"
-    lane_token = str(lane or "thread").strip() or "thread"
-    return f"{conversation.conversation_id}:{step_token}:{lane_token}"
-
-
 def kickoff_step(
     service,
     *,
@@ -161,9 +155,6 @@ def kickoff_step(
         )
 
     messages: list[ChatMessage] = []
-    kickoff_thread_id = _thread_id(conversation, step_id, "kickoff")
-    task_id = str(step_id or conversation.conversation_id).strip() or conversation.conversation_id
-    task_title = " ".join(str(step_description or original_task or conversation.topic).split()).strip()
     messages.append(
         service.send_message(
             conversation=conversation,
@@ -172,13 +163,8 @@ def kickoff_step(
             speaker_role=facilitator_role,
             content=brain_message,
             step_id=step_id,
-            thread_id=kickoff_thread_id,
-            task_id=task_id,
-            task_title=task_title,
             message_type="message",
             mood="confident",
-            mentions=[current_id],
-            requires_ack=True,
             to_agent=current_id,
             on_event=on_event,
         )
@@ -191,12 +177,8 @@ def kickoff_step(
             speaker_role=current_info.get("role", "agent"),
             content=assignee_message,
             step_id=step_id,
-            thread_id=kickoff_thread_id,
-            task_id=task_id,
-            task_title=task_title,
             message_type="message",
             mood="curious",
-            acked_by=[current_id],
             to_agent=facilitator_id,
             on_event=on_event,
         )
@@ -209,12 +191,8 @@ def kickoff_step(
             speaker_role=watcher_info.get("role", "agent"),
             content=watcher_message,
             step_id=step_id,
-            thread_id=kickoff_thread_id,
-            task_id=task_id,
-            task_title=task_title,
             message_type="message",
             mood="skeptical",
-            mentions=[current_id],
             to_agent=current_id,
             on_event=on_event,
         )
@@ -227,13 +205,8 @@ def kickoff_step(
             speaker_role=watcher_info.get("role", "agent"),
             content=watcher_follow_up,
             step_id=step_id,
-            thread_id=kickoff_thread_id,
-            task_id=task_id,
-            task_title=task_title,
             message_type="message",
             mood="skeptical",
-            mentions=[current_id],
-            requires_ack=True,
             to_agent=current_id,
             on_event=on_event,
         )
@@ -246,13 +219,8 @@ def kickoff_step(
             speaker_role=current_info.get("role", "agent"),
             content=assignee_follow_up,
             step_id=step_id,
-            thread_id=kickoff_thread_id,
-            task_id=task_id,
-            task_title=task_title,
             message_type="message",
             mood="confident",
-            acked_by=[current_id],
-            mentions=[watcher_id],
             to_agent=watcher_id,
             on_event=on_event,
         )

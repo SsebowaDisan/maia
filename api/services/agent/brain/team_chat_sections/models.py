@@ -12,9 +12,6 @@ class ChatMessage:
         "conversation_id",
         "run_id",
         "step_id",
-        "thread_id",
-        "task_id",
-        "task_title",
         "speaker_id",
         "speaker_name",
         "speaker_role",
@@ -25,10 +22,6 @@ class ChatMessage:
         "timestamp",
         "message_type",
         "mood",
-        "mentions",
-        "requires_ack",
-        "delivery_status",
-        "acked_by",
         "reaction_to_id",
         "reaction",
     )
@@ -52,9 +45,6 @@ class ChatMessage:
         conversation_id: str,
         run_id: str,
         step_id: str = "",
-        thread_id: str = "",
-        task_id: str = "",
-        task_title: str = "",
         speaker_id: str,
         speaker_name: str = "",
         speaker_role: str = "",
@@ -62,10 +52,6 @@ class ChatMessage:
         reply_to_id: str = "",
         message_type: str = "message",
         mood: str = "neutral",
-        mentions: list[str] | None = None,
-        requires_ack: bool = False,
-        delivery_status: str = "delivered",
-        acked_by: list[str] | None = None,
         reaction_to_id: str = "",
         reaction: str = "",
     ):
@@ -73,9 +59,6 @@ class ChatMessage:
         self.conversation_id = conversation_id
         self.run_id = run_id
         self.step_id = step_id
-        self.thread_id = thread_id or conversation_id
-        self.task_id = task_id or step_id
-        self.task_title = task_title
         self.speaker_id = speaker_id
         self.speaker_name = speaker_name or speaker_id
         self.speaker_role = speaker_role
@@ -84,10 +67,6 @@ class ChatMessage:
         self.timestamp = time.time()
         self.message_type = message_type
         self.mood = mood
-        self.mentions = [str(item).strip() for item in (mentions or []) if str(item).strip()]
-        self.requires_ack = bool(requires_ack)
-        self.delivery_status = str(delivery_status or "delivered").strip() or "delivered"
-        self.acked_by = [str(item).strip() for item in (acked_by or []) if str(item).strip()]
         self.reaction_to_id = reaction_to_id
         self.reaction = reaction
         if speaker_id not in ChatMessage._color_map:
@@ -104,9 +83,6 @@ class ChatMessage:
             "conversation_id": self.conversation_id,
             "run_id": self.run_id,
             "step_id": self.step_id,
-            "thread_id": self.thread_id,
-            "task_id": self.task_id,
-            "task_title": self.task_title,
             "speaker_id": self.speaker_id,
             "speaker_name": self.speaker_name,
             "speaker_role": self.speaker_role,
@@ -117,10 +93,6 @@ class ChatMessage:
             "timestamp": self.timestamp,
             "message_type": self.message_type,
             "mood": self.mood,
-            "mentions": list(self.mentions),
-            "requires_ack": self.requires_ack,
-            "delivery_status": self.delivery_status,
-            "acked_by": list(self.acked_by),
             "reaction_to_id": self.reaction_to_id,
             "reaction": self.reaction,
         }
