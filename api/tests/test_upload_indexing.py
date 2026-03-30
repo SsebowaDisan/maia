@@ -405,6 +405,68 @@ def test_classify_pdf_ingestion_route_prefers_native_text_when_fitz_recovers_mat
     assert result["fitz_native_text_pages_sampled"] >= 1
 
 
+def test_classify_pdf_ingestion_route_skips_ocr_for_image_heavy_pdf_with_majority_native_text(
+    monkeypatch, tmp_path: Path
+) -> None:
+    pdf_path = tmp_path / "technical-heavy.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+
+    class _FakePypdfPage:
+        def __init__(self, idx: int) -> None:
+            self.idx = idx
+
+        def extract_text(self):
+            return (
+                ""
+                if self.idx < 1
+                else "native text present " * 12
+            )
+
+    class _FakePdfReader:
+        def __init__(self, _path: str) -> None:
+            self.pages = [_FakePypdfPage(idx) for idx in range(4)]
+
+    class _FakeFitzPage:
+        def __init__(self, idx: int) -> None:
+            self.idx = idx
+
+        def get_text(self, mode: str = "text") -> str:
+            assert mode == "text"
+            return (
+                ""
+                if self.idx < 1
+                else "technical native text recovered from fitz " * 12
+            )
+
+    class _FakeFitzDoc:
+        page_count = 4
+
+        def load_page(self, index: int) -> _FakeFitzPage:
+            return _FakeFitzPage(index)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=_FakePdfReader))
+    monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=lambda _path: _FakeFitzDoc()))
+    monkeypatch.setattr(
+        indexing,
+        "_detect_pdf_images_with_pymupdf",
+        lambda *_args, **_kwargs: (set(range(4)), 4),
+    )
+
+    result = indexing._classify_pdf_ingestion_route_cached(
+        str(pdf_path.resolve()),
+        0,
+        pdf_path.stat().st_size,
+    )
+
+    assert result["route"] == "normal"
+    assert result["use_ocr"] is False
+    assert result["reason"] == "fitz-native-text-majority"
+    assert result["fitz_native_text_pages_sampled"] == 3
+
+
 def test_index_files_reuses_existing_file_when_duplicate_upload_hits_parser(monkeypatch) -> None:
     pipeline = _DummyPipeline()
     index = _DummyIndex(index_id=14, pipeline=pipeline)
@@ -427,6 +489,7 @@ def test_index_files_reuses_existing_file_when_duplicate_upload_hits_parser(monk
         ),
     )
     monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-1")
+    monkeypatch.setattr(indexing, "_source_ids_have_document_relations", lambda **kwargs: True)
 
     result = indexing.index_files(
         context=object(),  # type: ignore[arg-type]
@@ -519,6 +582,7 @@ def test_index_files_reuses_existing_file_when_paddle_fallback_hits_duplicate(mo
         ),
     )
     monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-fallback-1")
+    monkeypatch.setattr(indexing, "_source_ids_have_document_relations", lambda **kwargs: True)
 
     result = indexing.index_files(
         context=object(),  # type: ignore[arg-type]
@@ -560,6 +624,7 @@ def test_index_files_schedules_pdf_precompute_after_duplicate_reuse(monkeypatch)
         ),
     )
     monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-2")
+    monkeypatch.setattr(indexing, "_source_ids_have_document_relations", lambda **kwargs: True)
     monkeypatch.setattr(
         indexing,
         "precompute_page_units_background",
@@ -668,6 +733,7 @@ def test_index_files_reuses_existing_file_when_pipeline_returns_duplicate_failur
         },
     )
     monkeypatch.setattr(indexing, "_resolve_existing_file_id_for_upload", lambda **kwargs: "existing-item-1")
+    monkeypatch.setattr(indexing, "_source_ids_have_document_relations", lambda **kwargs: True)
 
     result = indexing.index_files(
         context=object(),  # type: ignore[arg-type]

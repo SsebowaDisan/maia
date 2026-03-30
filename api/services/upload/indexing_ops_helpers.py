@@ -511,8 +511,15 @@ def index_files_impl(
                     configured_reader_mode,
                     classification=classification,
                 )
+                error_text = str(exc)
+                ssl_hint = ""
+                if "CERTIFICATE_VERIFY_FAILED" in error_text or "certificate verify failed" in error_text.lower():
+                    ssl_hint = (
+                        " Configure MAIA_UPLOAD_PADDLEOCR_VL_API_VERIFY_SSL=false for a trusted internal endpoint,"
+                        " or set MAIA_UPLOAD_PADDLEOCR_VL_API_CA_BUNDLE to a custom CA bundle."
+                    )
                 all_debug.append(
-                    f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}."
+                    f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}.{ssl_hint}"
                 )
                 record_trace_event(
                     "index.ocr_route_failed",

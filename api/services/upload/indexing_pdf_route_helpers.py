@@ -339,6 +339,7 @@ def classify_pdf_ingestion_route_cached_impl(
     sampled_pages = max(1, sampled_pages)
     low_text_ratio = low_text_pages / float(sampled_pages)
     sample_image_ratio = sample_image_pages / float(sampled_pages)
+    fitz_native_text_ratio = fitz_native_text_pages / float(sampled_pages)
     # Use fitz (PyMuPDF) as the single authoritative image-page scanner.
     # The prior pypdf count_image_pages full pass was redundant — fitz already
     # walks every page and returns a superset of what pypdf detects.
@@ -370,6 +371,18 @@ def classify_pdf_ingestion_route_cached_impl(
             and image_ratio_all >= min_image_page_ratio_full_scan
         )
     )
+
+    # Some technical PDFs are image-heavy on paper but still expose a usable
+    # native text layer through PyMuPDF. In those cases OCR is wasted time and
+    # delays RAG readiness without improving retrieval quality materially.
+    native_text_majority = (
+        sampled_pages > 0
+        and fitz_native_text_ratio >= 0.7
+        and low_text_ratio < max(min_low_text_page_ratio, 0.5)
+    )
+    if native_text_majority:
+        should_use_ocr = False
+
     heavy = bool(should_use_ocr) and (
         force_heavy_any_image
         or image_ratio_all >= heavy_min_image_page_ratio
@@ -377,7 +390,9 @@ def classify_pdf_ingestion_route_cached_impl(
     )
 
     reason = "normal"
-    if force_heavy_any_image and image_pages_all > 0:
+    if native_text_majority:
+        reason = "fitz-native-text-majority"
+    elif force_heavy_any_image and image_pages_all > 0:
         reason = "heavy-any-image-page"
     elif low_text_ratio >= heavy_min_low_text_page_ratio and should_use_ocr:
         reason = "heavy-low-text-ratio"
@@ -396,6 +411,7 @@ def classify_pdf_ingestion_route_cached_impl(
         "low_text_ratio_sampled": float(low_text_ratio),
         "sampled_pages": int(sampled_pages),
         "fitz_native_text_pages_sampled": int(fitz_native_text_pages),
+        "fitz_native_text_ratio_sampled": float(fitz_native_text_ratio),
     }
     if fitz_probe_error:
         classification["fitz_probe_error"] = fitz_probe_error

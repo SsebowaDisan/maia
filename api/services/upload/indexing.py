@@ -70,6 +70,8 @@ def _run_paddle_startup_checks() -> list[str]:
         paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
         paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
         paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
+        paddleocr_vl_api_verify_ssl=UPLOAD_PADDLEOCR_VL_API_VERIFY_SSL,
+        paddleocr_vl_api_ca_bundle=UPLOAD_PADDLEOCR_VL_API_CA_BUNDLE,
         get_paddle_ocr_engine_fn=_get_paddle_ocr_engine,
         logger_warning=logger.info,
     )
@@ -293,6 +295,8 @@ def _extract_pdf_text_with_paddleocr(
         paddleocr_vl_api_use_doc_orientation_classify=UPLOAD_PADDLEOCR_VL_API_USE_DOC_ORIENTATION_CLASSIFY,
         paddleocr_vl_api_use_doc_unwarping=UPLOAD_PADDLEOCR_VL_API_USE_DOC_UNWARPING,
         paddleocr_vl_api_use_chart_recognition=UPLOAD_PADDLEOCR_VL_API_USE_CHART_RECOGNITION,
+        paddleocr_vl_api_verify_ssl=UPLOAD_PADDLEOCR_VL_API_VERIFY_SSL,
+        paddleocr_vl_api_ca_bundle=UPLOAD_PADDLEOCR_VL_API_CA_BUNDLE,
     )
 
 def _build_target_uploaded_meta(

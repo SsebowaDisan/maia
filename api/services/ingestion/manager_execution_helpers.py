@@ -109,7 +109,7 @@ def run_file_job(
             batch_debug = [
                 *all_debug,
                 *[
-                    f"Preparing {name} for OCR/text extraction."
+                    f"Preparing {name} for indexing analysis."
                     for name in batch_names[:5]
                 ],
             ]

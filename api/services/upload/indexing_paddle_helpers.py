@@ -136,6 +136,8 @@ def extract_pdf_text_with_paddleocr_impl(
     paddleocr_vl_api_use_doc_orientation_classify: bool,
     paddleocr_vl_api_use_doc_unwarping: bool,
     paddleocr_vl_api_use_chart_recognition: bool,
+    paddleocr_vl_api_verify_ssl: bool,
+    paddleocr_vl_api_ca_bundle: str,
 ) -> tuple[Path, list[str]]:
     remote_configured = bool(
         str(paddleocr_vl_api_url or "").strip() and str(paddleocr_vl_api_token or "").strip()
@@ -161,6 +163,8 @@ def extract_pdf_text_with_paddleocr_impl(
             use_doc_orientation_classify=paddleocr_vl_api_use_doc_orientation_classify,
             use_doc_unwarping=paddleocr_vl_api_use_doc_unwarping,
             use_chart_recognition=paddleocr_vl_api_use_chart_recognition,
+            verify_ssl=paddleocr_vl_api_verify_ssl,
+            ca_bundle=paddleocr_vl_api_ca_bundle,
         )
 
     try:
@@ -288,6 +292,8 @@ def _extract_pdf_text_with_paddleocr_vl_api_impl(
     use_doc_orientation_classify: bool,
     use_doc_unwarping: bool,
     use_chart_recognition: bool,
+    verify_ssl: bool,
+    ca_bundle: str,
 ) -> tuple[Path, list[str]]:
     if should_cancel and should_cancel():
         raise indexing_canceled_error_cls("Ingestion canceled by user.")
@@ -316,10 +322,13 @@ def _extract_pdf_text_with_paddleocr_vl_api_impl(
         "Authorization": f"token {api_token}",
         "Content-Type": "application/json",
     }
+    verify: bool | str = bool(verify_ssl)
+    if verify and str(ca_bundle or "").strip():
+        verify = str(ca_bundle).strip()
 
     try:
         timeout = httpx.Timeout(max(10.0, float(timeout_seconds)))
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=timeout, verify=verify) as client:
             response = client.post(str(api_url).strip(), json=payload, headers=headers)
     except Exception as exc:
         raise RuntimeError(f"PaddleOCR-VL API request failed: {exc}") from exc

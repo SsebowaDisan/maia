@@ -102,6 +102,8 @@ def run_paddle_startup_checks_impl(
     paddleocr_vl_api_enabled: bool,
     paddleocr_vl_api_url: str,
     paddleocr_vl_api_token: str,
+    paddleocr_vl_api_verify_ssl: bool,
+    paddleocr_vl_api_ca_bundle: str,
     get_paddle_ocr_engine_fn: Callable[[], Any],
     logger_warning: Callable[[str], None],
 ) -> list[str]:
@@ -118,6 +120,15 @@ def run_paddle_startup_checks_impl(
     )
     if bool(paddleocr_vl_api_enabled) and remote_configured:
         notices.append("PaddleOCR-VL API mode is enabled and configured.")
+        if not bool(paddleocr_vl_api_verify_ssl):
+            message = (
+                "PaddleOCR-VL API SSL verification is disabled. "
+                "Use this only when the remote OCR endpoint is behind a trusted internal certificate."
+            )
+            logger_warning(message)
+            notices.append(message)
+        elif str(paddleocr_vl_api_ca_bundle or "").strip():
+            notices.append("PaddleOCR-VL API will use a custom CA bundle for TLS verification.")
         return notices
     if bool(paddleocr_vl_api_enabled) and not remote_configured:
         missing_remote: list[str] = []
