@@ -14,7 +14,6 @@ export function FilesView({
   files = [],
   fileGroups = [],
   onRefreshFiles,
-  onUploadFiles,
   onCreateFileIngestionJob,
   onCancelFileUpload,
   onUploadUrls,
@@ -284,7 +283,7 @@ export function FilesView({
   }, [pendingDelete, deleteCountdownTick]);
 
   const canMoveSelection = hasSelection && Boolean(onMoveFilesToGroup);
-  const canUploadFilesToGroup = Boolean(onUploadFiles && onMoveFilesToGroup && fileGroups.length > 0 && uploadGroupId);
+  const canUploadFilesToGroup = Boolean(onCreateFileIngestionJob && fileGroups.length > 0 && uploadGroupId);
   const canIndexUrlsToGroup = Boolean(onUploadUrls && onMoveFilesToGroup && fileGroups.length > 0 && uploadGroupId);
   const canRenameGroup = Boolean(manageGroupId && manageGroupName.trim() && onRenameFileGroup);
   const canDeleteGroup = Boolean(manageGroupId && onDeleteFileGroup);
@@ -311,7 +310,6 @@ export function FilesView({
     onCreateFileGroup,
     onRenameFileGroup,
     onDeleteFileGroup,
-    onUploadFiles,
     onCreateFileIngestionJob,
     onUploadUrls,
     onRefreshIngestionJobs,

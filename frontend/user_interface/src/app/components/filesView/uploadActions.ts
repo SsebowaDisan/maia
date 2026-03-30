@@ -1,19 +1,10 @@
 import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import type { FileGroupRecord, IngestionJob } from "../../../api/client";
-import { extractSuccessfulFileIds } from "./helpers";
 
 const CLIENT_MAX_FILE_SIZE_BYTES = 512 * 1024 * 1024;
 const CLIENT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 type CreateUploadActionsParams = {
-  onUploadFiles?: (
-    files: FileList,
-    options?: { scope?: "persistent" | "chat_temp"; reindex?: boolean },
-  ) => Promise<{
-    file_ids: string[];
-    errors: string[];
-    items: { status: string; file_id?: string }[];
-  }>;
   onCreateFileIngestionJob?: (
     files: FileList,
     options?: { reindex?: boolean; groupId?: string },
@@ -53,7 +44,6 @@ type CreateUploadActionsParams = {
 };
 
 function createUploadActions({
-  onUploadFiles,
   onCreateFileIngestionJob,
   onUploadUrls,
   onMoveFilesToGroup,
@@ -69,7 +59,7 @@ function createUploadActions({
 }: CreateUploadActionsParams) {
   const handleFileInputChange = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files || !event.target.files.length) return;
-    if (!onUploadFiles || !onMoveFilesToGroup) {
+    if (!onCreateFileIngestionJob) {
       setActionMessage("Upload action is not available.");
       window.setTimeout(() => setActionMessage(""), 2400);
       event.target.value = "";
@@ -118,24 +108,6 @@ function createUploadActions({
         window.setTimeout(() => setActionMessage(""), 3200);
         return;
       }
-
-      const response = await onUploadFiles(event.target.files, { reindex: forceReindex, scope: "persistent" });
-      const successFileIds = extractSuccessfulFileIds(response);
-      if (!successFileIds.length) {
-        setActionMessage(response.errors[0] || "No files were indexed.");
-        window.setTimeout(() => setActionMessage(""), 2600);
-        return;
-      }
-      const moveResponse = await onMoveFilesToGroup(successFileIds, { groupId: uploadGroupId, mode: "append" });
-      const failedCount = response.items.filter((item) => item.status !== "success").length;
-      setActionMessage(
-        failedCount > 0
-          ? `Uploaded ${successFileIds.length} file(s) to "${moveResponse.group.name}", ${failedCount} failed.`
-          : `Uploaded ${successFileIds.length} file(s) to "${moveResponse.group.name}".`,
-      );
-      await onRefreshIngestionJobs?.();
-      await onRefreshFiles?.();
-      window.setTimeout(() => setActionMessage(""), 2600);
     } catch (error) {
       setActionMessage(`Upload failed: ${String(error)}`);
       window.setTimeout(() => setActionMessage(""), 2600);

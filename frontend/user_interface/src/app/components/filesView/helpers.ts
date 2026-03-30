@@ -57,9 +57,9 @@ function loaderText(note: Record<string, unknown>) {
   return "-";
 }
 
-function readinessLabel(note: Record<string, unknown>) {
-  const ragReady = Boolean(note["rag_ready"]);
-  const citationReady = Boolean(note["citation_ready"]);
+function readinessLabel(note: Record<string, unknown>, file?: { rag_ready?: boolean | null; citation_ready?: boolean | null }) {
+  const ragReady = Boolean(file?.rag_ready ?? note["rag_ready"]);
+  const citationReady = Boolean(file?.citation_ready ?? note["citation_ready"]);
   if (ragReady && !citationReady) {
     return "Ready for RAG · Citations refining";
   }
@@ -69,9 +69,9 @@ function readinessLabel(note: Record<string, unknown>) {
   return "Processing";
 }
 
-function readinessTone(note: Record<string, unknown>) {
-  const ragReady = Boolean(note["rag_ready"]);
-  const citationReady = Boolean(note["citation_ready"]);
+function readinessTone(note: Record<string, unknown>, file?: { rag_ready?: boolean | null; citation_ready?: boolean | null }) {
+  const ragReady = Boolean(file?.rag_ready ?? note["rag_ready"]);
+  const citationReady = Boolean(file?.citation_ready ?? note["citation_ready"]);
   if (ragReady && !citationReady) {
     return "warning";
   }

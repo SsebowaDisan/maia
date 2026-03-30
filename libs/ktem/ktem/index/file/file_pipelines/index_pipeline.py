@@ -527,6 +527,15 @@ class IndexPipeline(BaseComponent):
                 return None
             return self.FSPath / str(row[0])
 
+    def _source_has_document_relations(self, file_id: str) -> bool:
+        with Session(engine) as session:
+            stmt = select(self.Index.id).where(
+                self.Index.source_id == file_id,
+                self.Index.relation_type == "document",
+            ).limit(1)
+            row = session.execute(stmt).first()
+            return bool(row)
+
     def finish(self, file_id: str, file_path: str | Path) -> str:
         with Session(engine) as session:
             stmt = select(self.Source).where(self.Source.id == file_id)
@@ -606,7 +615,8 @@ class IndexPipeline(BaseComponent):
         )
 
         stored_file_path: Path | None = None
-        file_id = self.get_id_if_exists(file_path)
+        preferred_file_id = str(file_meta.get("source_id") or "").strip() or None
+        file_id = preferred_file_id or self.get_id_if_exists(file_path)
 
         if isinstance(file_path, Path):
             precomputed_sha256 = str(file_meta.get("checksum") or "").strip() or None
@@ -618,7 +628,8 @@ class IndexPipeline(BaseComponent):
                 except Exception:
                     precomputed_size = None
             if file_id is not None:
-                if not reindex:
+                has_document_relations = self._source_has_document_relations(file_id)
+                if not reindex and has_document_relations:
                     record_trace_event(
                         "index.stream_duplicate_blocked",
                         {
@@ -630,13 +641,23 @@ class IndexPipeline(BaseComponent):
                         f"File {file_path.name} already indexed. Please rerun with "
                         "reindex=True to force reindexing."
                     )
-                else:
+                elif reindex and has_document_relations:
                     yield Document(f" => Removing old {file_path.name}", channel="debug")
                     self.delete_file(file_id)
                     file_id = self.store_file(
                         file_path,
                         precomputed_sha256=precomputed_sha256,
                         precomputed_size=precomputed_size,
+                    )
+                else:
+                    stored_file_path = self.get_stored_file_path(file_id)
+                    record_trace_event(
+                        "index.stream_reserved_source_reused",
+                        {
+                            "file_name": file_path.name,
+                            "existing_file_id": file_id,
+                            "has_document_relations": bool(has_document_relations),
+                        },
                     )
             else:
                 file_id = self.store_file(
@@ -653,7 +674,8 @@ class IndexPipeline(BaseComponent):
                     "size": file_meta.get("size"),
                 },
             )
-            stored_file_path = self.get_stored_file_path(file_id)
+            if stored_file_path is None:
+                stored_file_path = self.get_stored_file_path(file_id)
         else:
             if file_id is not None:
                 if not reindex:
@@ -680,8 +702,9 @@ class IndexPipeline(BaseComponent):
         extra_info["file_id"] = file_id
         extra_info["collection_name"] = self.collection_name
 
+        load_target = stored_file_path if isinstance(file_path, Path) and stored_file_path is not None else file_path
         yield Document(f" => Converting {file_name} to text", channel="debug")
-        docs = self.loader.load_data(file_path, extra_info=extra_info)
+        docs = self.loader.load_data(load_target, extra_info=extra_info)
         record_trace_event(
             "index.loader_completed",
             {

@@ -57,7 +57,6 @@ function renderWorkspaceTabContent(tab: WorkspaceModalTab, fileLibrary: Workspac
         files={fileLibrary.indexedFiles}
         fileGroups={fileLibrary.fileGroups}
         onRefreshFiles={fileLibrary.refreshFileCount}
-        onUploadFiles={fileLibrary.handleUploadFiles}
         onCreateFileIngestionJob={fileLibrary.handleCreateFileIngestionJob}
         onCancelFileUpload={fileLibrary.handleCancelFileUpload}
         onUploadUrls={fileLibrary.handleUploadUrlsToLibrary}

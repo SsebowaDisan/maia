@@ -147,7 +147,6 @@ function AppChatWorkspaceLayout(props: AppChatWorkspaceLayoutProps) {
               onSelectTurn={props.chatState.handleSelectTurn}
               onUpdateUserTurn={props.chatState.handleUpdateUserTurn}
               onSendMessage={props.chatState.handleSendMessage}
-              onUploadFiles={props.fileLibrary.handleUploadFilesForChat}
               onCreateFileIngestionJob={props.fileLibrary.handleCreateFileIngestionJob}
               availableDocuments={props.fileLibrary.indexedFiles}
               availableGroups={props.fileLibrary.fileGroups}

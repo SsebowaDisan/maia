@@ -34,7 +34,6 @@ type UseChatMainInteractionsParams = Pick<
   | "onAgentModeChange"
   | "onSendMessage"
   | "onUpdateUserTurn"
-  | "onUploadFiles"
   | "onCreateFileIngestionJob"
   | "availableDocuments"
   | "availableGroups"
@@ -56,7 +55,6 @@ function useChatMainInteractions({
   onAgentModeChange,
   onSendMessage,
   onUpdateUserTurn,
-  onUploadFiles,
   onCreateFileIngestionJob,
   availableDocuments = [],
   availableGroups = [],
@@ -430,7 +428,6 @@ function useChatMainInteractions({
     await handleComposerFileChange({
       event,
       onCreateFileIngestionJob,
-      onUploadFiles,
       setAttachments,
       setIsUploading,
       showActionStatus,

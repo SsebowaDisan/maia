@@ -51,7 +51,7 @@ function FilesSection({
   groupsByFileId,
 }: FilesSectionProps) {
   const readinessClasses = (file: FileRecord) => {
-    const tone = readinessTone(file.note || {});
+    const tone = readinessTone(file.note || {}, file);
     if (tone === "ready") {
       return "border-[#2f8f3e]/20 bg-[#eefaf0] text-[#1f7a32]";
     }
@@ -199,7 +199,7 @@ function FilesSection({
                       <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{loaderText(file.note || {})}</td>
                       <td className="px-4 py-5">
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
-                          {readinessLabel(file.note || {})}
+                          {readinessLabel(file.note || {}, file)}
                         </span>
                       </td>
                       <td className="max-w-[260px] truncate px-4 py-5 text-[13px] text-[#6e6e73]">
@@ -242,7 +242,7 @@ function FilesSection({
                   </p>
                   <p className="mt-2">
                     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
-                      {readinessLabel(file.note || {})}
+                      {readinessLabel(file.note || {}, file)}
                     </span>
                   </p>
                   <p className="mt-1 truncate text-[11px] text-[#8d8d93]">

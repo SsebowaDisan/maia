@@ -5,6 +5,8 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from api.services.ingestion import manager_api_helpers
+from api.services.ingestion.models import IngestionJob
 from api.services.upload import indexing
 from api.services.observability.citation_trace import begin_trace, end_trace, snapshot_trace
 
@@ -34,6 +36,42 @@ class _DummyIndex:
 
     def get_indexing_pipeline(self, settings, user_id):
         self.request_settings = dict(settings)
+        return self.pipeline
+
+
+class _DummyStoredPipeline:
+    def __init__(self, stored_path: Path) -> None:
+        self.stored_path = stored_path
+        self.store_calls: list[dict] = []
+
+    def store_file(
+        self,
+        file_path: Path,
+        *,
+        precomputed_sha256: str | None = None,
+        precomputed_size: int | None = None,
+    ) -> str:
+        self.store_calls.append(
+            {
+                "file_path": file_path,
+                "precomputed_sha256": precomputed_sha256,
+                "precomputed_size": precomputed_size,
+            }
+        )
+        return "file-1"
+
+    def get_stored_file_path(self, file_id: str) -> Path | None:
+        assert file_id
+        return self.stored_path
+
+
+class _DummyStoredIndex:
+    def __init__(self, pipeline: _DummyStoredPipeline) -> None:
+        self.pipeline = pipeline
+        self.id = 7
+        self.config = {}
+
+    def get_indexing_pipeline(self, settings, user_id):
         return self.pipeline
 
 
@@ -88,6 +126,100 @@ def test_index_files_uses_performance_defaults_and_forwards_upload_meta(monkeypa
     assert passed_meta[str(Path("/tmp/a.txt").resolve())]["checksum"] == "a" * 64
     assert result["file_ids"] == ["file-1"]
     assert applied["scope"] == "chat_temp"
+
+
+def test_prepare_file_sources_for_job_creates_source_rows_and_scope(monkeypatch, tmp_path) -> None:
+    uploaded = tmp_path / "sample.pdf"
+    uploaded.write_bytes(b"%PDF-1.4 test")
+    stored = tmp_path / "stored.pdf"
+    stored.write_bytes(b"%PDF-1.4 stored")
+
+    pipeline = _DummyStoredPipeline(stored_path=stored)
+    index = _DummyStoredIndex(pipeline)
+    applied: dict[str, object] = {}
+
+    monkeypatch.setattr(manager_api_helpers, "get_context", lambda: object())
+    monkeypatch.setattr(manager_api_helpers, "load_user_settings", lambda **kwargs: {})
+    monkeypatch.setattr(manager_api_helpers, "_get_upload_index", lambda context, index_id: index)
+    monkeypatch.setattr(
+        manager_api_helpers,
+        "_resolve_existing_upload_file_id",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        manager_api_helpers,
+        "_apply_upload_scope_to_reserved_sources",
+        lambda **kwargs: applied.update(kwargs),
+    )
+
+    prepared, source_ids = manager_api_helpers._prepare_file_sources_for_job(
+        user_id="u-1",
+        index_id=7,
+        scope="chat_temp",
+        files=[
+            {
+                "name": uploaded.name,
+                "path": str(uploaded),
+                "size": uploaded.stat().st_size,
+                "checksum": "a" * 64,
+            }
+        ],
+    )
+
+    assert source_ids == ["file-1"]
+    assert prepared[0]["source_id"] == "file-1"
+    assert prepared[0]["stored_path"] == str(stored.resolve())
+    assert pipeline.store_calls[0]["precomputed_sha256"] == "a" * 64
+    assert applied["scope"] == "chat_temp"
+    assert applied["file_ids"] == ["file-1"]
+
+
+def test_create_file_job_cleans_duplicate_persisted_uploads(monkeypatch, tmp_path) -> None:
+    uploaded = tmp_path / "dup.pdf"
+    uploaded.write_bytes(b"duplicate")
+    cleaned: list[list[dict]] = []
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    existing_job = IngestionJob(
+        id="job-existing",
+        user_id="u-1",
+        kind="files",
+        status="queued",
+        index_id=1,
+        reindex=True,
+    )
+
+    monkeypatch.setattr(manager_api_helpers, "Session", lambda _engine: _FakeSession())
+    monkeypatch.setattr(
+        manager_api_helpers,
+        "_find_matching_active_file_job",
+        lambda **kwargs: existing_job,
+    )
+    monkeypatch.setattr(
+        manager_api_helpers,
+        "_cleanup_persisted_uploads",
+        lambda saved_files: cleaned.append(list(saved_files)),
+    )
+
+    payload = manager_api_helpers.create_file_job(
+        SimpleNamespace(enqueue=lambda _job_id: None, _inc_metric=lambda *args, **kwargs: None),
+        "u-1",
+        index_id=1,
+        reindex=True,
+        files=[{"name": uploaded.name, "path": str(uploaded), "size": uploaded.stat().st_size}],
+        group_id=None,
+        scope="persistent",
+    )
+
+    assert payload["id"] == "job-existing"
+    assert len(cleaned) == 1
+    assert cleaned[0][0]["path"] == str(uploaded)
 
 
 def test_index_files_respects_explicit_reader_and_quick_mode_settings(monkeypatch) -> None:

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 import threading
 from typing import Any, Callable
 
 import httpx
+from fastapi import HTTPException
 
 from api.context import ApiContext
+from api.services.observability.citation_trace import record_trace_event
 
 from .common import get_index, normalize_ids, normalize_upload_scope
 from .indexing_config import *
@@ -449,35 +452,380 @@ def index_files(
     uploaded_file_meta: dict[str, dict[str, Any]] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    return _ops_helpers.index_files_impl(
-        context=context,
-        user_id=user_id,
-        file_paths=file_paths,
-        index_id=index_id,
-        reindex=reindex,
-        settings=settings,
-        scope=scope,
-        uploaded_file_meta=uploaded_file_meta,
-        should_cancel=should_cancel,
-        get_index_fn=get_index,
-        classify_pdf_ingestion_route_fn=_classify_pdf_ingestion_route,
-        should_route_pdf_to_paddle_fn=_should_route_pdf_to_paddle,
-        index_pdf_with_paddleocr_route_fn=_index_pdf_with_paddleocr_route,
-        run_index_pipeline_for_file_fn=_run_index_pipeline_for_file,
-        fallback_reader_mode_for_pdf_fn=_fallback_reader_mode_for_pdf,
-        select_reader_mode_for_file_fn=_select_reader_mode_for_file,
-        apply_upload_scope_to_sources_fn=apply_upload_scope_to_sources,
-        schedule_pdf_precompute_fn=precompute_page_units_background,
-        resolve_existing_file_id_for_upload_fn=_resolve_existing_file_id_for_upload,
-        source_ids_have_document_relations_fn=_source_ids_have_document_relations,
-        is_already_indexed_error_fn=_is_already_indexed_error,
-        indexing_canceled_error_cls=IndexingCanceledError,
-        upload_paddleocr_enabled=UPLOAD_PADDLEOCR_ENABLED,
-        upload_paddleocr_vl_api_enabled=UPLOAD_PADDLEOCR_VL_API_ENABLED,
-        upload_paddleocr_vl_api_url=UPLOAD_PADDLEOCR_VL_API_URL,
-        upload_paddleocr_vl_api_token=UPLOAD_PADDLEOCR_VL_API_TOKEN,
-        upload_index_reader_mode=UPLOAD_INDEX_READER_MODE,
+    if not file_paths:
+        raise HTTPException(status_code=400, detail="No files were provided.")
+
+    index = get_index(context, index_id)
+    record_trace_event(
+        "index.started",
+        {
+            "index_id": getattr(index, "id", None),
+            "file_count": len(file_paths),
+            "reindex": bool(reindex),
+            "scope": str(scope or ""),
+        },
     )
+    prefix = f"index.options.{index.id}."
+    base_settings = deepcopy(settings)
+    configured_reader_mode = str(
+        base_settings.get(f"{prefix}reader_mode", UPLOAD_INDEX_READER_MODE)
+    ).strip() or UPLOAD_INDEX_READER_MODE
+    remote_paddle_api_configured = bool(
+        UPLOAD_PADDLEOCR_VL_API_ENABLED
+        and str(UPLOAD_PADDLEOCR_VL_API_URL or "").strip()
+        and str(UPLOAD_PADDLEOCR_VL_API_TOKEN or "").strip()
+    )
+    all_file_ids: list[str] = []
+    all_errors: list[str] = []
+    all_items: list[dict[str, Any]] = []
+    all_debug: list[str] = []
+
+    def _run_parser_or_reuse(
+        *,
+        file_path: Path,
+        reader_mode: str,
+        route: str,
+        classification: dict[str, Any],
+    ) -> dict[str, Any]:
+        record_trace_event(
+            "index.pipeline_started",
+            {
+                "file_name": file_path.name,
+                "reader_mode": reader_mode,
+                "route": route,
+                "classification_route": str(classification.get("route") or ""),
+            },
+        )
+        try:
+            return _run_index_pipeline_for_file(
+                index=index,
+                user_id=user_id,
+                source_path=file_path,
+                target_path=file_path,
+                reindex=reindex,
+                base_settings=base_settings,
+                prefix=prefix,
+                reader_mode=reader_mode,
+                uploaded_file_meta=uploaded_file_meta,
+                should_cancel=should_cancel,
+                route=route,
+            )
+        except IndexingCanceledError:
+            raise
+        except Exception as exc:
+            if not reindex and _is_already_indexed_error(exc):
+                reused_file_id = _resolve_existing_file_id_for_upload(
+                    index=index,
+                    user_id=user_id,
+                    file_path=file_path,
+                    uploaded_file_meta=uploaded_file_meta,
+                )
+                if reused_file_id and _source_ids_have_document_relations(
+                    index=index,
+                    source_ids=[reused_file_id],
+                ):
+                    all_debug.append(
+                        f"{file_path.name}: already indexed; reusing existing file {reused_file_id}."
+                    )
+                    record_trace_event(
+                        "index.duplicate_reused",
+                        {
+                            "file_name": file_path.name,
+                            "file_id": reused_file_id,
+                            "route": route,
+                        },
+                    )
+                    return {
+                        "file_ids": [reused_file_id],
+                        "errors": [],
+                        "items": [
+                            {
+                                "file_name": file_path.name,
+                                "status": "success",
+                                "message": "Already indexed; reused existing file.",
+                                "file_id": reused_file_id,
+                            }
+                        ],
+                        "debug": [],
+                    }
+                if reused_file_id:
+                    all_debug.append(
+                        f"{file_path.name}: duplicate source {reused_file_id} had no indexed document relations; fresh indexing will continue."
+                    )
+            raise
+
+    def _normalize_duplicate_failure_response(
+        *,
+        file_path: Path,
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        if reindex:
+            return response
+        items = list(response.get("items") or [])
+        errors = [str(err) for err in list(response.get("errors") or [])]
+        if not items and not errors:
+            return response
+        duplicate_messages: list[str] = []
+        for item in items:
+            if str(item.get("status") or "").strip().lower() != "failed":
+                continue
+            message = str(item.get("message") or "").strip()
+            if message and _is_already_indexed_error(ValueError(message)):
+                duplicate_messages.append(message)
+        for error in errors:
+            if error and _is_already_indexed_error(ValueError(error)):
+                duplicate_messages.append(error)
+        if not duplicate_messages:
+            return response
+
+        reused_file_id = _resolve_existing_file_id_for_upload(
+            index=index,
+            user_id=user_id,
+            file_path=file_path,
+            uploaded_file_meta=uploaded_file_meta,
+        )
+        if not reused_file_id:
+            return response
+        if not _source_ids_have_document_relations(
+            index=index,
+            source_ids=[reused_file_id],
+        ):
+            all_debug.append(
+                f"{file_path.name}: duplicate response pointed to source {reused_file_id} without indexed document relations; preserving failure so the source can be reindexed."
+            )
+            return response
+
+        all_debug.append(
+            f"{file_path.name}: already indexed response detected; reusing existing file {reused_file_id}."
+        )
+        record_trace_event(
+            "index.duplicate_response_reused",
+            {
+                "file_name": file_path.name,
+                "file_id": reused_file_id,
+            },
+        )
+        return {
+            "file_ids": [reused_file_id],
+            "errors": [],
+            "items": [
+                {
+                    "file_name": file_path.name,
+                    "status": "success",
+                    "message": "Already indexed; reused existing file.",
+                    "file_id": reused_file_id,
+                }
+            ],
+            "debug": list(response.get("debug") or []),
+        }
+
+    for file_path in file_paths:
+        ext = str(file_path.suffix or "").lower()
+        is_pdf = ext == ".pdf"
+        classification: dict[str, Any] = {}
+        record_trace_event(
+            "index.file_started",
+            {
+                "file_name": file_path.name,
+                "file_path": str(file_path),
+                "extension": ext,
+                "is_pdf": is_pdf,
+            },
+        )
+        if is_pdf:
+            content_hash = ""
+            if uploaded_file_meta:
+                try:
+                    resolved_key = str(file_path.resolve())
+                except Exception:
+                    resolved_key = str(file_path)
+                meta = uploaded_file_meta.get(resolved_key) or {}
+                content_hash = str(meta.get("checksum") or "").strip()
+            classification = _classify_pdf_ingestion_route(
+                file_path,
+                content_hash=content_hash,
+            )
+            record_trace_event(
+                "index.route_selected",
+                {
+                    "file_name": file_path.name,
+                    "route": str(classification.get("route") or "normal"),
+                    "reason": str(classification.get("reason") or ""),
+                    "image_ratio_all": classification.get("image_ratio_all"),
+                    "low_text_ratio_sampled": classification.get("low_text_ratio_sampled"),
+                    "content_hash": content_hash[:16] if content_hash else "",
+                },
+            )
+            all_debug.append(
+                (
+                    f"{file_path.name}: pdf route={classification.get('route', 'normal')} "
+                    f"(reason={classification.get('reason', 'n/a')}, "
+                    f"image_ratio={float(classification.get('image_ratio_all', 0.0)):.3f}, "
+                    f"low_text_ratio={float(classification.get('low_text_ratio_sampled', 0.0)):.3f})."
+                )
+            )
+
+        route_to_paddle = is_pdf and _should_route_pdf_to_paddle(
+            configured_mode=configured_reader_mode,
+            classification=classification,
+        )
+
+        try:
+            if route_to_paddle:
+                record_trace_event(
+                    "index.ocr_route_started",
+                    {
+                        "file_name": file_path.name,
+                        "route": "heavy-pdf-paddleocr",
+                    },
+                )
+                if not (UPLOAD_PADDLEOCR_ENABLED or remote_paddle_api_configured):
+                    raise RuntimeError("PaddleOCR routing is disabled by configuration.")
+                response = _index_pdf_with_paddleocr_route(
+                    index=index,
+                    user_id=user_id,
+                    file_path=file_path,
+                    reindex=reindex,
+                    base_settings=base_settings,
+                    prefix=prefix,
+                    uploaded_file_meta=uploaded_file_meta,
+                    should_cancel=should_cancel,
+                )
+            else:
+                if is_pdf:
+                    selected_mode = _fallback_reader_mode_for_pdf(
+                        file_path,
+                        configured_reader_mode,
+                        classification=classification,
+                    )
+                    route_name = "normal-pdf"
+                else:
+                    selected_mode = _select_reader_mode_for_file(
+                        configured_mode=configured_reader_mode,
+                        file_path=file_path,
+                    )
+                    route_name = "normal"
+                record_trace_event(
+                    "index.pipeline_route_started",
+                    {
+                        "file_name": file_path.name,
+                        "route": route_name,
+                        "reader_mode": selected_mode,
+                    },
+                )
+                response = _run_parser_or_reuse(
+                    file_path=file_path,
+                    reader_mode=selected_mode,
+                    route=route_name,
+                    classification=classification,
+                )
+        except IndexingCanceledError:
+            raise
+        except Exception as exc:
+            if not route_to_paddle:
+                record_trace_event(
+                    "index.file_failed",
+                    {
+                        "file_name": file_path.name,
+                        "route": "normal",
+                        "error": str(exc),
+                    },
+                )
+                raise
+            fallback_mode = _fallback_reader_mode_for_pdf(
+                file_path,
+                configured_reader_mode,
+                classification=classification,
+            )
+            error_text = str(exc)
+            ssl_hint = ""
+            if "CERTIFICATE_VERIFY_FAILED" in error_text or "certificate verify failed" in error_text.lower():
+                ssl_hint = (
+                    " Configure MAIA_UPLOAD_PADDLEOCR_VL_API_VERIFY_SSL=false for a trusted internal endpoint,"
+                    " or set MAIA_UPLOAD_PADDLEOCR_VL_API_CA_BUNDLE to a custom CA bundle."
+                )
+            all_debug.append(
+                f"{file_path.name}: PaddleOCR failed ({exc}); falling back to {fallback_mode}.{ssl_hint}"
+            )
+            record_trace_event(
+                "index.ocr_route_failed",
+                {
+                    "file_name": file_path.name,
+                    "error": str(exc),
+                    "fallback_reader_mode": fallback_mode,
+                },
+            )
+            response = _run_parser_or_reuse(
+                file_path=file_path,
+                reader_mode=fallback_mode,
+                route="heavy-pdf-fallback",
+                classification=classification,
+            )
+
+        response = _normalize_duplicate_failure_response(
+            file_path=file_path,
+            response=response,
+        )
+
+        file_ids = list(response.get("file_ids") or [])
+        errors = list(response.get("errors") or [])
+        items = list(response.get("items") or [])
+        debug = [str(msg) for msg in list(response.get("debug") or [])]
+        if is_pdf and file_ids:
+            has_success = any(
+                str(item.get("status") or "").strip().lower() == "success"
+                for item in items
+            )
+            if has_success:
+                try:
+                    precompute_page_units_background(file_path)
+                    all_debug.append(f"{file_path.name}: scheduled page-unit precompute.")
+                    record_trace_event(
+                        "index.precompute_scheduled",
+                        {
+                            "file_name": file_path.name,
+                            "file_ids": list(file_ids),
+                        },
+                    )
+                except Exception as exc:
+                    all_debug.append(
+                        f"{file_path.name}: page-unit precompute scheduling failed ({exc})."
+                    )
+                    record_trace_event(
+                        "index.precompute_failed",
+                        {
+                            "file_name": file_path.name,
+                            "error": str(exc),
+                        },
+                    )
+        all_file_ids.extend(file_ids)
+        all_errors.extend(errors)
+        all_items.extend(items)
+        all_debug.extend(debug)
+        record_trace_event(
+            "index.file_completed",
+            {
+                "file_name": file_path.name,
+                "file_ids": list(file_ids),
+                "error_count": len(errors),
+                "item_count": len(items),
+                "debug_count": len(debug),
+            },
+        )
+
+    apply_upload_scope_to_sources(
+        index=index,
+        user_id=user_id,
+        file_ids=all_file_ids,
+        scope=scope,
+    )
+    return {
+        "index_id": index.id,
+        "file_ids": all_file_ids,
+        "errors": all_errors,
+        "items": all_items,
+        "debug": all_debug,
+    }
 
 def index_urls(
     context: ApiContext,

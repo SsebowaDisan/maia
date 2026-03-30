@@ -720,3 +720,124 @@ def test_build_answer_phase_infers_conflict_from_conflicting_ref_values_for_rag(
     assert "## Conflicting Evidence" in answering["answer"]
     assert "prefer the higher-credibility evidence" not in answering["answer"].lower()
     assert "treat the disputed values as unresolved" in answering["answer"].lower()
+
+
+def test_build_answer_phase_does_not_infer_conflict_from_single_selected_source() -> None:
+    retrieval = {
+        "message": "What is this PDF about?",
+        "snippets": [
+            {
+                "text": "Chapter 56 introduces biochemical regulation and metabolic control.",
+                "page_label": "56",
+                "score": 0.9,
+                "source_id": "file-1",
+                "file_id": "file-1",
+                "source_name": "biochemistry.pdf",
+                "source_type": "pdf",
+                "credibility_tier": "platform",
+            },
+            {
+                "text": "Page 182 covers thermodynamics and enzyme kinetics in more depth.",
+                "page_label": "182",
+                "score": 0.88,
+                "source_id": "file-1",
+                "file_id": "file-1",
+                "source_name": "biochemistry.pdf",
+                "source_type": "pdf",
+                "credibility_tier": "platform",
+            },
+        ],
+        "chat_history": [],
+        "primary_source_note": "",
+        "requested_language": None,
+        "is_follow_up": False,
+        "mode_variant": "rag",
+        "selected_scope_count": 1,
+        "covered_scope_count": 1,
+        "selected_scope_ids": ["file-1"],
+        "selected_scope_sources": [],
+        "all_project_sources": ["biochemistry.pdf"],
+        "focus_meta": {},
+        "evidence_confidence": 0.82,
+        "evidence_reason": "",
+    }
+
+    answering = build_answer_phase(
+        request=type(
+            "Req",
+            (),
+            {
+                "citation": "required",
+                "use_mindmap": False,
+                "mindmap_settings": {},
+                "mindmap_focus": {},
+            },
+        )(),
+        logger=type("L", (), {"warning": staticmethod(lambda *args, **kwargs: None)})(),
+        retrieval=retrieval,
+        call_openai_fast_qa_fn=lambda **kwargs: "The PDF is a biochemistry textbook covering biochemical regulation, thermodynamics, and enzyme kinetics. [1] [2]",
+        normalize_fast_answer_fn=lambda answer, question: answer,
+        build_no_relevant_evidence_answer_fn=lambda message, response_language=None: "no evidence",
+        resolve_required_citation_mode_fn=lambda value: value,
+        render_fast_citation_links_fn=lambda answer, refs, citation_mode: answer,
+        build_fast_info_html_fn=lambda snippets_with_refs, max_blocks=12: "<div>info</div>",
+        enforce_required_citations_fn=lambda answer, info_html, citation_mode: answer,
+        build_source_usage_fn=lambda *args, **kwargs: [],
+        build_claim_signal_summary_fn=lambda *args, **kwargs: {
+            "claims_evaluated": 2,
+            "supported_claims": 0,
+            "contradicted_claims": 0,
+            "mixed_claims": 0,
+            "rows": [
+                {"claim": "The PDF discusses biochemical regulation.", "ref_ids": [1], "status": "insufficient", "support_votes": 0, "contradiction_votes": 0},
+                {"claim": "The PDF also covers thermodynamics.", "ref_ids": [2], "status": "insufficient", "support_votes": 0, "contradiction_votes": 0},
+            ],
+        },
+        build_citation_quality_metrics_fn=lambda *args, **kwargs: {},
+        build_info_panel_copy_fn=lambda *args, **kwargs: {},
+        build_knowledge_map_fn=lambda *args, **kwargs: {},
+        build_verification_evidence_items_fn=lambda *args, **kwargs: [],
+        build_web_review_content_fn=lambda *args, **kwargs: {},
+        build_sources_used_fn=lambda *args, **kwargs: [],
+        chunk_text_for_stream_fn=None,
+        emit_activity_fn=lambda **kwargs: None,
+        emit_stream_event_fn=lambda payload: None,
+        constants={
+            "assign_fast_source_refs_fn": lambda snippets: (
+                [
+                    {**snippets[0], "ref_id": 1, "ref": "1"},
+                    {**snippets[1], "ref_id": 2, "ref": "2"},
+                ],
+                [
+                    {
+                        "id": 1,
+                        "label": "1",
+                        "file_id": "file-1",
+                        "source_id": "file-1",
+                        "source_name": "biochemistry.pdf",
+                        "credibility_tier": "platform",
+                        "phrase": "Chapter 56 introduces biochemical regulation and metabolic control.",
+                    },
+                    {
+                        "id": 2,
+                        "label": "2",
+                        "file_id": "file-1",
+                        "source_id": "file-1",
+                        "source_name": "biochemistry.pdf",
+                        "credibility_tier": "platform",
+                        "phrase": "Page 182 covers thermodynamics and enzyme kinetics in more depth.",
+                    },
+                ],
+            ),
+            "truncate_for_log_fn": lambda value, limit=1600: str(value),
+            "MAIA_SOURCE_USAGE_HEATMAP_ENABLED": True,
+            "MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD": 0.8,
+            "VERIFICATION_CONTRACT_VERSION": "test",
+            "MAIA_CITATION_STRENGTH_ORDERING_ENABLED": True,
+        },
+    )
+
+    assert answering is not None
+    assert answering["info_panel"].get("evidence_conflict_summary") in ({}, None)
+    assert answering["info_panel"].get("answer_origin") != "conflict_aware_grounded_synthesis"
+    assert "## Conflicting Evidence" not in answering["answer"]

@@ -1,4 +1,3 @@
-import type { UploadResponse } from "../../../api/client";
 import type { FileGroupRecord, FileRecord } from "../../../api/client";
 import type { SidebarProject } from "../../appShell/types";
 import type {
@@ -30,10 +29,6 @@ type ChatMainProps = {
       accessMode?: "restricted" | "full_access";
     },
   ) => Promise<void>;
-  onUploadFiles: (
-    files: FileList,
-    options?: { onUploadProgress?: (loadedBytes: number, totalBytes: number) => void },
-  ) => Promise<UploadResponse>;
   onCreateFileIngestionJob?: (
     files: FileList,
     options?: {

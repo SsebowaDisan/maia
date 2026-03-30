@@ -147,6 +147,10 @@ type FileRecord = {
   id: string;
   name: string;
   size: number;
+  scope?: string | null;
+  rag_ready?: boolean | null;
+  citation_ready?: boolean | null;
+  citation_status?: string | null;
   note: Record<string, unknown>;
   date_created: string;
 };

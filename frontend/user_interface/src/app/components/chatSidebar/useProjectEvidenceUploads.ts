@@ -1,6 +1,6 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
-import { uploadFiles, uploadUrls } from "../../../api/client";
+import { createFileIngestionJob, getIngestionJob, uploadUrls } from "../../../api/client";
 import { normalizeUrlDraftList } from "./projectEvidenceHelpers";
 
 type UseProjectEvidenceUploadsArgs = {
@@ -20,18 +20,39 @@ export function useProjectEvidenceUploads({
   projectUrlDraftById,
   setProjectUrlDraftById,
 }: UseProjectEvidenceUploadsArgs) {
+  const waitForFileJob = useCallback(async (jobId: string) => {
+    const startedAt = Date.now();
+    const timeoutMs = 20 * 60 * 1000;
+    while (true) {
+      const job = await getIngestionJob(jobId);
+      const status = String(job.status || "").toLowerCase();
+      if (status === "completed") {
+        return job;
+      }
+      if (status === "failed" || status === "canceled") {
+        throw new Error(job.errors[0] || job.message || `Ingestion job ${job.status}`);
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error("File ingestion timed out.");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+  }, []);
+
   const handleProjectFileUpload = useCallback(
     async (projectId: string, files: FileList | null) => {
       if (!files || files.length <= 0) {
         return;
       }
       setProjectUploadBusy(projectId, true);
-      setProjectUploadStatus(projectId, "Uploading files...");
+      setProjectUploadStatus(projectId, "Queueing upload job...");
       try {
-        const response = await uploadFiles(files, {
+        const job = await createFileIngestionJob(files, {
           scope: "persistent",
           reindex: true,
         });
+        setProjectUploadStatus(projectId, `Upload job queued: ${job.id.slice(0, 8)}.`);
+        const response = await waitForFileJob(job.id);
         const uploadedFileIds = response.items
           .filter((item) => item.status === "success")
           .map((item) => String(item.file_id || "").trim())
@@ -56,7 +77,7 @@ export function useProjectEvidenceUploads({
         setProjectUploadBusy(projectId, false);
       }
     },
-    [appendProjectSourceBindings, loadProjectEvidence, setProjectUploadBusy, setProjectUploadStatus],
+    [appendProjectSourceBindings, loadProjectEvidence, setProjectUploadBusy, setProjectUploadStatus, waitForFileJob],
   );
 
   const submitProjectUrls = useCallback(

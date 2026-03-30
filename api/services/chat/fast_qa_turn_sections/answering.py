@@ -318,6 +318,7 @@ def _build_evidence_conflict_summary(
     *,
     claim_signal_summary: dict[str, Any],
     refs: list[dict[str, Any]],
+    selected_scope_count: int = 0,
 ) -> dict[str, Any]:
     ref_by_id = {
         int(ref.get("id", 0) or 0): ref
@@ -325,7 +326,27 @@ def _build_evidence_conflict_summary(
         if isinstance(ref, dict) and int(ref.get("id", 0) or 0) > 0
     }
 
+    def _ref_source_key(ref: dict[str, Any]) -> str:
+        file_id = str(ref.get("file_id", "") or "").strip()
+        source_id = str(ref.get("source_id", "") or "").strip()
+        source_url = str(ref.get("source_url", "") or "").strip().lower()
+        source_name = str(ref.get("source_name", "") or "").strip().lower()
+        label = str(ref.get("label", "") or "").strip().lower()
+        return file_id or source_id or source_url or source_name or label
+
+    def _row_has_distinct_sources(row: dict[str, Any]) -> bool:
+        if selected_scope_count <= 1:
+            return False
+        source_keys = {
+            _ref_source_key(ref_by_id[ref_id])
+            for ref_id in row.get("ref_ids", [])
+            if isinstance(ref_id, int) and ref_id in ref_by_id and _ref_source_key(ref_by_id[ref_id])
+        }
+        return len(source_keys) >= 2
+
     def _infer_conflict_rows_from_refs() -> list[dict[str, Any]]:
+        if selected_scope_count <= 1:
+            return []
         candidates: list[dict[str, Any]] = []
         for ref_id, ref in ref_by_id.items():
             phrase = " ".join(str(ref.get("phrase") or "").split()).strip()
@@ -347,6 +368,7 @@ def _build_evidence_conflict_summary(
                     "phrase": phrase,
                     "numbers": set(numbers),
                     "tokens": token_set,
+                    "source_key": _ref_source_key(ref),
                 }
             )
 
@@ -354,6 +376,10 @@ def _build_evidence_conflict_summary(
         best_overlap = 0
         for idx, left in enumerate(candidates):
             for right in candidates[idx + 1 :]:
+                if not left["source_key"] or not right["source_key"]:
+                    continue
+                if left["source_key"] == right["source_key"]:
+                    continue
                 overlap = len(left["tokens"] & right["tokens"])
                 if overlap < 3:
                     continue
@@ -396,6 +422,9 @@ def _build_evidence_conflict_summary(
         for row in (claim_signal_summary.get("rows") or [])
         if isinstance(row, dict) and str(row.get("status") or "") in {"contradicted", "mixed"}
     ]
+    rows = [row for row in rows if _row_has_distinct_sources(row)]
+    contradicted = sum(1 for row in rows if str(row.get("status") or "") == "contradicted")
+    mixed = sum(1 for row in rows if str(row.get("status") or "") == "mixed")
     if not rows and contradicted <= 0 and mixed <= 0:
         rows = _infer_conflict_rows_from_refs()
         if rows:
@@ -1019,6 +1048,7 @@ def build_answer_phase(
     initial_evidence_conflict_summary = _build_evidence_conflict_summary(
         claim_signal_summary=initial_claim_signal_summary,
         refs=refs,
+        selected_scope_count=selected_scope_count,
     )
     if mode_variant == "rag" and initial_evidence_conflict_summary and refs:
         answer = _build_conflict_aware_answer(
@@ -1037,6 +1067,7 @@ def build_answer_phase(
     evidence_conflict_summary = _build_evidence_conflict_summary(
         claim_signal_summary=claim_signal_summary,
         refs=refs,
+        selected_scope_count=selected_scope_count,
     )
     citation_quality_metrics = build_citation_quality_metrics_fn(
         snippets_with_refs=snippets_with_refs,

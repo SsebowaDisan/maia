@@ -129,6 +129,10 @@ class FileRecord(BaseModel):
     id: str
     name: str
     size: int
+    scope: str | None = None
+    rag_ready: bool | None = None
+    citation_ready: bool | None = None
+    citation_status: str | None = None
     note: dict[str, Any]
     date_created: datetime
 

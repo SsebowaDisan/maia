@@ -159,14 +159,12 @@ function applyUploadResult({
 async function handleComposerFileChange({
   event,
   onCreateFileIngestionJob,
-  onUploadFiles,
   setAttachments,
   setIsUploading,
   showActionStatus,
 }: {
   event: ChangeEvent<HTMLInputElement>;
   onCreateFileIngestionJob: ChatMainProps["onCreateFileIngestionJob"];
-  onUploadFiles: ChatMainProps["onUploadFiles"];
   setAttachments: Dispatch<SetStateAction<ComposerAttachment[]>>;
   setIsUploading: Dispatch<SetStateAction<boolean>>;
   showActionStatus: (text: string) => void;
@@ -217,59 +215,37 @@ async function handleComposerFileChange({
 
   setIsUploading(true);
   try {
-    const shouldQueueAsyncJob = Boolean(onCreateFileIngestionJob);
-    if (shouldQueueAsyncJob && onCreateFileIngestionJob) {
-      updatePendingMessage("Uploading to server 0%");
-      const queued = await onCreateFileIngestionJob(selectedFiles, {
-        reindex: false,
-        scope: "chat_temp",
-        onUploadProgress: (loadedBytes, totalBytesBytes) => {
-          updatePendingMessage(formatUploadProgress(loadedBytes, totalBytesBytes, "creating indexing job"));
-        },
-      });
-      setAttachments((previous) =>
-        previous.map((attachment) =>
-          pending.some((item) => item.id === attachment.id)
-            ? {
-                ...attachment,
-                status: "indexing",
-                message: formatIngestionJobProgress(queued),
-              }
-            : attachment,
-        ),
-      );
-      showActionStatus(
-        `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
-      );
-      void trackQueuedIngestionJob({
-        jobId: queued.id,
-        pending,
-        setAttachments,
-        showActionStatus,
-      });
-    } else {
-      const response = await onUploadFiles(selectedFiles, {
-        onUploadProgress: (loadedBytes, totalBytesBytes) => {
-          updatePendingMessage(
-            formatUploadProgress(
-              loadedBytes,
-              totalBytesBytes,
-              "server indexing in progress (no live server metrics)",
-            ),
-          );
-        },
-      });
-      applyUploadResult({
-        pending,
-        result: {
-          items: response.items,
-          errors: response.errors,
-          file_ids: response.file_ids,
-        },
-        setAttachments,
-        showActionStatus,
-      });
+    if (!onCreateFileIngestionJob) {
+      throw new Error("File ingestion job endpoint is required for chat uploads.");
     }
+    updatePendingMessage("Uploading to server 0%");
+    const queued = await onCreateFileIngestionJob(selectedFiles, {
+      reindex: false,
+      scope: "chat_temp",
+      onUploadProgress: (loadedBytes, totalBytesBytes) => {
+        updatePendingMessage(formatUploadProgress(loadedBytes, totalBytesBytes, "queueing upload job"));
+      },
+    });
+    setAttachments((previous) =>
+      previous.map((attachment) =>
+        pending.some((item) => item.id === attachment.id)
+          ? {
+              ...attachment,
+              status: "indexing",
+              message: formatIngestionJobProgress(queued),
+            }
+          : attachment,
+      ),
+    );
+    showActionStatus(
+      `Attachment job queued: ${queued.id.slice(0, 8)} (${queued.total_items} file${queued.total_items === 1 ? "" : "s"}).`,
+    );
+    void trackQueuedIngestionJob({
+      jobId: queued.id,
+      pending,
+      setAttachments,
+      showActionStatus,
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error || "Upload failed.");
     const compact = errorMessage.length > 250 ? `${errorMessage.slice(0, 247)}...` : errorMessage;

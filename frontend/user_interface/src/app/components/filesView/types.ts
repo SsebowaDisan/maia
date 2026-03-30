@@ -6,7 +6,6 @@ import type {
   FileRecord,
   IngestionJob,
   MoveFilesToGroupResponse,
-  UploadResponse,
 } from "../../../api/client";
 import type { CitationFocus } from "../../types";
 
@@ -16,13 +15,6 @@ interface FilesViewProps {
   files?: FileRecord[];
   fileGroups?: FileGroupRecord[];
   onRefreshFiles?: () => Promise<void>;
-  onUploadFiles?: (
-    files: FileList,
-    options?: {
-      scope?: "persistent" | "chat_temp";
-      reindex?: boolean;
-    },
-  ) => Promise<UploadResponse>;
   onCreateFileIngestionJob?: (
     files: FileList,
     options?: {

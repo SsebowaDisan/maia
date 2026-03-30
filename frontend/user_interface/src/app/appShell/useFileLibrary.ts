@@ -9,7 +9,6 @@ import {
   listIngestionJobs,
   moveFilesToGroup,
   renameFileGroup,
-  uploadFiles,
   uploadUrls,
   type BulkDeleteFilesResponse,
   type DeleteFileGroupResponse,
@@ -18,7 +17,6 @@ import {
   type FileRecord,
   type IngestionJob,
   type MoveFilesToGroupResponse,
-  type UploadResponse,
 } from "../../api/client";
 import { createFileJobWithFallback, createUrlJobWithFallback } from "./fileLibraryJobCreation";
 import { deriveIngestionJobProgress } from "../components/chatMain/ingestionProgress";
@@ -123,78 +121,6 @@ export function useFileLibrary() {
     return () => window.clearInterval(timer);
   }, [ingestionJobs, refreshIngestionJobs, refreshFileCount]);
 
-  const handleUploadFiles = async (
-    files: FileList,
-    options?: {
-      scope?: "persistent" | "chat_temp";
-      showStatus?: boolean;
-      reindex?: boolean;
-      onUploadProgress?: (loadedBytes: number, totalBytes: number) => void;
-    },
-  ): Promise<UploadResponse> => {
-    if (!files.length) {
-      throw new Error("No files selected.");
-    }
-
-    const scope = options?.scope ?? "persistent";
-    const showStatus = options?.showStatus ?? scope !== "chat_temp";
-    if (showStatus) {
-      setUploadStatus("Uploading files...");
-      setUploadProgressPercent(0);
-      setUploadProgressLabel("Uploading");
-    }
-    try {
-      const response = await uploadFiles(files, {
-        scope,
-        reindex: options?.reindex ?? true,
-        onUploadProgress: (loadedBytes, totalBytes) => {
-          options?.onUploadProgress?.(loadedBytes, totalBytes);
-          if (!showStatus) return;
-          setProgressFromUploadBytes(loadedBytes, totalBytes, "Uploading");
-        },
-      });
-      const successCount = response.items.filter((item) => item.status === "success").length;
-      if (showStatus) {
-        setUploadProgressPercent(100);
-        setUploadProgressLabel("Processing complete");
-        if (response.errors.length > 0) {
-          setUploadStatus(`Upload issue: ${response.errors[0]}`);
-        } else {
-          setUploadStatus(`Indexed ${successCount} file(s).`);
-        }
-      }
-      if (scope !== "chat_temp") {
-        await refreshFileCount();
-      }
-      return response;
-    } catch (error) {
-      if (showStatus) {
-        setUploadProgressPercent(null);
-        setUploadProgressLabel("");
-        setUploadStatus(`Upload failed: ${String(error)}`);
-      }
-      throw error;
-    } finally {
-      if (showStatus) {
-        window.setTimeout(() => {
-          setUploadProgressPercent(null);
-          setUploadProgressLabel("");
-        }, 1500);
-      }
-    }
-  };
-
-  const handleUploadFilesForChat = async (
-    files: FileList,
-    options?: { onUploadProgress?: (loadedBytes: number, totalBytes: number) => void },
-  ): Promise<UploadResponse> => {
-    return handleUploadFiles(files, {
-      scope: "chat_temp",
-      showStatus: false,
-      onUploadProgress: options?.onUploadProgress,
-    });
-  };
-
   const handleUploadUrlsToLibrary = async (
     urlText: string,
     options?: {
@@ -251,7 +177,6 @@ export function useFileLibrary() {
       setProgressFromUploadBytes,
       refreshIngestionJobs,
       refreshFileCount,
-      handleUploadFiles,
       isAbortError,
       findLikelyJobFromAbortedUpload,
       activeUploadControllerRef,
@@ -422,8 +347,6 @@ export function useFileLibrary() {
     handleDeleteFiles,
     handleMoveFilesToGroup,
     handleRenameFileGroup,
-    handleUploadFiles,
-    handleUploadFilesForChat,
     handleUploadUrlsToLibrary,
     indexedFiles,
     ingestionJobs,

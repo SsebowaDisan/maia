@@ -109,7 +109,7 @@ async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[di
     return persisted
 
 
-@router.post("/files", response_model=UploadResponse)
+@router.post("/files", response_model=UploadResponse, deprecated=True)
 async def upload_files(
     request: Request,
     response: Response,
@@ -119,6 +119,12 @@ async def upload_files(
     scope: str = Form(default="persistent"),
     user_id: str = Depends(get_current_user_id),
 ):
+    logger.warning(
+        "Deprecated sync file upload endpoint used",
+        extra={"user_id": user_id, "index_id": index_id, "scope": scope},
+    )
+    response.headers["X-Maia-Deprecated"] = "true"
+    response.headers["Warning"] = '299 - "Deprecated endpoint: use /api/uploads/files/jobs"'
     enforce_upload_limits(files, request)
     context = get_context()
     settings = load_user_settings(context=context, user_id=user_id)
@@ -170,7 +176,7 @@ async def upload_files(
             except Exception:
                 resolved = raw_path
             uploaded_file_meta[resolved] = dict(item)
-        response = await run_in_threadpool(
+        upload_result = await run_in_threadpool(
             index_files,
             context=context,
             user_id=user_id,
@@ -181,20 +187,20 @@ async def upload_files(
             scope=scope,
             uploaded_file_meta=uploaded_file_meta,
         )
-        if isinstance(response, dict):
-            debug_rows = response.setdefault("debug", [])
+        if isinstance(upload_result, dict):
+            debug_rows = upload_result.setdefault("debug", [])
             if isinstance(debug_rows, list):
                 debug_rows.append(f"trace_id={trace.trace_id}")
             record_trace_event(
                 "upload.index_completed",
                 {
-                    "index_id": response.get("index_id"),
-                    "file_ids": list(response.get("file_ids") or []),
-                    "error_count": len(response.get("errors") or []),
-                    "item_count": len(response.get("items") or []),
+                    "index_id": upload_result.get("index_id"),
+                    "file_ids": list(upload_result.get("file_ids") or []),
+                    "error_count": len(upload_result.get("errors") or []),
+                    "item_count": len(upload_result.get("items") or []),
                 },
             )
-        return response
+        return upload_result
     except HTTPException as exc:
         record_trace_event(
             "upload.http_error",

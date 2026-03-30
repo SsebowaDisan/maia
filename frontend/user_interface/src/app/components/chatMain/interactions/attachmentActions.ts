@@ -8,14 +8,14 @@ type SetAttachments = Dispatch<SetStateAction<ComposerAttachment[]>>;
 
 function buildAttachmentReadiness(file: FileRecord): Pick<ComposerAttachment, "status" | "message"> {
   const note = (file.note && typeof file.note === "object" ? file.note : {}) as Record<string, unknown>;
-  const ragReady = Boolean(note["rag_ready"]);
+  const ragReady = Boolean(file.rag_ready ?? note["rag_ready"]);
   if (ragReady) {
     return {
       status: "indexed",
       message: undefined,
     };
   }
-  const citationStatus = String(note["citation_status"] || "").trim().toLowerCase();
+  const citationStatus = String((file.citation_status ?? note["citation_status"]) || "").trim().toLowerCase();
   const detail =
     citationStatus === "refining"
       ? "Preparing for RAG"

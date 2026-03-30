@@ -22,14 +22,6 @@ interface UseFilesViewActionsParams {
   }>;
   onRenameFileGroup?: (groupId: string, name: string) => Promise<{ group: { name: string } }>;
   onDeleteFileGroup?: (groupId: string) => Promise<unknown>;
-  onUploadFiles?: (
-    files: FileList,
-    options?: { scope?: "persistent" | "chat_temp"; reindex?: boolean },
-  ) => Promise<{
-    file_ids: string[];
-    errors: string[];
-    items: { status: string; file_id?: string }[];
-  }>;
   onCreateFileIngestionJob?: (
     files: FileList,
     options?: { reindex?: boolean; groupId?: string },
@@ -94,7 +86,6 @@ function useFilesViewActions({
   onCreateFileGroup,
   onRenameFileGroup,
   onDeleteFileGroup,
-  onUploadFiles,
   onCreateFileIngestionJob,
   onUploadUrls,
   onRefreshIngestionJobs,
@@ -365,7 +356,6 @@ function useFilesViewActions({
     }
   };
   const { handleFileInputChange, handleUrlIndex } = createUploadActions({
-    onUploadFiles,
     onCreateFileIngestionJob,
     onUploadUrls,
     onMoveFilesToGroup,
