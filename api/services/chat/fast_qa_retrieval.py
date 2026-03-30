@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlmodel import Session, select
 
@@ -59,6 +60,30 @@ _FORMULA_VALUE_RE = re.compile(
     r"(?:\$\$.*?=\s*.*?\$\$|[FDVBLMQW]\s*[xXyYzZ]?\s*_\{?[A-Za-z0-9,+\-]+\}?\s*=\s*.+)",
     re.IGNORECASE | re.DOTALL,
 )
+_ALPHA_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_PLACEHOLDER_HOSTS = {"example.com", "example.org", "example.net", "localhost", "127.0.0.1"}
+_LOW_CREDIBILITY_HOSTS = {
+    "w3schools.com",
+    "geeksforgeeks.org",
+    "tutorialspoint.com",
+    "javatpoint.com",
+}
+
+
+def _source_kind(*, source_name: str, source_url: str, metadata: dict[str, Any]) -> str:
+    normalized_url = str(source_url or "").strip().lower()
+    normalized_name = str(source_name or "").strip().lower()
+    mime_type = str(metadata.get("mime_type", "") or "").strip().lower()
+    loader = str(metadata.get("loader", "") or "").strip().lower()
+    doc_type = str(metadata.get("type", "") or "").strip().lower()
+    if normalized_url.startswith(("http://", "https://")) or normalized_name.startswith(("http://", "https://")):
+        return "web"
+    if mime_type == "application/pdf" or normalized_name.endswith(".pdf") or "pdf" in loader:
+        return "pdf"
+    if doc_type in {"image", "thumbnail"}:
+        return "image"
+    return "file"
 
 
 def _is_low_value_chunk(text: str) -> bool:
@@ -85,6 +110,137 @@ def _is_heading_like_chunk(text: str) -> bool:
     if lowered.startswith("#") and "$$" not in lowered and "=" not in lowered and len(lowered) < 120:
         return True
     return False
+
+
+def _is_low_signal_chunk(*, text: str, lexical_score: int) -> bool:
+    normalized = " ".join(str(text or "").split()).strip()
+    if not normalized:
+        return True
+    if _FORMULA_VALUE_RE.search(normalized):
+        return False
+    token_candidates = [
+        token.lower()
+        for token in _ALPHA_TOKEN_RE.findall(normalized)
+        if len(token) >= 3
+    ]
+    unique_tokens = set(token_candidates)
+    if len(normalized) < 48 and lexical_score <= 1:
+        return True
+    if len(unique_tokens) <= 4 and lexical_score <= 1 and len(normalized) < 96:
+        return True
+    return False
+
+
+def _extract_host(raw_url: str) -> str:
+    normalized = str(raw_url or "").strip().lower()
+    if not normalized:
+        return ""
+    try:
+        parsed = urlparse(normalized)
+    except Exception:
+        return ""
+    host = str(parsed.netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    return host
+
+
+def _placeholder_host_penalty(source_url: str) -> float:
+    host = _extract_host(source_url)
+    if not host:
+        return 0.0
+    if host in _PLACEHOLDER_HOSTS:
+        return -8.0
+    return 0.0
+
+
+def _source_credibility_profile(*, source_type: str, source_url: str, source_name: str) -> tuple[str, float]:
+    normalized_type = str(source_type or "").strip().lower()
+    if normalized_type in {"file", "pdf"}:
+        return "platform", 2.5
+    if normalized_type == "image":
+        return "medium", 0.0
+
+    host = _extract_host(source_url or source_name)
+    if not host:
+        return "medium", 0.0
+    if host in _PLACEHOLDER_HOSTS:
+        return "low", -8.0
+    if host in _LOW_CREDIBILITY_HOSTS:
+        return "low", -3.5
+    if host.endswith(".gov") or host.endswith(".edu"):
+        return "high", 4.0
+    if host.startswith(("docs.", "developer.", "developers.", "research.")):
+        return "high", 3.0
+    if any(
+        host.endswith(suffix)
+        for suffix in (
+            "nature.com",
+            "arxiv.org",
+            "openml.org",
+            "jmlr.org",
+            "ibm.com",
+            "microsoft.com",
+            "google.com",
+            "openai.com",
+        )
+    ):
+        return "high", 2.5
+    return "medium", 0.0
+
+
+def _substantive_text_quality_boost(*, text: str) -> float:
+    normalized = " ".join(str(text or "").split()).strip()
+    if not normalized:
+        return -6.0
+    if _FORMULA_VALUE_RE.search(normalized):
+        return 4.0
+    if _is_low_value_chunk(normalized) or _is_heading_like_chunk(normalized):
+        return -6.0
+    sentences = [part.strip() for part in _SENTENCE_SPLIT_RE.split(normalized) if part.strip()]
+    unique_tokens = {
+        token.lower()
+        for token in _ALPHA_TOKEN_RE.findall(normalized)
+        if len(token) >= 3
+    }
+    boost = 0.0
+    if len(normalized) >= 220:
+        boost += 2.0
+    elif len(normalized) < 80:
+        boost -= 3.0
+    if len(sentences) >= 2:
+        boost += min(2.5, float(len(sentences) - 1) * 0.8)
+    if len(unique_tokens) >= 18:
+        boost += 1.5
+    elif len(unique_tokens) <= 5:
+        boost -= 2.5
+    return boost
+
+
+def _query_coverage_boost(*, text: str, query_terms: list[str]) -> float:
+    normalized = str(text or "").lower()
+    if not normalized or not query_terms:
+        return 0.0
+    distinct_terms = [term for term in dict.fromkeys(query_terms) if term]
+    matched_terms = [term for term in distinct_terms if term in normalized]
+    if not matched_terms:
+        return -2.0
+    coverage_ratio = float(len(matched_terms)) / float(max(1, len(distinct_terms)))
+    boost = coverage_ratio * 6.0
+    if len(matched_terms) >= 3:
+        boost += 2.0
+    if len(matched_terms) >= 5:
+        boost += 1.5
+    exact_phrase_hits = 0
+    for left, right in zip(distinct_terms, distinct_terms[1:]):
+        phrase = f"{left} {right}".strip()
+        if phrase and phrase in normalized:
+            exact_phrase_hits += 1
+    if exact_phrase_hits:
+        boost += min(3.0, float(exact_phrase_hits) * 1.2)
+    return boost
 
 
 def _technical_query_relevance_boost(*, query_lower: str, text: str, query_terms: list[str]) -> float:
@@ -298,6 +454,16 @@ def load_recent_chunks_for_fast_qa(
             or ""
         ).strip()
         source_key = source_id or f"name:{source_name}"
+        source_type = _source_kind(
+            source_name=source_name,
+            source_url=source_url,
+            metadata=metadata,
+        )
+        credibility_tier, credibility_boost = _source_credibility_profile(
+            source_type=source_type,
+            source_url=source_url,
+            source_name=source_name,
+        )
         target_host_match = _matches_target_hosts(
             source_name=source_name,
             metadata=metadata,
@@ -381,6 +547,15 @@ def load_recent_chunks_for_fast_qa(
             score += 8
         if source_name_lower.startswith("http://") or source_name_lower.startswith("https://"):
             score -= 1
+        if source_type in {"file", "pdf"}:
+            score += 2.0
+        elif source_type == "web":
+            score += 0.5
+        score += _substantive_text_quality_boost(text=text)
+        score += _query_coverage_boost(text=text, query_terms=query_terms)
+        score += credibility_boost
+        if _is_low_signal_chunk(text=text, lexical_score=lexical_score):
+            score -= 10.0
         if target_hosts:
             if target_host_match:
                 score += 42
@@ -395,7 +570,10 @@ def load_recent_chunks_for_fast_qa(
                 "source_key": source_key,
                 "source_name": source_name,
                 "source_url": source_url,
+                "source_type": source_type,
+                "credibility_tier": credibility_tier,
                 "text": text[:1200],
+                "lexical_score": lexical_score,
                 "doc_type": doc_type,
                 "page_label": page_label,
                 "image_origin": image_by_source.get(source_key, {}).get("image_origin"),
@@ -557,6 +735,7 @@ def load_recent_chunks_for_fast_qa(
                 "source_key": source_key,
                 "source_name": str(image_payload.get("source_name", "") or "Indexed file"),
                 "source_url": str(image_payload.get("source_url", "") or ""),
+                "source_type": "image",
                 "text": "Image evidence available for visual analysis.",
                 "doc_type": str(image_payload.get("doc_type", "") or "thumbnail"),
                 "page_label": str(image_payload.get("page_label", "") or ""),

@@ -812,6 +812,42 @@ def test_assign_fast_source_refs_strength_ordering_renumbers_refs() -> None:
     assert int(low_ref["ref_id"]) == 2
 
 
+def test_assign_fast_source_refs_preserves_explicit_file_id_separately_from_source_id() -> None:
+    _enriched, refs = assign_fast_source_refs(
+        [
+            {
+                "file_id": "file-22",
+                "source_id": "source-22",
+                "source_name": "Payroll 2025.pdf",
+                "page_label": "7",
+                "text": "Gross remuneration for December 2025.",
+            }
+        ]
+    )
+    assert refs[0]["file_id"] == "file-22"
+    assert refs[0]["source_id"] == "file-22"
+
+
+def test_append_required_citation_suffix_prefers_ref_file_id_for_anchor_metadata() -> None:
+    answer = append_required_citation_suffix(
+        answer="The payroll statement confirms the December remuneration [1].",
+        info_html=build_fast_info_html(
+            [
+                {
+                    "ref_id": 1,
+                    "file_id": "file-22",
+                    "source_id": "source-22",
+                    "source_name": "Payroll 2025.pdf",
+                    "page_label": "7",
+                    "text": "Gross remuneration for December 2025.",
+                }
+            ]
+        ),
+    )
+    assert "data-file-id='file-22'" in answer
+    assert "/api/uploads/files/file-22/raw#page=7" in answer
+
+
 def test_assign_fast_source_refs_prioritizes_primary_source_before_stronger_secondary() -> None:
     snippets = [
         {

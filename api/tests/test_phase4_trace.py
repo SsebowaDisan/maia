@@ -105,7 +105,7 @@ def test_finalize_turn_adds_trace_summary() -> None:
     assert trace_summary.get("last_event_type") == "delivery.completed"
 
 
-def test_finalize_turn_rag_mirrors_answer_into_top_level_field() -> None:
+def test_finalize_turn_rag_routes_answer_to_canvas_only() -> None:
     retrieval = {
         "message": "Question",
         "data_source": {"messages": [], "state": {}, "retrieval_messages": [], "plot_history": [], "message_meta": [], "likes": []},
@@ -156,6 +156,51 @@ def test_finalize_turn_rag_mirrors_answer_into_top_level_field() -> None:
         emit_activity_fn=lambda **kwargs: None,
     )
 
-    assert result["answer"] == "Grounded answer"
+    assert result["answer"] == ""
+    assert result["blocks"] == [
+        {
+            "type": "document_action",
+            "action": {
+                "kind": "open_canvas",
+                "title": "Title",
+                "documentId": "doc-1",
+            },
+        }
+    ]
     assert result["documents"][0]["content"] == "Grounded answer"
-    assert result["info_panel"]["rag_answer_mirrored"] is True
+    assert result["info_panel"]["rag_answer_mirrored"] is False
+    assert result["info_panel"]["rag_canvas_document_id"] == "doc-1"
+    assert result["info_panel"]["rag_canvas_title"] == "Title"
+
+
+def test_get_pdf_citation_cache_state_reports_refining_without_summary(monkeypatch, tmp_path) -> None:
+    sample = tmp_path / "sample.pdf"
+    sample.write_bytes(b"%PDF-1.4 fake")
+
+    monkeypatch.setattr(pdf_highlight_locator, "_load_cached_page_unit_summary", lambda _path: None)
+    monkeypatch.setattr(
+        pdf_highlight_locator,
+        "_load_cached_page_units",
+        lambda _path, page_number: {"page": page_number, "units": [{"text": "cached"}]},
+    )
+
+    state = pdf_highlight_locator.get_pdf_citation_cache_state(sample)
+
+    assert state["citation_ready"] is False
+    assert state["citation_status"] == "refining"
+
+
+def test_get_pdf_citation_cache_state_reports_ready_from_summary(monkeypatch, tmp_path) -> None:
+    sample = tmp_path / "sample.pdf"
+    sample.write_bytes(b"%PDF-1.4 fake")
+
+    monkeypatch.setattr(
+        pdf_highlight_locator,
+        "_load_cached_page_unit_summary",
+        lambda _path: {"citation_ready": True, "pages_cached": 8, "total_pages": 8},
+    )
+
+    state = pdf_highlight_locator.get_pdf_citation_cache_state(sample)
+
+    assert state["citation_ready"] is True
+    assert state["citation_status"] == "ready"

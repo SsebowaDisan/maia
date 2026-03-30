@@ -6,8 +6,8 @@ import re
 import time
 from typing import Any
 from urllib.parse import urlparse
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import requests
 
 
 def _is_google_gemini_compatible_base(base_url: str) -> bool:
@@ -97,19 +97,19 @@ def call_openai_chat_text(
             base_url=base_url,
             request_payload=request_payload,
         )
-        request = Request(
-            f"{base_url.rstrip('/')}/chat/completions",
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(payload).encode("utf-8"),
-        )
         try:
-            with urlopen(request, timeout=max(8, int(timeout_seconds))) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            choices = payload.get("choices")
+            response = requests.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=max(8, int(timeout_seconds)),
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+            choices = response_payload.get("choices")
             if not isinstance(choices, list) or not choices:
                 return None
             first = choices[0]
@@ -119,11 +119,12 @@ def call_openai_chat_text(
             if not isinstance(message, dict):
                 return None
             return extract_text_content_fn(message.get("content")) or None
-        except HTTPError as exc:
+        except requests.HTTPError as exc:
             last_error = exc
-            if exc.code not in {429, 500, 502, 503, 504} or attempt >= max_attempts:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code not in {429, 500, 502, 503, 504} or attempt >= max_attempts:
                 raise
-        except URLError as exc:
+        except requests.RequestException as exc:
             last_error = exc
             if attempt >= max_attempts:
                 raise

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from api.services.agent.models import AgentSource
 from api.services.agent.tools.research_web_stream_enrichment import (
+    _rank_sources_for_synthesis,
     run_enrichment_and_finalize_stage,
 )
 
@@ -141,3 +142,51 @@ def test_standard_segmented_still_skips_supplemental_enrichment() -> None:
     assert "api_call_started" not in event_types
     assert result.data["provider"] == "brave_search"
     assert result.data["source_count"] == 1
+
+
+def test_rank_sources_for_synthesis_drops_low_signal_meta_pages(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.tools.research_web_stream_enrichment._score_results_relevance_llm",
+        lambda **kwargs: [
+            {**row, "relevance_score": score}
+            for row, score in zip(
+                kwargs["results"],
+                [0.92, 0.14, 0.78],
+            )
+        ],
+    )
+    sources = [
+        AgentSource(
+            source_type="web",
+            label="What is Machine Learning? | IBM",
+            url="https://www.ibm.com/think/topics/machine-learning",
+            score=0.72,
+            metadata={"excerpt": "Explains machine learning basics and common categories."},
+        ),
+        AgentSource(
+            source_type="web",
+            label="Citing Sources - AI & Machine Learning - Library Guides",
+            url="https://libguides.mines.edu/c.php?g=1335565&p=9837818",
+            score=0.74,
+            metadata={"excerpt": "How to cite sources and build a bibliography for AI and machine learning research."},
+        ),
+        AgentSource(
+            source_type="web",
+            label="Machine learning - Wikipedia",
+            url="https://en.wikipedia.org/wiki/Machine_learning",
+            score=0.69,
+            metadata={"excerpt": "Overview of supervised, unsupervised, and reinforcement learning."},
+        ),
+    ]
+
+    ranked, dropped = _rank_sources_for_synthesis(
+        query="make research online about machine learning",
+        sources=sources,
+        min_unique_sources=3,
+    )
+
+    labels = [source.label for source in ranked]
+    assert dropped >= 1
+    assert "What is Machine Learning? | IBM" in labels
+    assert "Machine learning - Wikipedia" in labels
+    assert "Citing Sources - AI & Machine Learning - Library Guides" not in labels

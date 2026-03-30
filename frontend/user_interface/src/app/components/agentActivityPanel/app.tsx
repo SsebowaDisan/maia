@@ -17,6 +17,7 @@ import { resolveStagedTheatreEnabled } from "./theatreFeatureFlags";
 import { latestOpenApprovalEvent } from "./approvalGateState";
 import { maybeOpenEventSource } from "./eventSelection";
 import { resolvePreferredRunId } from "../../utils/runIdSelection";
+import { sanitizeSceneTextForSurface } from "./contentDerivation";
 const playbackRates = [0.75, 1, 1.5, 2] as const;
 
 export function AgentActivityPanel({
@@ -48,6 +49,7 @@ export function AgentActivityPanel({
   const timerRef = useRef<number | null>(null);
   const sceneTabSwitchTimerRef = useRef<number | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const didInitializeSettledCursorRef = useRef(false);
 
   const derived = useAgentActivityDerived({
     events,
@@ -107,7 +109,11 @@ export function AgentActivityPanel({
     streaming,
   });
 
-  const sceneText = useSceneTextTyping(sceneEvent || activeEvent);
+  const rawSceneText = useSceneTextTyping(sceneEvent || activeEvent);
+  const sceneText = useMemo(
+    () => sanitizeSceneTextForSurface(rawSceneText, { isBrowserScene }),
+    [isBrowserScene, rawSceneText],
+  );
 
   const phaseTimeline = useMemo(
     () => derivePhaseTimeline(visibleEvents, activeEvent),
@@ -142,11 +148,17 @@ export function AgentActivityPanel({
     if (!orderedEvents.length) {
       setCursor(0);
       setIsPlaying(false);
+      didInitializeSettledCursorRef.current = false;
       return;
     }
     if (streaming) {
       setCursor(orderedEvents.length - 1);
       setIsPlaying(false);
+      didInitializeSettledCursorRef.current = false;
+    } else if (!didInitializeSettledCursorRef.current && orderedEvents.length > 1) {
+      setCursor(orderedEvents.length - 1);
+      setIsPlaying(false);
+      didInitializeSettledCursorRef.current = true;
     } else if (cursor > orderedEvents.length - 1) {
       setCursor(orderedEvents.length - 1);
     }

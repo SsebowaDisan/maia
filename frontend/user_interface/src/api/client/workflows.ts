@@ -170,6 +170,7 @@ async function consumeSseStream<TEvent extends { event_type: string }>(
     onEvent?: (event: TEvent) => void;
     onDone?: () => void;
     onError?: (error: Error) => void;
+    shouldResolveOnEvent?: (event: TEvent) => boolean;
   },
 ) {
   if (!response.body) {
@@ -198,6 +199,11 @@ async function consumeSseStream<TEvent extends { event_type: string }>(
           continue;
         }
         options.onEvent?.(parsed);
+        if (options.shouldResolveOnEvent?.(parsed)) {
+          options.onDone?.();
+          await reader.cancel();
+          return;
+        }
       }
     }
     if (buffer.trim()) {
@@ -206,6 +212,11 @@ async function consumeSseStream<TEvent extends { event_type: string }>(
         options.onDone?.();
       } else if (parsed) {
         options.onEvent?.(parsed);
+        if (options.shouldResolveOnEvent?.(parsed)) {
+          options.onDone?.();
+          await reader.cancel();
+          return;
+        }
       }
     }
   } catch (error) {
@@ -213,6 +224,17 @@ async function consumeSseStream<TEvent extends { event_type: string }>(
     options.onError?.(normalized);
     throw normalized;
   }
+}
+
+function isWorkflowTerminalEvent(event: WorkflowRunEvent): boolean {
+  const eventType = String(event?.event_type || "").trim().toLowerCase();
+  return (
+    eventType === "workflow_completed" ||
+    eventType === "workflow_failed" ||
+    eventType === "execution_complete" ||
+    eventType === "execution_error" ||
+    eventType === "assembly_error"
+  );
 }
 
 function listWorkflowRecords() {
@@ -358,6 +380,7 @@ async function runWorkflowWithStream(workflowId: string, options?: RunWorkflowSt
     onEvent: options?.onEvent,
     onDone: options?.onDone,
     onError: options?.onError,
+    shouldResolveOnEvent: isWorkflowTerminalEvent,
   });
 }
 
@@ -380,6 +403,7 @@ async function assembleAndRunWorkflowWithStream(
     onEvent: options?.onEvent,
     onDone: options?.onDone,
     onError: options?.onError,
+    shouldResolveOnEvent: isWorkflowTerminalEvent,
   });
 }
 

@@ -32,6 +32,10 @@ function deriveWorkflowEventData(row: Record<string, unknown>, data: Record<stri
     "summary",
     "progress",
     "run_id",
+    "outputs",
+    "snapshot_ref",
+    "scene_ref",
+    "graph_node_id",
   ] as const;
   for (const key of fallbackKeys) {
     if (merged[key] !== undefined) {
@@ -109,10 +113,18 @@ function toActivityEventFromWorkflowEvent(
     event_type: eventType,
     title,
     detail,
-    timestamp: new Date().toISOString(),
+    timestamp: String(row.timestamp || data.timestamp || metadata.timestamp || new Date().toISOString()),
     stage: eventFamily === "plan" ? "plan" : "execute",
     status: eventType.includes("error") || eventType.includes("failed") ? "failed" : "info",
     data: resolvedData,
+    graph_node_id:
+      String(row.graph_node_id || resolvedData.graph_node_id || data.graph_node_id || metadata.graph_node_id || "").trim() ||
+      undefined,
+    scene_ref:
+      String(row.scene_ref || resolvedData.scene_ref || data.scene_ref || metadata.scene_ref || "").trim() || undefined,
+    snapshot_ref:
+      String(row.snapshot_ref || resolvedData.snapshot_ref || data.snapshot_ref || metadata.snapshot_ref || "").trim() ||
+      undefined,
     metadata,
     event_family: eventFamily,
     event_render_mode: eventFamily === "plan" ? "animate_live" : undefined,

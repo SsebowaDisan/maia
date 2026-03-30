@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from api.services.observability.citation_trace import record_trace_event
 from ktem.db.engine import engine
+from .pdf_highlight_locator import get_pdf_citation_cache_state
 
 
 class IndexingCanceledError(RuntimeError):
@@ -160,6 +161,9 @@ def apply_upload_scope_to_sources_impl(
             source = row[0]
             note = dict(source.note or {})
             note["upload_scope"] = normalized_scope
+            note["rag_ready"] = True
+            note.setdefault("citation_ready", True)
+            note.setdefault("citation_status", "ready")
             source.note = note
             session.add(source)
         session.commit()
@@ -629,12 +633,37 @@ def list_indexed_files_impl(
             statement = statement.where(Source.user == user_id)
         rows = session.execute(statement).all()
 
+    fs_path = Path(index._resources["FileStoragePath"])
     files = []
     for row in rows:
-        note = row[0].note or {}
+        note = dict(row[0].note or {})
         scope = normalize_upload_scope_fn(str(note.get("upload_scope", "persistent")))
         if not include_chat_temp and scope == "chat_temp":
             continue
+        note["rag_ready"] = True
+        stored_path = str(row[0].path or "").strip()
+        source_name = str(row[0].name or "").strip()
+        candidate: Path | None = None
+        if stored_path:
+            candidate = Path(stored_path)
+            if not candidate.is_absolute():
+                candidate = fs_path / candidate
+            try:
+                candidate = candidate.resolve()
+            except Exception:
+                candidate = candidate
+        original_pdf_storage_name = str(note.get("source_original_pdf_storage_name") or "").strip()
+        if original_pdf_storage_name:
+            candidate = (fs_path / original_pdf_storage_name).resolve()
+
+        is_pdf = source_name.lower().endswith(".pdf") or bool(original_pdf_storage_name)
+        if is_pdf and candidate and candidate.exists() and candidate.is_file():
+            citation_state = get_pdf_citation_cache_state(candidate)
+            note["citation_ready"] = bool(citation_state.get("citation_ready"))
+            note["citation_status"] = str(citation_state.get("citation_status") or "refining")
+        else:
+            note["citation_ready"] = True
+            note["citation_status"] = "ready"
         files.append(
             {
                 "id": row[0].id,

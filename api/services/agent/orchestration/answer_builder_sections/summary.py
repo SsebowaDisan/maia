@@ -40,6 +40,16 @@ def _is_error_page_text(text: str) -> bool:
     return any(signal in lowered for signal in _ERROR_PAGE_SIGNALS)
 
 
+def _is_meaningful_excerpt(text: str) -> bool:
+    clean = " ".join(str(text or "").split()).strip()
+    if len(clean) < 48:
+        return False
+    letters = len(re.findall(r"[A-Za-z]", clean))
+    symbols = len(re.findall(r"[\×✕|{}<>+=~`^]", clean))
+    ratio = letters / max(1, len(clean))
+    return ratio >= 0.55 and symbols <= max(4, len(clean) // 40)
+
+
 OPERATIONAL_LABEL_PREFIXES = (
     "workspace.",
     "gmail.",
@@ -217,6 +227,13 @@ def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
     if len(numbered_sources) < 2:
         return ""
 
+    evidence_snippets = _collect_evidence_snippets(ctx, citations)
+    evidence_block = "\n".join(
+        f"- [{item['citation_idx']}] {item['text']}"
+        for item in evidence_snippets[:12]
+    ).strip()
+    report_excerpt = _extract_report_excerpt(ctx)
+
     request_message = _clean(ctx.request.message)
     latest_title = _clean(ctx.runtime_settings.get("__latest_report_title")) or "Research summary"
     user_goal = request_message or latest_title
@@ -239,12 +256,14 @@ def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
             "- Do not include a Sources section here.\n\n"
             f"User request:\n{user_goal}\n\n"
             f"Reference title:\n{latest_title}\n\n"
-            "Numbered sources:\n"
+            + (f"Report excerpt:\n{report_excerpt}\n\n" if report_excerpt else "")
+            + (f"Evidence snippets:\n{evidence_block}\n\n" if evidence_block else "")
+            + "Numbered sources:\n"
             + "\n".join(numbered_sources)
         ),
         temperature=0.2,
-        timeout_seconds=16,
-        max_tokens=1400,
+        timeout_seconds=24,
+        max_tokens=1800,
     )
     text = str(response or "").strip()
     if not text or len(text) < 280:
@@ -252,6 +271,131 @@ def _compose_llm_cited_research_summary(ctx: AnswerBuildContext) -> str:
     if not re.search(r"\[\d+\]", text):
         return ""
     return text
+
+
+def _extract_report_excerpt(ctx: AnswerBuildContext) -> str:
+    report = str(ctx.runtime_settings.get("__latest_report_content") or "").strip()
+    if not report:
+        return ""
+    report = re.sub(
+        r"(?is)^.*?##\s+Evidence\s+Citations\s*$[\s\S]*$",
+        "",
+        report,
+    ).strip()
+    lines: list[str] = []
+    for raw_line in report.splitlines():
+        line = " ".join(str(raw_line or "").split()).strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if re.match(r"^#{1,3}\s+", line):
+            continue
+        if _is_error_page_text(line):
+            continue
+        lines.append(line)
+        if len(" ".join(lines)) >= 900:
+            break
+    cleaned = "\n".join(lines).strip()
+    return cleaned[:1200]
+
+
+def _collect_evidence_snippets(
+    ctx: AnswerBuildContext,
+    citations: list[dict[str, str]] | None = None,
+) -> list[dict[str, object]]:
+    citation_rows = citations if isinstance(citations, list) else collect_evidence_citations(ctx)
+    citation_index: dict[str, int] = {}
+    for idx, row in enumerate(citation_rows, start=1):
+        label = _clean(row.get("label"))
+        url = _normalize_url(row.get("url"))
+        if url:
+            citation_index[f"url::{url.lower()}"] = idx
+        if label:
+            citation_index[f"label::{label.lower()}"] = idx
+
+    snippets: list[dict[str, object]] = []
+    seen: set[str] = set()
+
+    def _append(text: object, *, label: object = "", url: object = "") -> None:
+        clean = compact(str(text or "").strip(), 320)
+        if not _is_meaningful_excerpt(clean):
+            return
+        if _is_error_page_text(clean):
+            return
+        normalized_url = _normalize_url(url)
+        normalized_label = _clean(label)
+        citation_idx = None
+        if normalized_url:
+            citation_idx = citation_index.get(f"url::{normalized_url.lower()}")
+        if citation_idx is None and normalized_label:
+            citation_idx = citation_index.get(f"label::{normalized_label.lower()}")
+        if citation_idx is None:
+            return
+        fingerprint = re.sub(r"\[\d+\]", "", clean).strip().lower()
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        snippets.append(
+            {
+                "citation_idx": citation_idx,
+                "label": normalized_label,
+                "url": normalized_url,
+                "text": clean,
+            }
+        )
+
+    for source in ctx.sources:
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
+            _append(metadata.get(key), label=source.label, url=source.url)
+
+    for bucket_key in ("__latest_report_sources", "__latest_web_sources"):
+        rows = ctx.runtime_settings.get(bucket_key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            label = row.get("label")
+            url = row.get("url") or metadata.get("source_url") or metadata.get("url")
+            for key in ("snippet", "excerpt", "summary", "text", "quote"):
+                _append(row.get(key), label=label, url=url)
+            for key in ("snippet", "excerpt", "summary", "text", "quote", "phrase"):
+                _append(metadata.get(key), label=label, url=url)
+
+    copied_highlights = ctx.runtime_settings.get("__copied_highlights")
+    if isinstance(copied_highlights, list):
+        for item in copied_highlights:
+            if not isinstance(item, dict):
+                continue
+            _append(item.get("text"), label=item.get("label"), url=item.get("url"))
+
+    browser_findings = ctx.runtime_settings.get("__latest_browser_findings")
+    if isinstance(browser_findings, dict):
+        _append(
+            browser_findings.get("excerpt"),
+            label=browser_findings.get("title"),
+            url=browser_findings.get("url"),
+        )
+
+    return snippets[:12]
+
+
+def _append_snippet_backed_summary(lines: list[str], ctx: AnswerBuildContext) -> bool:
+    snippets = _collect_evidence_snippets(ctx)
+    if not snippets:
+        return False
+    for item in snippets[:4]:
+        text = str(item.get("text") or "").strip()
+        citation_idx = int(item.get("citation_idx") or 0)
+        if not text or citation_idx <= 0:
+            continue
+        if not re.search(rf"\[{citation_idx}\]", text):
+            text = f"{text} [{citation_idx}]"
+        lines.append(f"- {text}")
+    return True
 
 
 def append_execution_summary(lines: list[str], ctx: AnswerBuildContext) -> None:
@@ -272,21 +416,17 @@ def append_execution_summary(lines: list[str], ctx: AnswerBuildContext) -> None:
 
 
 def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
-    def _is_meaningful_excerpt(text: str) -> bool:
-        clean = " ".join(str(text or "").split()).strip()
-        if len(clean) < 48:
-            return False
-        letters = len(re.findall(r"[A-Za-z]", clean))
-        symbols = len(re.findall(r"[×✕|{}<>+=~`^]", clean))
-        ratio = letters / max(1, len(clean))
-        return ratio >= 0.55 and symbols <= max(4, len(clean) // 40)
-
     show_diagnostics = bool(ctx.runtime_settings.get("__show_response_diagnostics"))
     lines.append("")
     lines.append("## Executive Summary")
     llm_summary = _compose_llm_cited_research_summary(ctx)
     if llm_summary:
         lines.extend(str(llm_summary).splitlines())
+        return
+
+    report_excerpt = _extract_report_excerpt(ctx)
+    if report_excerpt:
+        lines.extend(report_excerpt.splitlines())
         return
 
     browser_findings = ctx.runtime_settings.get("__latest_browser_findings")
@@ -326,8 +466,10 @@ def append_key_findings(lines: list[str], ctx: AnswerBuildContext) -> None:
                 lines.append(f"- Observed topics: {', '.join(clean_keywords[:10])}")
         if show_diagnostics:
             pass  # diagnostics block preserved for future use
-    else:
+    elif not _append_snippet_backed_summary(lines, ctx):
         lines.append("- Findings are grounded in executed tools and verified source evidence.")
+        summary_emitted = True
+    else:
         summary_emitted = True
 
     # Include extracted content snippets from the browser visit / search fallback

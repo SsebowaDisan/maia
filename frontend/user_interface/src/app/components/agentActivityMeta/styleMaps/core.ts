@@ -33,12 +33,12 @@ const coreEventStyles: Record<string, EventStyle> = {
     accent: "text-[#4c4c50]",
   },
   "llm.task_contract_started": {
-    label: "Contract Build",
+    label: "Checklist Build",
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
   "llm.task_contract_completed": {
-    label: "Contract Ready",
+    label: "Checklist Ready",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },

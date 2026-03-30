@@ -163,12 +163,12 @@ const integrationEventStyles: Record<string, EventStyle> = {
     accent: "text-[#4c4c50]",
   },
   "llm.task_rewrite_started": {
-    label: "Rewrite Task",
+    label: "Writing Todo",
     icon: Sparkles,
     accent: "text-[#4c4c50]",
   },
   "llm.task_rewrite_completed": {
-    label: "Task Rewritten",
+    label: "Todo Ready",
     icon: CheckCircle2,
     accent: "text-[#2f6a3f]",
   },

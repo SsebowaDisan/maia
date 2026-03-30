@@ -15,9 +15,11 @@ function inferApiBase() {
   }
 
   const { port } = window.location;
-  // In local Vite dev, prefer same-origin `/api` so proxy handles routing/CORS.
+  // In local Vite dev, prefer the backend directly. The Vite proxy can keep
+  // SSE responses open after the backend has already completed, which makes
+  // long-running Brain/workflow requests appear to never finish.
   if (port === "5173" || port === "4173") {
-    return "";
+    return `http://${window.location.hostname || "127.0.0.1"}:8000`;
   }
 
   return "";

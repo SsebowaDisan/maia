@@ -8,6 +8,7 @@ import {
   type IngestionJob,
 } from "../../api/client";
 import type { UploadResponse } from "../../api/client";
+import { formatIngestionJobProgress } from "../components/chatMain/ingestionProgress";
 
 function isMissingJobEndpointError(error: unknown) {
   const text = String(error || "");
@@ -84,7 +85,7 @@ async function createFileJobWithFallback(
     handlers.activeUploadControllerRef.current = null;
     handlers.activeFileJobIdRef.current = job.id;
     handlers.setUploadProgressPercent(0);
-    handlers.setUploadProgressLabel("Indexing 0%");
+    handlers.setUploadProgressLabel(formatIngestionJobProgress(job));
     handlers.setUploadStatus(
       `Job queued: ${job.id.slice(0, 8)} (${job.total_items} item${job.total_items === 1 ? "" : "s"}).`,
     );

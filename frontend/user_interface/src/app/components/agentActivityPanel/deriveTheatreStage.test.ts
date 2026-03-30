@@ -120,7 +120,7 @@ describe("deriveTheatreStage", () => {
 });
 
 describe("desiredPreviewTabForStage", () => {
-  it("forces system tab for non-surface stages", () => {
+  it("keeps browser tab during breakdown when a browser scene is already active", () => {
     const tab = desiredPreviewTabForStage({
       stage: "breakdown",
       sceneTab: "browser",
@@ -128,7 +128,7 @@ describe("desiredPreviewTabForStage", () => {
       fallbackPreviewTab: "browser",
       manualOverride: false,
     });
-    expect(tab).toBe("system");
+    expect(tab).toBe("browser");
   });
 
   it("uses committed tab for execute stage", () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Globe, FileText, Image as ImageIcon, Database } from "lucide-react";
 
 import type { AgentActivityEvent, AgentSourceRecord, ChatAttachment, CitationFocus, SourceUsageRecord } from "../types";
 import { parseEvidence } from "../utils/infoInsights";
@@ -10,6 +11,7 @@ import { TeamConversationTab } from "./agentActivityPanel/TeamConversationTab";
 import { getMindmapPayload } from "./infoPanelDerived";
 import { getTraceSummary } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
+import { EvidenceCardsList } from "./infoPanel/EvidenceCardsList";
 import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
 import { parseWebReviewSourceMap, resolveWebReviewSource } from "./infoPanel/review/webReviewContent";
 import { useResizableViewers } from "./infoPanel/useResizableViewers";
@@ -53,6 +55,130 @@ interface InfoPanelProps {
     sourceName?: string;
   }) => void;
   width?: number;
+}
+
+type RagScopeSourceRow = {
+  label: string;
+  source_type: string;
+  credibility_tier?: string | null;
+  url?: string | null;
+  file_id?: string | null;
+};
+
+type RagScopeSummary = {
+  fileCount: number;
+  coveredFileCount: number;
+  fileIds: string[];
+  searchedSourceCount: number;
+  searchedSources: RagScopeSourceRow[];
+};
+
+type EvidenceConflictSummary = {
+  status: string;
+  message: string;
+  contradictedClaims: number;
+  mixedClaims: number;
+};
+
+function parseRagScopeSummary(infoPanel: Record<string, unknown>): RagScopeSummary | null {
+  const raw = (infoPanel as { selected_scope?: unknown }).selected_scope;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const searchedSources = Array.isArray(record.searched_sources)
+    ? record.searched_sources
+        .map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return null;
+          }
+          const item = row as Record<string, unknown>;
+          const label = String(item.label || "").trim();
+          if (!label) {
+            return null;
+          }
+          return {
+            label,
+            source_type: String(item.source_type || "file").trim().toLowerCase() || "file",
+            credibility_tier: typeof item.credibility_tier === "string" ? item.credibility_tier : null,
+            url: typeof item.url === "string" ? item.url : null,
+            file_id: typeof item.file_id === "string" ? item.file_id : null,
+          } satisfies RagScopeSourceRow;
+        })
+        .filter((row): row is RagScopeSourceRow => Boolean(row))
+    : [];
+  const fileIds = Array.isArray(record.file_ids)
+    ? record.file_ids
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    : [];
+  return {
+    fileCount: Math.max(0, Number(record.file_count || 0)),
+    coveredFileCount: Math.max(0, Number(record.covered_file_count || 0)),
+    fileIds: fileIds.slice(0, 40),
+    searchedSourceCount: Math.max(
+      searchedSources.length,
+      Math.max(0, Number(record.searched_source_count || 0)),
+    ),
+    searchedSources,
+  };
+}
+
+function parseEvidenceConflictSummary(infoPanel: Record<string, unknown>): EvidenceConflictSummary | null {
+  const raw = (infoPanel as { evidence_conflict_summary?: unknown }).evidence_conflict_summary;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  const message = String(record.message || "").trim();
+  if (!message) {
+    return null;
+  }
+  return {
+    status: String(record.status || "mixed").trim().toLowerCase() || "mixed",
+    message,
+    contradictedClaims: Math.max(0, Number(record.contradicted_claims || 0)),
+    mixedClaims: Math.max(0, Number(record.mixed_claims || 0)),
+  };
+}
+
+function sourceIcon(sourceType: string) {
+  if (sourceType === "web") {
+    return Globe;
+  }
+  if (sourceType === "image") {
+    return ImageIcon;
+  }
+  if (sourceType === "pdf") {
+    return FileText;
+  }
+  return Database;
+}
+
+function credibilityBadgeClass(tier: string | null | undefined) {
+  switch ((tier || "").toLowerCase()) {
+    case "high":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "platform":
+      return "border-blue-200 bg-blue-50 text-blue-700";
+    case "low":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-black/[0.08] bg-white text-[#5b6474]";
+  }
+}
+
+function credibilityLabel(tier: string | null | undefined) {
+  switch ((tier || "").toLowerCase()) {
+    case "high":
+      return "High credibility";
+    case "platform":
+      return "Platform source";
+    case "low":
+      return "Low credibility";
+    default:
+      return "Medium credibility";
+  }
 }
 
 function findSourceById(sources: VerificationSourceItem[], sourceId: string): VerificationSourceItem | null {
@@ -189,6 +315,14 @@ export function InfoPanel({
     () => parseWebReviewSourceMap(infoPanel as Record<string, unknown>),
     [infoPanel],
   );
+  const ragScopeSummary = useMemo(
+    () => parseRagScopeSummary(infoPanel as Record<string, unknown>),
+    [infoPanel],
+  );
+  const evidenceConflictSummary = useMemo(
+    () => parseEvidenceConflictSummary(infoPanel as Record<string, unknown>),
+    [infoPanel],
+  );
   const activeWebReviewSource = useMemo(
     () =>
       resolveWebReviewSource({
@@ -227,6 +361,26 @@ export function InfoPanel({
   );
   const showTeamConversation = Boolean(conversationRunId) || activityEvents.length > 0;
   const showEvidenceSurfaces = Boolean(citationFocus);
+
+  useEffect(() => {
+    if (!showEvidenceSurfaces || !activeEvidenceId) {
+      return;
+    }
+    const viewportNode = contentViewportRef.current;
+    if (!viewportNode) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      const targetNode = viewportNode.querySelector<HTMLElement>(
+        `[data-evidence-card-id='${activeEvidenceId}']`,
+      );
+      if (!targetNode) {
+        return;
+      }
+      targetNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeEvidenceId, showEvidenceSurfaces]);
   const mindmapSummary = useMemo(
     () => buildMindmapArtifactSummary(typedMindmapPayload),
     [typedMindmapPayload],
@@ -481,6 +635,125 @@ export function InfoPanel({
           ) : !showTeamConversation ? (
             <section className="rounded-2xl border border-[#e4e7ec] bg-white px-4 py-3 text-[12px] text-[#667085]">
               Click a citation in the assistant answer to open source evidence in this panel.
+            </section>
+          ) : null}
+
+          {!showEvidenceSurfaces && ragScopeSummary ? (
+            <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-white px-4 py-4 shadow-sm">
+              {evidenceConflictSummary ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700">
+                        Evidence Conflict
+                      </p>
+                      <p className="mt-1 text-[12px] font-medium text-[#17171b]">
+                        {evidenceConflictSummary.message}
+                      </p>
+                    </div>
+                    <div className="text-right text-[11px] text-amber-700">
+                      {evidenceConflictSummary.contradictedClaims > 0 ? (
+                        <div>{evidenceConflictSummary.contradictedClaims} contradicted claim{evidenceConflictSummary.contradictedClaims === 1 ? "" : "s"}</div>
+                      ) : null}
+                      {evidenceConflictSummary.mixedClaims > 0 ? (
+                        <div>{evidenceConflictSummary.mixedClaims} mixed claim{evidenceConflictSummary.mixedClaims === 1 ? "" : "s"}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                    RAG Scope
+                  </p>
+                  <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
+                    Maia sources searched
+                  </h4>
+                </div>
+                <div className="text-right text-[11px] text-[#6b6b70]">
+                  {ragScopeSummary.fileCount > 0 ? (
+                    <div>{ragScopeSummary.coveredFileCount}/{ragScopeSummary.fileCount} selected files covered</div>
+                  ) : (
+                    <div>{ragScopeSummary.searchedSourceCount} indexed source{ragScopeSummary.searchedSourceCount === 1 ? "" : "s"}</div>
+                  )}
+                </div>
+              </div>
+
+              {ragScopeSummary.fileIds.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {ragScopeSummary.fileIds.slice(0, 8).map((fileId) => (
+                    <span
+                      key={fileId}
+                      className="rounded-full border border-black/[0.06] bg-[#f8f8fb] px-2.5 py-1 text-[11px] font-medium text-[#4b5563]"
+                    >
+                      {fileId}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {ragScopeSummary.searchedSources.length > 0 ? (
+                <div className="space-y-2">
+                  {ragScopeSummary.searchedSources.map((source) => {
+                    const Icon = sourceIcon(source.source_type);
+                    return (
+                      <div
+                        key={`${source.source_type}:${source.file_id || source.url || source.label}`}
+                        className="flex items-start gap-3 rounded-xl border border-black/[0.06] bg-[#fbfbfc] px-3 py-2"
+                      >
+                        <span className="mt-0.5 rounded-full border border-black/[0.06] bg-white p-1.5 text-[#5b6474]">
+                          <Icon className="h-3.5 w-3.5" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="truncate text-[12px] font-medium text-[#17171b]">{source.label}</div>
+                            <span
+                              className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${credibilityBadgeClass(source.credibility_tier)}`}
+                            >
+                              {credibilityLabel(source.credibility_tier)}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 truncate text-[11px] text-[#6b6b70]">
+                            {source.url || source.file_id || source.source_type}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-black/[0.08] bg-[#fbfbfc] px-3 py-3 text-[12px] text-[#6b6b70]">
+                  No indexed Maia sources matched this turn yet.
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          {showEvidenceSurfaces ? (
+            <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-white px-4 py-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                    Evidence
+                  </p>
+                  <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
+                    Citation evidence
+                  </h4>
+                </div>
+                <div className="text-right text-[11px] text-[#6b6b70]">
+                  {activeEvidenceId ? <div>{sourceEvidence.length} evidence card{sourceEvidence.length === 1 ? "" : "s"}</div> : null}
+                  {selectedSource?.title || activeCitation?.sourceName ? (
+                    <div className="truncate">{selectedSource?.title || activeCitation?.sourceName}</div>
+                  ) : null}
+                </div>
+              </div>
+
+              <EvidenceCardsList
+                cards={sourceEvidence}
+                selectedEvidenceId={activeEvidenceId}
+                onSelectCard={selectEvidence}
+              />
             </section>
           ) : null}
 

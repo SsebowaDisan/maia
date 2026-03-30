@@ -32,6 +32,53 @@ _FORMULA_VISIBLE_RE = re.compile(
     r"(?:\$\$.*?=\s*.*?\$\$|[FDVBLMQW]\s*[xXyYzZ]?\s*_\{?[A-Za-z0-9,+\-]+\}?\s*=\s*.+)",
     re.IGNORECASE | re.DOTALL,
 )
+_NUMERIC_LITERAL_RE = re.compile(r"\b\d+(?:[.,]\d+)?\b")
+_CONSTRAINED_SOURCE_RE = re.compile(
+    r"\b("
+    r"using only|based only on|from only|uploaded|attached|provided|selected|indexed"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _credibility_rank(value: Any) -> int:
+    normalized = str(value or "").strip().lower()
+    if normalized == "platform":
+        return 4
+    if normalized == "high":
+        return 3
+    if normalized == "medium":
+        return 2
+    if normalized == "low":
+        return 1
+    return 0
+
+
+def _normalize_searched_sources(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or "Indexed source").strip() or "Indexed source"
+        source_type = str(row.get("source_type") or "file").strip().lower() or "file"
+        credibility_tier = str(row.get("credibility_tier") or "").strip().lower() or None
+        url = row.get("url")
+        file_id = row.get("file_id")
+        key = f"{source_type}|{str(file_id or '').strip()}|{str(url or '').strip()}|{label.lower()}|{credibility_tier or ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "label": label,
+                "source_type": source_type,
+                "credibility_tier": credibility_tier,
+                "url": url,
+                "file_id": file_id,
+            }
+        )
+    return normalized
 
 _GROUNDING_STOPWORDS = {
     "about",
@@ -64,6 +111,10 @@ _GROUNDING_STOPWORDS = {
 }
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*]\([^)]+\)")
+_TRIVIAL_VISIBLE_PREFIX_RE = re.compile(
+    r"^\s*(?:hello|hi|test|draft|placeholder|sample|dummy|upload(?:ed)?|note(?:s)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _clean_user_visible_evidence_reason(reason: str) -> str:
@@ -104,6 +155,25 @@ def _looks_like_noise_excerpt(text: str) -> bool:
     return lowered.startswith(("figure ", "table ", "nomenclature ", "contents ", "chapter "))
 
 
+def _looks_like_trivial_visible_excerpt(text: str, *, overlap: int) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    if _TRIVIAL_VISIBLE_PREFIX_RE.match(normalized):
+        return True
+    if len(normalized) < 42 and overlap <= 1 and _FORMULA_VISIBLE_RE.search(normalized) is None:
+        return True
+    tokens = [
+        token.lower()
+        for token in _QUESTION_TOKEN_RE.findall(normalized)
+        if token and token.lower() not in _GROUNDING_STOPWORDS
+    ]
+    if len(set(tokens)) <= 4 and overlap <= 1 and len(normalized) < 90:
+        return True
+    return False
+
+
 def _select_visible_evidence_points(
     *,
     question: str,
@@ -120,6 +190,8 @@ def _select_visible_evidence_points(
             continue
         excerpt = excerpt[:220].rstrip(" ,;:")
         overlap = sum(1 for token in tokens if token in excerpt.lower())
+        if _looks_like_trivial_visible_excerpt(excerpt, overlap=overlap):
+            continue
         penalty = 0.75 if _looks_like_noise_excerpt(excerpt) else 0.0
         score = float(overlap) - penalty
         if wants_technical:
@@ -186,6 +258,36 @@ def _build_evidence_limited_answer(
     )
 
 
+def _build_partial_scope_answer(
+    *,
+    question: str,
+    snippets_with_refs: list[dict[str, Any]],
+    evidence_reason: str,
+    selected_scope_count: int,
+    covered_scope_count: int,
+) -> str:
+    visible_points = _select_visible_evidence_points(
+        question=question,
+        snippets_with_refs=snippets_with_refs,
+        limit=2,
+    )
+    lead = (
+        f"Only {covered_scope_count} of {selected_scope_count} selected Maia sources surfaced directly relevant evidence for this answer."
+    )
+    clean_reason = _clean_user_visible_evidence_reason(evidence_reason)
+    if clean_reason:
+        lead += f" {clean_reason}"
+    if visible_points:
+        return (
+            f"{lead} The usable evidence is limited to {'; '.join(visible_points)}. "
+            "The rest of the selected scope did not surface enough directly relevant indexed content to support a broader conclusion."
+        )
+    return (
+        f"{lead}\n\n"
+        "The rest of the selected scope did not surface enough directly relevant indexed content to support a broader conclusion."
+    )
+
+
 def _build_unsupported_by_source_answer(*, evidence_reason: str) -> str:
     lead = "The indexed source does not provide directly relevant evidence for that question."
     clean_reason = _clean_user_visible_evidence_reason(evidence_reason)
@@ -208,6 +310,239 @@ def _build_model_failure_answer(
         evidence_reason=(
             "The answer model was unavailable for this turn, so Maia is limiting the response to directly visible evidence only."
         ),
+    )
+
+
+def _build_evidence_conflict_summary(
+    *,
+    claim_signal_summary: dict[str, Any],
+    refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ref_by_id = {
+        int(ref.get("id", 0) or 0): ref
+        for ref in refs
+        if isinstance(ref, dict) and int(ref.get("id", 0) or 0) > 0
+    }
+
+    def _infer_conflict_rows_from_refs() -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for ref_id, ref in ref_by_id.items():
+            phrase = " ".join(str(ref.get("phrase") or "").split()).strip()
+            if not phrase:
+                continue
+            numbers = [value for value in _NUMERIC_LITERAL_RE.findall(phrase) if value]
+            if not numbers:
+                continue
+            token_set = {
+                token.lower()
+                for token in _QUESTION_TOKEN_RE.findall(phrase)
+                if token and token.lower() not in _GROUNDING_STOPWORDS
+            }
+            if not token_set:
+                continue
+            candidates.append(
+                {
+                    "id": ref_id,
+                    "phrase": phrase,
+                    "numbers": set(numbers),
+                    "tokens": token_set,
+                }
+            )
+
+        best_pair: tuple[dict[str, Any], dict[str, Any]] | None = None
+        best_overlap = 0
+        for idx, left in enumerate(candidates):
+            for right in candidates[idx + 1 :]:
+                overlap = len(left["tokens"] & right["tokens"])
+                if overlap < 3:
+                    continue
+                if left["numbers"] == right["numbers"]:
+                    continue
+                if overlap > best_overlap:
+                    best_pair = (left, right)
+                    best_overlap = overlap
+
+        if not best_pair:
+            return []
+
+        left, right = best_pair
+        differing_values = sorted((left["numbers"] ^ right["numbers"]))[:4]
+        claim = "Selected Maia sources report different values for the same point."
+        if differing_values:
+            claim = (
+                "Selected Maia sources report different values for the same point: "
+                + ", ".join(differing_values)
+                + "."
+            )
+        return [
+            {
+                "claim": claim,
+                "ref_ids": [int(left["id"]), int(right["id"])],
+                "status": "contradicted",
+                "support_votes": 0,
+                "contradiction_votes": 1,
+                "synthetic": True,
+            }
+        ]
+
+    if not isinstance(claim_signal_summary, dict):
+        claim_signal_summary = {}
+    contradicted = max(0, int(claim_signal_summary.get("contradicted_claims", 0) or 0))
+    mixed = max(0, int(claim_signal_summary.get("mixed_claims", 0) or 0))
+
+    rows = [
+        row
+        for row in (claim_signal_summary.get("rows") or [])
+        if isinstance(row, dict) and str(row.get("status") or "") in {"contradicted", "mixed"}
+    ]
+    if not rows and contradicted <= 0 and mixed <= 0:
+        rows = _infer_conflict_rows_from_refs()
+        if rows:
+            contradicted = 1
+    if not rows:
+        return {}
+
+    top_row = next(
+        (row for row in rows if str(row.get("status") or "") == "contradicted"),
+        rows[0],
+    )
+    top_ref_ids = [
+        ref_id
+        for ref_id in top_row.get("ref_ids", [])
+        if isinstance(ref_id, int) and ref_id in ref_by_id
+    ][:4]
+    credibility_tiers = [
+        str(ref_by_id[ref_id].get("credibility_tier") or "").strip().lower()
+        for ref_id in top_ref_ids
+        if ref_id in ref_by_id
+    ]
+    highest_tier = None
+    if credibility_tiers:
+        highest_tier = max(credibility_tiers, key=_credibility_rank)
+    distinct_tiers = {tier for tier in credibility_tiers if tier}
+    has_credibility_preference = len(distinct_tiers) >= 2 and highest_tier in {"platform", "high"}
+
+    if contradicted > 0:
+        message = "Some cited Maia sources conflict on at least one claim in this answer."
+    else:
+        message = "Some cited Maia sources provide mixed support for parts of this answer."
+    if has_credibility_preference:
+        message += " Prefer the higher-credibility evidence when reconciling those differences."
+
+    return {
+        "status": "contradicted" if contradicted > 0 else "mixed",
+        "message": message,
+        "ref_ids": top_ref_ids,
+        "highest_credibility_tier": highest_tier,
+        "has_credibility_preference": has_credibility_preference,
+        "contradicted_claims": contradicted,
+        "mixed_claims": mixed,
+        "rows": rows[:6],
+    }
+
+
+def _format_ref_markers(ref_ids: list[Any]) -> str:
+    markers: list[str] = []
+    for ref_id in ref_ids[:4]:
+        try:
+            normalized = int(ref_id)
+        except Exception:
+            continue
+        if normalized <= 0:
+            continue
+        markers.append(f"[{normalized}]")
+    return " ".join(markers)
+
+
+def _build_conflict_aware_answer(
+    *,
+    answer: str,
+    claim_signal_summary: dict[str, Any],
+    evidence_conflict_summary: dict[str, Any],
+) -> str:
+    answer_text = str(answer or "").strip()
+    if not answer_text:
+        return answer_text
+    if re.search(r"^##\s+(Agreed Evidence|Conflicting Evidence|Conclusion)\b", answer_text, re.IGNORECASE | re.MULTILINE):
+        return answer_text
+
+    rows = [
+        row
+        for row in (claim_signal_summary.get("rows") or [])
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        rows = [
+            row
+            for row in (evidence_conflict_summary.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+    if not rows:
+        return answer_text
+
+    supported_rows = [row for row in rows if str(row.get("status") or "") == "supported"][:2]
+    conflict_rows = [
+        row for row in rows if str(row.get("status") or "") in {"contradicted", "mixed"}
+    ][:3]
+    if not conflict_rows:
+        rows = [
+            row
+            for row in (evidence_conflict_summary.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+        supported_rows = [row for row in rows if str(row.get("status") or "") == "supported"][:2]
+        conflict_rows = [
+            row for row in rows if str(row.get("status") or "") in {"contradicted", "mixed"}
+        ][:3]
+    if not conflict_rows:
+        return answer_text
+
+    agreed_lines: list[str] = []
+    for row in supported_rows:
+        claim = " ".join(str(row.get("claim") or "").split()).strip()
+        if not claim:
+            continue
+        refs = _format_ref_markers(list(row.get("ref_ids") or []))
+        agreed_lines.append(f"- {claim}{f' {refs}' if refs else ''}")
+    if not agreed_lines:
+        agreed_lines.append(
+            "- The selected Maia sources overlap on the same question, but no clearly cross-supported claim was strong enough to stand as settled evidence yet."
+        )
+
+    conflict_lines: list[str] = []
+    for row in conflict_rows:
+        claim = " ".join(str(row.get("claim") or "").split()).strip()
+        if not claim:
+            continue
+        refs = _format_ref_markers(list(row.get("ref_ids") or []))
+        status = str(row.get("status") or "").strip().lower()
+        prefix = "Mixed support:" if status == "mixed" else "Conflict:"
+        conflict_lines.append(f"- {prefix} {claim}{f' {refs}' if refs else ''}")
+
+    highest_tier = str(evidence_conflict_summary.get("highest_credibility_tier") or "").strip().lower()
+    has_credibility_preference = bool(evidence_conflict_summary.get("has_credibility_preference"))
+    conclusion_lines = [
+        "The selected Maia sources do not support a single settled conclusion on the disputed point."
+    ]
+    if has_credibility_preference and highest_tier in {"platform", "high"}:
+        conclusion_lines.append("Where the sources diverge, prefer the higher-credibility evidence.")
+    else:
+        conclusion_lines.append("Treat the disputed values as unresolved unless another Maia source corroborates one side.")
+
+    top_conflict = conflict_rows[0]
+    top_refs = _format_ref_markers(list(top_conflict.get("ref_ids") or []))
+    if top_refs:
+        conclusion_lines[-1] = f"{conclusion_lines[-1]} {top_refs}"
+
+    return "\n\n".join(
+        [
+            "## Agreed Evidence",
+            "\n".join(agreed_lines),
+            "## Conflicting Evidence",
+            "\n".join(conflict_lines),
+            "## Conclusion",
+            " ".join(conclusion_lines),
+        ]
     )
 
 
@@ -235,6 +570,88 @@ def _question_support_ratio(
 
     supported = sum(1 for token in unique_tokens if token in evidence_text)
     return float(supported) / float(len(unique_tokens))
+
+
+def _allow_direct_single_source_answer(
+    *,
+    question: str,
+    snippets_with_refs: list[dict[str, Any]],
+    selected_scope_count: int,
+    covered_scope_count: int,
+    support_ratio: float,
+) -> bool:
+    if selected_scope_count != 1 or covered_scope_count < 1 or not snippets_with_refs:
+        return False
+
+    question_text = " ".join(str(question or "").split()).strip()
+    if not question_text:
+        return False
+
+    wants_narrow_technical_answer = bool(_NARROW_TECHNICAL_TASK_RE.search(question_text))
+    explicitly_scoped_to_sources = bool(_CONSTRAINED_SOURCE_RE.search(question_text))
+    if not wants_narrow_technical_answer and not explicitly_scoped_to_sources:
+        return False
+
+    evidence_text = " ".join(
+        " ".join(str(row.get("text", "") or "").split())
+        for row in snippets_with_refs
+        if isinstance(row, dict)
+    )
+    if not evidence_text:
+        return False
+
+    numeric_count = len(_NUMERIC_LITERAL_RE.findall(evidence_text))
+    formula_visible = bool(_FORMULA_VISIBLE_RE.search(evidence_text))
+
+    if wants_narrow_technical_answer and (formula_visible or numeric_count >= 3):
+        return support_ratio >= 0.34
+
+    if explicitly_scoped_to_sources and len(evidence_text) >= 180:
+        return support_ratio >= 0.55
+
+    return False
+
+
+def _evidence_text_stats(snippets_with_refs: list[dict[str, Any]]) -> tuple[int, int, int]:
+    lengths = [
+        len(" ".join(str(row.get("text", "") or "").split()))
+        for row in snippets_with_refs
+        if isinstance(row, dict) and str(row.get("text", "") or "").strip()
+    ]
+    if not lengths:
+        return 0, 0, 0
+    return sum(lengths), max(lengths), len(lengths)
+
+
+def _needs_partial_scope_fallback(
+    *,
+    question: str,
+    snippets_with_refs: list[dict[str, Any]],
+    selected_scope_count: int,
+    covered_scope_count: int,
+    evidence_confidence: float,
+    support_ratio: float,
+) -> bool:
+    if selected_scope_count < 2 or covered_scope_count < 1 or covered_scope_count >= selected_scope_count:
+        return False
+    total_chars, max_chars, snippet_count = _evidence_text_stats(snippets_with_refs)
+    if snippet_count <= 0:
+        return True
+    if _allow_direct_single_source_answer(
+        question=question,
+        snippets_with_refs=snippets_with_refs,
+        selected_scope_count=1,
+        covered_scope_count=1,
+        support_ratio=support_ratio,
+    ):
+        return False
+    if covered_scope_count == 1 and snippet_count <= 2 and total_chars < 520:
+        return True
+    if support_ratio < 0.52 and (evidence_confidence < 0.84 or total_chars < 720):
+        return True
+    if max_chars < 180 and evidence_confidence < 0.88:
+        return True
+    return False
 
 
 def build_answer_phase(
@@ -272,6 +689,7 @@ def build_answer_phase(
     selected_scope_count = retrieval["selected_scope_count"]
     covered_scope_count = retrieval["covered_scope_count"]
     selected_scope_ids = retrieval["selected_scope_ids"]
+    selected_scope_sources = retrieval.get("selected_scope_sources", [])
     all_project_sources = retrieval["all_project_sources"]
     focus_meta = retrieval["focus_meta"]
     evidence_confidence = float(retrieval.get("evidence_confidence", 1.0) or 1.0)
@@ -331,7 +749,43 @@ def build_answer_phase(
             snippets_with_refs=snippets_with_refs,
         )
         if (
+            mode_variant == "rag"
+            and _needs_partial_scope_fallback(
+                question=message,
+                snippets_with_refs=snippets_with_refs,
+                selected_scope_count=selected_scope_count,
+                covered_scope_count=covered_scope_count,
+                evidence_confidence=evidence_confidence,
+                support_ratio=support_ratio,
+            )
+        ):
+            answer = _build_partial_scope_answer(
+                question=message,
+                snippets_with_refs=snippets_with_refs,
+                evidence_reason=evidence_reason,
+                selected_scope_count=selected_scope_count,
+                covered_scope_count=covered_scope_count,
+            )
+            record_trace_event(
+                "answer.gate_narrowed",
+                {
+                    "mode": "partial_scope",
+                    "support_ratio": round(float(support_ratio), 4),
+                    "evidence_confidence": round(float(evidence_confidence), 4),
+                    "selected_scope_count": int(selected_scope_count),
+                    "covered_scope_count": int(covered_scope_count),
+                },
+            )
+        allow_single_source_direct_answer = _allow_direct_single_source_answer(
+            question=message,
+            snippets_with_refs=snippets_with_refs,
+            selected_scope_count=selected_scope_count,
+            covered_scope_count=covered_scope_count,
+            support_ratio=support_ratio,
+        )
+        if (
             _requires_broad_grounding(message)
+            and not allow_single_source_direct_answer
             and evidence_confidence < 0.72
             and (
                 (len(refs) <= 1 and page_count <= 1)
@@ -382,27 +836,34 @@ def build_answer_phase(
             constants["truncate_for_log_fn"](message, 220),
         )
         snippets_with_refs, refs = [], []
-        answer = call_openai_fast_qa_fn(
-            question=message,
-            snippets=[],
-            chat_history=chat_history,
-            refs=[],
-            citation_mode=request.citation,
-            primary_source_note=primary_source_note,
-            requested_language=requested_language,
-            allow_general_knowledge=True,
-            is_follow_up=is_follow_up,
-            all_project_sources=all_project_sources,
-        )
-        used_general_fallback = bool(answer)
-        if answer:
-            answer = normalize_fast_answer_fn(answer, question=message)
-        else:
+        if mode_variant == "rag":
             answer = build_no_relevant_evidence_answer_fn(
                 message,
                 response_language=requested_language,
             )
             used_general_fallback = False
+        else:
+            answer = call_openai_fast_qa_fn(
+                question=message,
+                snippets=[],
+                chat_history=chat_history,
+                refs=[],
+                citation_mode=request.citation,
+                primary_source_note=primary_source_note,
+                requested_language=requested_language,
+                allow_general_knowledge=True,
+                is_follow_up=is_follow_up,
+                all_project_sources=all_project_sources,
+            )
+            used_general_fallback = bool(answer)
+            if answer:
+                answer = normalize_fast_answer_fn(answer, question=message)
+            else:
+                answer = build_no_relevant_evidence_answer_fn(
+                    message,
+                    response_language=requested_language,
+                )
+                used_general_fallback = False
         record_trace_event(
             "answer.general_fallback",
             {
@@ -469,8 +930,14 @@ def build_answer_phase(
         citation_gate = {}
 
     if mode_variant == "rag" and chunk_text_for_stream_fn is not None:
+        try:
+            from api.services.chat.citation_sections.anchors import _anchors_to_bracket_markers
+
+            live_typing_answer = _anchors_to_bracket_markers(answer)
+        except Exception:
+            live_typing_answer = answer
         typed_preview = ""
-        for chunk in chunk_text_for_stream_fn(answer, 260):
+        for chunk in chunk_text_for_stream_fn(live_typing_answer, 260):
             if not chunk:
                 continue
             typed_preview += chunk
@@ -486,7 +953,6 @@ def build_answer_phase(
                 },
                 stage="execution",
             )
-            emit_stream_event_fn({"type": "chat_delta", "delta": chunk, "text": typed_preview})
 
     logger.warning(
         "fast_qa_completed snippets=%d refs=%d answer_chars=%d",
@@ -494,6 +960,18 @@ def build_answer_phase(
         len(refs),
         len(answer),
     )
+    initial_claim_signal_summary = build_claim_signal_summary_fn(answer_text=answer, refs=refs)
+    initial_evidence_conflict_summary = _build_evidence_conflict_summary(
+        claim_signal_summary=initial_claim_signal_summary,
+        refs=refs,
+    )
+    if mode_variant == "rag" and initial_evidence_conflict_summary and refs:
+        answer = _build_conflict_aware_answer(
+            answer=answer,
+            claim_signal_summary=initial_claim_signal_summary,
+            evidence_conflict_summary=initial_evidence_conflict_summary,
+        )
+
     source_usage = build_source_usage_fn(
         snippets_with_refs=snippets_with_refs,
         refs=refs,
@@ -501,6 +979,10 @@ def build_answer_phase(
         enabled=constants["MAIA_SOURCE_USAGE_HEATMAP_ENABLED"],
     )
     claim_signal_summary = build_claim_signal_summary_fn(answer_text=answer, refs=refs)
+    evidence_conflict_summary = _build_evidence_conflict_summary(
+        claim_signal_summary=claim_signal_summary,
+        refs=refs,
+    )
     citation_quality_metrics = build_citation_quality_metrics_fn(
         snippets_with_refs=snippets_with_refs,
         refs=refs,
@@ -568,10 +1050,36 @@ def build_answer_phase(
     if source_usage:
         info_panel["source_usage"] = source_usage
     if selected_scope_ids:
+        searched_sources = _normalize_searched_sources(
+            (
+                list(selected_scope_sources)
+                + [source for source in sources_used if isinstance(source, dict)]
+            )[:24]
+        )[:12]
         info_panel["selected_scope"] = {
             "file_count": selected_scope_count,
             "covered_file_count": covered_scope_count,
             "file_ids": selected_scope_ids[:40],
+            "searched_sources": searched_sources,
+            "searched_source_count": max(len(sources_used), len(selected_scope_sources)),
+        }
+    elif mode_variant == "rag" and sources_used:
+        info_panel["selected_scope"] = {
+            "file_count": 0,
+            "covered_file_count": 0,
+            "file_ids": [],
+            "searched_sources": _normalize_searched_sources(
+                [source for source in sources_used[:24] if isinstance(source, dict)]
+            )[:12],
+            "searched_source_count": len(sources_used),
+        }
+    elif mode_variant == "rag":
+        info_panel["selected_scope"] = {
+            "file_count": 0,
+            "covered_file_count": 0,
+            "file_ids": [],
+            "searched_sources": [],
+            "searched_source_count": 0,
         }
     if focus_meta.get("focus_applied"):
         info_panel["mindmap_focus_metadata"] = focus_meta
@@ -588,6 +1096,8 @@ def build_answer_phase(
             info_panel["web_review_content"] = web_review_content
     if claim_signal_summary:
         info_panel["claim_signal_summary"] = claim_signal_summary
+    if evidence_conflict_summary:
+        info_panel["evidence_conflict_summary"] = evidence_conflict_summary
     if citation_quality_metrics:
         info_panel["citation_quality_metrics"] = citation_quality_metrics
     if citation_gate:
@@ -596,10 +1106,35 @@ def build_answer_phase(
         info_panel["source_dominance_warning"] = source_dominance_warning
     if primary_source_note:
         info_panel["primary_source_note"] = primary_source_note
+    if mode_variant == "rag" and evidence_conflict_summary:
+        emit_activity_fn(
+            event_type="document_conflict_detected",
+            title="Evidence conflict detected",
+            detail=str(evidence_conflict_summary.get("message") or "Some selected Maia sources disagree."),
+            data={
+                "scene_surface": "document",
+                "scene_family": "document",
+                "status": evidence_conflict_summary.get("status"),
+                "ref_ids": evidence_conflict_summary.get("ref_ids", []),
+                "highest_credibility_tier": evidence_conflict_summary.get("highest_credibility_tier"),
+            },
+            stage="verification",
+            status="warn",
+        )
     if used_general_fallback:
         info_panel["answer_origin"] = "llm_general_knowledge"
     elif (
         _requires_broad_grounding(message)
+        and not _allow_direct_single_source_answer(
+            question=message,
+            snippets_with_refs=snippets_with_refs,
+            selected_scope_count=selected_scope_count,
+            covered_scope_count=covered_scope_count,
+            support_ratio=_question_support_ratio(
+                question=message,
+                snippets_with_refs=snippets_with_refs,
+            ),
+        )
         and evidence_confidence < 0.72
         and (
             not refs
@@ -608,6 +1143,20 @@ def build_answer_phase(
         )
     ):
         info_panel["answer_origin"] = "evidence_limited_grounded_fallback"
+    elif mode_variant == "rag" and _needs_partial_scope_fallback(
+        question=message,
+        snippets_with_refs=snippets_with_refs,
+        selected_scope_count=selected_scope_count,
+        covered_scope_count=covered_scope_count,
+        evidence_confidence=evidence_confidence,
+        support_ratio=_question_support_ratio(
+            question=message,
+            snippets_with_refs=snippets_with_refs,
+        ),
+    ):
+        info_panel["answer_origin"] = "partial_scope_grounded_fallback"
+    elif mode_variant == "rag" and evidence_conflict_summary:
+        info_panel["answer_origin"] = "conflict_aware_grounded_synthesis"
     info_panel["citation_strength_ordering"] = bool(constants["MAIA_CITATION_STRENGTH_ORDERING_ENABLED"])
     info_panel["citation_strength_legend"] = (
         "Citation numbers are normalized per answer: each source appears once and numbering starts at 1."
@@ -633,6 +1182,7 @@ def build_answer_phase(
         "sources_used": sources_used,
         "source_usage": source_usage,
         "claim_signal_summary": claim_signal_summary,
+        "evidence_conflict_summary": evidence_conflict_summary,
         "citation_quality_metrics": citation_quality_metrics,
         "info_panel": info_panel,
         "mindmap_payload": mindmap_payload,

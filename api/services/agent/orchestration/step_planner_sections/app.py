@@ -51,6 +51,13 @@ from .workspace_logging import (
     prepend_workspace_roadmap_steps,
 )
 
+_WEB_STAGE_TOOL_IDS = {
+    "marketing.web_research",
+    "web.extract.structured",
+    "web.dataset.adapter",
+    "browser.playwright.inspect",
+}
+
 
 def _truthy(value: Any, *, default: bool = False) -> bool:
     if value is None:
@@ -133,6 +140,56 @@ def _filter_steps_by_available_tools(
     return [step for step in steps if step.tool_id in available_tool_ids]
 
 
+def _stage_target_url(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+) -> str:
+    candidate = " ".join(
+        str(getattr(task_prep.task_intelligence, "target_url", "") or "").split()
+    ).strip()
+    if candidate.startswith(("http://", "https://")):
+        return candidate
+    for text in (str(request.message or ""), str(request.agent_goal or "")):
+        tokenized = text.replace("\n", " ").split()
+        for token in tokenized:
+            cleaned = str(token or "").strip().rstrip(".,;:!?)\"]'")
+            if cleaned.startswith(("http://", "https://")):
+                return cleaned
+    return ""
+
+
+def _apply_stage_scoped_web_routing_override(
+    *,
+    request: ChatRequest,
+    task_prep: TaskPreparation,
+    available_tool_ids: set[str],
+    allowlist_provided: bool,
+    web_routing: dict[str, Any],
+) -> dict[str, Any]:
+    routing = dict(web_routing) if isinstance(web_routing, dict) else {}
+    routing_mode = " ".join(str(routing.get("routing_mode") or "").split()).strip().lower()
+    if routing_mode and routing_mode != "none":
+        return routing
+    if not allowlist_provided:
+        return routing
+
+    stage_web_tools = {
+        str(tool_id).strip()
+        for tool_id in available_tool_ids
+        if str(tool_id).strip() in _WEB_STAGE_TOOL_IDS
+    }
+    if not stage_web_tools:
+        return routing
+
+    target_url = _stage_target_url(request=request, task_prep=task_prep)
+    routing["routing_mode"] = "url_scrape" if target_url else "online_research"
+    routing["target_url"] = target_url
+    routing["llm_used"] = False
+    routing["reasoning"] = "workflow_stage_tool_scope"
+    return routing
+
+
 def build_execution_steps(
     *,
     request: ChatRequest,
@@ -191,6 +248,13 @@ def build_execution_steps(
         )
     )
     web_routing = resolve_web_routing(planning_request)
+    web_routing = _apply_stage_scoped_web_routing_override(
+        request=request,
+        task_prep=task_prep,
+        available_tool_ids=available_tool_ids,
+        allowlist_provided=allowlist_provided,
+        web_routing=web_routing,
+    )
     yield emit_event(
         plan_web_routing_event(
             activity_event_factory=activity_event_factory,

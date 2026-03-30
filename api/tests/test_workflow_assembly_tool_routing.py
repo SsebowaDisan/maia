@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from api.services.agent.brain.workflow_assembly_sections import core as core_module
 from api.services.agent.brain.workflow_assembly import (
     _build_definition,
     _extract_email,
@@ -377,3 +378,81 @@ def test_build_definition_uses_clean_focus_for_research_query_mapping() -> None:
     research_step = definition["steps"][0]
     assert research_step["input_mapping"]["query"] == "literal:machine learning"
     assert research_step["input_mapping"]["topic"] == "literal:machine learning"
+
+
+def test_build_definition_keeps_report_synthesis_for_single_step_research_workflow() -> None:
+    definition = _build_definition(
+        "Make research online about machine learning?",
+        [
+            {
+                "step_id": "step_1",
+                "agent_role": "research specialist",
+                "description": "Make research online about machine learning?",
+                "tools_needed": ["research"],
+            }
+        ],
+        [],
+    )
+    tool_ids = definition["steps"][0]["step_config"]["tool_ids"]
+    assert "marketing.web_research" in tool_ids
+    assert "web.extract.structured" in tool_ids
+    assert "report.generate" in tool_ids
+
+
+def test_sanitize_plan_expands_single_step_research_request_into_research_plus_summary() -> None:
+    plan = _sanitize_plan(
+        {
+            "steps": [
+                {
+                    "step_id": "step_1",
+                    "agent_role": "research specialist",
+                    "description": "Make research online about machine learning?",
+                    "tools_needed": ["research"],
+                }
+            ],
+            "edges": [],
+        },
+        description="Make research online about machine learning?",
+    )
+    assert len(plan["steps"]) == 2
+    assert plan["steps"][0]["agent_role"] == "research specialist"
+    assert plan["steps"][1]["agent_role"] == "writer"
+    assert "final user-facing answer" in plan["steps"][1]["description"]
+    assert plan["edges"] == [{"from_step": "step_1", "to_step": "step_2"}]
+
+
+def test_assemble_workflow_emits_understanding_todo_checklist_before_team_assembly(monkeypatch) -> None:
+    monkeypatch.setattr(core_module, "rewrite_task_for_execution", lambda **_: {
+        "detailed_task": "Research machine learning online and prepare a cited summary.",
+        "deliverables": ["Cited summary"],
+        "constraints": ["Use authoritative sources"],
+    })
+    monkeypatch.setattr(core_module, "build_task_contract", lambda **_: {
+        "objective": "Research machine learning online and prepare a cited summary.",
+        "required_outputs": ["Cited summary"],
+        "required_facts": ["Definition of machine learning"],
+        "required_actions": [],
+        "success_checks": ["Summary includes evidence"],
+    })
+
+    events: list[str] = []
+
+    result = core_module.assemble_workflow(
+        description="Make research online about machine learning?",
+        tenant_id="tenant_1",
+        on_event=lambda event: events.append(str(event.get("event_type") or "")),
+        ops=__import__("api.services.agent.brain.workflow_assembly", fromlist=["dummy"]),
+    )
+
+    assert result["definition"] is not None
+    assert events[:7] == [
+        "task_understanding_started",
+        "task_understanding_ready",
+        "planning_started",
+        "llm.task_rewrite_started",
+        "llm.task_rewrite_completed",
+        "llm.task_contract_started",
+        "llm.task_contract_completed",
+    ]
+    assert "assembly_started" in events
+    assert events.index("assembly_started") > events.index("llm.task_contract_completed")

@@ -2,7 +2,6 @@ import { useEffect, type RefObject } from "react";
 import { getPdfHighlightTargetCached } from "../../../api/client/uploads";
 import type { ChatTurn, CitationFocus } from "../../types";
 import type { EvidenceCard } from "../../utils/infoInsights";
-import { normalizeEvidenceId } from "./urlHelpers";
 import {
   CITATION_ANCHOR_SELECTOR,
   resolveCitationAnchorInteractionPolicy,
@@ -32,12 +31,15 @@ function useCitationAnchorBinding({
   evidenceCards,
   onSelectCitationFocus,
 }: UseCitationAnchorBindingParams) {
+  const getCitationAnchors = (container: HTMLDivElement): HTMLAnchorElement[] =>
+    Array.from(container.querySelectorAll<HTMLAnchorElement>(CITATION_ANCHOR_SELECTOR));
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
     }
-    const citationAnchors = Array.from(container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation"));
+    const citationAnchors = getCitationAnchors(container);
     for (const anchor of citationAnchors) {
       const interactionPolicy = resolveCitationAnchorInteractionPolicy(anchor);
       const tier = resolveStrengthTier(
@@ -73,7 +75,7 @@ function useCitationAnchorBinding({
       infoPanel: infoPanel || undefined,
       attachments: [],
     };
-    const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>(".chat-answer-html a.citation")).slice(0, 4);
+    const anchors = getCitationAnchors(container).slice(0, 4);
     if (!anchors.length) {
       return;
     }
@@ -143,21 +145,6 @@ function useCitationAnchorBinding({
       window.open(url, "_blank", "noopener,noreferrer");
     };
 
-    const focusEvidenceDetails = (evidenceId: string | undefined) => {
-      const normalizedId = normalizeEvidenceId(evidenceId);
-      if (!normalizedId || !/^evidence-[a-z0-9_-]{1,64}$/i.test(normalizedId)) {
-        return;
-      }
-      const detailsNode = container.querySelector<HTMLElement>(`#${normalizedId}`);
-      if (!detailsNode) {
-        return;
-      }
-      if (detailsNode.tagName === "DETAILS") {
-        (detailsNode as HTMLDetailsElement).open = true;
-      }
-      detailsNode.scrollIntoView({ block: "nearest" });
-    };
-
     const selectCitationFromAnchor = (anchor: HTMLAnchorElement): boolean => {
       if (!onSelectCitationFocus || !isCitationAnchor(anchor)) {
         return false;
@@ -168,7 +155,6 @@ function useCitationAnchorBinding({
         evidenceCards,
       });
       onSelectCitationFocus(resolved.focus);
-      focusEvidenceDetails(resolved.focus.evidenceId);
       return true;
     };
 

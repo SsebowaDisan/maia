@@ -72,6 +72,7 @@ class ComputerUseBrowserConnector(BaseConnector):
         highlight_query: str = "",
         follow_same_domain_links: bool = True,
         interaction_actions: list[dict[str, Any]] | None = None,
+        prefer_direct_capture: bool = False,
     ) -> dict[str, Any]:
         stream = self.browse_live_stream(
             url=url,
@@ -84,6 +85,7 @@ class ComputerUseBrowserConnector(BaseConnector):
             highlight_query=highlight_query,
             follow_same_domain_links=follow_same_domain_links,
             interaction_actions=interaction_actions,
+            prefer_direct_capture=prefer_direct_capture,
         )
         while True:
             try:
@@ -104,6 +106,7 @@ class ComputerUseBrowserConnector(BaseConnector):
         highlight_query: str = "",
         follow_same_domain_links: bool = True,
         interaction_actions: list[dict[str, Any]] | None = None,
+        prefer_direct_capture: bool = False,
     ) -> Generator[dict[str, Any], None, dict[str, Any]]:
         del timeout_ms, wait_ms, auto_accept_cookies
         clean_url = str(url or "").strip()
@@ -140,57 +143,88 @@ class ComputerUseBrowserConnector(BaseConnector):
                 "snapshot_ref": screenshot_path,
             }
 
-            task = build_browse_task(
-                url=clean_url,
-                max_pages=max_pages,
-                max_scroll_steps=max_scroll_steps,
-                follow_same_domain_links=follow_same_domain_links,
-                interaction_actions=interaction_actions,
-            )
-            for raw_event in run_agent_loop(session, task, max_iterations=12):
-                event_index += 1
-                event_type = str(raw_event.get("event_type") or "").strip().lower()
-                if event_type == "screenshot":
-                    screenshot_path = write_snapshot(
-                        screenshot_b64=str(raw_event.get("screenshot_b64") or ""),
-                        label=f"frame-{event_index}",
-                    )
-                    yield {
-                        "event_type": "browser_verify",
-                        "title": "Capture browser frame",
-                        "detail": str(raw_event.get("url") or session.current_url()),
-                        "data": {
-                            "url": str(raw_event.get("url") or session.current_url()),
-                            "scene_surface": "browser",
-                            "connector_id": "computer_use_browser",
-                        },
-                        "snapshot_ref": screenshot_path,
-                    }
-                    continue
-                if event_type == "action":
-                    action_name = str(raw_event.get("action") or "action").strip() or "action"
-                    yield {
-                        "event_type": "browser_interaction_started",
-                        "title": f"Computer action: {action_name}",
-                        "detail": action_name,
-                        "data": {
-                            "url": session.current_url(),
-                            "scene_surface": "browser",
-                            "action": action_name,
-                            "connector_id": "computer_use_browser",
-                            **cursor_payload(raw_event),
-                        },
-                        "snapshot_ref": screenshot_path or None,
-                    }
-                    continue
-                if event_type == "text":
-                    text = str(raw_event.get("text") or raw_event.get("detail") or "").strip()
-                    if text:
-                        text_rows.append(text)
+            if prefer_direct_capture:
+                screenshot_path = write_snapshot(
+                    screenshot_b64=session.screenshot_b64(),
+                    label="verify",
+                )
+                yield {
+                    "event_type": "browser_verify",
+                    "title": "Verify opened page",
+                    "detail": session.current_url(),
+                    "data": {
+                        "url": session.current_url(),
+                        "scene_surface": "browser",
+                        "connector_id": "computer_use_browser",
+                    },
+                    "snapshot_ref": screenshot_path,
+                }
+            else:
+                task = build_browse_task(
+                    url=clean_url,
+                    max_pages=max_pages,
+                    max_scroll_steps=max_scroll_steps,
+                    follow_same_domain_links=follow_same_domain_links,
+                    interaction_actions=interaction_actions,
+                )
+                for raw_event in run_agent_loop(session, task, max_iterations=12):
+                    event_index += 1
+                    event_type = str(raw_event.get("event_type") or "").strip().lower()
+                    if event_type == "screenshot":
+                        screenshot_path = write_snapshot(
+                            screenshot_b64=str(raw_event.get("screenshot_b64") or ""),
+                            label=f"frame-{event_index}",
+                        )
                         yield {
-                            "event_type": "browser_extract",
-                            "title": "Extract page findings",
-                            "detail": compact_text(text, limit=200),
+                            "event_type": "browser_verify",
+                            "title": "Capture browser frame",
+                            "detail": str(raw_event.get("url") or session.current_url()),
+                            "data": {
+                                "url": str(raw_event.get("url") or session.current_url()),
+                                "scene_surface": "browser",
+                                "connector_id": "computer_use_browser",
+                            },
+                            "snapshot_ref": screenshot_path,
+                        }
+                        continue
+                    if event_type == "action":
+                        action_name = str(raw_event.get("action") or "action").strip() or "action"
+                        yield {
+                            "event_type": "browser_interaction_started",
+                            "title": f"Computer action: {action_name}",
+                            "detail": action_name,
+                            "data": {
+                                "url": session.current_url(),
+                                "scene_surface": "browser",
+                                "action": action_name,
+                                "connector_id": "computer_use_browser",
+                                **cursor_payload(raw_event),
+                            },
+                            "snapshot_ref": screenshot_path or None,
+                        }
+                        continue
+                    if event_type == "text":
+                        text = str(raw_event.get("text") or raw_event.get("detail") or "").strip()
+                        if text:
+                            text_rows.append(text)
+                            yield {
+                                "event_type": "browser_extract",
+                                "title": "Extract page findings",
+                                "detail": compact_text(text, limit=200),
+                                "data": {
+                                    "url": session.current_url(),
+                                    "scene_surface": "browser",
+                                    "connector_id": "computer_use_browser",
+                                },
+                                "snapshot_ref": screenshot_path or None,
+                            }
+                        continue
+                    if event_type == "error":
+                        error_text = str(raw_event.get("detail") or "Computer Use browser execution failed").strip()
+                        yield {
+                            "event_type": "browser_interaction_failed",
+                            "title": "Computer browser action failed",
+                            "detail": compact_text(error_text, limit=220),
                             "data": {
                                 "url": session.current_url(),
                                 "scene_surface": "browser",
@@ -198,35 +232,21 @@ class ComputerUseBrowserConnector(BaseConnector):
                             },
                             "snapshot_ref": screenshot_path or None,
                         }
-                    continue
-                if event_type == "error":
-                    error_text = str(raw_event.get("detail") or "Computer Use browser execution failed").strip()
-                    yield {
-                        "event_type": "browser_interaction_failed",
-                        "title": "Computer browser action failed",
-                        "detail": compact_text(error_text, limit=220),
-                        "data": {
-                            "url": session.current_url(),
-                            "scene_surface": "browser",
-                            "connector_id": "computer_use_browser",
-                        },
-                        "snapshot_ref": screenshot_path or None,
-                    }
-                    break
-                if event_type in {"done", "max_iterations"}:
-                    yield {
-                        "event_type": "browser_interaction_completed",
-                        "title": "Browser inspection complete",
-                        "detail": str(raw_event.get("url") or session.current_url()),
-                        "data": {
-                            "url": str(raw_event.get("url") or session.current_url()),
-                            "scene_surface": "browser",
-                            "connector_id": "computer_use_browser",
-                        },
-                        "snapshot_ref": screenshot_path or None,
-                    }
-                    if event_type == "done":
                         break
+                    if event_type in {"done", "max_iterations"}:
+                        yield {
+                            "event_type": "browser_interaction_completed",
+                            "title": "Browser inspection complete",
+                            "detail": str(raw_event.get("url") or session.current_url()),
+                            "data": {
+                                "url": str(raw_event.get("url") or session.current_url()),
+                                "scene_surface": "browser",
+                                "connector_id": "computer_use_browser",
+                            },
+                            "snapshot_ref": screenshot_path or None,
+                        }
+                        if event_type == "done":
+                            break
 
             forced_scroll_steps = session.scroll_through_page(
                 max_steps=max(20, min(90, int(max_scroll_steps) * 30))

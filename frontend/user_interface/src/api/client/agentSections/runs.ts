@@ -10,7 +10,13 @@ import type {
 import { isNotFoundError, toAgentRunFromApiRun } from "./types";
 
 function getAgentEventSnapshotUrl(runId: string, eventId: string): string {
-  return `${API_BASE}/api/agent/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(eventId)}/snapshot`;
+  return `${API_BASE}${withUserIdQuery(`/api/agent/runs/${encodeURIComponent(runId)}/events/${encodeURIComponent(eventId)}/snapshot`)}`;
+}
+
+function getAgentSnapshotRefUrl(snapshotRef: string): string {
+  const query = new URLSearchParams();
+  query.set("path", snapshotRef);
+  return `${API_BASE}${withUserIdQuery(`/api/agent/snapshot-file?${query.toString()}`)}`;
 }
 
 function getAgentRunEvents(runId: string) {
@@ -196,6 +202,7 @@ export {
   approveAgentRunGate,
   exportAgentRunEvents,
   getAgentEventSnapshotUrl,
+  getAgentSnapshotRefUrl,
   getAgentRun,
   getAgentRunEvents,
   getAgentRunWorkGraph,

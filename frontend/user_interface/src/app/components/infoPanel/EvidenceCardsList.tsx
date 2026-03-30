@@ -1,6 +1,6 @@
 import { ExternalLink, RefreshCcw } from "lucide-react";
 import type { EvidenceCard } from "../../utils/infoInsights";
-import { choosePreferredSourceUrl, evidenceSourceLabel } from "./urlHelpers";
+import { choosePreferredSourceUrl, evidenceSourceLabel, normalizeEvidenceId } from "./urlHelpers";
 
 type EvidenceCardsListProps = {
   cards: EvidenceCard[];
@@ -69,12 +69,15 @@ function EvidenceCardsList({
           .trim();
         const snippetLimit = evidenceMode === "exact" ? 220 : 420;
         const trimmedSnippet = snippet.length > snippetLimit ? `${snippet.slice(0, snippetLimit).trimEnd()}...` : snippet;
-        const selected = selectedEvidenceId && selectedEvidenceId === String(card.id || "").trim().toLowerCase();
+        const normalizedCardId = normalizeEvidenceId(card.id);
+        const selected = selectedEvidenceId && selectedEvidenceId === normalizedCardId;
         const quality = qualityLabel(card.matchQuality || "");
         const strength = strengthLabel(card.strengthTier);
         return (
           <div
             key={`${card.id || `evidence-${index + 1}`}:${sourceLabel}`}
+            id={normalizedCardId || undefined}
+            data-evidence-card-id={normalizedCardId || undefined}
             className={`rounded-xl border bg-white px-3 py-2 transition-colors ${
               selected ? "border-[#0a84ff]/40 bg-[#f1f7ff]" : "border-black/[0.06] hover:bg-[#f8f9fc]"
             }`}

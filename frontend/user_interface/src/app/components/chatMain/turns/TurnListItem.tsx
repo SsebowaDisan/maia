@@ -120,6 +120,8 @@ function TurnListItem({
       : fallbackAssistantBlocks(turn.assistant);
   const ragCanvasOnly = turn.mode === "rag" && Boolean(primaryCanvasDocument);
   const hasAssistantOutput = (!ragCanvasOnly && assistantBlocks.length > 0) || Boolean(turn.plot);
+  const shouldAnchorTheatre =
+    isLatestTurn && !hasAssistantOutput && (isSending || isActivityStreaming);
   const userCopyFeedbackKey = `user-${index}`;
   const assistantCopyFeedbackKey = `assistant-${index}`;
   const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
@@ -287,7 +289,7 @@ function TurnListItem({
         <div className="flex justify-end">
           <div
             className="w-full max-w-[98%] xl:max-w-full"
-            data-theatre-anchor={isLatestTurn ? "true" : undefined}
+            data-theatre-anchor={shouldAnchorTheatre ? "true" : undefined}
           >
             <AgentActivityPanel
               events={turnActivityEvents}
@@ -328,7 +330,10 @@ function TurnListItem({
       ) : null}
       {hasAssistantOutput ? (
         <div className="flex justify-start">
-          <div className="group max-w-[90%] space-y-1.5">
+          <div
+            className="group max-w-[90%] space-y-1.5"
+            data-response-anchor={isLatestTurn ? "true" : undefined}
+          >
             {assistantBlocks.length > 0 ? (
               <div className="assistantAnswerCard">
                 <MessageBlocks blocks={assistantBlocks} documents={turn.documents || []} />

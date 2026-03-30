@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from api.auth import get_current_user_id
@@ -17,6 +17,24 @@ from api.services.agent.memory import get_memory_service
 router = APIRouter(tags=["agent"])
 
 _logger = logging.getLogger(__name__)
+
+
+def _resolve_snapshot_candidate(snapshot_ref: str) -> Path:
+    candidate = Path(snapshot_ref).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    allowed_roots = [
+        (Path.cwd() / ".maia_agent").resolve(),
+        (Path.cwd() / "flow_tmp").resolve(),
+    ]
+    if not any(candidate == root or root in candidate.parents for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Snapshot path is outside allowed directories.")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Snapshot file is missing.")
+    return candidate
 
 
 def _merge_telemetry_into_runs(
@@ -346,26 +364,29 @@ def get_agent_event_snapshot(
     if not snapshot_ref:
         raise HTTPException(status_code=404, detail="Snapshot not found for this event.")
 
-    candidate = Path(snapshot_ref).expanduser()
-    if not candidate.is_absolute():
-        candidate = (Path.cwd() / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-
-    allowed_roots = [
-        (Path.cwd() / ".maia_agent").resolve(),
-        (Path.cwd() / "flow_tmp").resolve(),
-    ]
-    if not any(candidate == root or root in candidate.parents for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Snapshot path is outside allowed directories.")
-    if not candidate.exists() or not candidate.is_file():
-        raise HTTPException(status_code=404, detail="Snapshot file is missing.")
+    candidate = _resolve_snapshot_candidate(snapshot_ref)
 
     media_type, _ = mimetypes.guess_type(str(candidate))
     return FileResponse(
         path=str(candidate),
         media_type=media_type or "application/octet-stream",
-        filename=candidate.name,
+    )
+
+
+@router.get("/snapshot-file")
+def get_agent_snapshot_file(
+    path: str = Query(..., alias="path"),
+    user_id: str = Depends(get_current_user_id),
+):
+    del user_id
+    snapshot_ref = str(path or "").strip()
+    if not snapshot_ref:
+        raise HTTPException(status_code=400, detail="Snapshot path is required.")
+    candidate = _resolve_snapshot_candidate(snapshot_ref)
+    media_type, _ = mimetypes.guess_type(str(candidate))
+    return FileResponse(
+        path=str(candidate),
+        media_type=media_type or "application/octet-stream",
     )
 
 

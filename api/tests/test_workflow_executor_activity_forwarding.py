@@ -202,6 +202,77 @@ def test_run_agent_step_scopes_task_to_step_objective(monkeypatch) -> None:
     assert "write an email about the research to ssebowadisan1@gmail.com" not in task
 
 
+def test_run_agent_step_keeps_handoff_out_of_system_prompt(monkeypatch) -> None:
+    fake_record = SimpleNamespace(agent_id="writer")
+    fake_schema = SimpleNamespace(
+        system_prompt="You are a professional writer. Produce clear, well-structured reports.",
+        tools=[],
+        max_tool_calls_per_run=None,
+    )
+
+    def _fake_get_agent(tenant_id: str, agent_id: str):
+        return fake_record
+
+    def _fake_load_schema(record):
+        return fake_schema
+
+    observed: dict[str, object] = {}
+
+    def _fake_run_agent_task(task, *args, **kwargs):
+        observed["task"] = task
+        observed["system_prompt"] = kwargs.get("system_prompt")
+        observed["settings_overrides"] = kwargs.get("settings_overrides")
+        yield {"type": "chat_delta", "delta": "done", "text": "done"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "api.services.agents.definition_store",
+        SimpleNamespace(get_agent=_fake_get_agent, load_schema=_fake_load_schema),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "api.services.agents.runner",
+        SimpleNamespace(run_agent_task=_fake_run_agent_task),
+    )
+    monkeypatch.setattr(module, "_verify_and_clean_citations", lambda text, tenant_id: text)
+
+    step = WorkflowStep(
+        step_id="step_2",
+        step_type="agent",
+        agent_id="writer",
+        description="Write a concise executive summary from the verified findings.",
+        output_key="writer_output",
+        step_config={},
+    )
+    result = module._run_agent_step(
+        "writer",
+        {
+            "research_output": "Machine learning includes supervised, unsupervised, and reinforcement learning.",
+            "__handoff_context": (
+                "The researcher agent has completed their work and handed off to you.\n\n"
+                "Summary of their findings:\n"
+                "Machine learning is a field of AI focused on learning patterns from data.\n\n"
+                "Your task: Draft the final report."
+            ),
+        },
+        "tenant_1",
+        run_id="parent_run_2",
+        on_event=lambda event: None,
+        step=step,
+    )
+
+    assert result == "done"
+    assert str(observed.get("system_prompt") or "") == fake_schema.system_prompt
+    task = str(observed.get("task") or "")
+    assert "Incoming findings from previous stage" in task
+    assert "Machine learning is a field of AI focused on learning patterns from data." in task
+    assert "handed off to you" not in task
+    assert "Your task:" not in task
+    assert "Machine learning is a field of AI focused on learning patterns from data." in str(
+        (observed.get("settings_overrides") or {}).get("__report_seed_summary")
+    )
+
+
 def test_run_agent_step_passes_stage_topic_overrides_to_runner(monkeypatch) -> None:
     fake_record = SimpleNamespace(agent_id="researcher")
     fake_schema = SimpleNamespace(system_prompt="", tools=["marketing.web_research"], max_tool_calls_per_run=None)
@@ -243,6 +314,65 @@ def test_run_agent_step_passes_stage_topic_overrides_to_runner(monkeypatch) -> N
         {"query": "machine learning", "message": "unused broad prompt"},
         "tenant_1",
         run_id="run_seeded_1",
+        on_event=lambda event: None,
+        step=step,
+    )
+
+    assert result == "done"
+    assert observed_kwargs["settings_overrides"] == {
+        "__workflow_stage_primary_topic": "machine learning",
+        "__research_search_terms": ["machine learning"],
+    }
+
+
+def test_run_agent_step_derives_stage_topic_from_research_step_description(monkeypatch) -> None:
+    fake_record = SimpleNamespace(agent_id="researcher")
+    fake_schema = SimpleNamespace(system_prompt="", tools=["marketing.web_research"], max_tool_calls_per_run=None)
+
+    def _fake_get_agent(tenant_id: str, agent_id: str):
+        return fake_record
+
+    def _fake_load_schema(record):
+        return fake_schema
+
+    observed_kwargs: dict[str, object] = {}
+
+    def _fake_run_agent_task(task, *args, **kwargs):
+        observed_kwargs.update(kwargs)
+        yield {"type": "chat_delta", "delta": "done", "text": "done"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "api.services.agents.definition_store",
+        SimpleNamespace(get_agent=_fake_get_agent, load_schema=_fake_load_schema),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "api.services.agents.runner",
+        SimpleNamespace(run_agent_task=_fake_run_agent_task),
+    )
+    monkeypatch.setattr(module, "_verify_and_clean_citations", lambda text, tenant_id: text)
+    monkeypatch.setattr(
+        "api.services.agents.workflow_executor_sections.agent_runtime._clean_stage_topic",
+        lambda value: "machine learning",
+    )
+
+    step = WorkflowStep(
+        step_id="step_1",
+        step_type="agent",
+        agent_id="researcher",
+        description=(
+            "Research Make research online about machine learning? using multiple authoritative "
+            "sources and extract source-backed findings with inline citations."
+        ),
+        output_key="research_output",
+        step_config={"tool_ids": ["marketing.web_research"]},
+    )
+    result = module._run_agent_step(
+        "researcher",
+        {"message": "unused broad prompt"},
+        "tenant_1",
+        run_id="run_seeded_2",
         on_event=lambda event: None,
         step=step,
     )

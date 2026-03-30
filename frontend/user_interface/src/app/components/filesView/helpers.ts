@@ -57,6 +57,30 @@ function loaderText(note: Record<string, unknown>) {
   return "-";
 }
 
+function readinessLabel(note: Record<string, unknown>) {
+  const ragReady = Boolean(note["rag_ready"]);
+  const citationReady = Boolean(note["citation_ready"]);
+  if (ragReady && !citationReady) {
+    return "Ready for RAG · Citations refining";
+  }
+  if (ragReady) {
+    return "Ready for RAG";
+  }
+  return "Processing";
+}
+
+function readinessTone(note: Record<string, unknown>) {
+  const ragReady = Boolean(note["rag_ready"]);
+  const citationReady = Boolean(note["citation_ready"]);
+  if (ragReady && !citationReady) {
+    return "warning";
+  }
+  if (ragReady) {
+    return "ready";
+  }
+  return "neutral";
+}
+
 function extractSuccessfulFileIds(response: UploadResponse) {
   const byItem = response.items
     .filter((item) => item.status === "success" && item.file_id)
@@ -70,6 +94,8 @@ export {
   formatSize,
   inferFileKind,
   loaderText,
+  readinessLabel,
+  readinessTone,
   tokenNumber,
   tokenText,
   UNGROUPED_FILTER,

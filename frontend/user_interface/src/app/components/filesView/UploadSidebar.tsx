@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import { AlertCircle, CheckCircle2, Loader2, Upload, X } from "lucide-react";
 import type { FileGroupRecord, IngestionJob } from "../../../api/client";
+import { deriveIngestionJobProgress } from "../chatMain/ingestionProgress";
 import { NeutralSelect } from "./NeutralSelect";
 import type { UploadTab } from "./types";
 
@@ -210,11 +211,12 @@ function UploadSidebar({
       : primaryActiveJob
         ? computeJobProgressPercent(primaryActiveJob)
         : null;
+  const activeProgress = primaryActiveJob ? deriveIngestionJobProgress(primaryActiveJob) : null;
 
   const compactTitle = hasActiveJobs
     ? activeJobs.length > 1
       ? `Indexing ${activeJobs.length} jobs`
-      : jobKindLabel(activeJobs[0])
+      : activeProgress?.currentStep || jobKindLabel(activeJobs[0])
     : hasFailedJobs
       ? failedJobs.length > 1
         ? `${failedJobs.length} jobs need attention`
@@ -225,7 +227,7 @@ function UploadSidebar({
   const shouldShowCompactStatus =
     hasActiveJobs || hasFailedJobs || hasRecentCompleted || showCancelUpload;
   const compactDetail = hasActiveJobs
-    ? uploadStatus || uploadProgressLabel || formatJobMeta(activeJobs[0])
+    ? uploadProgressLabel || activeProgress?.detail || uploadStatus || formatJobMeta(activeJobs[0])
     : hasFailedJobs
       ? uploadStatus || primaryFailedJob?.errors?.[0] || primaryFailedJob?.message || "Fix and retry upload."
       : uploadStatus || "Your latest ingestion finished.";
@@ -377,6 +379,21 @@ function UploadSidebar({
               <p className="mt-1 text-[10px] text-[#8d8d93]">
                 {uploadProgressLabel || `Progress ${compactProgressPercent}%`}
               </p>
+              {activeProgress?.remainingSteps?.length ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {activeProgress.remainingSteps.slice(0, 3).map((step) => (
+                    <span
+                      key={step}
+                      className="rounded-full border border-black/[0.08] bg-[#fafafc] px-2 py-0.5 text-[10px] text-[#6e6e73]"
+                    >
+                      {step}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {activeProgress?.explanation ? (
+                <p className="mt-2 text-[10px] leading-4 text-[#6e6e73]">{activeProgress.explanation}</p>
+              ) : null}
             </div>
           ) : null}
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -451,7 +468,9 @@ function UploadSidebar({
               {sortedJobs.length === 0 ? (
                 <p className="text-[13px] text-[#8d8d93]">No ingestion jobs yet.</p>
               ) : (
-                sortedJobs.map((job) => (
+                sortedJobs.map((job) => {
+                  const jobProgress = isActiveJob(job) ? deriveIngestionJobProgress(job) : null;
+                  return (
                   <div key={job.id} className="rounded-xl border border-black/[0.08] bg-[#fafafc] px-3 py-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-[13px] font-medium text-[#1d1d1f]">{jobKindLabel(job)}</p>
@@ -465,6 +484,15 @@ function UploadSidebar({
                     <p className="mt-0.5 text-[11px] text-[#8d8d93]">
                       {formatRelativeTime(job.date_updated || job.date_created || null)}
                     </p>
+                    {isActiveJob(job) ? (
+                      <div className="mt-2 rounded-xl border border-black/[0.06] bg-white px-3 py-2">
+                        <p className="text-[11px] font-medium text-[#1d1d1f]">{jobProgress?.currentStep}</p>
+                        <p className="mt-1 text-[11px] text-[#6e6e73]">{jobProgress?.detail}</p>
+                        <p className="mt-1 text-[10px] leading-4 text-[#8d8d93]">
+                          {jobProgress?.explanation}
+                        </p>
+                      </div>
+                    ) : null}
                     {job.message ? (
                       <p className="mt-1 truncate text-[11px] text-[#6e6e73]">{job.message}</p>
                     ) : null}
@@ -483,7 +511,7 @@ function UploadSidebar({
                       </div>
                     ) : null}
                   </div>
-                ))
+                )})
               )}
             </div>
           </div>

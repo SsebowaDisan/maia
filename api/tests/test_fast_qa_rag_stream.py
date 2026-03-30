@@ -6,12 +6,23 @@ from api.schemas import ChatRequest
 from api.services.chat import app_stream_helpers
 from api.services.chat import fast_qa_turn_helpers
 from api.services.chat.fast_qa_turn_helpers import run_fast_chat_turn_impl
+from api.services.chat.fast_qa_turn_sections.common import build_sources_used
+from api.services.chat.fast_qa_turn_sections import retrieval as retrieval_section
 
 
 def test_run_fast_chat_turn_impl_rag_emits_document_activity_and_selected_scope(monkeypatch) -> None:
     emitted: list[dict] = []
     persisted: dict[str, object] = {}
     created_docs: list[dict] = []
+
+    monkeypatch.setattr(
+        retrieval_section,
+        "_resolve_selected_scope_sources",
+        lambda **_: [
+            {"file_id": "file-1", "label": "Paper A", "source_type": "pdf", "url": ""},
+            {"file_id": "file-2", "label": "Paper B", "source_type": "pdf", "url": ""},
+        ],
+    )
 
     monkeypatch.setattr(
         fast_qa_turn_helpers,
@@ -174,6 +185,7 @@ def test_run_fast_chat_turn_impl_rag_emits_document_activity_and_selected_scope(
     assert isinstance(selected_scope, dict)
     assert selected_scope.get("file_count") == 2
     assert selected_scope.get("covered_file_count") == 2
+    assert selected_scope.get("searched_sources", [])[0]["label"] == "Paper A"
     sources_used = result.get("sources_used", [])
     assert isinstance(sources_used, list) and len(sources_used) == 2
     assert result.get("documents") == created_docs
@@ -181,6 +193,10 @@ def test_run_fast_chat_turn_impl_rag_emits_document_activity_and_selected_scope(
     assert result["documents"][0]["info_panel"]["selected_scope"]["file_count"] == 2
     assert result["documents"][0]["user_prompt"] == "Answer only from the selected PDFs."
     assert result["documents"][0]["mode_variant"] == "rag"
+    assert result["documents"][0]["content"] == "Answer with evidence [1][2]."
+    assert info_panel.get("rag_canvas_document_id") == "canvas-1"
+    assert info_panel.get("rag_canvas_title")
+    assert info_panel.get("rag_answer_mirrored") is False
     block_types = [block.get("type") for block in result.get("blocks", [])]
     assert block_types == ["document_action"]
 
@@ -194,7 +210,7 @@ def test_run_fast_chat_turn_impl_rag_emits_document_activity_and_selected_scope(
     assert all(row.get("run_id") == result.get("activity_run_id") for row in activity_rows)
 
     chat_deltas = [row for row in emitted if row.get("type") == "chat_delta"]
-    assert chat_deltas
+    assert chat_deltas == []
     assert persisted.get("conversation_id") == "conv-1"
 
 
@@ -258,3 +274,127 @@ def test_stream_chat_turn_routes_rag_to_fast_stream(monkeypatch) -> None:
     assert events[0]["mode"] == "rag"
     assert events[1]["type"] == "activity"
     assert result["activity_run_id"] == "rag_test"
+
+
+def test_run_fast_chat_turn_impl_rag_returns_grounded_no_evidence_answer_when_retrieval_is_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        fast_qa_turn_helpers,
+        "create_document",
+        lambda *_args, **kwargs: type(
+            "CanvasDoc",
+            (),
+            {
+                "id": "canvas-1",
+                "title": kwargs.get("title", "Canvas"),
+                "content": kwargs.get("content", ""),
+                "info_html": kwargs.get("info_html", ""),
+                "info_panel_json": "{}",
+                "info_panel": kwargs.get("info_panel", {}),
+                "user_prompt": kwargs.get("user_prompt", ""),
+                "mode_variant": kwargs.get("mode_variant", ""),
+                "source_agent_id": kwargs.get("source_agent_id", ""),
+                "created_at": 0.0,
+                "updated_at": 0.0,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        fast_qa_turn_helpers,
+        "document_to_dict",
+        lambda doc: {
+            "id": doc.id,
+            "title": doc.title,
+            "content": doc.content,
+            "info_html": doc.info_html,
+            "info_panel": doc.info_panel,
+            "user_prompt": doc.user_prompt,
+            "mode_variant": doc.mode_variant,
+        },
+    )
+
+    request = ChatRequest(
+        message="Answer from my Maia sources only.",
+        agent_mode="ask",
+        setting_overrides={
+            "__rag_mode_enabled": True,
+            "__disable_auto_web_fallback": True,
+        },
+        citation="inline",
+    )
+
+    result = run_fast_chat_turn_impl(
+        context=None,
+        user_id="user-1",
+        request=request,
+        logger=logging.getLogger("test_fast_qa_rag_stream"),
+        default_setting="default",
+        get_or_create_conversation_fn=lambda **_: ("conv-1", "Chat", {}, "spark"),
+        maybe_autoname_conversation_fn=lambda **_: ("Chat", "spark"),
+        resolve_response_language_fn=lambda _language, _message: "en",
+        build_selected_payload_fn=lambda **_: {"7": ["select", ["file-1"]]},
+        resolve_contextual_url_targets_fn=lambda **_: [],
+        rewrite_followup_question_for_retrieval_fn=lambda **kwargs: (
+            str(kwargs.get("question") or ""),
+            False,
+            "direct",
+        ),
+        load_recent_chunks_for_fast_qa_fn=lambda **_: [],
+        finalize_retrieved_snippets_fn=lambda **kwargs: ([], "", "no_snippets", {}),
+        assess_evidence_sufficiency_with_llm_fn=lambda **_: (False, 0.0, "no evidence"),
+        expand_retrieval_query_for_gap_fn=lambda **kwargs: (
+            str(kwargs.get("current_query") or ""),
+            "unchanged",
+        ),
+        call_openai_fast_qa_fn=lambda **kwargs: "",
+        normalize_fast_answer_fn=lambda answer, **_: answer,
+        build_no_relevant_evidence_answer_fn=lambda *_args, **_kwargs: "No Maia evidence found.",
+        resolve_required_citation_mode_fn=lambda *_args, **_kwargs: "inline",
+        render_fast_citation_links_fn=lambda **kwargs: kwargs["answer"],
+        build_fast_info_html_fn=lambda snippets, max_blocks=6: "<div>evidence</div>",
+        enforce_required_citations_fn=lambda **kwargs: kwargs["answer"],
+        build_source_usage_fn=lambda **_: [],
+        build_claim_signal_summary_fn=lambda **_: {},
+        build_citation_quality_metrics_fn=lambda **_: {},
+        build_info_panel_copy_fn=lambda **_: {},
+        build_knowledge_map_fn=lambda **_: {},
+        build_verification_evidence_items_fn=lambda **_: [],
+        build_web_review_content_fn=lambda *_args, **_kwargs: {},
+        persist_conversation_fn=lambda *_args, **_kwargs: None,
+        normalize_request_attachments_fn=lambda _request: [],
+        constants={
+            "STATE": {},
+            "truncate_for_log_fn": lambda value, limit=1600: str(value)[:limit],
+            "API_FAST_QA_SOURCE_SCAN": 12,
+            "API_FAST_QA_MAX_SOURCES": 8,
+            "API_FAST_QA_MAX_SNIPPETS": 6,
+            "assign_fast_source_refs_fn": lambda snippets: ([], []),
+            "MAIA_SOURCE_USAGE_HEATMAP_ENABLED": False,
+            "MAIA_CITATION_DOMINANCE_WARNING_THRESHOLD": 0.8,
+            "VERIFICATION_CONTRACT_VERSION": "test-v1",
+            "MAIA_CITATION_STRENGTH_ORDERING_ENABLED": True,
+        },
+    )
+
+    assert result is not None
+    assert result["mode_actually_used"] == "rag"
+    assert result["answer"] == ""
+    assert result["documents"][0]["content"] == "No Maia evidence found."
+    assert [block.get("type") for block in result.get("blocks", [])] == ["document_action"]
+
+
+def test_build_sources_used_preserves_web_type_for_indexed_urls() -> None:
+    rows = build_sources_used(
+        snippets_with_refs=[
+            {
+                "source_id": "source-1",
+                "source_name": "https://example.com/ml-overview",
+                "source_url": "https://example.com/ml-overview",
+                "source_type": "web",
+            }
+        ],
+        refs=[],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["source_type"] == "web"
+    assert rows[0]["url"] == "https://example.com/ml-overview"

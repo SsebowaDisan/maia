@@ -37,6 +37,7 @@ def finalize_turn(
     snippets_with_refs = answering["snippets_with_refs"]
     source_usage = answering["source_usage"]
     claim_signal_summary = answering["claim_signal_summary"]
+    evidence_conflict_summary = answering.get("evidence_conflict_summary", {})
     citation_quality_metrics = answering["citation_quality_metrics"]
     sources_used = answering["sources_used"]
     llm_start_ms = answering["llm_start_ms"]
@@ -60,40 +61,6 @@ def finalize_turn(
 
     blocks, documents = build_turn_blocks_fn(answer_text=answer, question=message)
     chat_answer = answer
-    if mode_variant == "rag":
-        canvas_title = derive_rag_canvas_title_fn(message, answer)
-        canvas_doc = create_document_fn(
-            user_id,
-            canvas_title,
-            answer,
-            info_html=info_text,
-            info_panel=info_panel,
-            user_prompt=message,
-            mode_variant="rag",
-            source_agent_id="rag",
-        )
-        canvas_record = {**document_to_dict_fn(canvas_doc), "mode_variant": "rag"}
-        documents = [canvas_record]
-        blocks = [{
-            "type": "document_action",
-            "action": {
-                "kind": "open_canvas",
-                "title": canvas_title,
-                "documentId": canvas_doc.id,
-            },
-        }]
-        chat_answer = answer
-        info_panel["rag_canvas_document_id"] = canvas_doc.id
-        info_panel["rag_canvas_title"] = canvas_title
-        info_panel["rag_answer_mirrored"] = True
-        record_trace_event(
-            "delivery.canvas_created",
-            {
-                "conversation_id": conversation_id,
-                "document_id": canvas_doc.id,
-                "title": canvas_title,
-            },
-        )
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))
@@ -132,6 +99,34 @@ def finalize_turn(
     }
     info_panel["perf"] = perf
     if mode_variant == "rag":
+        canvas_title = derive_rag_canvas_title_fn(message, answer)
+        canvas_document = create_document_fn(
+            tenant_id=user_id,
+            title=canvas_title,
+            content=answer,
+            info_html=info_text,
+            info_panel=deepcopy(info_panel),
+            user_prompt=message,
+            mode_variant="rag",
+            source_agent_id=activity_run_id or "",
+        )
+        canvas_payload = document_to_dict_fn(canvas_document)
+        documents = [canvas_payload]
+        blocks = [
+            {
+                "type": "document_action",
+                "action": {
+                    "kind": "open_canvas",
+                    "title": canvas_payload.get("title") or canvas_title,
+                    "documentId": canvas_payload["id"],
+                },
+            }
+        ]
+        info_panel["rag_canvas_document_id"] = canvas_payload["id"]
+        info_panel["rag_canvas_title"] = str(canvas_payload.get("title") or canvas_title)
+        info_panel["rag_answer_mirrored"] = False
+        chat_answer = ""
+    if mode_variant == "rag":
         emit_activity_fn(
             event_type="document_review_completed",
             title="RAG review complete",
@@ -159,6 +154,7 @@ def finalize_turn(
             "actions_taken": [],
             "sources_used": sources_used,
             "source_usage": source_usage,
+            "evidence_conflict_summary": evidence_conflict_summary,
             "attachments": turn_attachments,
             "claim_signal_summary": claim_signal_summary,
             "citation_quality_metrics": citation_quality_metrics,
@@ -211,6 +207,7 @@ def finalize_turn(
         "sources_used": sources_used,
         "source_usage": source_usage,
         "claim_signal_summary": claim_signal_summary,
+        "evidence_conflict_summary": evidence_conflict_summary,
         "citation_quality_metrics": citation_quality_metrics,
         "next_recommended_steps": [],
         "activity_run_id": activity_run_id if mode_variant == "rag" else None,

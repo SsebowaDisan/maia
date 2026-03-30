@@ -170,6 +170,8 @@ function TurnsPanel({
       return;
     }
 
+    const responseAnchor =
+      turnsRootRef.current?.querySelector<HTMLElement>("[data-response-anchor='true']") || null;
     const theatreAnchor =
       turnsRootRef.current?.querySelector<HTMLElement>("[data-theatre-anchor='true']") || null;
     const latestTurnNode =
@@ -177,13 +179,23 @@ function TurnsPanel({
         `[data-turn-index="${String(latestTurnIndex)}"]`,
       ) || null;
 
-    if (!theatreAnchor && latestTurnUsesTheatre && (isSending || isActivityStreaming)) {
+    if (!responseAnchor && !theatreAnchor && latestTurnUsesTheatre && (isSending || isActivityStreaming)) {
       return;
     }
 
-    const target = theatreAnchor || latestTurnNode;
+    const target = responseAnchor || theatreAnchor || latestTurnNode;
     if (!target) {
       return;
+    }
+
+    if (responseAnchor) {
+      centeredTheatreAnchorRef.current = null;
+      pendingTheatreCenterTurnRef.current = null;
+      if (centeredTurnFallbackRef.current === latestTurnIndex) {
+        return;
+      }
+      centeredTurnFallbackRef.current = latestTurnIndex;
+      return scheduleCenteredScroll(responseAnchor);
     }
 
     if (theatreAnchor) {
@@ -192,6 +204,7 @@ function TurnsPanel({
       }
       centeredTheatreAnchorRef.current = latestTurnIndex;
       pendingTheatreCenterTurnRef.current = null;
+      centeredTurnFallbackRef.current = null;
       return scheduleCenteredScroll(theatreAnchor);
     }
 

@@ -16,6 +16,7 @@ export {
   approveAgentRunGate,
   exportAgentRunEvents,
   getAgentEventSnapshotUrl,
+  getAgentSnapshotRefUrl,
   getAgentRun,
   getAgentRunEvents,
   getAgentRunWorkGraph,

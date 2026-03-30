@@ -275,25 +275,25 @@ def build_no_relevant_evidence_answer(
         ),
         "de": (
             "Ich konnte in diesem Projektkontext keine indexierten Belege fuer {url} finden. "
-            "Im indexierten Inhalt nicht sichtbar. Falls noetig, starten Sie die Website-Indexierung oder eine Online-Suche fuer diese URL und fragen Sie dann erneut.",
+            "Im indexierten Inhalt nicht sichtbar. Falls noetig, fuegen Sie die URL in Maia hinzu oder starten Sie die Website-Indexierung in Maia und fragen Sie dann erneut.",
             "Ich konnte in den indexierten Projektdateien und im aktuellen Gespraechskontext keine relevanten Belege fuer diese Frage finden. "
             "Im indexierten Inhalt nicht sichtbar.",
         ),
         "it": (
             "Non ho trovato evidenze indicizzate per {url} in questo contesto di progetto. "
-            "Non visibile nei contenuti indicizzati. Se necessario, esegui l'indicizzazione del sito web o una ricerca online per quell'URL e chiedi di nuovo.",
+            "Non visibile nei contenuti indicizzati. Se necessario, aggiungi l'URL in Maia oppure esegui l'indicizzazione del sito in Maia e chiedi di nuovo.",
             "Non ho trovato evidenze rilevanti nei file di progetto indicizzati e nel contesto recente della conversazione per questa domanda. "
             "Non visibile nei contenuti indicizzati.",
         ),
         "pt": (
             "Nao encontrei evidencia indexada para {url} neste contexto do projeto. "
-            "Nao esta visivel no conteudo indexado. Se necessario, execute a indexacao do site ou uma pesquisa online para essa URL e pergunte novamente.",
+            "Nao esta visivel no conteudo indexado. Se necessario, adicione a URL no Maia ou execute a indexacao do site no Maia e pergunte novamente.",
             "Nao encontrei evidencia relevante nos arquivos indexados do projeto nem no contexto recente da conversa para esta pergunta. "
             "Nao esta visivel no conteudo indexado.",
         ),
         "nl": (
             "Ik kon geen geindexeerd bewijs voor {url} vinden in deze projectcontext. "
-            "Niet zichtbaar in geindexeerde inhoud. Start zo nodig website-indexering of online zoeken voor die URL en vraag het daarna opnieuw.",
+            "Niet zichtbaar in geindexeerde inhoud. Voeg zo nodig de URL toe in Maia of start website-indexering in Maia en vraag het daarna opnieuw.",
             "Ik kon geen relevant bewijs vinden in geindexeerde projectbestanden en recente gesprekscontext voor deze vraag. "
             "Niet zichtbaar in geindexeerde inhoud.",
         ),
@@ -304,12 +304,12 @@ def build_no_relevant_evidence_answer(
         if localized_pair:
             return localized_pair[0].format(url=resolved_target_url)
         return (
-            f"I could not find indexed evidence for {resolved_target_url} in this project context. "
-            "Not visible in indexed content. If needed, run website indexing or online search for that URL, then ask again."
+            f"I could not find indexed evidence for {resolved_target_url} in this Maia project context. "
+            "Not visible in indexed content. If needed, add that URL in Maia or run website indexing in Maia, then ask again."
         )
     if localized_pair:
         return localized_pair[1]
     return (
-        "I could not find relevant evidence in indexed project files and recent conversation context for this question. "
+        "I could not find relevant evidence in Maia files, documents, indexed URLs, or recent conversation context for this question. "
         "Not visible in indexed content."
     )

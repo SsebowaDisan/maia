@@ -473,6 +473,19 @@ def finalize_retrieved_snippets(
     select_relevant_snippets_with_llm_fn,
     prioritize_primary_evidence_fn,
 ) -> tuple[list[dict[str, Any]], str, str, dict[str, Any]]:
+    def _selected_source_ids_from_payload(payload: dict[str, list[Any]]) -> set[str]:
+        ids: set[str] = set()
+        for value in (payload or {}).values():
+            if not isinstance(value, list) or len(value) < 2:
+                continue
+            if str(value[0] or "").strip().lower() != "select":
+                continue
+            for raw_id in (value[1] if isinstance(value[1], list) else []):
+                normalized = str(raw_id or "").strip()
+                if normalized:
+                    ids.add(normalized)
+        return ids
+
     primary_source_note = (
         f"Primary source target from user or conversation context: {', '.join(target_urls[:3])}"
         if target_urls
@@ -535,6 +548,7 @@ def finalize_retrieved_snippets(
         ),
     )
     secondary_cap = 0 if target_urls else 2
+    selected_source_ids = _selected_source_ids_from_payload(selected_payload)
     llm_selected = select_relevant_snippets_with_llm_fn(
         question=question,
         chat_history=chat_history,
@@ -553,6 +567,66 @@ def finalize_retrieved_snippets(
             max_keep=max_keep,
             max_secondary=secondary_cap,
         )
+
+    if selected_source_ids and not target_urls:
+        by_primary_source: dict[str, list[dict[str, Any]]] = {}
+        for row in prioritized_pool:
+            source_key = str(row.get("source_id", "") or row.get("source_key", "") or "").strip()
+            if not source_key or source_key not in selected_source_ids:
+                continue
+            if not bool(row.get("is_primary_source")):
+                continue
+            by_primary_source.setdefault(source_key, []).append(row)
+
+        selected_keys = {
+            (
+                str(item.get("source_id", "") or item.get("source_key", "") or "").strip(),
+                str(item.get("page_label", "") or ""),
+                str(item.get("unit_id", "") or ""),
+                str(item.get("text", "") or ""),
+            )
+            for item in selected
+        }
+        missing_primary_rows: list[dict[str, Any]] = []
+        covered_source_ids = {
+            str(item.get("source_id", "") or item.get("source_key", "") or "").strip()
+            for item in selected
+        }
+        for source_id in selected_source_ids:
+            if source_id in covered_source_ids:
+                continue
+            rows = by_primary_source.get(source_id, [])
+            if not rows:
+                continue
+            rows.sort(
+                key=lambda row: (
+                    -snippet_score_fn(row),
+                    str(row.get("page_label", "") or ""),
+                )
+            )
+            candidate = rows[0]
+            key = (
+                str(candidate.get("source_id", "") or candidate.get("source_key", "") or "").strip(),
+                str(candidate.get("page_label", "") or ""),
+                str(candidate.get("unit_id", "") or ""),
+                str(candidate.get("text", "") or ""),
+            )
+            if key in selected_keys:
+                continue
+            missing_primary_rows.append(candidate)
+            selected_keys.add(key)
+
+        if missing_primary_rows:
+            merged = list(selected) + missing_primary_rows
+            merged.sort(
+                key=lambda row: (
+                    0 if bool(row.get("is_primary_source")) else 1,
+                    -snippet_score_fn(row),
+                    str(row.get("source_name", "") or ""),
+                    str(row.get("page_label", "") or ""),
+                )
+            )
+            selected = merged[: max(max_keep, min(len(selected_source_ids), 8))]
 
     selected_primary_sources = {
         str(row.get("source_id", "") or row.get("source_key", "") or "").strip()

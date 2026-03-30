@@ -17,6 +17,64 @@ from api.services.agent.tools.research_web_helpers import (
 )
 
 
+def _stream_source_page_via_computer_use(
+    *,
+    context: ToolExecutionContext,
+    clicked_url: str,
+    query_variant: str,
+    query: str,
+    idx: int,
+    rank: int,
+    trace_events: list[ToolTraceEvent],
+    get_connector_registry_fn: Callable[..., Any],
+):
+    try:
+        connector = get_connector_registry_fn().build("computer_use_browser", settings=context.settings)
+        health = connector.health_check()
+        if not bool(getattr(health, "ok", False)):
+            return None
+        stream = connector.browse_live_stream(
+            url=clicked_url,
+            max_pages=1,
+            max_scroll_steps=1,
+            follow_same_domain_links=False,
+            highlight_query=query,
+            prefer_direct_capture=True,
+        )
+        while True:
+            try:
+                raw_event = next(stream)
+            except StopIteration as stop:
+                return stop.value if isinstance(stop.value, dict) else {}
+            if not isinstance(raw_event, dict):
+                continue
+            event_type = str(raw_event.get("event_type") or "").strip() or "browser_event"
+            title = str(raw_event.get("title") or event_type.replace("_", " ")).strip()
+            detail = str(raw_event.get("detail") or "").strip()
+            raw_data = raw_event.get("data") if isinstance(raw_event.get("data"), dict) else {}
+            data = {
+                **raw_data,
+                "provider": "computer_use_browser",
+                "query": query_variant,
+                "query_variant": query_variant,
+                "variant_index": idx,
+                "result_rank": rank,
+                "url": str(raw_data.get("url") or clicked_url).strip() or clicked_url,
+                "source_url": str(raw_data.get("source_url") or raw_data.get("url") or clicked_url).strip() or clicked_url,
+            }
+            event = ToolTraceEvent(
+                event_type=event_type,
+                title=title,
+                detail=detail,
+                data=data,
+                snapshot_ref=str(raw_event.get("snapshot_ref") or "").strip() or None,
+            )
+            trace_events.append(event)
+            yield event
+    except Exception:
+        return None
+
+
 def run_brave_provider_stage(
     *,
     context: ToolExecutionContext,
@@ -251,6 +309,22 @@ def run_brave_provider_stage(
                             )
                             trace_events.append(click_event)
                             yield click_event
+                            computer_use_result = yield from _stream_source_page_via_computer_use(
+                                context=context,
+                                clicked_url=clicked_url,
+                                query_variant=query_variant,
+                                query=query,
+                                idx=idx,
+                                rank=rank,
+                                trace_events=trace_events,
+                                get_connector_registry_fn=get_connector_registry,
+                            )
+                            if isinstance(computer_use_result, dict) and (
+                                str(computer_use_result.get("text_excerpt") or "").strip()
+                                or str(computer_use_result.get("screenshot_path") or "").strip()
+                            ):
+                                continue
+
                             open_event = ToolTraceEvent(
                                 event_type="browser_navigate",
                                 title=f"Open source page {rank}",

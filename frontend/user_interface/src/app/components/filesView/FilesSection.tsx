@@ -1,7 +1,7 @@
 import type { DragEvent } from "react";
 import { ArrowUpDown, CheckSquare, LayoutGrid, List, Search, Square } from "lucide-react";
 import type { FileRecord } from "../../../api/client";
-import { formatDate, formatSize, loaderText, tokenText } from "./helpers";
+import { formatDate, formatSize, loaderText, readinessLabel, readinessTone, tokenText } from "./helpers";
 import { NeutralSelect } from "./NeutralSelect";
 import type { FileKind, GridMode, SortField } from "./types";
 
@@ -50,6 +50,17 @@ function FilesSection({
   endFileDrag,
   groupsByFileId,
 }: FilesSectionProps) {
+  const readinessClasses = (file: FileRecord) => {
+    const tone = readinessTone(file.note || {});
+    if (tone === "ready") {
+      return "border-[#2f8f3e]/20 bg-[#eefaf0] text-[#1f7a32]";
+    }
+    if (tone === "warning") {
+      return "border-[#d5a54b]/24 bg-[#fff8e8] text-[#8a5a00]";
+    }
+    return "border-black/[0.08] bg-[#f6f6f8] text-[#6e6e73]";
+  };
+
   return (
     <>
       <div className="mt-8 flex items-center justify-between">
@@ -144,6 +155,7 @@ function FilesSection({
                 <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Size</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Token</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Loader</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Status</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Groups</th>
                 <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Date Created</th>
               </tr>
@@ -151,7 +163,7 @@ function FilesSection({
             <tbody>
               {visibleFiles.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-8 text-[13px] text-[#8d8d93]" colSpan={7}>
+                  <td className="px-4 py-8 text-[13px] text-[#8d8d93]" colSpan={8}>
                     No indexed files found.
                   </td>
                 </tr>
@@ -185,6 +197,11 @@ function FilesSection({
                       <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{formatSize(file.size)}</td>
                       <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{tokenText(file.note || {})}</td>
                       <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{loaderText(file.note || {})}</td>
+                      <td className="px-4 py-5">
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
+                          {readinessLabel(file.note || {})}
+                        </span>
+                      </td>
                       <td className="max-w-[260px] truncate px-4 py-5 text-[13px] text-[#6e6e73]">
                         {groupsByFileId.get(file.id)?.length ? groupsByFileId.get(file.id)!.join(", ") : "-"}
                       </td>
@@ -222,6 +239,11 @@ function FilesSection({
                   </div>
                   <p className="mt-1 text-[12px] text-[#6e6e73]">
                     {formatSize(file.size)} | {loaderText(file.note || {})}
+                  </p>
+                  <p className="mt-2">
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
+                      {readinessLabel(file.note || {})}
+                    </span>
                   </p>
                   <p className="mt-1 truncate text-[11px] text-[#8d8d93]">
                     {groupsByFileId.get(file.id)?.length ? groupsByFileId.get(file.id)!.join(", ") : "No group"}

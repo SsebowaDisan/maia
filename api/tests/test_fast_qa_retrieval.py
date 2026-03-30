@@ -11,6 +11,10 @@ from api.services.chat.fast_qa_retrieval import (
     _extract_query_terms,
     _extract_target_hosts,
     _matches_target_hosts,
+    _placeholder_host_penalty,
+    _query_coverage_boost,
+    _source_credibility_profile,
+    _substantive_text_quality_boost,
     _technical_query_relevance_boost,
 )
 
@@ -51,10 +55,66 @@ def test_matches_target_hosts_rejects_unrelated_sources() -> None:
     )
 
 
+def test_placeholder_host_penalty_demotes_example_domain() -> None:
+    assert _placeholder_host_penalty("https://example.com/ml") < 0
+    assert _placeholder_host_penalty("https://localhost:8000/test") < 0
+    assert _placeholder_host_penalty("https://axongroup.com/about") == 0.0
+
+
+def test_substantive_text_quality_boost_prefers_real_paragraph_over_short_fragment() -> None:
+    short_fragment = "hello upload test after fix"
+    real_paragraph = (
+        "Machine learning is a field of artificial intelligence focused on systems that improve from data. "
+        "It includes supervised, unsupervised, and reinforcement learning approaches, each with different training objectives."
+    )
+
+    assert _substantive_text_quality_boost(text=real_paragraph) > _substantive_text_quality_boost(text=short_fragment)
+
+
+def test_query_coverage_boost_prefers_chunk_covering_more_query_terms() -> None:
+    query_terms = _extract_query_terms("machine learning model training data performance")
+    high_coverage = (
+        "Machine learning model training depends on data quality and directly affects performance during evaluation."
+    )
+    low_coverage = "Machine learning can be useful in many domains."
+
+    assert _query_coverage_boost(text=high_coverage, query_terms=query_terms) > _query_coverage_boost(
+        text=low_coverage,
+        query_terms=query_terms,
+    )
+
+
+def test_source_credibility_profile_prefers_authoritative_and_platform_sources() -> None:
+    high_tier, high_boost = _source_credibility_profile(
+        source_type="web",
+        source_url="https://developers.google.com/machine-learning",
+        source_name="https://developers.google.com/machine-learning",
+    )
+    low_tier, low_boost = _source_credibility_profile(
+        source_type="web",
+        source_url="https://www.w3schools.com/python/python_ml_getting_started.asp",
+        source_name="https://www.w3schools.com/python/python_ml_getting_started.asp",
+    )
+    platform_tier, platform_boost = _source_credibility_profile(
+        source_type="pdf",
+        source_url="",
+        source_name="internal_report.pdf",
+    )
+
+    assert high_tier == "high"
+    assert high_boost > 0
+    assert low_tier == "low"
+    assert low_boost < 0
+    assert platform_tier == "platform"
+    assert platform_boost > 0
+
+
 def test_no_relevant_evidence_answer_mentions_target_url() -> None:
     answer = _build_no_relevant_evidence_answer("https://axongroup.com what is this company doing?")
     assert "https://axongroup.com" in answer
     assert "Not visible in indexed content" in answer
+    assert "online search" not in answer.lower()
+    assert "Maia" in answer
 
 
 def test_no_relevant_evidence_answer_uses_target_url_override() -> None:
@@ -73,6 +133,11 @@ def test_no_relevant_evidence_answer_respects_response_language() -> None:
     )
     assert "https://axongroup.com/about-axon" in answer
     assert "No pude encontrar evidencia" in answer
+
+
+def test_no_relevant_evidence_answer_mentions_maia_sources_when_no_url_is_available() -> None:
+    answer = _build_no_relevant_evidence_answer("What does the uploaded material say about this topic?")
+    assert "Maia files, documents, indexed URLs" in answer
 
 
 def test_resolve_contextual_url_targets_uses_recent_history_when_llm_unavailable(monkeypatch) -> None:
@@ -247,6 +312,47 @@ def test_finalize_retrieved_snippets_broad_single_pdf_question_preserves_page_di
     assert reason == ""
     assert len(selected) >= 3
     assert [str(item.get("page_label")) for item in selected[:3]] == ["69", "66", "8"]
+
+
+def test_finalize_retrieved_snippets_preserves_selected_source_coverage(monkeypatch) -> None:
+    snippets = [
+        {
+            "source_id": "file-1",
+            "source_key": "file-1",
+            "source_name": "source-a.txt",
+            "page_label": "1",
+            "score": 9.0,
+            "text": "This source says the term machine learning was coined in 1959 by Arthur Samuel.",
+        },
+        {
+            "source_id": "file-2",
+            "source_key": "file-2",
+            "source_name": "source-b.txt",
+            "page_label": "1",
+            "score": 8.0,
+            "text": "This source says the term machine learning was coined in 1952 in early computing discussions.",
+        },
+    ]
+
+    monkeypatch.setattr(
+        "api.services.chat.fast_qa._select_relevant_snippets_with_llm",
+        lambda **kwargs: [kwargs["snippets"][0]],
+    )
+
+    selected, _note, reason, _meta = _finalize_retrieved_snippets(
+        question="According to the selected Maia sources, when was the term machine learning coined?",
+        chat_history=[],
+        retrieved_snippets=snippets,
+        selected_payload={"1": ["select", ["file-1", "file-2"], "user-1"]},
+        target_urls=[],
+        mindmap_focus=None,
+        max_keep=4,
+    )
+
+    assert reason == ""
+    covered = {str(item.get("source_id") or item.get("source_key") or "") for item in selected}
+    assert "file-1" in covered
+    assert "file-2" in covered
 
 
 def test_technical_query_relevance_boost_prefers_balance_equation_over_nomenclature() -> None:

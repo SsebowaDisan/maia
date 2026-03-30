@@ -22,6 +22,19 @@ from .shared import (
 )
 
 
+def _credibility_rank(value: Any) -> int:
+    normalized = str(value or "").strip().lower()
+    if normalized == "platform":
+        return 4
+    if normalized == "high":
+        return 3
+    if normalized == "medium":
+        return 2
+    if normalized == "low":
+        return 1
+    return 0
+
+
 def _plain_text_for_claim_analysis(answer_text: str) -> str:
     text = str(answer_text or "")
     if not text:
@@ -153,6 +166,7 @@ def assign_fast_source_refs(
             refs.append(
                 {
                     "id": ref_id,
+                    "file_id": file_id,
                     "source_id": source_id,
                     "source_name": source_name,
                     "page_label": page_label,
@@ -169,6 +183,7 @@ def assign_fast_source_refs(
                     "strength_score": snippet_strength,
                     "is_primary_source": is_primary_source,
                     "source_type": _source_type_from_name(source_name),
+                    "credibility_tier": str(snippet.get("credibility_tier", "") or "").strip().lower() or None,
                 }
             )
         else:
@@ -189,12 +204,17 @@ def assign_fast_source_refs(
 
                 if source_url and not _normalize_source_url(existing_ref.get("source_url")):
                     existing_ref["source_url"] = source_url
+                if file_id and not str(existing_ref.get("file_id", "") or "").strip():
+                    existing_ref["file_id"] = file_id
                 if is_primary_source:
                     existing_ref["is_primary_source"] = True
                 existing_ref["strength_score"] = max(
                     _score_value(existing_ref.get("strength_score")),
                     snippet_strength,
                 )
+                incoming_credibility = str(snippet.get("credibility_tier", "") or "").strip().lower() or None
+                if _credibility_rank(incoming_credibility) > _credibility_rank(existing_ref.get("credibility_tier")):
+                    existing_ref["credibility_tier"] = incoming_credibility
                 if unit_id and not str(existing_ref.get("unit_id", "")).strip():
                     existing_ref["unit_id"] = unit_id
                 if snippet_selector and not str(existing_ref.get("selector", "")).strip():
@@ -318,6 +338,7 @@ def build_source_usage(
                 "source_id": source_id,
                 "source_name": source_name,
                 "source_type": _source_type_from_name(source_name),
+                "credibility_tier": str(snippet.get("credibility_tier", "") or "").strip().lower() or None,
                 "retrieved_count": 0,
                 "cited_count": 0,
                 "max_strength_score": 0.0,
@@ -332,6 +353,9 @@ def build_source_usage(
         bucket["max_strength_score"] = max(_score_value(bucket.get("max_strength_score")), strength)
         bucket["_strength_total"] = _score_value(bucket.get("_strength_total")) + strength
         bucket["_strength_count"] = int(bucket.get("_strength_count", 0)) + 1
+        incoming_credibility = str(snippet.get("credibility_tier", "") or "").strip().lower() or None
+        if _credibility_rank(incoming_credibility) > _credibility_rank(bucket.get("credibility_tier")):
+            bucket["credibility_tier"] = incoming_credibility
 
         ref_id = int(snippet.get("ref_id", 0) or 0)
         if ref_id > 0 and ref_id in cited_ref_ids:
@@ -351,6 +375,7 @@ def build_source_usage(
                 "source_id": source_id,
                 "source_name": source_name,
                 "source_type": _source_type_from_name(source_name),
+                "credibility_tier": str(ref.get("credibility_tier", "") or "").strip().lower() or None,
                 "retrieved_count": 0,
                 "cited_count": 1,
                 "max_strength_score": strength,
@@ -373,6 +398,7 @@ def build_source_usage(
                 "source_id": str(bucket.get("source_id", "") or ""),
                 "source_name": str(bucket.get("source_name", "Indexed file") or "Indexed file"),
                 "source_type": str(bucket.get("source_type", "file") or "file"),
+                "credibility_tier": str(bucket.get("credibility_tier", "") or "").strip().lower() or None,
                 "retrieved_count": max(0, int(bucket.get("retrieved_count", 0))),
                 "cited_count": cited_count,
                 "max_strength_score": round(_score_value(bucket.get("max_strength_score")), 6),

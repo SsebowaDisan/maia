@@ -105,6 +105,56 @@ def _report_has_citation_structure(
         return False
     return True
 
+
+_REPORT_ORCHESTRATION_LINE_PREFIXES = (
+    "you are a professional writer",
+    "you are executing one workflow stage",
+    "contract objective:",
+    "required outputs:",
+    "required facts:",
+    "success checks:",
+    "deliverables:",
+    "constraints:",
+    "conversation context:",
+    "current stage objective:",
+    "stage completion rule:",
+    "available context and previous outputs:",
+    "the researcher agent has completed their work and handed off to you.",
+    "the analyst agent has completed their work and handed off to you.",
+    "the writer agent has completed their work and handed off to you.",
+    "summary of their findings:",
+    "key findings:",
+    "your task:",
+    "incoming findings from previous stage:",
+)
+
+
+def _sanitize_report_seed_text(text: str) -> str:
+    cleaned_lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = " ".join(str(raw_line or "").split()).strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if any(lowered.startswith(prefix) for prefix in _REPORT_ORCHESTRATION_LINE_PREFIXES):
+            continue
+        if lowered.startswith(("output_step_", "step_", "message:", "task:")):
+            continue
+        cleaned_lines.append(line)
+    cleaned = " ".join(cleaned_lines).strip()
+    cleaned = " ".join(cleaned.split()).strip()
+    return cleaned
+
+
+def _prepare_report_seed(*, prompt: str, summary: str) -> tuple[str, str]:
+    clean_prompt = _sanitize_report_seed_text(prompt)
+    clean_summary = _sanitize_report_seed_text(summary)
+    if clean_summary:
+        return clean_prompt, clean_summary
+    if clean_prompt:
+        return clean_prompt, clean_prompt
+    return clean_prompt, ""
+
 class DataAnalysisTool(AgentTool):
     metadata = ToolMetadata(
         tool_id="data.dataset.analyze",
@@ -259,6 +309,7 @@ class ReportGenerationTool(AgentTool):
     ) -> ToolExecutionResult:
         delivery_targets = _report_delivery_targets(prompt=prompt, settings=context.settings)
         sanitized_prompt = _redact_delivery_targets(prompt, targets=delivery_targets)
+        report_seed_override = str(context.settings.get("__report_seed_summary") or "").strip()
         depth_tier = (
             " ".join(str(context.settings.get("__research_depth_tier") or "standard").split())
             .strip()
@@ -266,7 +317,10 @@ class ReportGenerationTool(AgentTool):
             or "standard"
         )
         title = str(params.get("title") or "Executive Report").strip()
-        summary_seed = str(params.get("summary") or sanitized_prompt).strip()
+        sanitized_prompt, summary_seed = _prepare_report_seed(
+            prompt=sanitized_prompt,
+            summary=str(params.get("summary") or report_seed_override),
+        )
         summary = summary_seed or "No summary provided."
         summary = " ".join(summary.split())
         summary = _redact_delivery_targets(summary, targets=delivery_targets)

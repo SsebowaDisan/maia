@@ -3,11 +3,17 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
 
 from api.services.agent.llm_runtime import call_json_response, env_bool
 from api.services.agent.models import AgentSource
+from api.services.agent.research.source_credibility import (
+    apply_freshness_weight as _apply_freshness_weight,
+    score_source_credibility as _score_source_credibility,
+    score_source_freshness as _score_source_freshness,
+)
 from api.services.agent.tools.base import (
     ToolExecutionContext,
     ToolExecutionResult,
@@ -18,6 +24,7 @@ from api.services.agent.tools.research_helpers import (
     fuse_search_results as _fuse_search_results,
     mmr_rerank as _mmr_rerank,
     safe_snippet as _safe_snippet,
+    score_results_relevance_llm as _score_results_relevance_llm,
 )
 from api.services.agent.tools.research_web_helpers import _build_provider_plan, _website_scene_payload
 
@@ -89,6 +96,128 @@ def _llm_gap_fill_queries(
         if len(clean) >= max_queries:
             break
     return clean
+
+
+def _source_excerpt(source: AgentSource) -> str:
+    metadata = source.metadata if isinstance(source.metadata, dict) else {}
+    return str(
+        metadata.get("excerpt")
+        or metadata.get("extract")
+        or metadata.get("snippet")
+        or metadata.get("description")
+        or ""
+    ).strip()
+
+
+def _low_signal_penalty(source: AgentSource) -> float:
+    title = " ".join(str(source.label or "").split()).strip().lower()
+    excerpt = " ".join(_source_excerpt(source).split()).strip().lower()
+    url = str(source.url or "").strip().lower()
+    host = urlparse(url).netloc.lower() if url else ""
+    path = urlparse(url).path.strip().lower() if url else ""
+
+    penalty = 0.0
+    meta_markers = (
+        "library guide",
+        "citing sources",
+        "works cited",
+        "research easier",
+        "tutorial",
+        "course",
+    )
+    if any(marker in title or marker in excerpt for marker in meta_markers):
+        penalty += 0.35
+    if "udemy.com" in host:
+        penalty += 0.30
+    if path in {"", "/"} and ("journal of " in title or "latest research and news" in title):
+        penalty += 0.18
+    return min(0.65, penalty)
+
+
+def _rank_sources_for_synthesis(
+    *,
+    query: str,
+    sources: list[AgentSource],
+    min_unique_sources: int,
+) -> tuple[list[AgentSource], int]:
+    if not sources:
+        return sources, 0
+
+    candidate_rows = []
+    for index, source in enumerate(sources):
+        candidate_rows.append(
+            {
+                "idx": index,
+                "title": str(source.label or "").strip(),
+                "description": _source_excerpt(source),
+                "url": str(source.url or "").strip(),
+            }
+        )
+    scored_rows = _score_results_relevance_llm(query=query, results=candidate_rows, min_score=0.0, batch_size=20)
+    relevance_by_idx: dict[int, float] = {}
+    for row in scored_rows:
+        try:
+            idx = int(row.get("idx"))
+        except Exception:
+            continue
+        try:
+            relevance_by_idx[idx] = float(row.get("relevance_score") or 0.5)
+        except Exception:
+            relevance_by_idx[idx] = 0.5
+
+    ranked: list[tuple[float, float, AgentSource]] = []
+    for index, source in enumerate(sources):
+        url = str(source.url or "").strip()
+        excerpt = _source_excerpt(source)
+        credibility = float(source.credibility_score or 0.0) or _score_source_credibility(url)
+        freshness = _score_source_freshness(url, excerpt)
+        quality = _apply_freshness_weight(credibility, freshness)
+        relevance = float(relevance_by_idx.get(index, 0.5))
+        base = float(source.score or 0.55)
+        penalty = _low_signal_penalty(source)
+        final_score = max(
+            0.0,
+            min(
+                1.0,
+                (0.20 * base) + (0.45 * relevance) + (0.35 * quality) - penalty,
+            ),
+        )
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
+        metadata = {
+            **metadata,
+            "relevance_score": round(relevance, 4),
+            "credibility_score": round(credibility, 4),
+            "freshness_score": round(freshness, 4),
+            "quality_score": round(quality, 4),
+            "selection_score": round(final_score, 4),
+            "low_signal_penalty": round(penalty, 4),
+        }
+        source.metadata = metadata
+        source.credibility_score = credibility
+        source.score = round(final_score, 4)
+        ranked.append((final_score, penalty, source))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    strong = [source for score, _penalty, source in ranked if score >= 0.58]
+    unique_strong = {
+        str(source.url or "").strip()
+        for source in strong
+        if str(source.url or "").strip()
+    }
+    if len(unique_strong) >= max(2, min(min_unique_sources, 4)):
+        selected = strong
+    else:
+        selected = [
+            source
+            for score, penalty, source in ranked
+            if not (score < 0.38 and penalty >= 0.30)
+        ]
+        if not selected:
+            selected = [source for _score, _penalty, source in ranked]
+
+    selected = selected[: max(12, min(120, len(selected)))]
+    dropped_count = max(0, len(sources) - len(selected))
+    return selected, dropped_count
 
 
 def run_enrichment_and_finalize_stage(
@@ -601,6 +730,28 @@ def run_enrichment_and_finalize_stage(
             for _s in list(_src_by_url.values()):
                 if str(_s.url or "") not in _mmr_url_set:
                     sources.append(_s)
+
+        ranked_sources, dropped_for_quality = _rank_sources_for_synthesis(
+            query=query,
+            sources=sources,
+            min_unique_sources=min_unique_sources,
+        )
+        if dropped_for_quality:
+            quality_gate_event = ToolTraceEvent(
+                event_type="retrieval_quality_assessed",
+                title="Rank sources for synthesis",
+                detail=f"Pruned {dropped_for_quality} low-signal source(s) before final synthesis",
+                data={
+                    "provider": used_provider,
+                    "source_count_before": len(sources),
+                    "source_count_after": len(ranked_sources),
+                    "dropped_low_signal": dropped_for_quality,
+                    "query": query,
+                },
+            )
+            trace_events.append(quality_gate_event)
+            yield quality_gate_event
+        sources = ranked_sources
 
         context.settings["__latest_web_sources"] = [
             source.to_dict()

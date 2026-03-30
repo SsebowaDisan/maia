@@ -189,6 +189,22 @@ describe("messageBlocks", () => {
     ]);
   });
 
+  it("accepts legacy markdown blocks that use text instead of markdown", () => {
+    expect(
+      normalizeMessageBlocks([
+        {
+          type: "markdown",
+          text: "## Executive Summary\n- Complete",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "markdown",
+        markdown: "## Executive Summary\n- Complete",
+      },
+    ]);
+  });
+
   it("normalizes chart blocks from nested chart payload", () => {
     const blocks = normalizeMessageBlocks([
       {

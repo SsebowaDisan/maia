@@ -59,8 +59,10 @@ function cursorLabelForEventType(type: string): string {
   if (type === "drive.go_to_doc") return "Opening doc link";
   if (type === "drive.go_to_sheet") return "Opening sheet link";
   if (type === "llm.context_summary") return "Summarizing context";
-  if (type === "llm.task_rewrite_started") return "Rewriting task";
-  if (type === "llm.task_rewrite_completed") return "Task rewrite ready";
+  if (type === "llm.task_rewrite_started") return "Writing todo";
+  if (type === "llm.task_rewrite_completed") return "Todo ready";
+  if (type === "llm.task_contract_started") return "Preparing checklist";
+  if (type === "llm.task_contract_completed") return "Checklist ready";
   if (type === "llm.clarification_requested") return "Requesting clarification";
   if (type === "llm.clarification_resolved") return "Clarification resolved";
   if (type === "llm.plan_decompose_started") return "Breaking into steps";

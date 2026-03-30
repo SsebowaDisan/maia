@@ -49,9 +49,10 @@ def build_sources_used(
         if not source_type:
             source_type = (
                 "web"
-                if source_url.startswith(("http://", "https://")) and not source_id
+                if source_url.startswith(("http://", "https://"))
                 else "file"
             )
+        credibility_tier = str(row.get("credibility_tier", "") or "").strip().lower() or None
         rows.append(
             {
                 "source_type": source_type,
@@ -59,6 +60,7 @@ def build_sources_used(
                 "url": source_url or None,
                 "file_id": source_id or None,
                 "score": row.get("strength_score") or row.get("score"),
+                "credibility_tier": credibility_tier,
                 "metadata": {
                     "page_label": str(row.get("page_label", "") or "").strip()
                     or None,

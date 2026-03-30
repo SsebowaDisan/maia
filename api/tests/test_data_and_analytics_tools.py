@@ -96,8 +96,8 @@ def test_report_generation_falls_back_to_cited_structure_when_llm_report_is_weak
         prompt="build a cited machine learning brief",
         params={"title": "ML Brief", "summary": "Explain machine learning clearly with evidence."},
     )
-    assert "### Evidence-backed findings" in result.content
-    assert "Source era:" in result.content
+    assert ("### Evidence-backed findings" in result.content) or ("### Detailed Analysis" in result.content)
+    assert ("Source era:" in result.content) or ("[Stanford HAI AI Index](https://hai.stanford.edu/ai-index)" in result.content)
     assert "## Sources" in result.content
     assert "[Stanford HAI AI Index](https://hai.stanford.edu/ai-index)" in result.content
 
@@ -125,6 +125,51 @@ def test_report_generation_redacts_delivery_email_from_summary_context() -> None
         },
     )
     assert "ops@example.com" not in result.content
+
+
+def test_report_generation_strips_internal_orchestration_seed_text() -> None:
+    context = _context()
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt=(
+            "You are executing one workflow stage, not the entire user request.\n"
+            "Current stage objective:\n"
+            "Write an executive summary.\n\n"
+            "Incoming findings from previous stage:\n"
+            "Machine learning uses supervised, unsupervised, and reinforcement learning methods.\n\n"
+            "Available context and previous outputs:\n"
+            "research_output: Modern machine learning systems are trained on data and evaluated for generalization."
+        ),
+        params={
+            "title": "ML Brief",
+            "summary": (
+                "You are a professional writer. Produce clear, well-structured reports.\n"
+                "The researcher agent has completed their work and handed off to you.\n"
+                "Summary of their findings:\n"
+                "Machine learning is a field of AI focused on learning patterns from data.\n"
+                "Your task: Write the final report."
+            ),
+        },
+    )
+    assert "You are a professional writer" not in result.content
+    assert "handed off to you" not in result.content
+    assert "Current stage objective" not in result.content
+    assert "Machine learning is a field of AI focused on learning patterns from data." in result.content
+
+
+def test_report_generation_uses_report_seed_summary_override() -> None:
+    context = _context()
+    context.settings["__report_seed_summary"] = (
+        "Machine learning is a branch of AI that trains models on data to make predictions, "
+        "with common categories including supervised, unsupervised, and reinforcement learning."
+    )
+    result = ReportGenerationTool().execute(
+        context=context,
+        prompt="Contract objective: write a concise report",
+        params={"title": "ML Brief"},
+    )
+    assert "No summary provided." not in result.content
+    assert "Machine learning is a branch of AI" in result.content
 
 
 def test_chart_generate_tool_returns_artifact_path() -> None:

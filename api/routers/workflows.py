@@ -210,11 +210,6 @@ def assemble_and_run(
     # Run pipeline in background thread so events stream immediately
     pipeline_thread = threading.Thread(target=_run_pipeline, daemon=True)
     pipeline_thread.start()
-    _emit_live({
-        "event_type": "assembly_started",
-        "title": "Assembling workflow",
-        "detail": "Building the team and dependency plan...",
-    })
 
     def _stream():
         heartbeat_interval_seconds = 10.0

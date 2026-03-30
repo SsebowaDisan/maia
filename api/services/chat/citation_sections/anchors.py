@@ -24,7 +24,11 @@ def _citation_anchor(ref: dict[str, Any]) -> str:
     ref_id = int(ref.get("id", 0) or 0)
     if ref_id <= 0:
         return ""
-    file_id = str(ref.get("source_id", "") or "").strip()
+    file_id = str(ref.get("file_id", "") or "").strip()
+    if not file_id:
+        source_id = str(ref.get("source_id", "") or "").strip()
+        if source_id and not source_id.lower().startswith(("http://", "https://")):
+            file_id = source_id
     source_url = _normalize_source_url(ref.get("source_url"))
     page_label = str(ref.get("page_label", "") or "").strip()
     unit_id = str(ref.get("unit_id", "") or "").strip()
@@ -167,7 +171,11 @@ def _augment_existing_citation_anchors(answer: str, refs: list[dict[str, Any]]) 
             normalized_open = f"{normalized_open[:-1]} data-evidence-id='evidence-{ref_id}'>"
 
         additions: list[str] = []
-        file_id = str(ref.get("source_id", "") or "").strip()
+        file_id = str(ref.get("file_id", "") or "").strip()
+        if not file_id:
+            source_id = str(ref.get("source_id", "") or "").strip()
+            if source_id and not source_id.lower().startswith(("http://", "https://")):
+                file_id = source_id
         source_url = _normalize_source_url(ref.get("source_url"))
         page_label = str(ref.get("page_label", "") or "").strip()
         unit_id = str(ref.get("unit_id", "") or "").strip()

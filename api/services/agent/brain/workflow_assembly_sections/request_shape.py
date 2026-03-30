@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 from typing import Any
+
+from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
 from .common import _extract_email, _normalize_role_key
 
@@ -10,12 +13,69 @@ def _derive_request_focus(request_description: str) -> str:
     text = " ".join(str(request_description or "").split()).strip()
     if not text:
         return "the requested topic"
+    llm_focus = _derive_request_focus_with_llm(text)
+    if llm_focus:
+        return llm_focus
     cleaned = re.sub(r"([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", "", text, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:and|then)?\s*(?:write|draft|compose|send|deliver|email|mail)\b[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"^\s*(?:please\s+)?(?:make|do|perform|conduct|carry out|start|run)\s+(?:the\s+)?research\s+(?:about|on)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*(?:please\s+)?(?:make|do|perform|conduct|carry out|start|run)\s+(?:the\s+)?research(?:\s+online)?\s+(?:about|on)\s+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"^\s*(?:research|analyse|analyze|investigate|study)\s+(?:about|on)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = cleaned.strip(" .,:;!-")
-    return cleaned or text.strip(" .,:;!-") or "the requested topic"
+    cleaned = cleaned.strip(" .,:;!?-")
+    return cleaned or text.strip(" .,:;!?-") or "the requested topic"
+
+
+def _needs_focus_extraction(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split()).strip()
+    if not normalized:
+        return False
+    if len(normalized.split()) <= 4 and "?" not in normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "research online",
+            "research about",
+            "research on",
+            "make research",
+            "conduct research",
+            "write an email",
+            "inline citations",
+            "authoritative sources",
+        )
+    )
+
+
+@lru_cache(maxsize=256)
+def _derive_request_focus_with_llm(text: str) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if not cleaned or not env_bool("MAIA_AGENT_LLM_REQUEST_FOCUS_ENABLED", default=True):
+        return ""
+    if not _needs_focus_extraction(cleaned):
+        return ""
+    payload = call_json_response(
+        system_prompt=(
+            "You extract the core subject of a user request for workflow planning. "
+            "Return strict JSON only."
+        ),
+        user_prompt=(
+            "Return JSON only in this schema:\n"
+            '{ "focus": "machine learning" }\n'
+            "Rules:\n"
+            "- Keep only the core subject/topic.\n"
+            "- Remove wrapper verbs like make, research, search, email, write, send, gather.\n"
+            "- Remove output formatting instructions and citation instructions.\n"
+            "- Keep it concise, usually 2-8 words.\n\n"
+            f"Input:\n{cleaned}"
+        ),
+        temperature=0.0,
+        timeout_seconds=8,
+        max_tokens=120,
+    )
+    normalized = sanitize_json_value(payload) if isinstance(payload, dict) else None
+    if not isinstance(normalized, dict):
+        return ""
+    focus = " ".join(str(normalized.get("focus") or "").split()).strip()
+    return focus[:180] if focus else ""
 
 
 def _derive_primary_search_query(*, request_description: str, step: dict[str, Any]) -> str:
@@ -51,7 +111,7 @@ def _step_role_family(step: dict[str, Any]) -> str:
         return "reviewer"
     if _role_matches("analyst", "analysis"):
         return "analysis"
-    if _role_matches("browser", "research", "document", "investigate"):
+    if _role_matches("browser", "research", "researcher", "research specialist", "document", "investigate"):
         return "research"
     if _matches("deliver", "delivery", "mailer", "sender", "dispatch"):
         return "delivery"
@@ -61,7 +121,7 @@ def _step_role_family(step: dict[str, Any]) -> str:
         return "reviewer"
     if _matches("analyst", "analysis", "compare", "metric", "trend", "evaluate"):
         return "analysis"
-    if _matches("browser", "research", "document", "evidence", "search", "source", "investigate"):
+    if _matches("browser", "research", "researcher", "document", "evidence", "search", "source", "investigate"):
         return "research"
     return "general"
 
@@ -73,6 +133,20 @@ def _request_needs_research_email_flow(request_description: str) -> bool:
     wants_delivery = bool(_extract_email(request_description)) or any(marker in request for marker in ("send", "email", "mail", "deliver"))
     wants_research = any(marker in request for marker in ("research", "investigate", "look up", "search", "sources", "evidence", "findings"))
     return wants_delivery and wants_research
+
+
+def _request_needs_research_summary_flow(request_description: str) -> bool:
+    request = " ".join(str(request_description or "").split()).strip().lower()
+    if not request:
+        return False
+    wants_research = any(
+        marker in request
+        for marker in ("research", "investigate", "look up", "search", "sources", "evidence", "findings")
+    )
+    wants_delivery = bool(_extract_email(request_description)) or any(
+        marker in request for marker in ("send", "email", "mail", "deliver")
+    )
+    return wants_research and not wants_delivery
 
 
 def _research_step_description(focus: str) -> str:
@@ -93,6 +167,14 @@ def _review_step_description(focus: str) -> str:
         f"Review the research findings about {focus}, verify the strongest supported claims, and challenge any weak "
         "or contradictory evidence before writing. Preserve inline citations and the final Evidence Citations section. "
         "Do not draft or send the email."
+    )
+
+
+def _research_summary_step_description(focus: str) -> str:
+    return (
+        f"Synthesize the research findings about {focus} into a concise executive brief with inline citations and a final "
+        "Evidence Citations section. Explain the topic clearly, highlight the strongest supported findings, and remove weak "
+        "or irrelevant sources. This stage writes the final user-facing answer only; do not send an email."
     )
 
 
@@ -139,12 +221,47 @@ def _rebalance_research_email_steps(*, steps: list[dict[str, Any]], request_desc
     return updated_steps
 
 
+def _ensure_research_summary_followup(*, steps: list[dict[str, Any]], edges: list[dict[str, str]], request_description: str) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    if len(steps) != 1 or not _request_needs_research_summary_flow(request_description):
+        return steps, edges
+    first_step = dict(steps[0])
+    first_family = _step_role_family(first_step)
+    if first_family not in {"research", "analysis", "reviewer", "general"}:
+        return steps, edges
+    focus = _derive_request_focus(request_description)
+    summary_step_id = "step_2"
+    updated_steps = [first_step]
+    updated_steps.append(
+        {
+            "step_id": summary_step_id,
+            "agent_role": "writer",
+            "description": _research_summary_step_description(focus),
+            "tools_needed": ["report", "summary"],
+        }
+    )
+    updated_edges = list(edges)
+    if not any(
+        str(edge.get("from_step") or "").strip() == str(first_step.get("step_id") or "").strip()
+        and str(edge.get("to_step") or "").strip() == summary_step_id
+        for edge in updated_edges
+        if isinstance(edge, dict)
+    ):
+        updated_edges.append(
+            {
+                "from_step": str(first_step.get("step_id") or "").strip(),
+                "to_step": summary_step_id,
+            }
+        )
+    return updated_steps, updated_edges
+
+
 def _rescope_step_descriptions(*, steps: list[dict[str, Any]], request_description: str) -> list[dict[str, Any]]:
     if len(steps) < 2:
         return steps
     focus = _derive_request_focus(request_description)
     recipient = _extract_email(request_description)
     has_delivery_step = any(_step_role_family(step) == "delivery" for step in steps)
+    summary_only_flow = _request_needs_research_summary_flow(request_description)
     rescoped: list[dict[str, Any]] = []
     for index, step in enumerate(steps, start=1):
         updated = dict(step)
@@ -154,7 +271,11 @@ def _rescope_step_descriptions(*, steps: list[dict[str, Any]], request_descripti
         elif family in {"analysis", "reviewer"}:
             updated["description"] = _review_step_description(focus)
         elif family == "writer":
-            updated["description"] = _writer_step_description(focus, recipient)
+            updated["description"] = (
+                _research_summary_step_description(focus)
+                if summary_only_flow and not recipient
+                else _writer_step_description(focus, recipient)
+            )
         elif family == "delivery":
             updated["description"] = _delivery_step_description(recipient)
         elif index == 1 and has_delivery_step:
@@ -337,5 +458,10 @@ def _sanitize_plan(plan: dict[str, Any], *, description: str, ops: Any | None = 
             reason = str(candidate.get("reason") or "").strip()
             if connector_id:
                 connectors.append({"connector_id": connector_id, "reason": reason})
+    steps, edges = _ensure_research_summary_followup(
+        steps=steps,
+        edges=edges,
+        request_description=description,
+    )
     steps = _rescope_step_descriptions(steps=steps, request_description=description)
     return {"steps": steps, "edges": edges, "connectors_needed": connectors}

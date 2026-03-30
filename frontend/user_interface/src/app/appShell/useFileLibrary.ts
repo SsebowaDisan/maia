@@ -21,6 +21,7 @@ import {
   type UploadResponse,
 } from "../../api/client";
 import { createFileJobWithFallback, createUrlJobWithFallback } from "./fileLibraryJobCreation";
+import { deriveIngestionJobProgress } from "../components/chatMain/ingestionProgress";
 
 export function useFileLibrary() {
   const [uploadStatus, setUploadStatus] = useState("");
@@ -103,27 +104,9 @@ export function useFileLibrary() {
       return jobs;
     }
     activeFileJobIdRef.current = activeFileJob.id;
-
-    const totalBytes = Math.max(0, Number(activeFileJob.bytes_total || 0));
-    const indexedBytes = Math.max(0, Number(activeFileJob.bytes_indexed || 0));
-    const percent =
-      totalBytes > 0
-        ? Math.max(0, Math.min(100, Math.round((indexedBytes / totalBytes) * 100)))
-        : Math.max(
-            0,
-            Math.min(
-              100,
-              Math.round(
-                ((Number(activeFileJob.processed_items || 0) /
-                  Math.max(1, Number(activeFileJob.total_items || 0))) *
-                  100),
-              ),
-            ),
-          );
-    setUploadProgressPercent(percent);
-    setUploadProgressLabel(
-      `Indexing ${activeFileJob.processed_items}/${activeFileJob.total_items} (${activeFileJob.status})`,
-    );
+    const progress = deriveIngestionJobProgress(activeFileJob);
+    setUploadProgressPercent(progress.percent);
+    setUploadProgressLabel(progress.detail);
     return jobs;
   }, []);
 

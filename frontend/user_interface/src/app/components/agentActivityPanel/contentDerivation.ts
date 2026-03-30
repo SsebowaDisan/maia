@@ -1,7 +1,18 @@
-import { getAgentEventSnapshotUrl } from "../../../api/client";
+import { getAgentEventSnapshotUrl, getAgentSnapshotRefUrl } from "../../../api/client";
 import type { AgentActivityEvent } from "../../types";
 import { readStringField, URL_PATTERN } from "./helpers";
 import { eventTab } from "./interactionSemantics";
+
+function isDesktopStartingNarration(value: string): boolean {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "starting secure agent desktop" ||
+    normalized.includes("booting isolated workspace and loading connected tools")
+  );
+}
 
 function resolveSceneSnapshotUrl(
   sceneEvent: AgentActivityEvent | null,
@@ -9,10 +20,16 @@ function resolveSceneSnapshotUrl(
 ): string {
   const resolveSnapshot = (event: AgentActivityEvent | null): string => {
     if (!event) return "";
-    const raw = readStringField(event.snapshot_ref);
+    const raw =
+      readStringField(event.snapshot_ref) ||
+      readStringField(event.data?.["snapshot_ref"]) ||
+      readStringField(event.metadata?.["snapshot_ref"]);
     if (!raw) return "";
     if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:image/")) {
       return raw;
+    }
+    if (raw.startsWith(".") || raw.startsWith("/") || /^[A-Za-z]:[\\/]/.test(raw)) {
+      return getAgentSnapshotRefUrl(raw);
     }
     if (!event.run_id || !event.event_id) {
       return "";
@@ -31,6 +48,14 @@ function resolveSceneSnapshotUrl(
     }
   }
   return "";
+}
+
+function sanitizeSceneTextForSurface(sceneText: string, options?: { isBrowserScene?: boolean }): string {
+  const text = String(sceneText || "");
+  if (!options?.isBrowserScene) {
+    return text;
+  }
+  return isDesktopStartingNarration(text) ? "" : text;
 }
 
 function resolveBrowserUrl(visibleEvents: AgentActivityEvent[]): string {
@@ -298,4 +323,5 @@ export {
   resolveEmailSubject,
   resolveSceneSnapshotUrl,
   resolveSheetBodyHint,
+  sanitizeSceneTextForSurface,
 };

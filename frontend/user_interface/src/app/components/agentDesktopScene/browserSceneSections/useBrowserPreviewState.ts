@@ -32,7 +32,7 @@ function useBrowserPreviewState(options: UseBrowserPreviewStateOptions) {
   const [frameScrollPercent, setFrameScrollPercent] = useState<number | null>(null);
   const [frameScale, setFrameScale] = useState(1);
   const [frameVirtualHeight, setFrameVirtualHeight] = useState(FRAME_VIEWPORT_BASE_HEIGHT);
-  const prevSnapshotUrlRef = useRef<string>(options.computerUseScreenshotUrl || options.snapshotUrl);
+  const prevSnapshotUrlRef = useRef<string>(options.snapshotUrl || options.computerUseScreenshotUrl);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const frameViewportRef = useRef<HTMLDivElement | null>(null);
   const frameScrollObserverCleanupRef = useRef<(() => void) | null>(null);
@@ -44,8 +44,8 @@ function useBrowserPreviewState(options: UseBrowserPreviewStateOptions) {
     openedPages: options.openedPages,
     pageIndex: options.pageIndex,
   });
-  const resolvedPageUrl = options.computerUseStreamUrl || activePageUrl;
-  const sceneSnapshotUrl = options.computerUseScreenshotUrl || options.snapshotUrl;
+  const resolvedPageUrl = activePageUrl || options.computerUseStreamUrl;
+  const sceneSnapshotUrl = options.snapshotUrl || options.computerUseScreenshotUrl;
 
   const proxyPreviewUrl = useMemo(() => {
     const source = String(resolvedPageUrl || "").trim();

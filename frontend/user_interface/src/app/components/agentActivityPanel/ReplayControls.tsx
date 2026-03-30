@@ -16,6 +16,10 @@ type ReplayControlsProps = {
   onStep?: (event: ReplayEvent, index: number, total: number) => void;
 };
 
+function initialReplayCursor(total: number): number {
+  return total > 0 ? total - 1 : 0;
+}
+
 export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
   const [events, setEvents] = useState<ReplayEvent[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -32,10 +36,13 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
       .then((data) => {
         const evts = Array.isArray(data) ? (data as ReplayEvent[]) : [];
         setEvents(evts);
-        setCursor(0);
+        setCursor(initialReplayCursor(evts.length));
         setPlaying(false);
       })
-      .catch(() => setEvents([]))
+      .catch(() => {
+        setEvents([]);
+        setCursor(0);
+      })
       .finally(() => setLoading(false));
   }, [runId]);
 
@@ -162,3 +169,5 @@ export function ReplayControls({ runId, onStep }: ReplayControlsProps) {
     </div>
   );
 }
+
+export { initialReplayCursor };

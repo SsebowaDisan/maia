@@ -270,17 +270,30 @@ def _create_chat_completion_with_retry(
     messages: list[dict[str, Any]],
 ) -> Any:
     last_exc: Exception | None = None
+    candidate_messages = messages
+    attempted_string_fallback = False
     for attempt in range(1, _MAX_API_ATTEMPTS + 1):
         try:
             return client.chat.completions.create(
                 model=model,
-                messages=messages,  # type: ignore[arg-type]
+                messages=candidate_messages,  # type: ignore[arg-type]
                 tools=[_COMPUTER_FUNCTION],  # type: ignore[arg-type]
                 tool_choice="auto",
                 max_tokens=1024,
             )
         except Exception as exc:
             last_exc = exc
+            if (
+                not attempted_string_fallback
+                and _requires_string_user_content(exc)
+                and _has_structured_user_content(candidate_messages)
+            ):
+                attempted_string_fallback = True
+                candidate_messages = _coerce_user_content_to_string(candidate_messages)
+                logger.info(
+                    "Computer Use runtime rejected structured user content; retrying with string-only user messages."
+                )
+                continue
             if attempt >= _MAX_API_ATTEMPTS or not _is_retryable_exception(exc):
                 raise
             sleep_for = _RETRY_BASE_SECONDS * (2 ** (attempt - 1))
@@ -296,6 +309,54 @@ def _create_chat_completion_with_retry(
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("OpenAI completion retry loop failed without an exception.")
+
+
+def _has_structured_user_content(messages: list[dict[str, Any]]) -> bool:
+    for message in messages:
+        if str(message.get("role") or "").strip().lower() != "user":
+            continue
+        if isinstance(message.get("content"), list):
+            return True
+    return False
+
+
+def _coerce_user_content_to_string(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        cloned = dict(message)
+        if str(cloned.get("role") or "").strip().lower() != "user":
+            normalized.append(cloned)
+            continue
+        content = cloned.get("content")
+        if not isinstance(content, list):
+            normalized.append(cloned)
+            continue
+        parts: list[str] = []
+        saw_image = False
+        for item in content:
+            if not isinstance(item, dict):
+                text = " ".join(str(item or "").split()).strip()
+                if text:
+                    parts.append(text)
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type == "text":
+                text = " ".join(str(item.get("text") or "").split()).strip()
+                if text:
+                    parts.append(text)
+                continue
+            if item_type == "image_url":
+                saw_image = True
+        if saw_image:
+            parts.append("Screenshot is available in the current browser state.")
+        cloned["content"] = "\n\n".join(part for part in parts if part).strip()
+        normalized.append(cloned)
+    return normalized
+
+
+def _requires_string_user_content(exc: Exception) -> bool:
+    lowered = str(exc or "").lower()
+    return "content must be a string" in lowered and "messages[" in lowered
 
 
 def _exception_status_code(exc: Exception) -> int | None:

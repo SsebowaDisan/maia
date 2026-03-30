@@ -93,6 +93,7 @@ def _extract_info_refs(info_html: str) -> list[dict[str, Any]]:
         refs.append(
             {
                 "id": ref_id,
+                "file_id": source_id_match.group(1).strip() if source_id_match else "",
                 "source_id": source_id_match.group(1).strip() if source_id_match else "",
                 "source_url": source_url,
                 "page_label": page_label,
@@ -226,6 +227,7 @@ def _merge_refs(
             by_id[ref_id] = copied
             continue
         for key in (
+            "file_id",
             "source_url",
             "page_label",
             "label",
@@ -298,7 +300,8 @@ def build_fast_info_html(
             summary_label += f" - page {page_label}"
 
         details_id = f" id='evidence-{ref_id}'" if ref_id > 0 else ""
-        source_id = str(snippet.get("source_id", "") or "").strip()
+        file_id = str(snippet.get("file_id", "") or "").strip()
+        source_id = file_id or str(snippet.get("source_id", "") or "").strip()
         unit_id = str(snippet.get("unit_id", "") or "").strip()
         match_quality = str(snippet.get("match_quality", "") or "").strip().lower() or "estimated"
         try:
@@ -310,7 +313,7 @@ def build_fast_info_html(
         except Exception:
             char_end = 0
         details_page_attr = f" data-page='{page_label}'" if page_label else ""
-        details_file_attr = f" data-file-id='{html.escape(source_id, quote=True)}'" if source_id else ""
+        details_file_attr = f" data-file-id='{html.escape(file_id, quote=True)}'" if file_id else ""
         details_source_url_attr = f" data-source-url='{html.escape(source_url, quote=True)}'" if source_url else ""
         details_unit_attr = f" data-unit-id='{html.escape(unit_id[:160], quote=True)}'" if unit_id else ""
         details_match_quality_attr = (
@@ -345,14 +348,14 @@ def build_fast_info_html(
                 f"<a href='{safe_source_url}' target='_blank' rel='noopener noreferrer'>{safe_source_url}</a>"
                 "</div>"
             )
-        elif source_id:
-            viewer_url = f"/api/uploads/files/{html.escape(source_id, quote=True)}/raw"
+        elif file_id:
+            viewer_url = f"/api/uploads/files/{html.escape(file_id, quote=True)}/raw"
             if page_label:
                 viewer_url += f"#page={html.escape(page_label, quote=True)}"
             link_block = (
                 "<div class='evidence-content'><b>View document:</b> "
                 f"<a href='{viewer_url}' target='_blank' rel='noopener noreferrer'>"
-                f"{html.escape(source_name or source_id)}</a>"
+                f"{html.escape(source_name or file_id)}</a>"
                 "</div>"
             )
         block = (

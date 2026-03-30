@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 from api.schemas.workflow_definition import WorkflowStep
+from api.services.agent.llm_runtime import call_json_response, env_bool, sanitize_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +67,78 @@ def _normalize_http_url(value: Any) -> str:
 
 def _clean_stage_topic(value: Any) -> str:
     text = " ".join(str(value or "").split()).strip()
-    return text[:180] if text else ""
+    if not text:
+        return ""
+    extracted = _extract_stage_topic(text)
+    return extracted[:180] if extracted else text[:180]
+
+
+_TOPIC_WRAPPER_MARKERS = (
+    "research online",
+    "search online",
+    "research about",
+    "research on",
+    "make research",
+    "conduct research",
+    "find information",
+    "gather evidence",
+)
+
+
+def _needs_topic_extraction(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split()).strip()
+    if not normalized:
+        return False
+    if len(normalized.split()) <= 4 and "?" not in normalized:
+        return False
+    return any(marker in normalized for marker in _TOPIC_WRAPPER_MARKERS) or " about " in normalized
+
+
+@lru_cache(maxsize=256)
+def _extract_stage_topic(text: str) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if not cleaned:
+        return ""
+    if env_bool("MAIA_AGENT_LLM_STAGE_TOPIC_EXTRACTION_ENABLED", default=True) and _needs_topic_extraction(cleaned):
+        payload = call_json_response(
+            system_prompt=(
+                "You extract the core research topic from an agent stage instruction. "
+                "Return strict JSON only."
+            ),
+            user_prompt=(
+                "Return JSON only in this schema:\n"
+                '{ "topic": "machine learning" }\n'
+                "Rules:\n"
+                "- Keep only the core subject/topic to research.\n"
+                "- Remove operational wrapper words like research/search/find/gather/open/verify.\n"
+                "- Do not include formatting instructions or delivery instructions.\n"
+                "- Keep it concise, usually 2-8 words.\n\n"
+                f"Input:\n{cleaned}"
+            ),
+            temperature=0.0,
+            timeout_seconds=8,
+            max_tokens=120,
+        )
+        normalized = sanitize_json_value(payload) if isinstance(payload, dict) else None
+        if isinstance(normalized, dict):
+            topic = " ".join(str(normalized.get("topic") or "").split()).strip()
+            if topic:
+                return topic
+    return _fallback_stage_topic(cleaned)
+
+
+def _fallback_stage_topic(text: str) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    for marker in (" about ", " on "):
+        if marker in lowered:
+            idx = lowered.find(marker)
+            candidate = cleaned[idx + len(marker):].strip(" .,:;!?-")
+            if candidate:
+                return candidate
+    return cleaned
 
 
 def _normalize_delivery_artifact(text: Any) -> str:

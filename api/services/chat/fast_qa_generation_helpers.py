@@ -12,6 +12,15 @@ from urllib.error import HTTPError
 _FAST_QA_RESPONSE_CACHE: "OrderedDict[str, str]" = OrderedDict()
 
 
+def _provider_supports_inline_images(provider_label: str) -> bool:
+    normalized = str(provider_label or "").strip().lower()
+    if normalized in {"openai", "azure-openai"}:
+        return True
+    if "generativelanguage.googleapis.com" in normalized or "gemini" in normalized:
+        return True
+    return False
+
+
 def _cache_limit() -> int:
     raw = str(os.getenv("MAIA_FAST_QA_RESPONSE_CACHE_SIZE", "") or "").strip()
     try:
@@ -177,20 +186,21 @@ def call_openai_fast_qa_impl(
         context_blocks.append(f"{' | '.join(header_parts)}\nExcerpt: {text}")
 
     visual_evidence: list[tuple[str, str, str, int]] = []
-    seen_images: set[str] = set()
-    for snippet in snippets:
-        source_name = str(snippet.get("source_name", "Indexed file"))
-        page_label = str(snippet.get("page_label", "") or "")
-        ref_id = int(snippet.get("ref_id", 0) or 0)
-        image_origin = snippet.get("image_origin")
-        if not isinstance(image_origin, str) or not image_origin.startswith("data:image/"):
-            continue
-        if image_origin in seen_images:
-            continue
-        seen_images.add(image_origin)
-        visual_evidence.append((source_name, page_label, image_origin, ref_id))
-        if len(visual_evidence) >= max(0, API_FAST_QA_MAX_IMAGES):
-            break
+    if _provider_supports_inline_images(provider_label):
+        seen_images: set[str] = set()
+        for snippet in snippets:
+            source_name = str(snippet.get("source_name", "Indexed file"))
+            page_label = str(snippet.get("page_label", "") or "")
+            ref_id = int(snippet.get("ref_id", 0) or 0)
+            image_origin = snippet.get("image_origin")
+            if not isinstance(image_origin, str) or not image_origin.startswith("data:image/"):
+                continue
+            if image_origin in seen_images:
+                continue
+            seen_images.add(image_origin)
+            visual_evidence.append((source_name, page_label, image_origin, ref_id))
+            if len(visual_evidence) >= max(0, API_FAST_QA_MAX_IMAGES):
+                break
 
     general_knowledge_mode = bool(allow_general_knowledge and not context_blocks)
     history_blocks = []

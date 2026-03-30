@@ -3,8 +3,90 @@ from __future__ import annotations
 import time
 from copy import deepcopy
 from typing import Any, Callable
+from urllib.parse import urlparse
+
+from sqlmodel import Session, select
+
+from ktem.db.models import engine
 
 from api.services.observability.citation_trace import record_trace_event
+
+
+def _selected_source_credibility(label: str, source_type: str) -> str:
+    normalized_type = str(source_type or "").strip().lower()
+    normalized_label = str(label or "").strip().lower()
+    if normalized_type in {"file", "pdf"}:
+        return "platform"
+    try:
+        host = (urlparse(normalized_label).netloc or "").strip().lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    if host in {"example.com", "example.org", "example.net", "localhost", "127.0.0.1"}:
+        return "low"
+    if host.endswith(".gov") or host.endswith(".edu") or host.startswith(("docs.", "developer.", "developers.", "research.")):
+        return "high"
+    if host.endswith(("nature.com", "arxiv.org", "openml.org", "jmlr.org", "ibm.com", "microsoft.com", "google.com", "openai.com")):
+        return "high"
+    if host.endswith(("w3schools.com", "geeksforgeeks.org", "tutorialspoint.com", "javatpoint.com")):
+        return "low"
+    return "medium"
+
+
+def _resolve_selected_scope_sources(
+    *,
+    context,
+    user_id: str,
+    selected_payload: dict[str, Any],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_index_id, payload in (selected_payload or {}).items():
+        if not isinstance(payload, list) or len(payload) < 2:
+            continue
+        mode = str(payload[0] or "").strip().lower()
+        if mode != "select":
+            continue
+        selected_ids = [
+            str(item).strip()
+            for item in (payload[1] if isinstance(payload[1], list) else [])
+            if str(item).strip()
+        ]
+        if not selected_ids:
+            continue
+        try:
+            index = context.get_index(int(str(raw_index_id)))
+        except Exception:
+            try:
+                index = context.get_index(raw_index_id)
+            except Exception:
+                continue
+        Source = index._resources.get("Source")
+        if Source is None:
+            continue
+        with Session(engine) as session:
+            stmt = select(Source.id, Source.name).where(Source.id.in_(selected_ids))
+            if index.config.get("private", False):
+                stmt = stmt.where(Source.user == user_id)
+            result_rows = session.execute(stmt).all()
+        name_by_id = {str(row[0]): str(row[1] or "").strip() for row in result_rows}
+        for source_id in selected_ids:
+            if source_id in seen:
+                continue
+            seen.add(source_id)
+            label = name_by_id.get(source_id, source_id)
+            source_type = "web" if label.startswith(("http://", "https://")) else ("pdf" if label.lower().endswith(".pdf") else "file")
+            rows.append(
+                {
+                    "file_id": source_id,
+                    "label": label,
+                    "source_type": source_type,
+                    "credibility_tier": _selected_source_credibility(label, source_type),
+                    "url": label if source_type == "web" else "",
+                }
+            )
+    return rows
 
 
 def run_retrieval_phase(
@@ -107,9 +189,10 @@ def run_retrieval_phase(
         "yes",
         "on",
     }
+    normalized_agent_mode = str(request.agent_mode or "").strip().lower()
     mode_variant = (
         "rag"
-        if str(request.agent_mode or "").strip().lower() == "ask" and rag_enabled
+        if normalized_agent_mode == "rag" or (normalized_agent_mode == "ask" and rag_enabled)
         else ""
     )
     display_mode = mode_variant or "ask"
@@ -118,6 +201,11 @@ def run_retrieval_phase(
     retrieval_max_chunks = max(18, int(constants["API_FAST_QA_MAX_SNIPPETS"]) * 3)
     max_keep = max(1, int(constants["API_FAST_QA_MAX_SNIPPETS"]))
     selected_scope_ids = selected_scope_file_ids_fn(selected_payload)
+    selected_scope_sources = _resolve_selected_scope_sources(
+        context=context,
+        user_id=user_id,
+        selected_payload=selected_payload,
+    )
 
     if mode_variant == "rag":
         scope_detail = (
@@ -280,6 +368,38 @@ def run_retrieval_phase(
                 "raw_snippet_count": len(raw_snippets),
             },
         )
+        if mode_variant == "rag":
+            return {
+                "skip": False,
+                "message": message,
+                "conversation_id": conversation_id,
+                "conversation_name": conversation_name,
+                "data_source": data_source,
+                "chat_history": chat_history,
+                "chat_state": chat_state,
+                "requested_language": requested_language,
+                "selected_payload": selected_payload,
+                "selected_scope_ids": selected_scope_ids,
+                "selected_scope_count": len(selected_scope_ids),
+                "selected_scope_sources": selected_scope_sources,
+                "covered_scope_count": 0,
+                "url_targets": url_targets,
+                "retrieval_query": retrieval_query,
+                "is_follow_up": is_follow_up,
+                "mode_variant": mode_variant,
+                "display_mode": display_mode,
+                "turn_start_ms": turn_start_ms,
+                "retrieval_end_ms": int(time.monotonic() * 1000),
+                "raw_snippets": raw_snippets,
+                "snippets": [],
+                "primary_source_note": primary_source_note,
+                "focus_meta": focus_meta,
+                "evidence_confidence": 0.0,
+                "evidence_reason": (
+                    "No directly relevant evidence was found in Maia files, documents, or indexed URLs for this request."
+                ),
+                "all_project_sources": all_project_sources,
+            }
         return {"skip": True, "skip_reason": selection_reason}
 
     selected_scope_count = len(selected_scope_ids)
@@ -421,7 +541,7 @@ def run_retrieval_phase(
             stage="planning",
         )
 
-    if bool(url_targets) and not evidence_sufficient:
+    if bool(url_targets) and not evidence_sufficient and mode_variant != "rag":
         logger.warning(
             "fast_qa_skipped reason=insufficient_evidence_for_url targets=%s confidence=%.3f note=%s question=%s",
             ",".join(url_targets[:3]),
@@ -460,6 +580,7 @@ def run_retrieval_phase(
         "selected_payload": selected_payload,
         "selected_scope_ids": selected_scope_ids,
         "selected_scope_count": len(selected_scope_ids),
+        "selected_scope_sources": selected_scope_sources,
         "covered_scope_count": covered_scope_count,
         "url_targets": url_targets,
         "retrieval_query": retrieval_query,

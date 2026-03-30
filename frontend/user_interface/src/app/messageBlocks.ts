@@ -158,9 +158,13 @@ function normalizeMessageBlocks(raw: unknown, assistantText = ""): MessageBlock[
         } satisfies TextMessageBlock;
       }
       if (type === "markdown") {
+        const markdown = String(record.markdown ?? record.text ?? "");
+        if (!markdown.trim()) {
+          return null;
+        }
         return {
           type: "markdown",
-          markdown: String(record.markdown ?? ""),
+          markdown,
         } satisfies MarkdownMessageBlock;
       }
       if (type === "math") {

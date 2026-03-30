@@ -87,3 +87,74 @@ def test_answer_builder_synthesizes_cited_summary_from_sources(monkeypatch) -> N
     assert "[1][2]" in answer
     assert "## Evidence Citations" in answer
 
+
+def test_answer_builder_falls_back_to_source_snippets_when_llm_summary_is_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.answer_builder_sections.summary.call_text_response",
+        lambda **kwargs: "",
+    )
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="Make research online about machine learning?",
+            agent_mode="company_agent",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__latest_web_sources": [
+                {
+                    "label": "IBM machine learning guide",
+                    "url": "https://www.ibm.com/think/topics/machine-learning",
+                    "snippet": "Machine learning is a branch of AI focused on building systems that learn from data and improve over time without being explicitly programmed for every scenario.",
+                },
+                {
+                    "label": "Google ML Crash Course",
+                    "url": "https://developers.google.com/machine-learning/crash-course",
+                    "snippet": "Common production uses include classification, prediction, recommendation, ranking, and pattern discovery in large datasets.",
+                },
+            ]
+        },
+        verification_report=None,
+    )
+    assert "## Executive Summary" in answer
+    assert "learn from data and improve over time" in answer
+    assert "classification, prediction, recommendation, ranking" in answer
+    assert "[1]" in answer
+    assert "[2]" in answer
+    assert "Findings are grounded in executed tools and verified source evidence." not in answer
+
+
+def test_answer_builder_uses_report_excerpt_before_generic_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "api.services.agent.orchestration.answer_builder_sections.summary.call_text_response",
+        lambda **kwargs: "",
+    )
+    answer = compose_professional_answer(
+        request=ChatRequest(
+            message="Make research online about machine learning?",
+            agent_mode="company_agent",
+        ),
+        planned_steps=[],
+        executed_steps=[],
+        actions=[],
+        sources=[],
+        next_steps=[],
+        runtime_settings={
+            "__latest_report_content": (
+                "## Detailed Research Report\n\n"
+                "### Executive Summary\n"
+                "Machine learning is now a core production capability across search, recommendation, fraud detection, and software tooling, but the strongest evidence still comes from benchmarked systems and peer-reviewed research.\n\n"
+                "Organizations get the most value when they pair model capability gains with strong evaluation, data quality, and governance controls.\n\n"
+                "## Evidence Citations\n"
+                "- [1] [Example](https://example.com)"
+            )
+        },
+        verification_report=None,
+    )
+    assert "Machine learning is now a core production capability" in answer
+    assert "Organizations get the most value" in answer
+    assert "Findings are grounded in executed tools and verified source evidence." not in answer
+

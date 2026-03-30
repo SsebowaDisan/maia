@@ -29,6 +29,23 @@ class _SessionStub:
     def current_url(self) -> str:
         return self._url
 
+    def scroll_through_page(self, max_steps: int = 20):
+        return [{"scroll_percent": min(100.0, float(max_steps))}]
+
+    def extract_page_text(self, max_chars: int = 12000) -> str:
+        del max_chars
+        return "Machine learning is a field of study that gives computers the ability to learn."
+
+    def sentence_regions(self, terms: list[str], limit: int = 8):
+        del limit
+        return [
+            {"sentence": "Machine learning is a field of study that gives computers the ability to learn."}
+            for _ in terms[:1]
+        ]
+
+    def apply_highlight_regions(self, regions, color: str = "yellow") -> None:
+        _ = regions, color
+
 
 class _RegistryStub:
     def __init__(self) -> None:
@@ -84,6 +101,34 @@ class ComputerUseBrowserConnectorTests(unittest.TestCase):
         assert capture["url"] == "https://example.com"
         assert "Example company profile details." in str(capture.get("text_excerpt") or "")
         assert capture.get("render_quality") in {"low", "medium", "high", "blocked"}
+        assert "s-1" in registry.closed
+
+    def test_browse_live_stream_direct_capture_skips_llm_loop(self) -> None:
+        registry = _RegistryStub()
+
+        connector = ComputerUseBrowserConnector(settings={"__agent_user_id": "u-1"})
+        with patch(
+            "api.services.computer_use.session_registry.get_session_registry",
+            return_value=registry,
+        ), patch(
+            "api.services.computer_use.agent_loop.run_agent_loop",
+            side_effect=AssertionError("run_agent_loop should not be called in direct capture mode"),
+        ):
+            stream = connector.browse_live_stream(
+                url="https://example.com",
+                max_pages=1,
+                max_scroll_steps=1,
+                follow_same_domain_links=False,
+                highlight_query="machine learning",
+                prefer_direct_capture=True,
+            )
+            events = list(stream)
+
+        event_types = [str(event.get("event_type") or "") for event in events]
+        assert "browser_open" in event_types
+        assert "browser_verify" in event_types
+        assert "browser_scroll" in event_types
+        assert "browser_interaction_failed" not in event_types
         assert "s-1" in registry.closed
 
     def test_submit_contact_form_stream_returns_expected_payload_keys(self) -> None:

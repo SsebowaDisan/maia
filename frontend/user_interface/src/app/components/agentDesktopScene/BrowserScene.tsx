@@ -269,9 +269,9 @@ function BrowserScene({
         ) : (
           <FallbackPane
             {...overlayProps}
-            activeTitle={activeTitle}
+            activeTitle={fallbackTitle}
             sceneSnapshotUrl={preview.sceneSnapshotUrl}
-            sceneText={sceneText}
+            sceneText={fallbackSceneText}
             onFallbackSnapshotError={preview.handleSnapshotError}
             snapshotReady={preview.snapshotReady}
             viewportScrollOffsetPx={preview.viewportScrollOffsetPx}

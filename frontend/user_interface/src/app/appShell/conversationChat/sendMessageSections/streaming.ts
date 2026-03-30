@@ -100,7 +100,7 @@ async function streamBrainRun(context: StreamContext): Promise<StreamExecutionRe
       conversation_name: "Brain run",
       message: context.message,
       answer,
-      blocks: [{ type: "markdown", text: answer }],
+      blocks: [{ type: "markdown", markdown: answer }],
       documents: [],
       info: "",
       plot: null,

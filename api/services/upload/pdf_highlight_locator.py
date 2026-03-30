@@ -109,6 +109,16 @@ def _page_unit_cache_path(file_path: Path, page_number: int) -> Path:
     return _page_unit_cache_dir() / f"{digest}.json"
 
 
+def _page_unit_summary_cache_path(file_path: Path) -> Path:
+    try:
+        stat = file_path.stat()
+        signature = f"{file_path.resolve()}::{int(stat.st_size)}::{int(stat.st_mtime_ns)}::summary"
+    except Exception:
+        signature = f"{file_path}::summary"
+    digest = hashlib.sha1(signature.encode("utf-8", errors="ignore")).hexdigest()
+    return _page_unit_cache_dir() / f"{digest}.summary.json"
+
+
 def _load_cached_page_units(file_path: Path, page_number: int) -> dict[str, Any] | None:
     cache_path = _page_unit_cache_path(file_path, page_number)
     if not cache_path.exists():
@@ -139,6 +149,54 @@ def _store_cached_page_units(file_path: Path, page_number: int, payload: dict[st
         cache_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
     except Exception:
         return
+
+
+def _load_cached_page_unit_summary(file_path: Path) -> dict[str, Any] | None:
+    cache_path = _page_unit_summary_cache_path(file_path)
+    if not cache_path.exists():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _store_cached_page_unit_summary(file_path: Path, payload: dict[str, Any]) -> None:
+    cache_path = _page_unit_summary_cache_path(file_path)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    except Exception:
+        return
+
+
+def get_pdf_citation_cache_state(file_path: Path) -> dict[str, Any]:
+    summary = _load_cached_page_unit_summary(file_path)
+    if isinstance(summary, dict):
+        ready = bool(summary.get("citation_ready"))
+        return {
+            "citation_ready": ready,
+            "citation_status": "ready" if ready else "refining",
+            "summary": summary,
+        }
+
+    first_page_cache = _load_cached_page_units(file_path, 1)
+    if first_page_cache is not None:
+        return {
+            "citation_ready": False,
+            "citation_status": "refining",
+            "summary": {
+                "pages_cached": 1,
+                "citation_ready": False,
+            },
+        }
+
+    return {
+        "citation_ready": False,
+        "citation_status": "refining",
+        "summary": None,
+    }
 
 
 @lru_cache(maxsize=1)
@@ -370,12 +428,16 @@ def precompute_page_units_for_pdf(
         except Exception:
             continue
 
-    return {
+    citation_ready = bool(total_pages > 0 and pages_processed >= total_pages)
+    payload = {
         "pages_processed": pages_processed,
         "pages_cached": pages_processed,
         "pages_with_ocr": pages_with_ocr,
         "total_pages": doc_page_count,
+        "citation_ready": citation_ready,
     }
+    _store_cached_page_unit_summary(file_path, payload)
+    return payload
 
 
 def precompute_page_units_background(file_path: Path) -> None:
