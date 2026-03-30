@@ -6,6 +6,7 @@ import {
   attachDocumentById as attachDocumentByIdAction,
   attachGroupById as attachGroupByIdAction,
   attachProjectById as attachProjectByIdAction,
+  buildAttachmentReadiness,
   mapTurnAttachments,
 } from "./interactions/attachmentActions";
 import { ComposerMode, WEB_SEARCH_SETTING_OVERRIDES } from "./interactions/constants";
@@ -390,7 +391,7 @@ function useChatMainInteractions({
     setDeepSearchProfile("default");
     setActiveAgent(null);
     onAgentModeChange("brain");
-    showActionStatus("Maia Brain mode � describe what you want and the Brain will assemble a team.");
+    showActionStatus("Maia Brain mode â€” describe what you want and the Brain will assemble a team.");
   };
 
   const composerMode: ComposerMode =
@@ -457,6 +458,37 @@ function useChatMainInteractions({
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    if (!attachments.length || !availableDocuments.length) {
+      return;
+    }
+    const docsById = new Map(availableDocuments.map((item) => [item.id, item]));
+    const nextAttachments = attachments.map((attachment) => {
+      const fileId = String(attachment.fileId || "").trim();
+      if (!fileId) {
+        return attachment;
+      }
+      const file = docsById.get(fileId);
+      if (!file) {
+        return attachment;
+      }
+      const readiness = buildAttachmentReadiness(file);
+      if (attachment.status === readiness.status && attachment.message === readiness.message) {
+        return attachment;
+      }
+      return {
+        ...attachment,
+        status: readiness.status,
+        message: readiness.message,
+      };
+    });
+    const changed = nextAttachments.some((attachment, index) => attachment !== attachments[index]);
+    if (!changed) {
+      return;
+    }
+    setAttachments(nextAttachments);
+  }, [attachments, availableDocuments]);
 
   useComposerPrefillEffects({
     setActiveAgent,

@@ -35,6 +35,7 @@ def update_progress(
     errors: list[str],
     file_ids: list[str],
     debug: list[str],
+    message: str | None = None,
 ) -> None:
     with Session(engine) as session:
         job = session.exec(select(IngestionJob).where(IngestionJob.id == job_id)).first()
@@ -53,6 +54,10 @@ def update_progress(
         dedup_ids = list(dict.fromkeys([str(file_id) for file_id in file_ids if file_id]))
         job.file_ids = dedup_ids
         job.debug = [str(msg) for msg in debug][-200:]
+        if message is not None:
+            clean_message = str(message).strip()
+            if clean_message:
+                job.message = clean_message
         job.date_updated = datetime.utcnow()
         session.add(job)
         session.commit()

@@ -21,6 +21,7 @@ from .pdf_highlight_locator import precompute_page_units_background
 _PADDLE_OCR_ENGINE: Any | None = None
 _PADDLE_OCR_LOCK = threading.Lock()
 _PADDLE_OCR_REF: dict[str, Any] = {"engine": None}
+_source_ids_have_document_relations = _ops_helpers.source_ids_have_document_relations_impl
 
 # Content-hash-keyed classification cache.
 # Keyed on SHA256 of the uploaded file so re-uploads of identical PDFs skip
@@ -464,6 +465,7 @@ def index_files(
         apply_upload_scope_to_sources_fn=apply_upload_scope_to_sources,
         schedule_pdf_precompute_fn=precompute_page_units_background,
         resolve_existing_file_id_for_upload_fn=_resolve_existing_file_id_for_upload,
+        source_ids_have_document_relations_fn=_source_ids_have_document_relations,
         is_already_indexed_error_fn=_is_already_indexed_error,
         indexing_canceled_error_cls=IndexingCanceledError,
         upload_paddleocr_enabled=UPLOAD_PADDLEOCR_ENABLED,

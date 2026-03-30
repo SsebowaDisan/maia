@@ -7,7 +7,6 @@ type ComposerAttachmentChipsProps = {
   onClearAttachments: () => void;
   onOpenPreview: (attachment: ComposerAttachment) => void;
   onRemoveAttachment: (attachmentId: string) => void;
-  attachmentStatusLabel: (attachment: ComposerAttachment) => string;
 };
 
 function ComposerAttachmentChips({
@@ -16,7 +15,6 @@ function ComposerAttachmentChips({
   onClearAttachments,
   onOpenPreview,
   onRemoveAttachment,
-  attachmentStatusLabel,
 }: ComposerAttachmentChipsProps) {
   if (!attachments.length) {
     return null;
@@ -35,7 +33,6 @@ function ComposerAttachmentChips({
             title={attachment.message ? `${attachment.name} - ${attachment.message}` : attachment.name}
           >
             {(() => {
-              const attachmentStatus = attachmentStatusLabel(attachment);
               const content = (
                 <>
                   {attachment.status === "uploading" || attachment.status === "indexing" ? (
@@ -48,11 +45,6 @@ function ComposerAttachmentChips({
                     <FileText className="h-3.5 w-3.5 shrink-0 text-[#6e6e73]" />
                   )}
                   <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
-                  {attachmentStatus ? (
-                    <span className="max-w-[84px] shrink truncate text-[10px] text-[#8d8d93] md:max-w-[108px]">
-                      {attachmentStatus}
-                    </span>
-                  ) : null}
                 </>
               );
 

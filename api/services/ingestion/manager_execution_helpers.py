@@ -96,8 +96,37 @@ def run_file_job(
                     errors=all_errors,
                     file_ids=all_file_ids,
                     debug=all_debug,
+                    message="Unable to read the uploaded file batch.",
                 )
                 continue
+
+            batch_names = [str(path.name or "file").strip() or "file" for path in batch_paths]
+            batch_message = (
+                f"Preparing {batch_names[0]} for indexing."
+                if len(batch_names) == 1
+                else f"Preparing {len(batch_names)} files for indexing."
+            )
+            batch_debug = [
+                *all_debug,
+                *[
+                    f"Preparing {name} for OCR/text extraction."
+                    for name in batch_names[:5]
+                ],
+            ]
+            manager._update_progress(
+                job_id=job_id,
+                processed_items=processed,
+                success_count=success_count,
+                failure_count=failure_count,
+                bytes_total=bytes_total,
+                bytes_persisted=bytes_persisted,
+                bytes_indexed=indexed_bytes,
+                items=all_items,
+                errors=all_errors,
+                file_ids=all_file_ids,
+                debug=batch_debug,
+                message=batch_message,
+            )
 
             try:
                 response = index_files_fn(
@@ -159,6 +188,9 @@ def run_file_job(
                 errors=all_errors,
                 file_ids=all_file_ids,
                 debug=all_debug,
+                message=(
+                    "Indexing completed." if processed >= len(files_payload) else "Continuing file indexing."
+                ),
             )
 
         manager._assert_job_not_canceled(job_id)

@@ -6,6 +6,26 @@ import type { ComposerAttachment } from "../types";
 
 type SetAttachments = Dispatch<SetStateAction<ComposerAttachment[]>>;
 
+function buildAttachmentReadiness(file: FileRecord): Pick<ComposerAttachment, "status" | "message"> {
+  const note = (file.note && typeof file.note === "object" ? file.note : {}) as Record<string, unknown>;
+  const ragReady = Boolean(note["rag_ready"]);
+  if (ragReady) {
+    return {
+      status: "indexed",
+      message: undefined,
+    };
+  }
+  const citationStatus = String(note["citation_status"] || "").trim().toLowerCase();
+  const detail =
+    citationStatus === "refining"
+      ? "Preparing for RAG"
+      : "Indexing for RAG";
+  return {
+    status: "indexing",
+    message: detail,
+  };
+}
+
 function mapTurnAttachments(turnAttachments?: ChatAttachment[]): ComposerAttachment[] {
   return (turnAttachments || []).map((attachment, idx) => ({
     id: `compose-${Date.now()}-${idx}-${attachment.name}`,
@@ -22,6 +42,19 @@ function createDocumentAttachment(file: { id: string; name: string }, fallbackId
     id: `${fallbackIdPrefix}-${file.id}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`,
     name: file.name,
     status: "indexed",
+    fileId: file.id,
+    kind: "file",
+    entityId: file.id,
+  };
+}
+
+function createIndexedDocumentAttachment(file: FileRecord, fallbackIdPrefix = "doc"): ComposerAttachment {
+  const readiness = buildAttachmentReadiness(file);
+  return {
+    id: `${fallbackIdPrefix}-${file.id}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`,
+    name: file.name,
+    status: readiness.status,
+    message: readiness.message,
     fileId: file.id,
     kind: "file",
     entityId: file.id,
@@ -50,7 +83,7 @@ function attachDocumentById({
       return previous;
     }
     added = true;
-    return [...previous, createDocumentAttachment(target)];
+    return [...previous, createIndexedDocumentAttachment(target)];
   });
   if (!added) {
     showActionStatus(`"${target.name}" is already attached.`);
@@ -97,7 +130,7 @@ function attachGroupById({
       if (existingFileIds.has(doc.id)) {
         continue;
       }
-      next.push(createDocumentAttachment(doc, "group-doc"));
+      next.push(createIndexedDocumentAttachment(doc, "group-doc"));
       existingFileIds.add(doc.id);
       addedCount += 1;
     }
@@ -163,4 +196,10 @@ function attachProjectById({
   showActionStatus(`Attached project "${project.name}".`);
 }
 
-export { attachDocumentById, attachGroupById, attachProjectById, mapTurnAttachments };
+export {
+  attachDocumentById,
+  attachGroupById,
+  attachProjectById,
+  buildAttachmentReadiness,
+  mapTurnAttachments,
+};

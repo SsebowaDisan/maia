@@ -191,24 +191,6 @@ function ComposerPanel({
     resizeComposerTextarea();
   }, [message, resizeComposerTextarea]);
 
-  const attachmentStatusLabel = (attachment: ComposerAttachment) => {
-    if (attachment.status === "uploading") {
-      return attachment.message || "Uploading";
-    }
-    if (attachment.status === "indexing") {
-      return attachment.message || "Indexing";
-    }
-    if (attachment.status === "error") {
-      const detail = String(attachment.message || "").trim();
-      if (!detail) {
-        return "Failed";
-      }
-      const compact = detail.length > 42 ? `${detail.slice(0, 39)}...` : detail;
-      return `Failed: ${compact}`;
-    }
-    return "";
-  };
-
   return (
     <div
       className="bg-transparent"
@@ -360,7 +342,6 @@ function ComposerPanel({
                 onClearAttachments={clearAttachments}
                 onOpenPreview={setPreviewAttachment}
                 onRemoveAttachment={removeAttachment}
-                attachmentStatusLabel={attachmentStatusLabel}
               />
 
               <div className="assistantComposerAccessSlot">

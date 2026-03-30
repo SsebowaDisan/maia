@@ -439,6 +439,7 @@ class IngestionJobManager:
         errors: list[str],
         file_ids: list[str],
         debug: list[str],
+        message: str | None = None,
     ) -> None:
         update_progress(
             job_id=job_id,
@@ -452,6 +453,7 @@ class IngestionJobManager:
             errors=errors,
             file_ids=file_ids,
             debug=debug,
+            message=message,
         )
 
     def _mark_completed(

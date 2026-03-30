@@ -8,6 +8,7 @@ from api.services.observability.citation_trace import record_trace_event
 
 
 _QUESTION_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+_UUID_LIKE_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _BROAD_GROUNDING_RE = re.compile(
     r"\b("
     r"why|how|explain|compare|comparison|trade[- ]?off|implication|impact|mechanism|"
@@ -654,6 +655,51 @@ def _needs_partial_scope_fallback(
     return False
 
 
+def _build_selected_scope_processing_answer(
+    *,
+    selected_scope_sources: list[dict[str, Any]],
+) -> str:
+    pending_sources = [
+        source
+        for source in selected_scope_sources
+        if isinstance(source, dict) and not bool(source.get("rag_ready"))
+    ]
+    if not pending_sources:
+        return (
+            "I could not find relevant evidence in Maia files, documents, indexed URLs, or recent conversation "
+            "context for this question. Not visible in indexed content."
+        )
+    labels = []
+    for source in pending_sources[:3]:
+        label = str(source.get("label") or "Selected source").strip() or "Selected source"
+        if _UUID_LIKE_RE.match(label):
+            continue
+        labels.append(label)
+    if len(pending_sources) == 1 and len(labels) == 1:
+        return (
+            f"`{labels[0]}` is still being prepared for RAG in Maia. "
+            "The file exists, but searchable document chunks are not ready yet. "
+            "Wait for indexing or OCR to finish, then ask again."
+        )
+    if len(pending_sources) == 1:
+        return (
+            "The selected file is still being prepared for RAG in Maia. "
+            "The file exists, but searchable document chunks are not ready yet. "
+            "Wait for indexing or OCR to finish, then ask again."
+        )
+    return (
+        (
+            "Some selected Maia sources are still being prepared for RAG: "
+            + ", ".join(f"`{label}`" for label in labels)
+            + ". "
+            if labels
+            else "Some selected Maia sources are still being prepared for RAG. "
+        )
+        + "The files exist, but searchable document chunks are not ready yet. "
+        + "Wait for indexing or OCR to finish, then ask again."
+    )
+
+
 def build_answer_phase(
     *,
     request,
@@ -837,10 +883,19 @@ def build_answer_phase(
         )
         snippets_with_refs, refs = [], []
         if mode_variant == "rag":
-            answer = build_no_relevant_evidence_answer_fn(
-                message,
-                response_language=requested_language,
-            )
+            if selected_scope_ids and any(
+                not bool(source.get("rag_ready"))
+                for source in selected_scope_sources
+                if isinstance(source, dict)
+            ):
+                answer = _build_selected_scope_processing_answer(
+                    selected_scope_sources=selected_scope_sources,
+                )
+            else:
+                answer = build_no_relevant_evidence_answer_fn(
+                    message,
+                    response_language=requested_language,
+                )
             used_general_fallback = False
         else:
             answer = call_openai_fast_qa_fn(

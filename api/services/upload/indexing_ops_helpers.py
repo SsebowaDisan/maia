@@ -74,6 +74,27 @@ def resolve_existing_file_id_for_upload_impl(
     return None
 
 
+def source_ids_have_document_relations_impl(
+    *,
+    index: Any,
+    source_ids: list[str] | None,
+) -> bool:
+    cleaned_ids = [str(item).strip() for item in (source_ids or []) if str(item).strip()]
+    if not cleaned_ids:
+        return False
+    IndexTable = index._resources["Index"]
+    with Session(engine) as session:
+        row = session.execute(
+            select(IndexTable.target_id)
+            .where(
+                IndexTable.source_id.in_(cleaned_ids),
+                IndexTable.relation_type == "document",
+            )
+            .limit(1)
+        ).first()
+    return bool(row)
+
+
 def collect_index_stream_impl(
     output_stream,
     *,
@@ -160,10 +181,17 @@ def apply_upload_scope_to_sources_impl(
         for row in rows:
             source = row[0]
             note = dict(source.note or {})
+            has_document_relations = source_ids_have_document_relations_impl(
+                index=index,
+                source_ids=[str(source.id)],
+            )
             note["upload_scope"] = normalized_scope
-            note["rag_ready"] = True
-            note.setdefault("citation_ready", True)
-            note.setdefault("citation_status", "ready")
+            note["rag_ready"] = bool(has_document_relations)
+            note.setdefault("citation_ready", bool(has_document_relations))
+            note.setdefault(
+                "citation_status",
+                "ready" if has_document_relations else "pending",
+            )
             source.note = note
             session.add(source)
         session.commit()
@@ -190,6 +218,7 @@ def index_files_impl(
     apply_upload_scope_to_sources_fn: Callable[..., None],
     schedule_pdf_precompute_fn: Callable[[Path], None],
     resolve_existing_file_id_for_upload_fn: Callable[..., str | None],
+    source_ids_have_document_relations_fn: Callable[..., bool],
     is_already_indexed_error_fn: Callable[[Exception], bool],
     indexing_canceled_error_cls: type[Exception],
     upload_paddleocr_enabled: bool,
@@ -266,7 +295,10 @@ def index_files_impl(
                     file_path=file_path,
                     uploaded_file_meta=uploaded_file_meta,
                 )
-                if reused_file_id:
+                if reused_file_id and source_ids_have_document_relations_fn(
+                    index=index,
+                    source_ids=[reused_file_id],
+                ):
                     all_debug.append(
                         f"{file_path.name}: already indexed; reusing existing file {reused_file_id}."
                     )
@@ -291,6 +323,10 @@ def index_files_impl(
                         ],
                         "debug": [],
                     }
+                if reused_file_id:
+                    all_debug.append(
+                        f"{file_path.name}: duplicate source {reused_file_id} had no indexed document relations; fresh indexing will continue."
+                    )
             raise
 
     def _normalize_duplicate_failure_response(
@@ -324,6 +360,14 @@ def index_files_impl(
             uploaded_file_meta=uploaded_file_meta,
         )
         if not reused_file_id:
+            return response
+        if not source_ids_have_document_relations_fn(
+            index=index,
+            source_ids=[reused_file_id],
+        ):
+            all_debug.append(
+                f"{file_path.name}: duplicate response pointed to source {reused_file_id} without indexed document relations; preserving failure so the source can be reindexed."
+            )
             return response
 
         all_debug.append(
@@ -640,7 +684,11 @@ def list_indexed_files_impl(
         scope = normalize_upload_scope_fn(str(note.get("upload_scope", "persistent")))
         if not include_chat_temp and scope == "chat_temp":
             continue
-        note["rag_ready"] = True
+        has_document_relations = source_ids_have_document_relations_impl(
+            index=index,
+            source_ids=[str(row[0].id)],
+        )
+        note["rag_ready"] = bool(has_document_relations)
         stored_path = str(row[0].path or "").strip()
         source_name = str(row[0].name or "").strip()
         candidate: Path | None = None
@@ -659,11 +707,14 @@ def list_indexed_files_impl(
         is_pdf = source_name.lower().endswith(".pdf") or bool(original_pdf_storage_name)
         if is_pdf and candidate and candidate.exists() and candidate.is_file():
             citation_state = get_pdf_citation_cache_state(candidate)
-            note["citation_ready"] = bool(citation_state.get("citation_ready"))
-            note["citation_status"] = str(citation_state.get("citation_status") or "refining")
+            note["citation_ready"] = bool(has_document_relations and citation_state.get("citation_ready"))
+            note["citation_status"] = str(
+                citation_state.get("citation_status")
+                or ("refining" if has_document_relations else "pending")
+            )
         else:
-            note["citation_ready"] = True
-            note["citation_status"] = "ready"
+            note["citation_ready"] = bool(has_document_relations)
+            note["citation_status"] = "ready" if has_document_relations else "pending"
         files.append(
             {
                 "id": row[0].id,

@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from ktem.db.models import engine
@@ -40,6 +41,8 @@ def _resolve_selected_scope_sources(
     user_id: str,
     selected_payload: dict[str, Any],
 ) -> list[dict[str, str]]:
+    from api.services.upload.indexing import list_indexed_files
+
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
     for raw_index_id, payload in (selected_payload or {}).items():
@@ -63,27 +66,106 @@ def _resolve_selected_scope_sources(
             except Exception:
                 continue
         Source = index._resources.get("Source")
-        if Source is None:
+        IndexTable = index._resources.get("Index")
+        if Source is None or IndexTable is None:
             continue
         with Session(engine) as session:
-            stmt = select(Source.id, Source.name).where(Source.id.in_(selected_ids))
+            source_file_id_column = getattr(Source, "file_id", None)
+            if source_file_id_column is not None:
+                source_filter = or_(
+                    Source.id.in_(selected_ids),
+                    source_file_id_column.in_(selected_ids),
+                )
+            else:
+                source_filter = Source.id.in_(selected_ids)
+            stmt = select(Source.id, Source.name, Source.note, source_file_id_column).where(source_filter)
             if index.config.get("private", False):
                 stmt = stmt.where(Source.user == user_id)
             result_rows = session.execute(stmt).all()
-        name_by_id = {str(row[0]): str(row[1] or "").strip() for row in result_rows}
+            source_ids_for_relations: list[str] = []
+            metadata_by_selected_id: dict[str, dict[str, Any]] = {}
+            for row in result_rows:
+                source_id = str(row[0] or "").strip()
+                source_name = str(row[1] or "").strip()
+                source_note = dict(row[2] or {})
+                source_file_id = str((row[3] if len(row) > 3 else "") or "").strip()
+                if not source_id:
+                    continue
+                source_ids_for_relations.append(source_id)
+                resolved_file_id = source_file_id or source_id
+                metadata = {
+                    "label": source_name,
+                    "note": source_note,
+                    "file_id": resolved_file_id,
+                    "source_id": source_id,
+                }
+                metadata_by_selected_id[source_id] = metadata
+                metadata_by_selected_id[resolved_file_id] = metadata
+            relation_rows = session.execute(
+                select(IndexTable.source_id)
+                .where(
+                    IndexTable.source_id.in_(source_ids_for_relations),
+                    IndexTable.relation_type == "document",
+                )
+            ).all()
+        relation_source_ids = {
+            str(row[0]).strip()
+            for row in relation_rows
+            if row and str(row[0] or "").strip()
+        }
+        unresolved_ids = [
+            selected_id
+            for selected_id in selected_ids
+            if selected_id not in metadata_by_selected_id
+        ]
+        if unresolved_ids:
+            try:
+                indexed_files = list_indexed_files(
+                    context=context,
+                    user_id=user_id,
+                    index_id=int(str(raw_index_id)),
+                    include_chat_temp=True,
+                ).get("files", [])
+            except Exception:
+                indexed_files = []
+            file_lookup = {
+                str(row.get("id") or "").strip(): row
+                for row in indexed_files
+                if isinstance(row, dict) and str(row.get("id") or "").strip()
+            }
+            for unresolved_id in unresolved_ids:
+                file_row = file_lookup.get(unresolved_id)
+                if not file_row:
+                    continue
+                metadata_by_selected_id[unresolved_id] = {
+                    "label": str(file_row.get("name") or unresolved_id).strip(),
+                    "note": dict(file_row.get("note") or {}),
+                    "file_id": unresolved_id,
+                    "source_id": "",
+                }
         for source_id in selected_ids:
             if source_id in seen:
                 continue
             seen.add(source_id)
-            label = name_by_id.get(source_id, source_id)
+            meta = metadata_by_selected_id.get(source_id, {})
+            note = dict(meta.get("note") or {})
+            label = str(meta.get("label") or source_id).strip() or source_id
             source_type = "web" if label.startswith(("http://", "https://")) else ("pdf" if label.lower().endswith(".pdf") else "file")
+            resolved_source_id = str(meta.get("source_id") or "").strip()
+            resolved_file_id = str(meta.get("file_id") or source_id).strip() or source_id
+            rag_ready = bool(resolved_source_id and resolved_source_id in relation_source_ids)
+            citation_ready = bool(note.get("citation_ready")) if rag_ready else False
+            citation_status = str(note.get("citation_status") or ("ready" if rag_ready else "pending")).strip() or ("ready" if rag_ready else "pending")
             rows.append(
                 {
-                    "file_id": source_id,
+                    "file_id": resolved_file_id,
                     "label": label,
                     "source_type": source_type,
                     "credibility_tier": _selected_source_credibility(label, source_type),
                     "url": label if source_type == "web" else "",
+                    "rag_ready": rag_ready,
+                    "citation_ready": citation_ready,
+                    "citation_status": citation_status,
                 }
             )
     return rows
