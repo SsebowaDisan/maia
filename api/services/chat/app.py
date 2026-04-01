@@ -379,8 +379,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
                 "blocks": blocks,
                 "documents": documents,
                 "halt_reason": HaltReason.llm_timeout,
-                "mode_requested": timeout_display_mode,
-                "mode_actually_used": "extractive_fallback",
+                "mode_requested": requested_mode,
+                "mode_actually_used": requested_mode,
             }
         )
 
@@ -405,7 +405,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "info": timeout_info,
             "plot": None,
             "state": deepcopy(data_source.get("state", STATE)),
-            "mode": timeout_mode,
+            "mode": requested_mode,
             "actions_taken": [],
             "sources_used": [],
             "source_usage": [],
@@ -417,8 +417,8 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "info_panel": timeout_info_panel,
             "mindmap": {},
             "halt_reason": HaltReason.llm_timeout,
-            "mode_requested": timeout_display_mode,
-            "mode_actually_used": "extractive_fallback",
+            "mode_requested": requested_mode,
+            "mode_actually_used": requested_mode,
         }
         return _ensure_canvas_for_response(
             payload=timeout_payload,

@@ -63,6 +63,10 @@ def notify(
         "rejected": f"Your agent '{agent_name}' was rejected.",
         "published": f"Your agent '{agent_name}' is now live on the marketplace.",
         "revised": f"Your revision for '{agent_name}' is back in the review queue.",
+        # File-tier events
+        "file_flagged": f"'{agent_name}' was submitted for library review.",
+        "file_promoted": f"Your file '{agent_name}' was added to the team library.",
+        "file_dismissed": f"Your file '{agent_name}' was not added to the library.",
     }
     message = messages.get(event_type, f"Update on your agent '{agent_name}': {event_type}.")
     record = MarketplaceNotification(

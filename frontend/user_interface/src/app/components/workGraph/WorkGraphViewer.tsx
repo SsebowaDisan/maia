@@ -114,7 +114,7 @@ function WorkGraphViewer({ viewerHeight = 520, onAskNode, onInspectEvidence, onI
   const collaborationRef = useRef<CollaborationTransport | null>(null);
 
   const roleOptions = useMemo(() => {
-    const roles = slice.nodes
+    const roles = (slice.nodes ?? [])
       .map((node) => String(node.agent_role || "system").trim())
       .filter((role) => role.length > 0);
     return Array.from(new Set(roles)).sort((left, right) => left.localeCompare(right));

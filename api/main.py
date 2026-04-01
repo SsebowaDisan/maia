@@ -52,6 +52,7 @@ from api.routers.mfa import router as mfa_router
 from api.routers.roles import router as roles_router
 from api.routers.mcp import router as mcp_router
 from api.routers.og_meta import router as og_meta_router
+from api.routers.file_library import router as file_library_router
 from api.schemas import HealthResponse
 from api.services.agent.report_scheduler import get_report_scheduler
 from api.services.agents.scheduler import get_agent_scheduler
@@ -119,6 +120,16 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     get_report_scheduler().start()
     get_agent_scheduler().start()
     try:
+        from api.services.upload.storage_config import ensure_dirs
+        ensure_dirs()
+    except Exception as _exc:
+        logger.warning("Storage dir setup failed (non-fatal): %s", _exc)
+    try:
+        from api.services.upload.cleanup_service import get_cleanup_service
+        get_cleanup_service().start()
+    except Exception as _exc:
+        logger.warning("Cleanup service start failed (non-fatal): %s", _exc)
+    try:
         from api.services.agents.event_triggers import seed_subscriptions_from_definitions
         seed_subscriptions_from_definitions()
     except Exception:
@@ -158,6 +169,11 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     get_ingestion_manager().stop()
     get_report_scheduler().stop()
     get_agent_scheduler().stop()
+    try:
+        from api.services.upload.cleanup_service import get_cleanup_service
+        get_cleanup_service().stop()
+    except Exception:
+        pass
     try:
         from api.services.proactive.monitor import get_proactive_monitor
         get_proactive_monitor().stop()
@@ -255,6 +271,7 @@ app.include_router(mfa_router)
 app.include_router(roles_router)
 app.include_router(mcp_router)
 app.include_router(og_meta_router)
+app.include_router(file_library_router)
 
 
 @app.middleware("http")

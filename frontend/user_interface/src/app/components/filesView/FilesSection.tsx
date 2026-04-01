@@ -140,87 +140,92 @@ function FilesSection({
       </div>
 
       {viewMode === "table" ? (
-        <div className="mt-8 overflow-hidden rounded-2xl border border-black/[0.06]">
-          <table className="w-full">
-            <thead className="border-b border-[#f2f2f5] bg-[#fcfcfd]">
-              <tr>
-                <th className="w-[52px] px-3 py-3 text-left">
-                  <button
-                    onClick={toggleSelectAllVisible}
-                    className="rounded-md p-1 text-[#8d8d93] hover:text-[#1d1d1f]"
-                    aria-label={areAllVisibleSelected ? "Unselect visible files" : "Select visible files"}
-                  >
-                    {areAllVisibleSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                  </button>
-                </th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Name</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Size</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Token</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Loader</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Status</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Groups</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Date Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleFiles.length === 0 ? (
+        <div className="mt-8 overflow-hidden rounded-2xl border border-black/[0.06] bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] xl:min-w-[980px]">
+              <thead className="border-b border-[#f2f2f5] bg-[#fcfcfd]">
                 <tr>
-                  <td className="px-4 py-8 text-[13px] text-[#8d8d93]" colSpan={8}>
-                    No indexed files found.
-                  </td>
-                </tr>
-              ) : (
-                visibleFiles.map((file) => {
-                  const isSelected = selectedFileIds.includes(file.id);
-                  return (
-                    <tr
-                      key={file.id}
-                      draggable={canMoveFiles}
-                      onDragStart={(event) => startFileDrag(event, file.id)}
-                      onDragEnd={endFileDrag}
-                      onClick={(event) => {
-                        if (event.detail > 1) return;
-                        toggleFileSelection(file.id);
-                      }}
-                      onDoubleClick={() => onOpenFilePreview(file.id)}
-                      className={`cursor-pointer border-t border-[#f2f2f5] ${
-                        isSelected ? "bg-[#f7f7f9]" : "hover:bg-[#fbfbfd]"
-                      } ${draggingFileId === file.id ? "opacity-65" : ""}`}
+                  <th className="w-[52px] px-3 py-3 text-left">
+                    <button
+                      onClick={toggleSelectAllVisible}
+                      className="rounded-md p-1 text-[#8d8d93] hover:text-[#1d1d1f]"
+                      aria-label={areAllVisibleSelected ? "Unselect visible files" : "Select visible files"}
                     >
-                      <td className="px-3 py-5">
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleFileSelection(file.id);
-                          }}
-                          className="rounded-md p-1 text-[#8d8d93] hover:text-[#1d1d1f]"
-                          aria-label={isSelected ? `Unselect ${file.name}` : `Select ${file.name}`}
-                        >
-                          {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                        </button>
-                      </td>
-                      <td className="max-w-[340px] truncate px-4 py-5 text-[14px] text-[#1d1d1f]">{file.name}</td>
-                      <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{formatSize(file.size)}</td>
-                      <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{tokenText(file.note || {})}</td>
-                      <td className="px-4 py-5 text-[14px] text-[#1d1d1f]">{loaderText(file.note || {})}</td>
-                      <td className="px-4 py-5">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
-                          {readinessLabel(file.note || {}, file)}
-                        </span>
-                      </td>
-                      <td className="max-w-[260px] truncate px-4 py-5 text-[13px] text-[#6e6e73]">
-                        {groupsByFileId.get(file.id)?.length ? groupsByFileId.get(file.id)!.join(", ") : "-"}
-                      </td>
-                      <td className="px-4 py-5 text-[13px] text-[#6e6e73]">{formatDate(file.date_created)}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                      {areAllVisibleSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Name</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Size</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Token</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Loader</th>
+                  <th className="min-w-[168px] px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93]">Status</th>
+                  <th className="hidden px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93] 2xl:table-cell">Groups</th>
+                  <th className="hidden px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-[#8d8d93] 2xl:table-cell">Date Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleFiles.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-8 text-[13px] text-[#8d8d93]" colSpan={8}>
+                      No indexed files found.
+                    </td>
+                  </tr>
+                ) : (
+                  visibleFiles.map((file) => {
+                    const isSelected = selectedFileIds.includes(file.id);
+                    return (
+                      <tr
+                        key={file.id}
+                        draggable={canMoveFiles}
+                        onDragStart={(event) => startFileDrag(event, file.id)}
+                        onDragEnd={endFileDrag}
+                        onClick={(event) => {
+                          if (event.detail > 1) return;
+                          toggleFileSelection(file.id);
+                        }}
+                        onDoubleClick={() => onOpenFilePreview(file.id)}
+                        className={`cursor-pointer border-t border-[#f2f2f5] transition-colors ${
+                          isSelected ? "bg-[#f7f7f9]" : "hover:bg-[#fbfbfd]"
+                        } ${draggingFileId === file.id ? "opacity-65" : ""}`}
+                      >
+                        <td className="px-3 py-4">
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleFileSelection(file.id);
+                            }}
+                            className="rounded-md p-1 text-[#8d8d93] hover:text-[#1d1d1f]"
+                            aria-label={isSelected ? `Unselect ${file.name}` : `Select ${file.name}`}
+                          >
+                            {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                          </button>
+                        </td>
+                        <td className="max-w-[360px] truncate px-4 py-4 text-[14px] text-[#1d1d1f]">{file.name}</td>
+                        <td className="whitespace-nowrap px-4 py-4 text-[14px] text-[#1d1d1f]">{formatSize(file.size)}</td>
+                        <td className="whitespace-nowrap px-4 py-4 text-[14px] text-[#1d1d1f]">{tokenText(file.note || {})}</td>
+                        <td className="max-w-[240px] truncate whitespace-nowrap px-4 py-4 text-[14px] text-[#1d1d1f]">{loaderText(file.note || {})}</td>
+                        <td className="min-w-[168px] px-4 py-4">
+                          <span
+                            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-medium ${readinessClasses(file)}`}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-current/70" />
+                            {readinessLabel(file.note || {}, file)}
+                          </span>
+                        </td>
+                        <td className="hidden max-w-[260px] truncate px-4 py-4 text-[13px] text-[#6e6e73] 2xl:table-cell">
+                          {groupsByFileId.get(file.id)?.length ? groupsByFileId.get(file.id)!.join(", ") : "-"}
+                        </td>
+                        <td className="hidden whitespace-nowrap px-4 py-4 text-[13px] text-[#6e6e73] 2xl:table-cell">{formatDate(file.date_created)}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
-        <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {visibleFiles.length === 0 ? (
             <div className="rounded-xl border border-black/[0.08] bg-white px-3 py-4 text-[13px] text-[#8d8d93]">
               No indexed files found.
@@ -251,7 +256,8 @@ function FilesSection({
                     {formatSize(file.size)} | {loaderText(file.note || {})}
                   </p>
                   <p className="mt-2">
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
+                    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${readinessClasses(file)}`}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-current/70" />
                       {readinessLabel(file.note || {}, file)}
                     </span>
                   </p>

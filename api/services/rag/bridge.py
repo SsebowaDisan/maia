@@ -86,6 +86,12 @@ def _save_registry() -> None:
                     "created_at": source.created_at or "",
                     "updated_at": source.updated_at or "",
                     "metadata": source.metadata if isinstance(source.metadata, dict) else {},
+                    # Tier / lifecycle fields
+                    "scope": source.scope or "user_temp",
+                    "flagged": bool(source.flagged),
+                    "flagged_at": source.flagged_at or "",
+                    "expires_at": source.expires_at or "",
+                    "flag_note": source.flag_note or "",
                 })
         registry_path.write_text(_stdlib_json.dumps(entries, indent=2, default=str), encoding="utf-8")
     except Exception as exc:
@@ -113,6 +119,18 @@ def _load_registry() -> None:
                 status = IngestionStatus(entry.get("status", "rag_ready"))
             except (ValueError, KeyError):
                 status = IngestionStatus.RAG_READY
+            # Scope: prefer top-level field; fall back to metadata for old records
+            raw_meta = entry.get("metadata") or {}
+            legacy_scope = str(raw_meta.get("scope") or "").strip().lower()
+            has_chat_id = bool(raw_meta.get("chat_id"))
+            if entry.get("scope"):
+                resolved_scope = str(entry["scope"]).strip().lower()
+            elif legacy_scope:
+                resolved_scope = "user_temp" if legacy_scope == "chat_temp" else legacy_scope
+            elif has_chat_id:
+                resolved_scope = "user_temp"
+            else:
+                resolved_scope = "library"  # old persistent uploads are library
             source = SourceRecord(
                 id=entry["id"],
                 filename=entry.get("filename", ""),
@@ -126,7 +144,12 @@ def _load_registry() -> None:
                 status=status,
                 created_at=entry.get("created_at", ""),
                 updated_at=entry.get("updated_at", ""),
-                metadata=entry.get("metadata", {}),
+                metadata=raw_meta,
+                scope=resolved_scope,
+                flagged=bool(entry.get("flagged", False)),
+                flagged_at=entry.get("flagged_at") or None,
+                expires_at=entry.get("expires_at") or None,
+                flag_note=entry.get("flag_note", ""),
             )
             with _SOURCE_REGISTRY_LOCK:
                 sid = str(source.id).strip()
@@ -144,13 +167,19 @@ _load_registry()
 
 
 def _source_scope(source: SourceRecord) -> str:
+    # Top-level field takes precedence (set on all new records)
+    if source.scope:
+        return source.scope
+    # Legacy fallback: read from metadata
     metadata = source.metadata if isinstance(source.metadata, dict) else {}
     raw_scope = str(metadata.get("scope") or "").strip().lower()
+    if raw_scope == "chat_temp":
+        return "user_temp"
     if raw_scope:
         return raw_scope
     if metadata.get("chat_id"):
-        return "chat_temp"
-    return "persistent"
+        return "user_temp"
+    return "library"
 
 
 def _normalize_index_id(value: Any) -> int | None:
@@ -199,12 +228,18 @@ def list_registered_sources(
         ]
     selected: list[SourceRecord] = []
     for source in rows:
-        if normalized_owner and source.owner_id and source.owner_id != normalized_owner:
-            continue
-        metadata = source.metadata if isinstance(source.metadata, dict) else {}
         source_scope = _source_scope(source)
+        # Library files are shared — visible to all users regardless of owner
+        if source_scope != "library":
+            if normalized_owner and source.owner_id and source.owner_id != normalized_owner:
+                continue
+        # Filter out user_temp files unless caller explicitly asks for them
+        if source_scope == "user_temp" and not include_chat_temp:
+            continue
+        # Legacy chat_temp compatibility
         if source_scope == "chat_temp" and not include_chat_temp:
             continue
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
         if requested_index_id is not None:
             source_index_id = _normalize_index_id(metadata.get("index_id"))
             if source_index_id != requested_index_id:
@@ -243,6 +278,44 @@ def resolve_registered_source_path(
         return None
     filename = str(source.filename or path.name or normalized_source_id).strip() or normalized_source_id
     return path, filename
+
+
+# ── Registry public helpers ──────────────────────────────────────────────────
+
+def get_registered_source(source_id: str) -> SourceRecord | None:
+    """Return a single source by ID, or None if not found."""
+    sid = str(source_id or "").strip()
+    if not sid:
+        return None
+    with _SOURCE_REGISTRY_LOCK:
+        return _SOURCE_REGISTRY.get(sid)
+
+
+def update_registered_source(source: SourceRecord) -> None:
+    """Replace an existing registry entry and persist to disk."""
+    _register_source(source)
+
+
+def remove_registered_source(source_id: str) -> None:
+    """Remove a source from the registry and persist to disk."""
+    sid = str(source_id or "").strip()
+    if not sid:
+        return
+    with _SOURCE_REGISTRY_LOCK:
+        _SOURCE_REGISTRY.pop(sid, None)
+        try:
+            _SOURCE_REGISTRY_ORDER.remove(sid)
+        except ValueError:
+            pass
+    _save_registry()
+
+
+def list_flagged_sources() -> list[SourceRecord]:
+    """Return all sources currently flagged for admin review, newest first."""
+    with _SOURCE_REGISTRY_LOCK:
+        ordered_ids = list(reversed(_SOURCE_REGISTRY_ORDER))
+        rows = [_SOURCE_REGISTRY[sid] for sid in ordered_ids if sid in _SOURCE_REGISTRY]
+    return [s for s in rows if s.flagged]
 
 
 # ── Query Bridge ─────────────────────────────────────────────────────────────
@@ -686,6 +759,13 @@ async def run_rag_ingest_bridge(
     """
     try:
         source = await ingest_file(file_path, group_id, owner_id, metadata=metadata)
+        # Resolve scope from metadata: persistent/library uploads from admins → "library"
+        raw_scope = str((metadata or {}).get("scope") or "").strip().lower()
+        if raw_scope in {"chat_temp", "user_temp"}:
+            resolved = "user_temp"
+        else:
+            resolved = "library"  # persistent / explicit library uploads
+        source = replace(source, scope=resolved)
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:
@@ -708,6 +788,7 @@ async def run_rag_ingest_url_bridge(
     """Bridge: ingest a URL via the new pipeline."""
     try:
         source = await ingest_url(url, group_id, owner_id)
+        source = replace(source, scope="library")  # URL ingestion is always admin → library
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:

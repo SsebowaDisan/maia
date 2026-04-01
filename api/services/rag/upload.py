@@ -137,26 +137,47 @@ async def upload_from_chat(
 ) -> SourceRecord:
     """Upload a file attachment from a chat message.
 
-    Stores the raw bytes on the SourceRecord metadata so downstream phases
-    can access them without a filesystem path.
+    Writes bytes to USER_TEMP_DIR so the file survives server restarts.
+    Sets expires_at = now + USER_TEMP_TTL_DAYS so the cleanup job can
+    auto-delete it. The raw bytes are also kept in metadata for the
+    pipeline phases that need them; bridge.py strips file_data before
+    persisting the registry so the JSON stays small.
     """
+    from datetime import datetime, timezone, timedelta
+    from api.services.upload.storage_config import USER_TEMP_DIR, USER_TEMP_TTL_DAYS
+
+    source_id = str(uuid.uuid4())
+    safe_filename = os.path.basename(filename) or "upload"
+
+    # Write to disk: user_temp/{owner_id}/{source_id}_{filename}
+    owner_dir = USER_TEMP_DIR / (owner_id or "anonymous")
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    file_path = owner_dir / f"{source_id}_{safe_filename}"
+    file_path.write_bytes(file_data)
+
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=USER_TEMP_TTL_DAYS)
+    ).isoformat()
+
     record = SourceRecord(
-        id=str(uuid.uuid4()),
+        id=source_id,
         filename=filename,
         source_type=_detect_source_type(filename),
         file_size=len(file_data),
         mime_type=_detect_mime(filename),
         group_id="",
         owner_id=owner_id,
-        upload_url="",
+        upload_url=str(file_path),
         status=IngestionStatus.UPLOADED,
         metadata={
             "chat_id": chat_id,
-            "file_data": file_data,  # kept in-memory for pipeline
+            "file_data": file_data,  # kept in-memory for pipeline phases; stripped before registry save
         },
         created_at=_now_iso(),
         updated_at=_now_iso(),
         rag_ready=False,
         citation_ready=False,
+        scope="user_temp",
+        expires_at=expires_at,
     )
     return record
