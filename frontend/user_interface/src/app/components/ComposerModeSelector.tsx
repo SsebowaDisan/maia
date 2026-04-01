@@ -26,7 +26,12 @@ type ModeOption = {
 
 const MODE_OPTIONS: ModeOption[] = [
   { value: "ask", label: "Standard", Icon: Sparkles, description: "Send directly to LLM" },
-  { value: "rag", label: "RAG", Icon: BookOpenText, description: "Answer from files and URLs in Maia" },
+  {
+    value: "rag",
+    label: "Library",
+    Icon: BookOpenText,
+    description: "Search, summarize, and answer from Axon Group files and URLs",
+  },
   { value: "brain", label: "Maia Brain", Icon: Brain, description: "Auto-builds a team and runs it" },
   { value: "company_agent", label: "Workflow", Icon: GitBranch, description: "Pick an existing workflow" },
   { value: "deep_search", label: "Deep research", Icon: Search, description: "Multi-source deep analysis" },

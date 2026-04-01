@@ -137,22 +137,34 @@ async def upload_from_chat(
 ) -> SourceRecord:
     """Upload a file attachment from a chat message.
 
-    Stores the raw bytes on the SourceRecord metadata so downstream phases
-    can access them without a filesystem path.
+    Saves the file to disk (so the PDF viewer can serve it) AND keeps data
+    in-memory for the pipeline.
     """
+    from pathlib import Path
+
+    source_id = str(uuid.uuid4())
+
+    # Save to disk so /api/uploads/files/{id}/raw can serve it
+    upload_dir = Path(os.environ.get("MAIA_UPLOAD_DIR", "ktem_app_data/user_data/uploads"))
+    chat_dir = upload_dir / "chat" / owner_id
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    file_path = chat_dir / f"{source_id}_{filename}"
+    file_path.write_bytes(file_data)
+
     record = SourceRecord(
-        id=str(uuid.uuid4()),
+        id=source_id,
         filename=filename,
         source_type=_detect_source_type(filename),
         file_size=len(file_data),
         mime_type=_detect_mime(filename),
         group_id="",
         owner_id=owner_id,
-        upload_url="",
+        upload_url=str(file_path),
         status=IngestionStatus.UPLOADED,
         metadata={
             "chat_id": chat_id,
             "file_data": file_data,  # kept in-memory for pipeline
+            "file_path": str(file_path),
         },
         created_at=_now_iso(),
         updated_at=_now_iso(),

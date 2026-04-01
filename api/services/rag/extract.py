@@ -276,7 +276,15 @@ def _extract_pdf_native(file_data: bytes, source_id: str) -> ExtractionResult:
     char_cursor = 0
     warnings: list[str] = []
 
-    for page_idx in range(doc.page_count):
+    # Limit pages for very large PDFs — extract first N pages quickly
+    max_pages = int(os.environ.get("MAIA_RAG_MAX_EXTRACT_PAGES", "0")) or doc.page_count
+    total_pages = doc.page_count
+    pages_to_extract = min(max_pages, total_pages)
+    if pages_to_extract < total_pages:
+        warnings.append(f"Large PDF: extracted first {pages_to_extract} of {total_pages} pages for speed.")
+        _logger.info("Large PDF (%d pages): extracting first %d pages", total_pages, pages_to_extract)
+
+    for page_idx in range(pages_to_extract):
         page = doc[page_idx]
         page_rect = page.rect  # (x0, y0, x1, y1) in PDF points
         page_width = page_rect.width or 595   # fallback to A4
@@ -959,7 +967,9 @@ async def extract_source(
     # ── Enrich PDFs with image descriptions ──────────────────────────────
     # For any PDF route: extract images and describe them with vision LLM.
     # This makes diagrams, charts, figures searchable via text embeddings.
-    if file_data and source.source_type in (SourceType.PDF,) and route in (
+    # SKIP for composer uploads (MAIA_RAG_MAX_EXTRACT_PAGES set) — too slow for chat.
+    skip_images = bool(os.environ.get("MAIA_RAG_MAX_EXTRACT_PAGES"))
+    if not skip_images and file_data and source.source_type in (SourceType.PDF,) and route in (
         ProcessingRoute.TEXT_NATIVE,
         ProcessingRoute.OCR_STANDARD,
         ProcessingRoute.OCR_SCIENTIFIC,

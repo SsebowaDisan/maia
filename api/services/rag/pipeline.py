@@ -19,11 +19,14 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 from api.services.rag.types import (
-    SourceRecord, RAGConfig, DeliveryPayload, IngestionStatus,
+    SourceRecord, RAGConfig, DeliveryPayload, IngestionStatus, EmbeddedChunk,
 )
 from api.services.rag.config import get_config
 from api.services.rag.observability import StageTimer
@@ -58,6 +61,7 @@ async def ingest_file(
 
     Returns the SourceRecord after all phases complete.
     The source will have rag_ready=True and citation_ready=True.
+    Used by Library uploads where full quality matters.
     """
     cfg = config or get_config()
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
@@ -167,9 +171,24 @@ async def ingest_chat_upload(
     owner_id: str = "",
     config: RAGConfig | None = None,
 ) -> SourceRecord:
-    """Ingest a file uploaded via chat composer. Same pipeline, returns when rag_ready."""
+    """Ingest a file uploaded via chat composer — optimised for SPEED.
+
+    Fast stage (user waits): upload → classify → extract → chunk → index (keyword-only)
+    Background stage: embed → re-index with vectors
+
+    The file is queryable via keyword search within seconds.
+    Vector search quality upgrades silently in the background.
+    """
+    import asyncio
+    import os
     cfg = config or get_config()
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
+
+    # Limit extraction to first 50 pages for composer uploads (speed)
+    _prev_max_pages = os.environ.get("MAIA_RAG_MAX_EXTRACT_PAGES", "")
+    os.environ["MAIA_RAG_MAX_EXTRACT_PAGES"] = "50"
+
+    # ── FAST STAGE ────────────────────────────────────────────────────
 
     with StageTimer(trace_id, "upload", ""):
         source = await phase_upload.upload_from_chat(file_data, filename, chat_id, owner_id)
@@ -183,6 +202,12 @@ async def ingest_chat_upload(
     with StageTimer(trace_id, "extract", source.id):
         extraction = await phase_extract.extract_source(source, classification, file_data)
 
+    # Restore page limit env var
+    if _prev_max_pages:
+        os.environ["MAIA_RAG_MAX_EXTRACT_PAGES"] = _prev_max_pages
+    else:
+        os.environ.pop("MAIA_RAG_MAX_EXTRACT_PAGES", None)
+
     source.status = IngestionStatus.NORMALIZING
     with StageTimer(trace_id, "normalize", source.id):
         normalized = await phase_normalize.normalize_document(extraction)
@@ -191,22 +216,45 @@ async def ingest_chat_upload(
     with StageTimer(trace_id, "chunk", source.id):
         chunks = await phase_chunk.chunk_document(normalized, source, cfg)
 
-    source.status = IngestionStatus.EMBEDDING
-    with StageTimer(trace_id, "embed", source.id):
-        embedded = await phase_embed.embed_chunks(chunks, cfg)
-
+    # Index with EMPTY vectors — keyword search works immediately
     source.status = IngestionStatus.INDEXING
-    with StageTimer(trace_id, "index", source.id):
-        await phase_index.index_chunks(embedded, source, cfg)
+    with StageTimer(trace_id, "index_keyword", source.id):
+        from dataclasses import fields as dc_fields
+        keyword_chunks = []
+        for c in chunks:
+            # Copy all Chunk fields to EmbeddedChunk, add empty embedding
+            chunk_data = {f.name: getattr(c, f.name) for f in dc_fields(c)}
+            chunk_data["embedding"] = []
+            chunk_data["embedding_model"] = "pending"
+            ec = EmbeddedChunk(**chunk_data)
+            keyword_chunks.append(ec)
+        await phase_index.index_chunks(keyword_chunks, source, cfg)
         await phase_index.mark_rag_ready(source)
 
-    # Citation prep runs after rag_ready — user can start querying immediately
+    # Citation prep — so evidence panel works immediately
     source.status = IngestionStatus.PREPARING_CITATIONS
     with StageTimer(trace_id, "citation_prep", source.id):
         await phase_citation_prep.prepare_citations(source, chunks, extraction)
         await phase_citation_prep.mark_citation_ready(source)
 
     source.status = IngestionStatus.CITATION_READY
+    logger.info("Chat upload fast stage done for %s (%d chunks) — queryable now", source.id, len(chunks))
+
+    # ── BACKGROUND STAGE (user doesn't wait) ──────────────────────────
+
+    async def _embed_in_background():
+        try:
+            embedded = await phase_embed.embed_chunks(chunks, cfg)
+            has_vectors = any(len(ec.embedding) > 0 for ec in embedded)
+            if has_vectors:
+                await phase_index.index_chunks(embedded, source, cfg)
+                logger.info("Background vectors ready for %s — search quality upgraded", source.id)
+            else:
+                logger.warning("Embedding skipped for %s — keyword search remains", source.id)
+        except Exception as exc:
+            logger.warning("Background embedding failed for %s: %s", source.id, exc)
+
+    asyncio.ensure_future(_embed_in_background())
     return source
 
 

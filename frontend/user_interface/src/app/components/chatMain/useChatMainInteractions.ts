@@ -372,7 +372,7 @@ function useChatMainInteractions({
     setActiveAgent(null);
     onAgentModeChange("rag");
     onAccessModeChange("restricted");
-    showActionStatus("RAG mode enabled. Maia will answer from files and URLs already in Maia.");
+    showActionStatus("Library mode enabled. Search, summarize, and answer from Axon Group files and URLs.");
   };
 
   const enableWebSearch = () => {

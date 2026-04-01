@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 _OPENAI_EMBED_URL = os.environ.get("MAIA_RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1") + "/embeddings"
 _BATCH_SIZE = 100
-_MAX_RETRIES = 2
+_MAX_RETRIES = 1  # Only 1 retry — don't waste time on auth errors
 
 
 def _chunk_to_embedded(chunk: Chunk, embedding: list[float], model: str) -> EmbeddedChunk:
@@ -48,7 +48,7 @@ async def _call_openai_embeddings(
     if "embedding-3" in model:
         payload["dimensions"] = dimensions
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(_OPENAI_EMBED_URL, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
@@ -95,14 +95,21 @@ async def embed_chunks(
             try:
                 embeddings = await _call_openai_embeddings(texts, model, api_key, dimensions)
                 break
-            except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException) as exc:
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code if exc.response else 0
+                logger.warning(
+                    "Embedding batch %d–%d attempt %d failed (HTTP %d): %s",
+                    batch_start, batch_start + len(batch), attempt + 1, status_code, exc,
+                )
+                # Don't retry on auth/permission errors — they'll never succeed
+                if status_code in (401, 403, 404, 422):
+                    break
+            except (httpx.RequestError, httpx.TimeoutException) as exc:
                 last_error = exc
                 logger.warning(
                     "Embedding batch %d–%d attempt %d failed: %s",
-                    batch_start,
-                    batch_start + len(batch),
-                    attempt + 1,
-                    exc,
+                    batch_start, batch_start + len(batch), attempt + 1, exc,
                 )
 
         if embeddings is None:

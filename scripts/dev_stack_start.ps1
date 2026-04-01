@@ -15,20 +15,65 @@ $apiErr = Join-Path $logDir "api-dev.err.log"
 $uiOut = Join-Path $logDir "ui-dev.log"
 $uiErr = Join-Path $logDir "ui-dev.err.log"
 
+function Test-PythonHasModules([string]$pythonPath, [string[]]$requiredModules) {
+    if (-not $pythonPath -or -not (Test-Path $pythonPath)) { return $false }
+    $checkScript = "import importlib.util as u, sys; mods = sys.argv[1:]; raise SystemExit(0 if all(u.find_spec(m) for m in mods) else 1)"
+    & $pythonPath -c $checkScript @requiredModules *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Get-LocalPython {
-    $local = Join-Path $root "tools\python\python.exe"
-    if (Test-Path $local) { return $local }
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    throw "Python runtime not found. Install Python or keep tools\python\python.exe."
+    $requiredModules = @("fastapi", "uvicorn")
+    $candidates = @(
+        (Join-Path $root ".venv311\Scripts\python.exe"),
+        (Join-Path $root ".venv\Scripts\python.exe"),
+        (Join-Path $root "tools\python\python.exe")
+    )
+
+    $sysPython = Get-Command python -ErrorAction SilentlyContinue
+    if ($sysPython -and $sysPython.Source) {
+        $candidates += $sysPython.Source
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (Test-PythonHasModules -pythonPath $candidate -requiredModules $requiredModules) {
+            return $candidate
+        }
+    }
+
+    $checked = (($candidates | Select-Object -Unique) -join ", ")
+    throw "No suitable Python runtime found with required modules (fastapi, uvicorn). Checked: $checked"
 }
 
 function Get-NpmCmd {
-    $local = Join-Path $root "tools\node\npm.cmd"
-    if (Test-Path $local) { return $local }
-    $cmd = Get-Command npm -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    throw "npm not found. Install Node.js or keep tools\node\npm.cmd."
+    $candidates = @(
+        (Join-Path $root "tools\node\npm.cmd")
+    )
+
+    if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles "nodejs\npm.cmd")
+    }
+    if (${env:ProgramFiles(x86)}) {
+        $candidates += (Join-Path ${env:ProgramFiles(x86)} "nodejs\npm.cmd")
+    }
+
+    $cmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        $candidates += $cmd.Source
+    }
+
+    $npmApp = Get-Command npm -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($npmApp -and $npmApp.Source) {
+        $candidates += $npmApp.Source
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    throw "npm.cmd not found. Install Node.js or keep tools\node\npm.cmd."
 }
 
 function Stop-ByPidFile([string]$pidFile) {

@@ -477,8 +477,16 @@ def _inject_citation_anchors(
             attrs.append(f'data-phrase="{safe_phrase}"')
         elif cit.get("snippet"):
             raw_snippet = cit["snippet"]
-            first_sentence = _re.split(r'[.!?\n]', raw_snippet, maxsplit=1)[0].strip()
-            safe_phrase = (first_sentence[:120] if first_sentence else raw_snippet[:80]).replace('"', '&quot;')
+            # Skip heading-like lines (e.g. "1 Introduction", "Chapter 3")
+            # and find the first real content sentence
+            lines = [ln.strip() for ln in raw_snippet.split("\n") if ln.strip()]
+            content_lines = [
+                ln for ln in lines
+                if len(ln) > 30 and not _re.match(r'^(\d+[\.\s]+)?[A-Z][a-z]+(\s[A-Z][a-z]+){0,3}$', ln)
+            ]
+            best_text = content_lines[0] if content_lines else (lines[0] if lines else raw_snippet)
+            first_sentence = _re.split(r'[.!?]', best_text, maxsplit=1)[0].strip()
+            safe_phrase = (first_sentence[:150] if len(first_sentence) > 20 else best_text[:150]).replace('"', '&quot;')
             attrs.append(f'data-phrase="{safe_phrase}"')
 
         # Strength tier from relevance score
@@ -538,7 +546,12 @@ def _build_info_panel(
         if hm_sentences and isinstance(hm_sentences, list):
             extract_text = " ".join(str(s) for s in hm_sentences[:3])[:300]
         else:
-            extract_text = _re.split(r'[.!?\n]', item.get("snippet", ""), maxsplit=1)[0].strip()[:150]
+            # Skip heading-like lines, find first real content
+            raw = item.get("snippet", "")
+            lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+            content = [ln for ln in lines if len(ln) > 30]
+            best = content[0] if content else (lines[1] if len(lines) > 1 else lines[0] if lines else raw)
+            extract_text = _re.split(r'[.!?]', best, maxsplit=1)[0].strip()[:200]
 
         fe_item: dict[str, Any] = {
             "id": f"evidence-{ref_num}",
@@ -672,8 +685,13 @@ async def run_rag_ingest_bridge(
     group_id: str = "",
     owner_id: str = "",
     metadata: dict[str, Any] | None = None,
+    fast: bool = False,
 ) -> dict[str, Any]:
     """Bridge: runs the new ingestion pipeline and returns data in old format.
+
+    Args:
+        fast: If True, uses fast composer path (keyword-only, embeds in background).
+              If False, uses full library path (waits for embeddings).
 
     Returns:
     {
@@ -685,7 +703,16 @@ async def run_rag_ingest_bridge(
     }
     """
     try:
-        source = await ingest_file(file_path, group_id, owner_id, metadata=metadata)
+        if fast:
+            # Composer path: read file data, use fast ingest_chat_upload
+            resolved_path = Path(file_path).resolve()
+            file_data = resolved_path.read_bytes()
+            filename = resolved_path.name
+            chat_id = str((metadata or {}).get("chat_id", ""))
+            source = await ingest_chat_upload(file_data, filename, chat_id, owner_id)
+        else:
+            # Library path: full pipeline with embeddings
+            source = await ingest_file(file_path, group_id, owner_id, metadata=metadata)
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:

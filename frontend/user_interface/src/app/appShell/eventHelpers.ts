@@ -34,7 +34,7 @@ type ConversationMessageMeta = {
 };
 
 const MODE_SCOPE_STATEMENTS: Record<string, string> = {
-  rag: "RAG mode: I will answer from files and indexed URLs already in Maia, using citations.",
+  rag: "Library mode: I will search, summarize, and answer from Axon Group files and URLs, using citations.",
   company_agent: "Agent mode: I will execute tools and complete the workflow end-to-end.",
   deep_search:
     "Deep search: I will query multiple sources, synthesize evidence, and cite each key claim.",

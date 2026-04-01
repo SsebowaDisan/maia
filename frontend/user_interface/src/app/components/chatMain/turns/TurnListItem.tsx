@@ -70,7 +70,7 @@ function resolveTurnModeLabel(mode: ChatTurn["mode"]): string {
     return "Maia Brain";
   }
   if (mode === "rag") {
-    return "RAG";
+    return "Library";
   }
   if (mode === "web_search") {
     return "Web Search";

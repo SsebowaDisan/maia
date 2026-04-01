@@ -291,79 +291,108 @@ async def create_file_ingestion_job(
         )
         total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
 
-        # ── New RAG pipeline ingestion ──────────────────────────────────
+        # ── New RAG pipeline ingestion (background) ────────────────────
         from api.services.rag.bridge import run_rag_ingest_bridge
         import asyncio
 
         job_id = f"job_{uuid.uuid4().hex[:12]}"
-        file_ids = []
-        errors = []
-        success_count = 0
 
-        for pf in persisted:
-            file_path = str(pf.get("path") or "")
-            file_name = str(pf.get("name") or "")
-            if not file_path:
-                errors.append(f"No path for {file_name}")
-                continue
-            try:
-                logger.info("RAG ingest starting: file=%s path=%s", file_name, file_path)
-                result = await run_rag_ingest_bridge(
-                    file_path=file_path,
-                    group_id=str(group_id or ""),
-                    owner_id=user_id,
-                    metadata={"index_id": index_id, "scope": scope, "reindex": reindex},
-                )
-                logger.info("RAG ingest result: file=%s status=%s error=%s", file_name, result.get("status"), result.get("error", "none"))
-                if result.get("source_id"):
-                    file_ids.append(result["source_id"])
-                    success_count += 1
-                elif result.get("error"):
-                    errors.append(f"{file_name}: {result['error']}")
-            except Exception as exc:
-                logger.exception("RAG ingest exception: file=%s", file_name)
-                errors.append(f"{file_name}: {exc}")
-
-        record_trace_event(
-            "upload_job.completed_new_pipeline",
-            {
-                "job_id": job_id,
-                "file_count": len(persisted),
-                "success_count": success_count,
-                "error_count": len(errors),
-            },
-        )
-        logger.info(
-            "Completed file ingestion via new RAG pipeline",
-            extra={
-                "user_id": user_id,
-                "group_id": group_id,
-                "file_count": len(persisted),
-                "success_count": success_count,
-                "elapsed_ms": int((perf_counter() - started_at) * 1000),
-            },
-        )
+        # Return job immediately — ingestion runs in background
         job = IngestionJobResponse(
             id=job_id,
             user_id=user_id,
             kind="file",
-            status="completed" if not errors else "completed_with_errors",
+            status="running",
             index_id=index_id,
             reindex=reindex,
             total_items=len(persisted),
-            processed_items=len(persisted),
-            success_count=success_count,
-            failure_count=len(errors),
+            processed_items=0,
+            success_count=0,
+            failure_count=0,
             bytes_total=total_bytes,
             bytes_persisted=total_bytes,
-            bytes_indexed=total_bytes if success_count > 0 else 0,
-            items=_build_items_aligned(persisted, file_ids, errors),
-            errors=errors,
-            file_ids=file_ids,
+            bytes_indexed=0,
+            items=_build_items_aligned(persisted, [], []),
+            errors=[],
+            file_ids=[],
             debug=[f"trace_id={trace.trace_id}", "pipeline=new_rag"],
-            message=f"Ingested {success_count}/{len(persisted)} files via new RAG pipeline",
+            message=f"Ingesting {len(persisted)} file(s) — processing in background",
         )
         _store_new_pipeline_job(job)
+
+        # Run ingestion in background task
+        async def _run_background_ingestion():
+            file_ids = []
+            errors = []
+            success_count = 0
+            for pf in persisted:
+                file_path = str(pf.get("path") or "")
+                file_name = str(pf.get("name") or "")
+                if not file_path:
+                    errors.append(f"No path for {file_name}")
+                    continue
+                try:
+                    logger.info("RAG ingest starting: file=%s path=%s", file_name, file_path)
+                    is_composer_upload = str(scope or "").strip().lower() == "chat_temp"
+                    result = await run_rag_ingest_bridge(
+                        file_path=file_path,
+                        group_id=str(group_id or ""),
+                        owner_id=user_id,
+                        metadata={"index_id": index_id, "scope": scope, "reindex": reindex},
+                        fast=is_composer_upload,
+                    )
+                    logger.info("RAG ingest result: file=%s status=%s", file_name, result.get("status"))
+                    if result.get("source_id"):
+                        file_ids.append(result["source_id"])
+                        success_count += 1
+                    elif result.get("error"):
+                        errors.append(f"{file_name}: {result['error']}")
+                except Exception as exc:
+                    logger.exception("RAG ingest exception: file=%s", file_name)
+                    errors.append(f"{file_name}: {exc}")
+
+            # Update job with final status
+            completed_job = IngestionJobResponse(
+                id=job_id,
+                user_id=user_id,
+                kind="file",
+                status="completed" if not errors else "completed_with_errors",
+                index_id=index_id,
+                reindex=reindex,
+                total_items=len(persisted),
+                processed_items=len(persisted),
+                success_count=success_count,
+                failure_count=len(errors),
+                bytes_total=total_bytes,
+                bytes_persisted=total_bytes,
+                bytes_indexed=total_bytes if success_count > 0 else 0,
+                items=_build_items_aligned(persisted, file_ids, errors),
+                errors=errors,
+                file_ids=file_ids,
+                debug=[f"trace_id={trace.trace_id}", "pipeline=new_rag"],
+                message=f"Ingested {success_count}/{len(persisted)} files via new RAG pipeline",
+            )
+            _store_new_pipeline_job(completed_job)
+            record_trace_event(
+                "upload_job.completed_new_pipeline",
+                {
+                    "job_id": job_id,
+                    "file_count": len(persisted),
+                    "success_count": success_count,
+                    "error_count": len(errors),
+                },
+            )
+            logger.info(
+                "Background ingestion completed",
+                extra={
+                    "user_id": user_id,
+                    "job_id": job_id,
+                    "success_count": success_count,
+                    "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                },
+            )
+
+        asyncio.ensure_future(_run_background_ingestion())
         return job
     except HTTPException as exc:
         record_trace_event(

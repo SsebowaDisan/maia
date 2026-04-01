@@ -5,6 +5,13 @@ import os
 import warnings
 from pathlib import Path
 
+# Load .env BEFORE any other imports read os.environ
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)
+except ImportError:
+    pass
+
 # Suppress known harmless third-party deprecation/compatibility warnings that
 # appear at import time and cannot be fixed upstream.
 warnings.filterwarnings("ignore", category=UserWarning, module=r"pydantic.*")
