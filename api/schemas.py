@@ -294,7 +294,7 @@ class ChatRequest(BaseModel):
     setting_overrides: dict[str, Any] = Field(default_factory=dict)
     mindmap_focus: MindmapFocusSchema = Field(default_factory=MindmapFocusSchema)
     mindmap_settings: dict[str, Any] = Field(default_factory=dict)
-    agent_mode: Literal["ask", "company_agent", "deep_search", "brain"] = "ask"
+    agent_mode: Literal["ask", "rag", "company_agent", "deep_search", "brain"] = "ask"
     agent_goal: str | None = None
     access_mode: Literal["restricted", "full_access"] | None = None
     agent_id: str | None = None  # explicit agent selection — skips intent resolution

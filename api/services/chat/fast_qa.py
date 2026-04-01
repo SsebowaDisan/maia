@@ -553,7 +553,7 @@ def run_fast_chat_turn(
     user_id: str,
     request: ChatRequest,
 ) -> dict[str, Any] | None:
-    # Only use RAG pipeline when user has files attached or selected sources
+    # Determine if RAG mode should be used
     _has_attachments = hasattr(request, "attachments") and request.attachments and any(
         getattr(att, "file_id", None) or (att.get("file_id") if isinstance(att, dict) else None)
         for att in request.attachments
@@ -562,9 +562,10 @@ def run_fast_chat_turn(
         (hasattr(sel, "file_ids") and sel.file_ids) or (isinstance(sel, dict) and sel.get("file_ids"))
         for sel in request.index_selection.values()
     )
-    _use_rag_for_this_request = _USE_NEW_RAG and (_has_attachments or _has_selected_files)
+    _rag_mode_selected = str(getattr(request, "agent_mode", "") or "").strip().lower() == "rag"
+    _use_rag_for_this_request = _USE_NEW_RAG and (_has_attachments or _has_selected_files or _rag_mode_selected)
 
-    # ── Standard mode (no files): direct LLM, no citations ───────────
+    # ── Standard mode (no files, not Library mode): direct LLM, no citations ───
     if not _use_rag_for_this_request:
         try:
             import httpx
@@ -613,7 +614,8 @@ def run_fast_chat_turn(
                                     "- Never say 'Great question!' or 'Sure!' or 'Of course!'\n"
                                     "- Never repeat the question back.\n"
                                     "- Never give a response that is just bullet points without explanatory text.\n"
-                                    "- Never use 'In conclusion' or 'To summarize' — just end when done."
+                                    "- Never use 'In conclusion' or 'To summarize' — just end when done.\n"
+                                    "- Never use citation markers like [1], [2], [3]. You are answering from your own knowledge, not from sources."
                                 ),
                             },
                             {"role": "user", "content": request.message},
@@ -754,45 +756,54 @@ def run_fast_chat_turn(
         selected_ids = []
         group_id = ""
         try:
-            # 1. From attachments (chat-uploaded PDFs)
-            if hasattr(request, "attachments") and request.attachments:
-                for att in request.attachments:
-                    fid = getattr(att, "file_id", None) or (att.get("file_id") if isinstance(att, dict) else None)
-                    if fid:
-                        selected_ids.append(str(fid))
-
-            # 2. From index_selection (selected files in the file picker)
-            if not selected_ids and hasattr(request, "index_selection") and request.index_selection:
+            # 1. From index_selection (selected files via @ picker)
+            if hasattr(request, "index_selection") and request.index_selection:
                 for _idx_key, sel in request.index_selection.items():
                     if hasattr(sel, "file_ids") and sel.file_ids:
                         selected_ids.extend([str(f) for f in sel.file_ids])
                     elif isinstance(sel, dict) and sel.get("file_ids"):
                         selected_ids.extend([str(f) for f in sel["file_ids"]])
+
+            # 2. From attachments (chat-uploaded PDFs) — add to selected_ids
+            if hasattr(request, "attachments") and request.attachments:
+                for att in request.attachments:
+                    fid = getattr(att, "file_id", None) or (att.get("file_id") if isinstance(att, dict) else None)
+                    if fid and str(fid) not in selected_ids:
+                        selected_ids.append(str(fid))
         except Exception:
             pass
+
+        # In Library mode: ALWAYS search ALL library files (not just attached ones).
+        # The attached file is included too, but we search the whole library.
+        # Pass empty source_ids so the bridge queries all user documents.
+        # Only scope to specific files if user explicitly selected via @ or #.
+        query_source_ids = selected_ids if (selected_ids and not _rag_mode_selected) else []
+        if _rag_mode_selected and selected_ids:
+            # Library mode + files attached/selected: search all, but the attached
+            # files are already in the index so they'll be found naturally.
+            # Pass empty to search everything.
+            query_source_ids = []
 
         try:
             # Handle both sync and async contexts
             try:
                 loop = asyncio.get_running_loop()
-                # We're inside an async context — use nest_asyncio or thread
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     result = pool.submit(
                         asyncio.run,
                         run_rag_query_bridge(
                             question=request.message,
-                            source_ids=selected_ids,
+                            source_ids=query_source_ids,
                             group_id=group_id,
                             owner_id=user_id,
                         )
                     ).result(timeout=60)
             except RuntimeError:
-                # No running loop — safe to use asyncio.run
                 result = asyncio.run(
                     run_rag_query_bridge(
                         question=request.message,
-                        source_ids=selected_ids,
+                        source_ids=query_source_ids,
                         group_id=group_id,
                         owner_id=user_id,
                     )

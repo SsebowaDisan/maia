@@ -371,7 +371,7 @@ function buildModeContext(
 } {
   const effectiveMode = context.options?.agentMode ?? context.composerMode;
   const backendMode: AgentMode =
-    effectiveMode === "brain" ? "company_agent" : effectiveMode === "rag" ? "ask" : effectiveMode;
+    effectiveMode === "brain" ? "company_agent" : effectiveMode;
   const effectiveAccessMode = context.options?.accessMode ?? context.accessMode;
   const orchestratorMode = backendMode === "company_agent" || backendMode === "deep_search";
   const liveStreamMode = orchestratorMode || effectiveMode === "rag";

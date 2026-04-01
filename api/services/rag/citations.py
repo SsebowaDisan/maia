@@ -11,6 +11,7 @@ ranked evidence, then creates Citation objects the UI can render:
 from __future__ import annotations
 
 import logging
+import re
 
 from api.services.rag.types import (
     BoundingBox,
@@ -24,6 +25,46 @@ from api.services.rag.types import (
 from api.services.rag.config import classify_credibility
 
 logger = logging.getLogger(__name__)
+
+
+_HEADING_RE = re.compile(
+    r'^(\d+[\.\s]+)?[A-Z][A-Za-z\s]{0,40}$'  # e.g. "1 Introduction", "DESIGN of THERMAL"
+)
+
+
+def _extract_content_snippet(chunk_text: str, fallback_snippet: str = "") -> str:
+    """Extract the first real content sentences from chunk text, skipping headings.
+
+    Returns 1-2 full sentences that represent actual evidence, not section titles.
+    """
+    lines = [ln.strip() for ln in chunk_text.split("\n") if ln.strip()]
+
+    # Find content lines: longer than 40 chars AND don't look like a heading
+    content_sentences: list[str] = []
+    for line in lines:
+        if len(line) < 40:
+            continue
+        if _HEADING_RE.match(line):
+            continue
+        if line.isupper() and len(line) < 80:
+            continue
+        # Split into sentences and take the first 2
+        sentences = re.split(r'(?<=[.!?])\s+', line)
+        for sent in sentences:
+            sent = sent.strip()
+            if len(sent) > 30:
+                content_sentences.append(sent)
+                if len(content_sentences) >= 2:
+                    break
+        if len(content_sentences) >= 2:
+            break
+
+    if content_sentences:
+        return " ".join(content_sentences)[:300]
+
+    # Fallback: use the raw fallback_snippet or chunk text
+    raw = fallback_snippet or chunk_text
+    return raw[:300]
 
 
 def _best_anchor(anchors: list[CitationAnchor]) -> CitationAnchor | None:
@@ -148,7 +189,7 @@ async def build_citations(
                 text_snippet=chunk.text[:200],
                 heading_path=list(chunk.heading_path),
             )
-        snippet = best.text_snippet if best.text_snippet else chunk.text[:300]
+        snippet = _extract_content_snippet(chunk.text, best.text_snippet)
 
         # Source info
         source_name = chunk.filename or chunk.source_id
