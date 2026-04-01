@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { TrendingUp } from "lucide-react";
+import { request } from "../../../api/client/core";
 
 type RoiSummaryPayload = {
   total_time_saved_hours?: number;
@@ -13,11 +14,10 @@ function EmptyState() {
     let cancelled = false;
     const loadRoiSummary = async () => {
       try {
-        const response = await fetch("/api/roi?days=30", { credentials: "include" });
-        if (!response.ok || cancelled) {
+        const payload = await request<RoiSummaryPayload>("/api/roi?days=30");
+        if (cancelled) {
           return;
         }
-        const payload = (await response.json()) as RoiSummaryPayload;
         const totalCost = Number(payload.total_cost_avoided_usd ?? 0);
         if (!Number.isFinite(totalCost) || totalCost <= 0) {
           return;

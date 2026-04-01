@@ -1,11 +1,11 @@
-"""RAG Pipeline Phase 1: Upload — create SourceRecord from file, URL, or chat attachment."""
+﻿"""RAG Pipeline Phase 1: Upload â€” create SourceRecord from file, URL, or chat attachment."""
 
 from __future__ import annotations
 
 import mimetypes
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from api.services.rag.types import (
     IngestionStatus,
@@ -13,7 +13,7 @@ from api.services.rag.types import (
     SourceType,
 )
 
-# ── Extension to SourceType mapping ─────────────────────────────────────────
+# â”€â”€ Extension to SourceType mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _EXT_MAP: dict[str, SourceType] = {
     ".pdf": SourceType.PDF,
@@ -56,7 +56,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── Public API ──────────────────────────────────────────────────────────────
+# â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def upload_file(
@@ -137,20 +137,26 @@ async def upload_from_chat(
 ) -> SourceRecord:
     """Upload a file attachment from a chat message.
 
-    Saves the file to disk (so the PDF viewer can serve it) AND keeps data
-    in-memory for the pipeline.
+    Writes bytes to USER_TEMP_DIR so the file survives server restarts.
+    Sets expires_at = now + USER_TEMP_TTL_DAYS so the cleanup job can
+    auto-delete it. The raw bytes are also kept in metadata for the
+    pipeline phases that need them; bridge.py strips file_data before
+    persisting the registry so the JSON stays small.
     """
-    from pathlib import Path
+    from api.services.upload.storage_config import USER_TEMP_DIR, USER_TEMP_TTL_DAYS
 
     source_id = str(uuid.uuid4())
+    safe_filename = os.path.basename(filename) or "upload"
 
-    # Save to disk so /api/uploads/files/{id}/raw can serve it
-    upload_dir = Path(os.environ.get("MAIA_UPLOAD_DIR", "ktem_app_data/user_data/uploads"))
-    chat_dir = upload_dir / "chat" / owner_id
-    chat_dir.mkdir(parents=True, exist_ok=True)
-    file_path = chat_dir / f"{source_id}_{filename}"
+    # Write to disk: user_temp/{owner_id}/{source_id}_{filename}
+    owner_dir = USER_TEMP_DIR / (owner_id or "anonymous")
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    file_path = owner_dir / f"{source_id}_{safe_filename}"
     file_path.write_bytes(file_data)
 
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=USER_TEMP_TTL_DAYS)
+    ).isoformat()
     record = SourceRecord(
         id=source_id,
         filename=filename,
@@ -163,12 +169,15 @@ async def upload_from_chat(
         status=IngestionStatus.UPLOADED,
         metadata={
             "chat_id": chat_id,
-            "file_data": file_data,  # kept in-memory for pipeline
+            "file_data": file_data,  # kept in-memory for pipeline phases; stripped before registry save
             "file_path": str(file_path),
         },
         created_at=_now_iso(),
         updated_at=_now_iso(),
         rag_ready=False,
         citation_ready=False,
+        scope="user_temp",
+        expires_at=expires_at,
     )
     return record
+

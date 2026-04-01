@@ -1,4 +1,4 @@
-"""RAG Bridge — adapts the new clean pipeline to the old app interface.
+﻿"""RAG Bridge â€” adapts the new clean pipeline to the old app interface.
 
 This module lets the app use the new RAG pipeline without rewriting every
 callback and router at once. It wraps pipeline.query_* in the shape that
@@ -49,7 +49,7 @@ _SOURCE_REGISTRY_LOCK = RLock()
 _SOURCE_REGISTRY: dict[str, SourceRecord] = {}
 _SOURCE_REGISTRY_ORDER: list[str] = []
 
-# ── Registry persistence ────────────────────────────────────────────────────
+# â”€â”€ Registry persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _REGISTRY_FILE = os.environ.get(
     "MAIA_RAG_REGISTRY_FILE",
@@ -86,6 +86,12 @@ def _save_registry() -> None:
                     "created_at": source.created_at or "",
                     "updated_at": source.updated_at or "",
                     "metadata": source.metadata if isinstance(source.metadata, dict) else {},
+                    # Tier / lifecycle fields
+                    "scope": source.scope or "user_temp",
+                    "flagged": bool(source.flagged),
+                    "flagged_at": source.flagged_at or "",
+                    "expires_at": source.expires_at or "",
+                    "flag_note": source.flag_note or "",
                 })
         registry_path.write_text(_stdlib_json.dumps(entries, indent=2, default=str), encoding="utf-8")
     except Exception as exc:
@@ -113,6 +119,18 @@ def _load_registry() -> None:
                 status = IngestionStatus(entry.get("status", "rag_ready"))
             except (ValueError, KeyError):
                 status = IngestionStatus.RAG_READY
+            # Scope: prefer top-level field; fall back to metadata for old records
+            raw_meta = entry.get("metadata") or {}
+            legacy_scope = str(raw_meta.get("scope") or "").strip().lower()
+            has_chat_id = bool(raw_meta.get("chat_id"))
+            if entry.get("scope"):
+                resolved_scope = str(entry["scope"]).strip().lower()
+            elif legacy_scope:
+                resolved_scope = "user_temp" if legacy_scope == "chat_temp" else legacy_scope
+            elif has_chat_id:
+                resolved_scope = "user_temp"
+            else:
+                resolved_scope = "library"  # old persistent uploads are library
             source = SourceRecord(
                 id=entry["id"],
                 filename=entry.get("filename", ""),
@@ -126,7 +144,12 @@ def _load_registry() -> None:
                 status=status,
                 created_at=entry.get("created_at", ""),
                 updated_at=entry.get("updated_at", ""),
-                metadata=entry.get("metadata", {}),
+                metadata=raw_meta,
+                scope=resolved_scope,
+                flagged=bool(entry.get("flagged", False)),
+                flagged_at=entry.get("flagged_at") or None,
+                expires_at=entry.get("expires_at") or None,
+                flag_note=entry.get("flag_note", ""),
             )
             with _SOURCE_REGISTRY_LOCK:
                 sid = str(source.id).strip()
@@ -144,13 +167,19 @@ _load_registry()
 
 
 def _source_scope(source: SourceRecord) -> str:
+    # Top-level field takes precedence (set on all new records)
+    if source.scope:
+        return source.scope
+    # Legacy fallback: read from metadata
     metadata = source.metadata if isinstance(source.metadata, dict) else {}
     raw_scope = str(metadata.get("scope") or "").strip().lower()
+    if raw_scope == "chat_temp":
+        return "user_temp"
     if raw_scope:
         return raw_scope
     if metadata.get("chat_id"):
-        return "chat_temp"
-    return "persistent"
+        return "user_temp"
+    return "library"
 
 
 def _normalize_index_id(value: Any) -> int | None:
@@ -199,12 +228,18 @@ def list_registered_sources(
         ]
     selected: list[SourceRecord] = []
     for source in rows:
-        if normalized_owner and source.owner_id and source.owner_id != normalized_owner:
-            continue
-        metadata = source.metadata if isinstance(source.metadata, dict) else {}
         source_scope = _source_scope(source)
+        # Library files are shared â€” visible to all users regardless of owner
+        if source_scope != "library":
+            if normalized_owner and source.owner_id and source.owner_id != normalized_owner:
+                continue
+        # Filter out user_temp files unless caller explicitly asks for them
+        if source_scope == "user_temp" and not include_chat_temp:
+            continue
+        # Legacy chat_temp compatibility
         if source_scope == "chat_temp" and not include_chat_temp:
             continue
+        metadata = source.metadata if isinstance(source.metadata, dict) else {}
         if requested_index_id is not None:
             source_index_id = _normalize_index_id(metadata.get("index_id"))
             if source_index_id != requested_index_id:
@@ -245,7 +280,45 @@ def resolve_registered_source_path(
     return path, filename
 
 
-# ── Query Bridge ─────────────────────────────────────────────────────────────
+# â”€â”€ Registry public helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+def get_registered_source(source_id: str) -> SourceRecord | None:
+    """Return a single source by ID, or None if not found."""
+    sid = str(source_id or "").strip()
+    if not sid:
+        return None
+    with _SOURCE_REGISTRY_LOCK:
+        return _SOURCE_REGISTRY.get(sid)
+
+
+def update_registered_source(source: SourceRecord) -> None:
+    """Replace an existing registry entry and persist to disk."""
+    _register_source(source)
+
+
+def remove_registered_source(source_id: str) -> None:
+    """Remove a source from the registry and persist to disk."""
+    sid = str(source_id or "").strip()
+    if not sid:
+        return
+    with _SOURCE_REGISTRY_LOCK:
+        _SOURCE_REGISTRY.pop(sid, None)
+        try:
+            _SOURCE_REGISTRY_ORDER.remove(sid)
+        except ValueError:
+            pass
+    _save_registry()
+
+
+def list_flagged_sources() -> list[SourceRecord]:
+    """Return all sources currently flagged for admin review, newest first."""
+    with _SOURCE_REGISTRY_LOCK:
+        ordered_ids = list(reversed(_SOURCE_REGISTRY_ORDER))
+        rows = [_SOURCE_REGISTRY[sid] for sid in ordered_ids if sid in _SOURCE_REGISTRY]
+    return [s for s in rows if s.flagged]
+
+
+# â”€â”€ Query Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def run_rag_query_bridge(
     question: str,
@@ -282,7 +355,7 @@ async def run_rag_query_bridge(
             else:
                 payload = await query_sources(question, str_source_ids, owner_id, cfg)
         else:
-            # No specific scope — search all documents for this user
+            # No specific scope â€” search all documents for this user
             from api.services.rag.retrieve import RetrievalScope
             payload = await _run_query_unscoped(question, owner_id, cfg)
     except Exception as exc:
@@ -471,7 +544,7 @@ def _inject_citation_anchors(
         # or fall back to first sentence of chunk snippet
         hm_sentences = hm_entry.get("sentences", [])
         if hm_sentences and isinstance(hm_sentences, list):
-            # Join sentences for the phrase — these are exact copies from the PDF
+            # Join sentences for the phrase â€” these are exact copies from the PDF
             phrase = " ".join(str(s) for s in hm_sentences[:3])
             safe_phrase = phrase[:300].replace('"', '&quot;')
             attrs.append(f'data-phrase="{safe_phrase}"')
@@ -585,7 +658,7 @@ def _build_info_panel(
             fe_item["highlight_boxes"] = normalized
 
         # Evidence units for character-level highlighting
-        # Use LLM sentences if available — these are exact PDF text for precise highlighting
+        # Use LLM sentences if available â€” these are exact PDF text for precise highlighting
         if hm_sentences:
             fe_item["evidence_units"] = [
                 {"text": str(s), "highlight_boxes": fe_item.get("highlight_boxes", [])}
@@ -678,7 +751,7 @@ async def _run_query_unscoped(
     return await _run_query(question, scope, "all documents", config, f"trace_{__import__('uuid').uuid4().hex[:12]}")
 
 
-# ── Ingestion Bridge ─────────────────────────────────────────────────────────
+# â”€â”€ Ingestion Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def run_rag_ingest_bridge(
     file_path: str,
@@ -710,9 +783,17 @@ async def run_rag_ingest_bridge(
             filename = resolved_path.name
             chat_id = str((metadata or {}).get("chat_id", ""))
             source = await ingest_chat_upload(file_data, filename, chat_id, owner_id)
+            source = replace(source, scope="user_temp")
         else:
             # Library path: full pipeline with embeddings
             source = await ingest_file(file_path, group_id, owner_id, metadata=metadata)
+            # Resolve scope from metadata: persistent/library uploads from admins -> "library"
+            raw_scope = str((metadata or {}).get("scope") or "").strip().lower()
+            if raw_scope in {"chat_temp", "user_temp"}:
+                resolved = "user_temp"
+            else:
+                resolved = "library"  # persistent / explicit library uploads
+            source = replace(source, scope=resolved)
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:
@@ -735,6 +816,7 @@ async def run_rag_ingest_url_bridge(
     """Bridge: ingest a URL via the new pipeline."""
     try:
         source = await ingest_url(url, group_id, owner_id)
+        source = replace(source, scope="library")  # URL ingestion is always admin â†’ library
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:
@@ -785,7 +867,7 @@ def _source_to_legacy_format(source: SourceRecord) -> dict[str, Any]:
     }
 
 
-# ── Highlight Bridge ─────────────────────────────────────────────────────────
+# â”€â”€ Highlight Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def get_highlight_target_bridge(
     source_id: str,
@@ -825,7 +907,7 @@ async def get_highlight_target_bridge(
             "snippet": "",
         }
 
-    # Find best anchor — prefer EXACT tier, or matching page
+    # Find best anchor â€” prefer EXACT tier, or matching page
     best = anchors[0]
     for a in anchors:
         if a.tier == CitationTier.EXACT:
@@ -865,3 +947,4 @@ async def get_highlight_target_bridge(
         "tier": best.tier.value if best.tier else "fallback",
         "snippet": best.text_snippet,
     }
+

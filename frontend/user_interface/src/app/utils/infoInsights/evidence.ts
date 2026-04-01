@@ -389,7 +389,7 @@ function parseEvidenceUnitsFromDetails(details: Element) {
   const attrs = ["data-evidence-units", "data-evidenceUnits"];
   for (const attr of attrs) {
     const explicit = normalizeEvidenceUnits(details.getAttribute(attr));
-    if (explicit.length) {
+    if (Array.isArray(explicit) && explicit.length) {
       return explicit;
     }
   }
@@ -399,7 +399,7 @@ function parseEvidenceUnitsFromDetails(details: Element) {
   }
   for (const attr of attrs) {
     const nested = normalizeEvidenceUnits(candidate.getAttribute(attr));
-    if (nested.length) {
+    if (Array.isArray(nested) && nested.length) {
       return nested;
     }
   }

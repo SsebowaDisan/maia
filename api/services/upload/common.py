@@ -20,8 +20,18 @@ def normalize_ids(values: list[str]) -> list[str]:
 
 
 def normalize_upload_scope(scope: str | None) -> str:
-    value = str(scope or "persistent").strip().lower()
-    return "chat_temp" if value == "chat_temp" else "persistent"
+    """Normalise the upload scope string to one of two canonical values.
+
+    Returns:
+        "user_temp"  — composer / transient upload, allowed for any user.
+                       Accepts: "chat_temp", "user_temp"
+        "library"    — persistent file-library write, admin-only.
+                       Accepts: "library", "persistent", or anything else.
+    """
+    value = str(scope or "library").strip().lower()
+    if value in {"chat_temp", "user_temp"}:
+        return "user_temp"
+    return "library"
 
 
 def serialize_group_record(group: Any) -> dict[str, Any]:

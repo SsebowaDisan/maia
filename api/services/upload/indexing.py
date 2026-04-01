@@ -69,6 +69,26 @@ def list_indexed_files(*, context, user_id: str, include_chat_temp: bool = False
             "source_type": source.source_type.value if source.source_type else "unknown",
             "group_id": str(source.group_id or ""),
         }
+        # Preserve compact metadata used by the frontend file list columns.
+        for key in (
+            "tokens",
+            "token",
+            "n_tokens",
+            "num_tokens",
+            "token_count",
+            "loader",
+            "reader",
+            "doc_loader",
+            "processing_route",
+            "upload_scope",
+            "index_id",
+        ):
+            value = metadata.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            note[key] = value
         raw_url = str(source.upload_url or "").strip()
         if raw_url.startswith(("http://", "https://")):
             note["url"] = raw_url

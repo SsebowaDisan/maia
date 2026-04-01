@@ -169,4 +169,25 @@ describe("parseEvidence", () => {
     expect(cards[0].evidenceUnits?.[0]?.text).toContain("CAPEX");
     expect(cards[0].evidenceUnits?.[0]?.highlightBoxes).toHaveLength(1);
   });
+
+  it("does not crash when evidence-unit payload exists but normalizes to empty", () => {
+    const cards = parseEvidence(
+      `
+        <details
+          class="evidence"
+          id="evidence-3"
+          data-file-id="file-3"
+          data-evidence-units='[{"text":"too short","char_start":1,"char_end":2}]'
+        >
+          <summary>Evidence [3]</summary>
+          <div>Source: Test</div>
+          <div>Extract: This row should parse without throwing.</div>
+        </details>
+      `,
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0].id).toBe("evidence-3");
+    expect(cards[0].evidenceUnits).toBeUndefined();
+  });
 });

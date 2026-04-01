@@ -74,14 +74,14 @@ logger = logging.getLogger(__name__)
 
 
 def _assert_upload_write_allowed(user: User, scope: str | None) -> None:
-    """Allow chat_temp uploads for all users; keep persistent writes admin-only."""
+    """Allow user_temp uploads for all users; restrict library writes to admins."""
     normalized_scope = normalize_upload_scope(scope)
-    if normalized_scope == "chat_temp":
+    if normalized_scope == "user_temp":
         return
     if user.role not in {"org_admin", "super_admin"}:
         raise HTTPException(
             status_code=403,
-            detail="Admin privileges are required for persistent file library writes.",
+            detail="Admin privileges are required to upload to the file library.",
         )
 
 

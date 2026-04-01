@@ -290,39 +290,40 @@ function mapMessageAttachments(
   if (!Array.isArray(attachments) || attachments.length <= 0) {
     return undefined;
   }
-  const normalized = attachments
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const name = String(item.name || "").trim();
-      const fileId = String(item.file_id || item.fileId || "").trim();
-      if (!name && !fileId) {
-        return null;
-      }
-      return {
-        name: name || fileId || "Uploaded file",
-        fileId: fileId || undefined,
-      };
-    })
-    .filter(
-      (
-        item,
-      ): item is {
-        name: string;
-        fileId?: string;
-      } => Boolean(item),
-    );
+  const normalized: NonNullable<ChatTurn["attachments"]> = [];
+  for (const item of attachments) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const name = String(item.name || "").trim();
+    const fileId = String(item.file_id || item.fileId || "").trim();
+    if (!name && !fileId) {
+      continue;
+    }
+    const attachment: NonNullable<ChatTurn["attachments"]>[number] = {
+      name: name || fileId || "Uploaded file",
+    };
+    if (fileId) {
+      attachment.fileId = fileId;
+    }
+    normalized.push(attachment);
+  }
   return normalized.length > 0 ? normalized : undefined;
 }
 
 export function buildConversationTurns(
   detail: ConversationDetail,
 ): { turns: ChatTurn[]; runIds: string[] } {
-  const messages = detail.data_source?.messages || [];
-  const retrievalMessages = detail.data_source?.retrieval_messages || [];
-  const plotHistory = detail.data_source?.plot_history || [];
-  const messageMeta = (detail.data_source?.message_meta || []) as ConversationMessageMeta[];
+  const messages = Array.isArray(detail.data_source?.messages) ? detail.data_source.messages : [];
+  const retrievalMessages = Array.isArray(detail.data_source?.retrieval_messages)
+    ? detail.data_source.retrieval_messages
+    : [];
+  const plotHistory = Array.isArray(detail.data_source?.plot_history)
+    ? detail.data_source.plot_history
+    : [];
+  const messageMeta = Array.isArray(detail.data_source?.message_meta)
+    ? (detail.data_source.message_meta as ConversationMessageMeta[])
+    : [];
   const turns: ChatTurn[] = messages.map((entry, index) => {
     const assistant = entry[1] || "";
     const infoPanelMeta =
@@ -355,7 +356,7 @@ export function buildConversationTurns(
       documents: normalizeCanvasDocuments(messageMeta[index]?.documents),
       attachments: mapMessageAttachments(messageMeta[index]?.attachments),
       info: retrievalMessages[index] || "",
-      plot: (plotHistory[index] as Record<string, unknown> | null | undefined) ?? null,
+      plot: asRecord(plotHistory[index]),
       mode: resolvedMode,
       modeRequested: requestedMode || "ask",
       modeActuallyUsed: actualMode || requestedMode || "ask",

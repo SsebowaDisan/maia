@@ -142,7 +142,7 @@ class SourceRecord:
     mime_type: str = ""
     group_id: str = ""                  # which group this belongs to
     owner_id: str = ""
-    upload_url: str = ""                # storage URL
+    upload_url: str = ""                # storage URL / file path on disk
     status: IngestionStatus = IngestionStatus.UPLOADED
     processing_route: ProcessingRoute | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -152,6 +152,13 @@ class SourceRecord:
     # Readiness flags — set by specific phases only
     rag_ready: bool = False             # set by Phase 7 (Index) only
     citation_ready: bool = False        # set by Phase 8 (Citation Prep) only
+
+    # Tier / lifecycle fields
+    scope: str = "user_temp"            # "library" | "user_temp"
+    flagged: bool = False               # user submitted for admin review
+    flagged_at: str | None = None       # ISO timestamp when flagged
+    expires_at: str | None = None       # ISO timestamp for auto-deletion (None = never)
+    flag_note: str = ""                 # optional note from the user when flagging
 
 
 @dataclass
