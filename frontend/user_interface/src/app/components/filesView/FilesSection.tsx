@@ -26,6 +26,7 @@ interface FilesSectionProps {
   startFileDrag: (event: DragEvent<HTMLElement>, fileId: string) => void;
   endFileDrag: () => void;
   groupsByFileId: Map<string, string[]>;
+  onOpenFilePreview: (fileId: string) => void;
 }
 
 function FilesSection({
@@ -49,6 +50,7 @@ function FilesSection({
   startFileDrag,
   endFileDrag,
   groupsByFileId,
+  onOpenFilePreview,
 }: FilesSectionProps) {
   const readinessClasses = (file: FileRecord) => {
     const tone = readinessTone(file.note || {}, file);
@@ -176,7 +178,11 @@ function FilesSection({
                       draggable={canMoveFiles}
                       onDragStart={(event) => startFileDrag(event, file.id)}
                       onDragEnd={endFileDrag}
-                      onClick={() => toggleFileSelection(file.id)}
+                      onClick={(event) => {
+                        if (event.detail > 1) return;
+                        toggleFileSelection(file.id);
+                      }}
+                      onDoubleClick={() => onOpenFilePreview(file.id)}
                       className={`cursor-pointer border-t border-[#f2f2f5] ${
                         isSelected ? "bg-[#f7f7f9]" : "hover:bg-[#fbfbfd]"
                       } ${draggingFileId === file.id ? "opacity-65" : ""}`}
@@ -228,7 +234,11 @@ function FilesSection({
                   draggable={canMoveFiles}
                   onDragStart={(event) => startFileDrag(event, file.id)}
                   onDragEnd={endFileDrag}
-                  onClick={() => toggleFileSelection(file.id)}
+                  onClick={(event) => {
+                    if (event.detail > 1) return;
+                    toggleFileSelection(file.id);
+                  }}
+                  onDoubleClick={() => onOpenFilePreview(file.id)}
                   className={`rounded-xl border px-4 py-4 text-left ${
                     isSelected ? "border-[#1d1d1f] bg-[#f7f7f9]" : "border-black/[0.08] bg-white"
                   }`}

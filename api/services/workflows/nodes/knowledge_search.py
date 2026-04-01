@@ -17,10 +17,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional
 
+from decouple import config as decouple_config
 from api.schemas.workflow_definition import WorkflowStep
 from api.services.workflows.nodes import register
 
 logger = logging.getLogger(__name__)
+
+# New RAG pipeline (feature flag)
+_USE_NEW_RAG = decouple_config("MAIA_USE_NEW_RAG", default="false", cast=str).lower() == "true"
 
 _MAX_TOP_K = 20
 _DEFAULT_TOP_K = 5
@@ -50,6 +54,24 @@ def handle_knowledge_search(
     novelty = _check_query_novelty(query)
     if novelty and on_event:
         on_event({"event_type": "knowledge_search_novelty", **novelty})
+
+    if _USE_NEW_RAG:
+        import asyncio
+        from api.services.rag.bridge import run_rag_query_bridge
+        try:
+            rag_result = asyncio.get_event_loop().run_until_complete(
+                run_rag_query_bridge(question=query, source_ids=[])
+            )
+            # Extract chunks from result for workflow
+            chunks = rag_result.get("chunks") or rag_result.get("results") or []
+            if chunks:
+                formatted = _format_results(chunks, include_metadata)
+                if on_event:
+                    on_event({"event_type": "knowledge_search_completed", "count": len(formatted)})
+                return {"results": formatted, "count": len(formatted), "query": query, "novelty": novelty or {}}
+        except Exception as exc:
+            logger.warning("New RAG pipeline failed in knowledge_search, falling back: %s", exc)
+        # Fall through to old retrieval
 
     try:
         results = _run_retrieval(query, top_k, retrieval_mode, score_threshold)

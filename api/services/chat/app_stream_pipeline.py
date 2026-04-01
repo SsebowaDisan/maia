@@ -20,6 +20,7 @@ from api.schemas import HaltReason
 
 from .constants import logger
 from .conversation_store import persist_conversation
+from .canvas_turn import attach_canvas_document
 from .fallbacks import fallback_answer_from_exception
 from .info_panel_copy import build_info_panel_copy
 from .pipeline import create_pipeline
@@ -246,6 +247,19 @@ def run_pipeline_stream_turn(
     }
     info_panel["perf"] = _pipeline_perf
     blocks, documents = build_turn_blocks(answer_text=answer_text, question=message)
+    blocks, documents, canvas_payload = attach_canvas_document(
+        user_id=user_id,
+        question=message,
+        answer_text=answer_text,
+        info_html=info_text,
+        info_panel=info_panel,
+        mode_variant=display_mode,
+        blocks=blocks,
+        documents=documents,
+    )
+    if canvas_payload:
+        info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
+        info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
 
     chat_state.setdefault("app", {})
     chat_state["app"].update(reasoning_state.get("app", {}))

@@ -56,9 +56,10 @@ export function useFileLibrary() {
     const expectedBytes = Math.max(0, Number(activeUploadBytesRef.current || 0));
     const startedAt = Number(activeUploadStartedAtRef.current || 0);
     if (!startedAt) return null;
+    const isFileJobKind = (kind: string) => kind === "file" || kind === "files";
     return (
       jobs.find((job) => {
-        if (job.kind !== "files") return false;
+        if (!isFileJobKind(String(job.kind || "").trim().toLowerCase())) return false;
         if (job.status !== "queued" && job.status !== "running") return false;
         const createdAt = job.date_created ? new Date(job.date_created).getTime() : 0;
         if (createdAt && createdAt < startedAt - 10_000) {
@@ -91,9 +92,11 @@ export function useFileLibrary() {
   const refreshIngestionJobs = useCallback(async () => {
     const jobs = await listIngestionJobs(80);
     setIngestionJobs(jobs);
+    const isFileJobKind = (kind: string) => kind === "file" || kind === "files";
     const activeFileJob = jobs.find(
       (job) =>
-        job.kind === "files" && (job.status === "queued" || job.status === "running"),
+        isFileJobKind(String(job.kind || "").trim().toLowerCase()) &&
+        (job.status === "queued" || job.status === "running"),
     );
     if (!activeFileJob) {
       activeFileJobIdRef.current = null;
@@ -215,12 +218,16 @@ export function useFileLibrary() {
       const activeJob =
         ingestionJobs.find(
           (job) =>
-            job.kind === "files" &&
+            (String(job.kind || "").trim().toLowerCase() === "file" ||
+              String(job.kind || "").trim().toLowerCase() === "files") &&
             (job.status === "queued" || job.status === "running") &&
             (!activeFileJobIdRef.current || job.id === activeFileJobIdRef.current),
         ) ||
         ingestionJobs.find(
-          (job) => job.kind === "files" && (job.status === "queued" || job.status === "running"),
+          (job) =>
+            (String(job.kind || "").trim().toLowerCase() === "file" ||
+              String(job.kind || "").trim().toLowerCase() === "files") &&
+            (job.status === "queued" || job.status === "running"),
         );
 
       if (!activeJob) {

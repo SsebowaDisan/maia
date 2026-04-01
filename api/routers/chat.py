@@ -9,7 +9,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 
-from api.auth import get_current_user_id
+from api.auth import get_current_registered_user_id
 from api.context import get_context
 from api.schemas import ChatRequest, ChatResponse
 from api.services.observability.citation_trace import begin_trace, end_trace, record_trace_event, summarize_trace
@@ -29,7 +29,7 @@ def _to_sse(event: str, payload: dict) -> str:
 def chat(
     payload: ChatRequest,
     response: Response,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_registered_user_id),
 ):
     context = get_context()
     trace = begin_trace(
@@ -81,7 +81,7 @@ def chat(
 @router.post("/stream")
 def chat_stream(
     payload: ChatRequest,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_registered_user_id),
 ):
     context = get_context()
     trace = begin_trace(
@@ -90,6 +90,21 @@ def chat_stream(
         question=payload.message,
         conversation_id=payload.conversation_id or "",
     )
+
+    # Try fast sync path first (Standard mode — no streaming needed)
+    try:
+        from api.services.chat.fast_qa import run_fast_chat_turn
+        fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=payload)
+        if fast_result is not None:
+            record_trace_event("chat_stream.fast_path", {"path": "fast_qa_sync"})
+            # Return as single SSE event — not streaming, but the frontend handles it
+            def fast_stream() -> Generator[str, None, None]:
+                yield _to_sse("chat_response", fast_result)
+                yield _to_sse("done", fast_result)
+                end_trace(trace, level=logging.INFO)
+            return StreamingResponse(fast_stream(), media_type="text/event-stream")
+    except Exception as fast_exc:
+        logging.getLogger(__name__).warning("Fast sync path failed in stream: %s", fast_exc)
 
     def event_stream() -> Generator[str, None, None]:
         try:

@@ -147,6 +147,24 @@ async function streamChatRun(
         if (!event || typeof event !== "object") {
           return;
         }
+        if (event.type === "chat_response") {
+          const fullResponse =
+            event.response && typeof event.response === "object"
+              ? (event.response as ChatResponse)
+              : null;
+          if (!fullResponse) {
+            return;
+          }
+          applyStreamAssistantPreview(context.setChatTurns, String(fullResponse.answer || ""));
+          context.setInfoText(String(fullResponse.info || ""));
+          applyPendingPlot(
+            context.setChatTurns,
+            fullResponse.plot && typeof fullResponse.plot === "object"
+              ? (fullResponse.plot as Record<string, unknown>)
+              : null,
+          );
+          return;
+        }
         if (event.type === "chat_delta") {
           applyStreamAssistantPreview(context.setChatTurns, String(event.text || ""));
           return;

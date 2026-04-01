@@ -85,9 +85,14 @@ export function CitationPdfPreview({
   );
   const pdfFileSource = useMemo(() => {
     const headers = buildAuthHeaders();
-    return Object.keys(headers).length > 0
-      ? { url: fileUrl, httpHeaders: headers }
-      : fileUrl;
+    const hasBearerAuth = Boolean(headers.Authorization);
+    const hasUserQuery = /(?:\?|&)user_id=/.test(fileUrl);
+    // When the URL already carries user scope, avoid adding X-User-Id header:
+    // it triggers CORS preflight requests in dev and can trip API rate limits.
+    if (!hasBearerAuth && hasUserQuery) {
+      return fileUrl;
+    }
+    return Object.keys(headers).length > 0 ? { url: fileUrl, httpHeaders: headers } : fileUrl;
   }, [fileUrl]);
 
   const searchCandidates = useMemo(() => {

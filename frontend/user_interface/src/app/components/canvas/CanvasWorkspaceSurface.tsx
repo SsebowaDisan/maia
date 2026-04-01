@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Copy, Download, Eye, FileText, Loader2, PenSquare } from "lucide-react";
+import { CheckCircle2, Copy, Download, Eye, FileText, Loader2, PenSquare, Save } from "lucide-react";
 
 import { updateCanvasDocument } from "../../../api/client";
 import type { CanvasDocumentRecord } from "../../messageBlocks";
@@ -48,10 +48,9 @@ function CanvasWorkspaceSurface({
   );
 
   useEffect(() => {
-    const nextSurface =
-      String(activeDocument?.modeVariant || "").trim().toLowerCase() === "rag" ? "preview" : "edit";
-    setSurface(nextSurface);
-  }, [activeDocument?.id, activeDocument?.modeVariant]);
+    const hasContent = String(activeDocument?.content || "").trim().length > 0;
+    setSurface(hasContent ? "preview" : "edit");
+  }, [activeDocument?.id, activeDocument?.content]);
 
   useCitationAnchorBinding({
     containerRef: previewRef,
@@ -81,7 +80,7 @@ function CanvasWorkspaceSurface({
         });
         markDocumentSaved(activeDocument.id, String(saved?.content ?? activeDocument.content));
         setSaveState("saved");
-        setSaveMessage(reason === "blur" ? "Auto-saved." : "Saved.");
+        setSaveMessage("");
       } catch (error) {
         setSaveState("error");
         setSaveMessage(`Save failed: ${String(error)}`);
@@ -114,8 +113,7 @@ function CanvasWorkspaceSurface({
         throw new Error("Clipboard API unavailable.");
       }
       await navigator.clipboard.writeText(activeDocument.content);
-      setSaveState("saved");
-      setSaveMessage("Copied markdown.");
+      setSaveMessage("");
     } catch (error) {
       setSaveState("error");
       setSaveMessage(`Copy failed: ${String(error)}`);
@@ -147,8 +145,7 @@ function CanvasWorkspaceSurface({
       anchor.click();
       document.body.removeChild(anchor);
       URL.revokeObjectURL(objectUrl);
-      setSaveState("saved");
-      setSaveMessage(`Downloaded ${filename}.`);
+      setSaveMessage("");
     } catch (error) {
       setSaveState("error");
       setSaveMessage(`Download failed: ${String(error)}`);
@@ -175,12 +172,16 @@ function CanvasWorkspaceSurface({
   const editClass = embedded
     ? "h-[560px] w-full resize-none rounded-[24px] border border-black/[0.06] bg-[#fbfbfd] px-5 py-4 font-[ui-monospace,SFMono-Regular,Menlo,monospace] text-[13px] leading-6 text-[#111827] outline-none transition focus:border-[#98a2b3] focus:ring-2 focus:ring-[#dbeafe]"
     : "min-h-0 flex-1 resize-none rounded-[24px] border border-black/[0.06] bg-[#fbfbfd] px-5 py-4 font-[ui-monospace,SFMono-Regular,Menlo,monospace] text-[13px] leading-6 text-[#111827] outline-none transition focus:border-[#98a2b3] focus:ring-2 focus:ring-[#dbeafe]";
+  const surfaceDescription =
+    surface === "preview"
+      ? "Cited workspace for reviewed answers."
+      : "Markdown editor with manual and auto-save.";
 
   return (
     <section className={shellClass}>
       <div className="border-b border-black/[0.06] px-5 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex min-w-0 flex-1 items-start gap-3">
             <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#111827] text-white shadow-[0_10px_30px_rgba(17,24,39,0.18)]">
               <FileText className="h-4 w-4" />
             </span>
@@ -188,71 +189,77 @@ function CanvasWorkspaceSurface({
               <h4 className="truncate text-[18px] font-semibold tracking-[-0.02em] text-[#111827]">
                 {activeDocument.title || "Canvas draft"}
               </h4>
-              <p className="mt-1 text-[12px] text-[#667085]">
-                {surface === "preview"
-                  ? "Structured cited workspace. Click citations to open PDF evidence in the right panel."
-                  : "Editable markdown workspace. Save or auto-save on blur."}
-              </p>
-              {saveMessage ? (
-                <p className={`mt-1 text-[11px] ${saveState === "error" ? "text-[#b42318]" : "text-[#667085]"}`}>
-                  {saveMessage}
-                </p>
-              ) : null}
+              <p className="mt-1 max-w-[560px] truncate text-[12px] text-[#667085]">{surfaceDescription}</p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            {saveState === "error" && saveMessage ? (
+              <span
+                className="inline-flex max-w-[220px] truncate rounded-full border border-[#fecdca] bg-[#fff6f5] px-3 py-1 text-[11px] font-medium text-[#b42318]"
+                title={saveMessage}
+              >
+                {saveMessage}
+              </span>
+            ) : null}
             <div className="inline-flex items-center rounded-full border border-black/[0.08] bg-[#f8fafc] p-1 shadow-sm">
               <button
                 type="button"
                 onClick={() => setSurface("preview")}
+                aria-label="Preview"
+                title="Preview"
                 className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-semibold transition ${
                   surface === "preview" ? "bg-[#111827] text-white" : "text-[#667085]"
                 }`}
               >
                 <Eye className="h-3.5 w-3.5" />
-                Preview
               </button>
               <button
                 type="button"
                 onClick={() => setSurface("edit")}
+                aria-label="Edit"
+                title="Edit"
                 className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-[12px] font-semibold transition ${
                   surface === "edit" ? "bg-[#111827] text-white" : "text-[#667085]"
                 }`}
               >
                 <PenSquare className="h-3.5 w-3.5" />
-                Edit
               </button>
             </div>
             <button
               type="button"
               onClick={() => void copyMarkdown()}
+              aria-label={copying ? "Copying" : "Copy"}
+              title={copying ? "Copying" : "Copy"}
               disabled={!activeDocument.content || copying || saveState === "saving"}
-              className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.1] bg-white text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Copy className="h-3.5 w-3.5" />
-              {copying ? "Copying..." : "Copy"}
             </button>
             <button
               type="button"
               onClick={downloadMarkdown}
+              aria-label={downloading ? "Preparing download" : "Download"}
+              title={downloading ? "Preparing download" : "Download"}
               disabled={!activeDocument.content || downloading || saveState === "saving"}
-              className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.1] bg-white text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Download className="h-3.5 w-3.5" />
-              {downloading ? "Preparing..." : "Download"}
             </button>
             <button
               type="button"
               onClick={() => void saveDocument("manual")}
+              aria-label={saveState === "saving" ? "Saving" : "Save"}
+              title={saveState === "saving" ? "Saving" : "Save"}
               disabled={!activeDocument.isDirty || saveState === "saving"}
-              className="inline-flex items-center gap-1.5 rounded-full border border-black/[0.1] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/[0.1] bg-white text-[#1f2937] transition hover:border-black/[0.24] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saveState === "saving" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : saveState === "saved" && !activeDocument.isDirty ? (
                 <CheckCircle2 className="h-3.5 w-3.5 text-[#2f6a3f]" />
-              ) : null}
-              {saveState === "saving" ? "Saving..." : "Save"}
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
             </button>
           </div>
         </div>

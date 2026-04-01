@@ -33,6 +33,30 @@ function sanitizeUserId(raw: string | null | undefined): string | null {
   return normalized || null;
 }
 
+function readUserIdCandidateFromAuthPayload(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const root = parsed as Record<string, unknown>;
+  const state = root.state && typeof root.state === "object" ? (root.state as Record<string, unknown>) : null;
+  const rootUser = root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : null;
+  const stateUser = state?.user && typeof state.user === "object" ? (state.user as Record<string, unknown>) : null;
+  const candidates = [
+    stateUser?.id,
+    stateUser?.user_id,
+    rootUser?.id,
+    rootUser?.user_id,
+    state?.user_id,
+  ];
+  for (const candidate of candidates) {
+    const normalized = sanitizeUserId(typeof candidate === "string" ? candidate : null);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
 function readUserIdFromPersistedAuth(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -42,8 +66,8 @@ function readUserIdFromPersistedAuth(): string | null {
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as { state?: { user?: { id?: string } } };
-    return sanitizeUserId(parsed?.state?.user?.id || null);
+    const parsed = JSON.parse(raw) as unknown;
+    return readUserIdCandidateFromAuthPayload(parsed);
   } catch {
     return null;
   }
@@ -93,8 +117,13 @@ function inferUserId() {
   return fallbackUserId;
 }
 
+function getActiveUserId(): string | null {
+  return inferUserId();
+}
+
 function withUserIdHeaders(initHeaders?: HeadersInit) {
   const headers = new Headers(initHeaders || {});
+  const activeUserId = getActiveUserId();
 
   // Prefer JWT Bearer token when available (production auth)
   try {
@@ -111,8 +140,8 @@ function withUserIdHeaders(initHeaders?: HeadersInit) {
   }
 
   // Legacy fallback: X-User-Id header (dev mode / MAIA_AUTH_DISABLED=true)
-  if (ACTIVE_USER_ID && !headers.has("X-User-Id") && !headers.has("Authorization")) {
-    headers.set("X-User-Id", ACTIVE_USER_ID);
+  if (activeUserId && !headers.has("X-User-Id") && !headers.has("Authorization")) {
+    headers.set("X-User-Id", activeUserId);
   }
   return headers;
 }
@@ -120,6 +149,7 @@ function withUserIdHeaders(initHeaders?: HeadersInit) {
 /** Plain-object version of auth headers — for libraries like react-pdf that don't accept Headers. */
 function buildAuthHeaders(): Record<string, string> {
   const result: Record<string, string> = {};
+  const activeUserId = getActiveUserId();
   try {
     const raw = window.localStorage.getItem("maia.auth");
     if (raw) {
@@ -132,8 +162,8 @@ function buildAuthHeaders(): Record<string, string> {
   } catch {
     // ignore
   }
-  if (ACTIVE_USER_ID && !result["Authorization"]) {
-    result["X-User-Id"] = ACTIVE_USER_ID;
+  if (activeUserId && !result["Authorization"]) {
+    result["X-User-Id"] = activeUserId;
   }
   return result;
 }
@@ -178,11 +208,12 @@ function clearPersistedBearerTokens(): void {
 }
 
 function withUserIdQuery(path: string) {
-  if (!ACTIVE_USER_ID || path.includes("user_id=")) {
+  const activeUserId = getActiveUserId();
+  if (!activeUserId || path.includes("user_id=")) {
     return path;
   }
   const separator = path.includes("?") ? "&" : "?";
-  return `${path}${separator}user_id=${encodeURIComponent(ACTIVE_USER_ID)}`;
+  return `${path}${separator}user_id=${encodeURIComponent(activeUserId)}`;
 }
 
 const API_BASE = inferApiBase();
@@ -322,12 +353,27 @@ async function request<T>(path: string, init?: RequestInit, authRetryAttempt = 0
     throw new Error(parsedMessage);
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
+  const responseText = await response.text();
+  if (!responseText.trim()) {
+    return undefined as T;
+  }
+
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    return responseText as T;
+  }
+
+  return JSON.parse(responseText) as T;
 }
 
 export {
   ACTIVE_USER_ID,
   API_BASE,
+  getActiveUserId,
   buildApiBaseCandidates,
   buildAuthHeaders,
   buildNetworkError,

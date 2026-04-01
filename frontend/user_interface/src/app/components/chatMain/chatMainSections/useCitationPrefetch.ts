@@ -54,6 +54,7 @@ export function useCitationPrefetch({ contentScrollRef, chatTurns }: UseCitation
         page: focus.page,
         text: focus.extract || "",
         claim_text: focus.claimText || "",
+        chunk_id: focus.chunkId || "",
       }).catch(() => undefined);
     };
 

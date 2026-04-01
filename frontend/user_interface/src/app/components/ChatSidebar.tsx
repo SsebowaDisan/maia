@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
-  Code2,
   HelpCircle,
   Plus,
   Settings,
   FileText,
   Library,
   Plug,
-  Store,
 } from "lucide-react";
 import { type ConversationSummary } from "../../api/client";
 import {
@@ -23,8 +21,7 @@ import { ProjectEvidenceModal } from "./chatSidebar/ProjectEvidenceModal";
 import { useDeletePromptController } from "./chatSidebar/useDeletePromptController";
 import { useProjectEvidenceDeletion } from "./chatSidebar/useProjectEvidenceDeletion";
 import { useProjectEvidenceState } from "./chatSidebar/useProjectEvidenceState";
-import { DeveloperPortalModal } from "./developer/DeveloperPortalModal";
-import { MarketplaceNotificationBell } from "./marketplace/MarketplaceNotificationBell";
+import { DEFAULT_PROJECT_ID } from "../appShell/constants";
 
 interface SidebarProject {
   id: string;
@@ -89,7 +86,6 @@ export function ChatSidebar({
   const [renamingConversationDraft, setRenamingConversationDraft] = useState("");
   const [busyConversationId, setBusyConversationId] = useState<string | null>(null);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
-  const [developerModalOpen, setDeveloperModalOpen] = useState(false);
   const {
     deletePromptOpen,
     deletePromptTitle,
@@ -105,7 +101,7 @@ export function ChatSidebar({
     confirmDeletePrompt,
   } = useDeletePromptController();
 
-  const fallbackProjectId = useMemo(() => projects[0]?.id || "", [projects]);
+  const fallbackProjectId = useMemo(() => DEFAULT_PROJECT_ID, []);
 
   const selectedProjectConversations = useMemo(
     () =>
@@ -327,7 +323,6 @@ export function ChatSidebar({
             <h2 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">Chats</h2>
           </div>
           <div className="inline-flex items-center gap-1.5">
-            <MarketplaceNotificationBell onNavigate={onNavigateAppRoute} />
             <button
               onClick={() => {
                 void onNewConversation(selectedProjectId);
@@ -462,36 +457,6 @@ export function ChatSidebar({
                 </div>
                 <div className="mx-3 h-px bg-black/[0.06]" />
                 <div className="p-1.5">
-                  <a
-                    href="/marketplace"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => setWorkspaceMenuOpen(false)}
-                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
-                  >
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#fdf2f8] transition-colors group-hover:bg-[#fce7f3]">
-                      <Store className="w-3.5 h-3.5 text-[#db2777]" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Marketplace</p>
-                      <p className="text-[11px] text-[#86868b] leading-tight">Discover agents & teams</p>
-                    </div>
-                  </a>
-                  <button
-                    onClick={() => {
-                      setWorkspaceMenuOpen(false);
-                      setDeveloperModalOpen(true);
-                    }}
-                    className="w-full px-3 py-2 rounded-[10px] text-left hover:bg-black/[0.04] transition-colors inline-flex items-center gap-3 group"
-                  >
-                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#fff7ed] transition-colors group-hover:bg-[#ffedd5]">
-                      <Code2 className="w-3.5 h-3.5 text-[#ea580c]" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[13px] font-medium text-[#1d1d1f] leading-tight">Developer</p>
-                      <p className="text-[11px] text-[#86868b] leading-tight">Publish agents</p>
-                    </div>
-                  </button>
                   <button
                     onClick={() => {
                       onOpenWorkspaceTab("Help");
@@ -561,11 +526,6 @@ export function ChatSidebar({
           }))
         }
         onSubmitProjectUrls={() => void submitProjectUrls(evidenceProjectId)}
-      />
-
-      <DeveloperPortalModal
-        open={developerModalOpen}
-        onClose={() => setDeveloperModalOpen(false)}
       />
     </div>
   );

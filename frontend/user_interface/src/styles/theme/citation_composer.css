@@ -17,16 +17,17 @@
 }
 
 .citation-pdf .citation-pdf-overlay-path {
-  fill: var(--citation-highlight-fill);
-  stroke: var(--citation-highlight-stroke);
-  stroke-width: 0.18;
+  fill: #ffe24a;
+  stroke: #d4ac0d;
+  stroke-width: 0.12;
   vector-effect: non-scaling-stroke;
-  opacity: 0.88;
-  filter: saturate(0.92);
+  opacity: 0.25;
+  filter: saturate(1.06) contrast(1.02);
+  mix-blend-mode: multiply;
 }
 
 .citation-pdf .citation-pdf-overlay-svg.is-active .citation-pdf-overlay-path {
-  opacity: 1;
+  opacity: 0.35;
 }
 
 .chat-answer-html a.citation {

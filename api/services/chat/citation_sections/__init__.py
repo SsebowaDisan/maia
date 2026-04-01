@@ -1,1 +1,1 @@
-"""Citation processing submodules for behavior-preserving decomposition."""
+"""Stub — old citation sections replaced by api.services.rag.citations."""

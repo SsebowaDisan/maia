@@ -65,6 +65,7 @@ interface MainPanelProps {
   startFileDrag: (event: React.DragEvent<HTMLElement>, fileId: string) => void;
   endFileDrag: () => void;
   groupsByFileId: Map<string, string[]>;
+  onOpenFilePreview: (fileId: string) => void;
   citationFocus: CitationFocus | null;
   citationRawUrl: string | null;
 }
@@ -114,6 +115,7 @@ function MainPanel({
   startFileDrag,
   endFileDrag,
   groupsByFileId,
+  onOpenFilePreview,
   citationFocus,
   citationRawUrl,
 }: MainPanelProps) {
@@ -193,6 +195,7 @@ function MainPanel({
           startFileDrag={startFileDrag}
           endFileDrag={endFileDrag}
           groupsByFileId={groupsByFileId}
+          onOpenFilePreview={onOpenFilePreview}
         />
       </div>
 

@@ -11,7 +11,7 @@ import type {
 } from "../../../api/integrations";
 import type { ConnectorDefinition } from "./connectorDefinitions";
 
-export type SettingsTabId = "general" | "models" | "apis";
+export type SettingsTabId = "general" | "models" | "access";
 
 export type SettingsTabItem = {
   id: SettingsTabId;
@@ -31,9 +31,9 @@ export const SETTINGS_TABS: SettingsTabItem[] = [
     subtitle: "Local model runtime and indexing embeddings.",
   },
   {
-    id: "apis",
-    label: "APIs",
-    subtitle: "External API keys and provider credentials.",
+    id: "access",
+    label: "Access",
+    subtitle: "Admins, users, and workspace permissions.",
   },
 ];
 

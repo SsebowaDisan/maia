@@ -1,8 +1,8 @@
 import {
-  ACTIVE_USER_ID,
   API_BASE,
   buildApiBaseCandidates,
   fetchApi,
+  getActiveUserId,
   buildNetworkError,
   buildRequestUrl,
   isNetworkError,
@@ -24,7 +24,8 @@ import type {
 
 function getRawFileUrl(fileId: string): string {
   const base = `${API_BASE}/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
-  return ACTIVE_USER_ID ? `${base}?user_id=${encodeURIComponent(ACTIVE_USER_ID)}` : base;
+  const activeUserId = getActiveUserId();
+  return activeUserId ? `${base}?user_id=${encodeURIComponent(activeUserId)}` : base;
 }
 
 function getPdfHighlightTarget(
@@ -33,6 +34,7 @@ function getPdfHighlightTarget(
     page?: string;
     text?: string;
     claim_text?: string;
+    chunk_id?: string;
     index_id?: number;
   },
 ) {
@@ -54,6 +56,10 @@ function getPdfHighlightTarget(
 }
 
 const highlightTargetRequestCache = new Map<string, Promise<HighlightTargetResponse>>();
+const highlightTargetErrorCooldown = new Map<string, { untilMs: number; message: string }>();
+const HIGHLIGHT_TARGET_ERROR_COOLDOWN_MS = 30_000;
+const HIGHLIGHT_TARGET_MISSING_FILE_COOLDOWN_MS = 5 * 60_000;
+const missingHighlightSourceCooldownByFile = new Map<string, { untilMs: number; message: string }>();
 
 function getPdfHighlightTargetCached(
   fileId: string,
@@ -61,18 +67,54 @@ function getPdfHighlightTargetCached(
     page?: string;
     text?: string;
     claim_text?: string;
+    chunk_id?: string;
     index_id?: number;
   },
 ) {
-  const cacheKey = `${fileId}::${payload.page || ""}::${payload.text || ""}::${payload.claim_text || ""}::${payload.index_id ?? ""}`;
+  const missingFileCooldown = missingHighlightSourceCooldownByFile.get(fileId);
+  if (missingFileCooldown && missingFileCooldown.untilMs > Date.now()) {
+    return Promise.reject(
+      new Error(missingFileCooldown.message || "Source file is no longer available for this citation."),
+    );
+  }
+  if (missingFileCooldown) {
+    missingHighlightSourceCooldownByFile.delete(fileId);
+  }
+  const cacheKey = `${fileId}::${payload.page || ""}::${payload.text || ""}::${payload.claim_text || ""}::${payload.chunk_id || ""}::${payload.index_id ?? ""}`;
+  const cooldown = highlightTargetErrorCooldown.get(cacheKey);
+  if (cooldown && cooldown.untilMs > Date.now()) {
+    return Promise.reject(new Error(cooldown.message || "Highlight target is temporarily unavailable."));
+  }
+  if (cooldown) {
+    highlightTargetErrorCooldown.delete(cacheKey);
+  }
   const existing = highlightTargetRequestCache.get(cacheKey);
   if (existing) {
     return existing;
   }
   const requestPromise = getPdfHighlightTarget(fileId, payload)
+    .then((result) => {
+      highlightTargetErrorCooldown.delete(cacheKey);
+      return result;
+    })
     .catch((error) => {
       highlightTargetRequestCache.delete(cacheKey);
-      throw error;
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error || "Highlight target request failed.");
+      const normalized = String(message || "").toLowerCase();
+      if (normalized.includes("404") || normalized.includes("not found")) {
+        missingHighlightSourceCooldownByFile.set(fileId, {
+          untilMs: Date.now() + HIGHLIGHT_TARGET_MISSING_FILE_COOLDOWN_MS,
+          message: "Source file is no longer available for this citation.",
+        });
+      }
+      highlightTargetErrorCooldown.set(cacheKey, {
+        untilMs: Date.now() + HIGHLIGHT_TARGET_ERROR_COOLDOWN_MS,
+        message,
+      });
+      throw error instanceof Error ? error : new Error(message);
     });
   highlightTargetRequestCache.set(cacheKey, requestPromise);
   return requestPromise;
@@ -83,6 +125,69 @@ type UploadRequestOptions = {
   onUploadProgress?: UploadProgressCallback;
   signal?: AbortSignal;
 };
+
+function createAbortError() {
+  try {
+    return new DOMException("Upload canceled.", "AbortError");
+  } catch {
+    const error = new Error("Upload canceled.");
+    error.name = "AbortError";
+    return error;
+  }
+}
+
+async function waitForIngestionJobCompletion(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<IngestionJob> {
+  const startedAt = Date.now();
+  const timeoutMs = 20 * 60 * 1000;
+  while (true) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+    const job = await getIngestionJob(jobId);
+    const status = String(job.status || "").trim().toLowerCase();
+    if (status === "completed" || status === "completed_with_errors") {
+      return job;
+    }
+    if (status === "failed" || status === "canceled") {
+      throw new Error(job.errors?.[0] || job.message || `Ingestion job ${job.status}`);
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Ingestion timed out while indexing files.");
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 800));
+  }
+}
+
+function toLegacyUploadResponse(
+  files: FileList,
+  job: IngestionJob,
+): UploadResponse {
+  const mappedItems = (job.items || []).map((item, index) => {
+    const row = item as Record<string, unknown>;
+    const fileName =
+      String(row.file_name || row.name || files[index]?.name || "").trim();
+    const fileId =
+      String(row.file_id || row.source_id || job.file_ids?.[index] || "").trim();
+    const status = String(row.status || "").trim() || "failed";
+    const message = String(row.message || "").trim();
+    return {
+      file_name: fileName,
+      status,
+      message: message || undefined,
+      file_id: fileId || undefined,
+    };
+  });
+  return {
+    index_id: typeof job.index_id === "number" ? job.index_id : 0,
+    file_ids: Array.isArray(job.file_ids) ? job.file_ids : [],
+    errors: Array.isArray(job.errors) ? job.errors : [],
+    items: mappedItems,
+    debug: Array.isArray(job.debug) ? job.debug : [],
+  };
+}
 
 function requestMultipartWithProgress<T>(
   path: string,
@@ -208,15 +313,16 @@ async function uploadFiles(
   }
   formData.append("reindex", String(options?.reindex ?? true));
   formData.append("scope", options?.scope ?? "persistent");
-
-  return requestMultipartWithProgress<UploadResponse>(
-    "/api/uploads/files",
+  const job = await requestMultipartWithProgress<IngestionJob>(
+    "/api/uploads/files/jobs",
     formData,
     {
       onUploadProgress: options?.onUploadProgress,
       signal: options?.signal,
     },
   );
+  const completed = await waitForIngestionJobCompletion(job.id, options?.signal);
+  return toLegacyUploadResponse(files, completed);
 }
 
 function uploadUrls(
@@ -530,8 +636,9 @@ function cancelIngestionJob(jobId: string) {
 
 function buildRawFileUrl(fileId: string, options?: { indexId?: number; download?: boolean }) {
   const query = new URLSearchParams();
-  if (ACTIVE_USER_ID) {
-    query.set("user_id", ACTIVE_USER_ID);
+  const activeUserId = getActiveUserId();
+  if (activeUserId) {
+    query.set("user_id", activeUserId);
   }
   if (typeof options?.indexId === "number") {
     query.set("index_id", String(options.indexId));

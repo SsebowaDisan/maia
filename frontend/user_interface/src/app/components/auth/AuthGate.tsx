@@ -9,6 +9,7 @@
  */
 import { useState } from "react";
 import { useAuthStore } from "../../stores/authStore";
+import { AcceptInvitePage } from "./AcceptInvitePage";
 import { LoginPage } from "./LoginPage";
 import { RegisterPage } from "./RegisterPage";
 
@@ -23,6 +24,11 @@ interface Props {
 export function AuthGate({ authDisabled = false, children }: Props) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
   const [view, setView] = useState<AuthView>("login");
+  const path = typeof window !== "undefined" ? String(window.location.pathname || "") : "";
+
+  if (path.startsWith("/accept-invite")) {
+    return <AcceptInvitePage />;
+  }
 
   // In dev/disabled mode skip the auth gate entirely
   if (authDisabled || isAuthenticated) {

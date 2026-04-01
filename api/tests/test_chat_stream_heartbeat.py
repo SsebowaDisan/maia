@@ -6,6 +6,7 @@ from typing import Any, Generator
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.auth import get_current_registered_user_id
 from api.routers import chat as chat_router
 
 
@@ -37,10 +38,12 @@ def _slow_stream(*_args: Any, **_kwargs: Any) -> Generator[dict[str, Any], None,
 def test_chat_stream_emits_heartbeat_ping_during_long_wait(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(chat_router.router)
+    app.dependency_overrides[get_current_registered_user_id] = lambda: "u-test"
 
     monkeypatch.setattr(chat_router, "get_context", lambda: object())
     monkeypatch.setattr(chat_router, "stream_chat_turn", _slow_stream)
     monkeypatch.setattr(chat_router, "_STREAM_HEARTBEAT_SECONDS", 0.03)
+    monkeypatch.setattr(chat_router, "end_trace", lambda *_args, **_kwargs: None)
 
     client = TestClient(app)
     response = client.post(

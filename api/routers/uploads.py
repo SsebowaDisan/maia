@@ -10,8 +10,9 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from api.auth import get_current_user_id
+from api.auth import get_current_user, get_current_user_id, require_org_admin
 from api.context import get_context
+from api.models.user import User
 from api.schemas import (
     BulkDeleteFilesRequest,
     BulkDeleteFilesResponse,
@@ -52,7 +53,13 @@ from api.services.upload_service import (
     rename_file_group,
     resolve_indexed_file_path,
 )
+from api.services.upload.common import normalize_upload_scope
+from decouple import config as decouple_config
 from api.services.upload.pdf_highlight_locator import locate_pdf_highlight_target
+from api.services.rag.bridge import get_highlight_target_bridge, resolve_registered_source_path
+
+# New RAG pipeline (feature flag)
+_USE_NEW_RAG = decouple_config("MAIA_USE_NEW_RAG", default="true", cast=str).lower() == "true"
 from .uploads_support import (
     bytes_to_human,
     cleanup_persisted_uploads,
@@ -64,6 +71,18 @@ from . import uploads_support as _uploads_support
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 logger = logging.getLogger(__name__)
+
+
+def _assert_upload_write_allowed(user: User, scope: str | None) -> None:
+    """Allow chat_temp uploads for all users; keep persistent writes admin-only."""
+    normalized_scope = normalize_upload_scope(scope)
+    if normalized_scope == "chat_temp":
+        return
+    if user.role not in {"org_admin", "super_admin"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges are required for persistent file library writes.",
+        )
 
 
 async def _store_upload_file(upload: UploadFile, directory: Path) -> dict[str, object]:
@@ -117,8 +136,10 @@ async def upload_files(
     index_id: int | None = Form(default=None),
     reindex: bool = Form(default=True),
     scope: str = Form(default="persistent"),
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(get_current_user),
 ):
+    user_id = user.id
+    _assert_upload_write_allowed(user, scope)
     logger.warning(
         "Deprecated sync file upload endpoint used",
         extra={"user_id": user_id, "index_id": index_id, "scope": scope},
@@ -238,8 +259,10 @@ async def create_file_ingestion_job(
     reindex: bool = Form(default=True),
     group_id: str | None = Form(default=None),
     scope: str = Form(default="persistent"),
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(get_current_user),
 ):
+    user_id = user.id
+    _assert_upload_write_allowed(user, scope)
     enforce_upload_limits(files, request)
     started_at = perf_counter()
     trace = begin_trace(
@@ -267,37 +290,80 @@ async def create_file_ingestion_job(
             },
         )
         total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
-        manager = get_ingestion_manager()
-        job = manager.create_file_job(
-            user_id=user_id,
-            index_id=index_id,
-            reindex=reindex,
-            files=persisted,
-            group_id=group_id,
-            scope=scope,
-        )
-        if hasattr(job, "debug") and isinstance(job.debug, list):
-            job.debug.append(f"trace_id={trace.trace_id}")
+
+        # ── New RAG pipeline ingestion ──────────────────────────────────
+        from api.services.rag.bridge import run_rag_ingest_bridge
+        import asyncio
+
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        file_ids = []
+        errors = []
+        success_count = 0
+
+        for pf in persisted:
+            file_path = str(pf.get("path") or "")
+            file_name = str(pf.get("name") or "")
+            if not file_path:
+                errors.append(f"No path for {file_name}")
+                continue
+            try:
+                logger.info("RAG ingest starting: file=%s path=%s", file_name, file_path)
+                result = await run_rag_ingest_bridge(
+                    file_path=file_path,
+                    group_id=str(group_id or ""),
+                    owner_id=user_id,
+                    metadata={"index_id": index_id, "scope": scope, "reindex": reindex},
+                )
+                logger.info("RAG ingest result: file=%s status=%s error=%s", file_name, result.get("status"), result.get("error", "none"))
+                if result.get("source_id"):
+                    file_ids.append(result["source_id"])
+                    success_count += 1
+                elif result.get("error"):
+                    errors.append(f"{file_name}: {result['error']}")
+            except Exception as exc:
+                logger.exception("RAG ingest exception: file=%s", file_name)
+                errors.append(f"{file_name}: {exc}")
+
         record_trace_event(
-            "upload_job.queued",
+            "upload_job.completed_new_pipeline",
             {
-                "job_id": getattr(job, "id", ""),
+                "job_id": job_id,
                 "file_count": len(persisted),
-                "persisted_bytes": total_bytes,
+                "success_count": success_count,
+                "error_count": len(errors),
             },
         )
         logger.info(
-            "Queued file ingestion job",
+            "Completed file ingestion via new RAG pipeline",
             extra={
                 "user_id": user_id,
-                "index_id": index_id,
                 "group_id": group_id,
-                "scope": scope,
                 "file_count": len(persisted),
-                "persisted_bytes": total_bytes,
+                "success_count": success_count,
                 "elapsed_ms": int((perf_counter() - started_at) * 1000),
             },
         )
+        job = IngestionJobResponse(
+            id=job_id,
+            user_id=user_id,
+            kind="file",
+            status="completed" if not errors else "completed_with_errors",
+            index_id=index_id,
+            reindex=reindex,
+            total_items=len(persisted),
+            processed_items=len(persisted),
+            success_count=success_count,
+            failure_count=len(errors),
+            bytes_total=total_bytes,
+            bytes_persisted=total_bytes,
+            bytes_indexed=total_bytes if success_count > 0 else 0,
+            items=_build_items_aligned(persisted, file_ids, errors),
+            errors=errors,
+            file_ids=file_ids,
+            debug=[f"trace_id={trace.trace_id}", "pipeline=new_rag"],
+            message=f"Ingested {success_count}/{len(persisted)} files via new RAG pipeline",
+        )
+        _store_new_pipeline_job(job)
         return job
     except HTTPException as exc:
         record_trace_event(
@@ -316,8 +382,9 @@ async def create_file_ingestion_job(
 @router.post("/urls", response_model=UploadResponse)
 def upload_urls(
     payload: UploadUrlsRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     settings = load_user_settings(context=context, user_id=user_id)
     return index_urls(
@@ -336,22 +403,119 @@ def upload_urls(
 
 
 @router.post("/urls/jobs", response_model=IngestionJobResponse)
-def create_url_ingestion_job(
+async def create_url_ingestion_job(
     payload: UploadUrlsRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
-    manager = get_ingestion_manager()
-    return manager.create_url_job(
+    user_id = user.id
+    from api.services.rag.bridge import run_rag_ingest_url_bridge
+
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+    file_ids = []
+    errors = []
+    success_count = 0
+
+    for url in (payload.urls or []):
+        try:
+            result = await run_rag_ingest_url_bridge(
+                url=url,
+                group_id="",
+                owner_id=user_id,
+            )
+            if result.get("source_id"):
+                file_ids.append(result["source_id"])
+                success_count += 1
+            elif result.get("error"):
+                errors.append(f"{url}: {result['error']}")
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    job = IngestionJobResponse(
+        id=job_id,
         user_id=user_id,
+        kind="url",
+        status="completed" if not errors else "completed_with_errors",
         index_id=payload.index_id,
         reindex=payload.reindex,
-        urls=payload.urls,
-        web_crawl_depth=payload.web_crawl_depth,
-        web_crawl_max_pages=payload.web_crawl_max_pages,
-        web_crawl_same_domain_only=payload.web_crawl_same_domain_only,
-        include_pdfs=payload.include_pdfs,
-        include_images=payload.include_images,
+        total_items=len(payload.urls or []),
+        processed_items=len(payload.urls or []),
+        success_count=success_count,
+        failure_count=len(errors),
+        items=[],
+        errors=errors,
+        file_ids=file_ids,
+        debug=["pipeline=new_rag"],
+        message=f"Ingested {success_count}/{len(payload.urls or [])} URLs via new RAG pipeline",
     )
+    _store_new_pipeline_job(job)
+    return job
+
+
+def _build_items_aligned(
+    persisted: list[dict[str, object]],
+    file_ids: list[str],
+    errors: list[str],
+) -> list[dict[str, Any]]:
+    """Build items array aligned 1:1 with the original persisted files.
+
+    The frontend maps results by index, so we must return one item per
+    persisted file — even if that file failed. Uses "success" (not
+    "completed") because the frontend checks `item.status === "success"`.
+    """
+    items: list[dict[str, Any]] = []
+    fid_idx = 0
+    error_idx = 0
+
+    for pf in persisted:
+        file_name = str(pf.get("name", ""))
+        # Check if this file has a matching error
+        file_errored = False
+        for err in errors:
+            if file_name in err:
+                file_errored = True
+                break
+
+        if file_errored:
+            items.append({
+                "name": file_name,
+                "source_id": "",
+                "status": "failed",
+                "rag_ready": False,
+                "citation_ready": False,
+            })
+        elif fid_idx < len(file_ids):
+            items.append({
+                "name": file_name,
+                "source_id": file_ids[fid_idx],
+                "status": "success",
+                "rag_ready": True,
+                "citation_ready": True,
+            })
+            fid_idx += 1
+        else:
+            items.append({
+                "name": file_name,
+                "source_id": "",
+                "status": "failed",
+                "rag_ready": False,
+                "citation_ready": False,
+            })
+
+    return items
+
+
+# In-memory store for new pipeline jobs (so GET /jobs/{id} can find them)
+_new_pipeline_jobs: dict[str, IngestionJobResponse] = {}
+
+
+def _store_new_pipeline_job(job: IngestionJobResponse) -> None:
+    """Store a completed new-pipeline job so the polling endpoint can find it."""
+    _new_pipeline_jobs[job.id] = job
+    # Keep only last 200 jobs in memory
+    if len(_new_pipeline_jobs) > 200:
+        oldest = list(_new_pipeline_jobs.keys())[:100]
+        for k in oldest:
+            _new_pipeline_jobs.pop(k, None)
 
 
 @router.get("/jobs", response_model=list[IngestionJobResponse])
@@ -359,8 +523,15 @@ def list_ingestion_jobs(
     limit: int = 50,
     user_id: str = Depends(get_current_user_id),
 ):
-    manager = get_ingestion_manager()
-    return manager.list_jobs(user_id=user_id, limit=limit)
+    # Merge old manager jobs + new pipeline jobs
+    try:
+        manager = get_ingestion_manager()
+        old_jobs = manager.list_jobs(user_id=user_id, limit=limit)
+    except Exception:
+        old_jobs = []
+    new_jobs = [j for j in _new_pipeline_jobs.values() if j.user_id == user_id]
+    all_jobs = list(old_jobs) + new_jobs
+    return all_jobs[:limit]
 
 
 @router.get("/jobs/{job_id}", response_model=IngestionJobResponse)
@@ -368,8 +539,15 @@ def get_ingestion_job(
     job_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    manager = get_ingestion_manager()
-    return manager.get_job(user_id=user_id, job_id=job_id)
+    # Check new pipeline jobs first
+    if job_id in _new_pipeline_jobs:
+        return _new_pipeline_jobs[job_id]
+    # Fall back to old manager
+    try:
+        manager = get_ingestion_manager()
+        return manager.get_job(user_id=user_id, job_id=job_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=IngestionJobResponse)
@@ -377,8 +555,13 @@ def cancel_ingestion_job(
     job_id: str,
     user_id: str = Depends(get_current_user_id),
 ):
-    manager = get_ingestion_manager()
-    return manager.cancel_job(user_id=user_id, job_id=job_id)
+    if job_id in _new_pipeline_jobs:
+        return _new_pipeline_jobs[job_id]  # Already completed, can't cancel
+    try:
+        manager = get_ingestion_manager()
+        return manager.cancel_job(user_id=user_id, job_id=job_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
 
 
 @router.get("/files", response_model=FileListResponse)
@@ -399,8 +582,9 @@ def list_files(
 @router.post("/files/delete", response_model=BulkDeleteFilesResponse)
 def delete_files(
     payload: BulkDeleteFilesRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return delete_indexed_files(
         context=context,
@@ -413,8 +597,9 @@ def delete_files(
 @router.post("/urls/delete", response_model=BulkDeleteUrlsResponse)
 def delete_urls(
     payload: BulkDeleteUrlsRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return delete_indexed_urls(
         context=context,
@@ -430,14 +615,19 @@ def list_groups(
     user_id: str = Depends(get_current_user_id),
 ):
     context = get_context()
-    return list_file_groups(context=context, user_id=user_id, index_id=index_id)
+    try:
+        return list_file_groups(context=context, user_id=user_id, index_id=index_id)
+    except HTTPException:
+        # Index not found — return empty groups list instead of 404
+        return FileGroupListResponse(index_id=index_id or 0, groups=[])
 
 
 @router.post("/groups", response_model=MoveFilesToGroupResponse)
 def create_group(
     payload: CreateFileGroupRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return create_file_group(
         context=context,
@@ -451,8 +641,9 @@ def create_group(
 @router.put("/groups", response_model=MoveFilesToGroupResponse)
 def create_group_put(
     payload: CreateFileGroupRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return create_file_group(
         context=context,
@@ -468,8 +659,9 @@ def create_group_compat(
     name: str = Query(..., min_length=1),
     index_id: int | None = None,
     file_ids: str | None = None,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     parsed_file_ids = []
     if file_ids:
         parsed_file_ids = [item.strip() for item in file_ids.split(",") if item and item.strip()]
@@ -487,8 +679,9 @@ def create_group_compat(
 def rename_group(
     group_id: str,
     payload: RenameFileGroupRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return rename_file_group(
         context=context,
@@ -503,8 +696,9 @@ def rename_group(
 def remove_group(
     group_id: str,
     index_id: int | None = None,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return delete_file_group(
         context=context,
@@ -517,8 +711,9 @@ def remove_group(
 @router.post("/groups/move", response_model=MoveFilesToGroupResponse)
 def move_files(
     payload: MoveFilesToGroupRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return move_files_to_group(
         context=context,
@@ -534,8 +729,9 @@ def move_files(
 @router.put("/groups/move", response_model=MoveFilesToGroupResponse)
 def move_files_put(
     payload: MoveFilesToGroupRequest,
-    user_id: str = Depends(get_current_user_id),
+    user: User = Depends(require_org_admin),
 ):
+    user_id = user.id
     context = get_context()
     return move_files_to_group(
         context=context,
@@ -600,11 +796,21 @@ async def get_file_highlight_target(
     )
     response.headers["X-Maia-Trace-Id"] = trace.trace_id
     context = get_context()
-    page = payload.get("page")
+    page_raw = payload.get("page")
+    page: int | None
+    if isinstance(page_raw, int):
+        page = page_raw
+    else:
+        try:
+            page = int(str(page_raw).strip()) if str(page_raw or "").strip() else None
+        except Exception:
+            page = None
     text = str(payload.get("text") or "").strip()
     claim_text = str(payload.get("claim_text") or "").strip()
+    chunk_id = str(payload.get("chunk_id") or payload.get("unit_id") or "")
     index_id_value = payload.get("index_id")
     index_id = index_id_value if isinstance(index_id_value, int) else None
+    bridge_result: dict[str, object] | None = None
     try:
         record_trace_event(
             "highlight.requested",
@@ -616,6 +822,17 @@ async def get_file_highlight_target(
                 "index_id": index_id,
             },
         )
+        if _USE_NEW_RAG:
+            try:
+                bridge_chunk_id = chunk_id or str(payload.get("index_id") or "")
+                bridge_result = await get_highlight_target_bridge(file_id, bridge_chunk_id, page)
+                bridge_result["file_id"] = file_id
+                if bridge_result.get("highlight_boxes"):
+                    return bridge_result
+            except Exception as exc:
+                logger.warning("New highlight bridge failed, falling back: %s", exc)
+        # Fall through to old code
+        file_path: Path | None = None
         try:
             file_path, _ = resolve_indexed_file_path(
                 context=context,
@@ -624,14 +841,31 @@ async def get_file_highlight_target(
                 index_id=index_id,
             )
         except HTTPException as exc:
-            if index_id is None or exc.status_code != 404:
+            if exc.status_code != 404:
                 raise
-            file_path, _ = resolve_indexed_file_path(
-                context=context,
-                user_id=user_id,
-                file_id=file_id,
-                index_id=None,
-            )
+            if index_id is not None:
+                try:
+                    file_path, _ = resolve_indexed_file_path(
+                        context=context,
+                        user_id=user_id,
+                        file_id=file_id,
+                        index_id=None,
+                    )
+                except HTTPException as fallback_exc:
+                    if fallback_exc.status_code != 404:
+                        raise
+            if file_path is None:
+                rag_path = resolve_registered_source_path(
+                    source_id=file_id,
+                    owner_id=user_id,
+                    index_id=index_id,
+                )
+                if rag_path:
+                    file_path = rag_path[0]
+            if file_path is None and bridge_result is not None:
+                return bridge_result
+            if file_path is None:
+                raise
         result = await run_in_threadpool(
             locate_pdf_highlight_target,
             file_path=file_path,
@@ -640,6 +874,8 @@ async def get_file_highlight_target(
             claim_text=claim_text,
         )
         result["file_id"] = file_id
+        if bridge_result is not None and not result.get("highlight_boxes"):
+            return bridge_result
         record_trace_event(
             "highlight.completed",
             {

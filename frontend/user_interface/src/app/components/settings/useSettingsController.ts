@@ -247,6 +247,7 @@ export function useSettingsController(activeTab: string) {
     setOauthClientIdInput,
     setOauthClientSecretInput,
     setOauthRedirectUriInput,
+    setStatusMessage,
     refreshConnectorStatus,
     handleDraftChange,
     handleSaveConnector,

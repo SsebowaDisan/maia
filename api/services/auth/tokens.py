@@ -53,6 +53,7 @@ _SECRET = os.getenv("MAIA_JWT_SECRET") or _load_dev_secret()
 _ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("MAIA_ACCESS_TOKEN_TTL_MINUTES", "60"))
 REFRESH_TOKEN_TTL_DAYS = int(os.getenv("MAIA_REFRESH_TOKEN_TTL_DAYS", "30"))
+INVITE_TOKEN_TTL_HOURS = int(os.getenv("MAIA_INVITE_TOKEN_TTL_HOURS", "72"))
 
 
 # ── Token creation ─────────────────────────────────────────────────────────────
@@ -87,6 +88,33 @@ def create_refresh_token(*, user_id: str) -> str:
     payload = {
         "sub": user_id,
         "type": "refresh",
+        "exp": expire,
+        "iat": int(now.timestamp()),
+        "jti": str(uuid.uuid4()),
+    }
+    return jwt.encode(payload, _SECRET, algorithm=_ALGORITHM)
+
+
+def create_invite_token(
+    *,
+    user_id: str,
+    email: str,
+    role: str,
+    tenant_id: str | None,
+    invited_by: str | None,
+    full_name: str | None = None,
+) -> str:
+    """Issue a short-lived onboarding token for invite acceptance."""
+    now = datetime.now(tz=timezone.utc)
+    expire = now + timedelta(hours=INVITE_TOKEN_TTL_HOURS)
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "tid": tenant_id,
+        "invited_by": invited_by,
+        "full_name": full_name or "",
+        "type": "invite",
         "exp": expire,
         "iat": int(now.timestamp()),
         "jti": str(uuid.uuid4()),
@@ -133,3 +161,15 @@ def decode_refresh_token(token: str) -> str:
         raise TokenError("Not a refresh token.")
     _check_revoked(payload)
     return str(payload["sub"])
+
+
+def decode_invite_token(token: str) -> dict[str, Any]:
+    """Decode and validate an invite token. Raises TokenError on failure."""
+    try:
+        payload = jwt.decode(token, _SECRET, algorithms=[_ALGORITHM])
+    except JWTError as exc:
+        raise TokenError(f"Invalid invite token: {exc}") from exc
+    if payload.get("type") != "invite":
+        raise TokenError("Not an invite token.")
+    _check_revoked(payload)
+    return payload

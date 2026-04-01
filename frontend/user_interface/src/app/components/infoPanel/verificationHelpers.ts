@@ -31,6 +31,7 @@ function toCitationFromEvidence(card: EvidenceCard, index: number): CitationFocu
   const sourceType = !card.fileId && sourceUrl && !sourceLooksImage(sourceUrl) ? "website" : "file";
   return {
     fileId: card.fileId,
+    chunkId: card.chunkId,
     sourceUrl: sourceUrl || undefined,
     sourceType,
     sourceName: card.source || "Indexed source",

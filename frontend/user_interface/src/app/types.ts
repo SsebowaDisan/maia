@@ -157,6 +157,7 @@ export type CitationEvidenceUnit = {
 
 export type CitationFocus = {
   fileId?: string;
+  chunkId?: string;
   sourceUrl?: string;
   sourceType?: "file" | "website";
   sourceName: string;

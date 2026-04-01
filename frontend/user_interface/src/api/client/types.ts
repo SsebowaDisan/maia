@@ -104,6 +104,7 @@ type ChatResponse = {
   human_review_notes: string | null;
   web_summary: Record<string, unknown>;
   info_panel: Record<string, unknown>;
+  infoPanel?: Record<string, unknown>;
   activity_run_id: string | null;
   mindmap: Record<string, unknown>;
   halt_reason?: string | null;
@@ -112,8 +113,20 @@ type ChatResponse = {
   mode_requested?: string | null;
 };
 
+type UserRole = "super_admin" | "org_admin" | "org_user";
+
+type ManagedUser = {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole | string;
+  tenant_id: string | null;
+  is_active: boolean;
+};
+
 type ChatStreamEvent =
   | { type: "chat_delta"; delta: string; text: string }
+  | { type: "chat_response"; response: ChatResponse }
   | { type: "info_delta"; delta: string }
   | { type: "plot"; plot: Record<string, unknown> | null }
   | { type: "activity"; event: AgentActivityEvent }
@@ -693,4 +706,6 @@ export type {
   UrlActionResult,
   UploadResponse,
   HighlightTargetResponse,
+  ManagedUser,
+  UserRole,
 };

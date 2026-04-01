@@ -277,6 +277,17 @@ export function FilesView({
 
   const clearSelection = () => setSelectedFileIds([]);
 
+  const openFilePreview = (fileId: string) => {
+    const target = files.find((file) => file.id === fileId);
+    if (!target) {
+      return;
+    }
+    setSelectedFileIds([fileId]);
+    if (inferFileKind(target.name) === "pdf") {
+      setIsPdfPreviewModalOpen(true);
+    }
+  };
+
   const pendingDeleteSeconds = useMemo(() => {
     if (!pendingDelete) return 0;
     return Math.max(0, Math.ceil((pendingDelete.expiresAt - Date.now()) / 1000));
@@ -426,6 +437,7 @@ export function FilesView({
           startFileDrag={startFileDrag}
           endFileDrag={endFileDrag}
           groupsByFileId={groupsByFileId}
+          onOpenFilePreview={openFilePreview}
           citationFocus={citationFocus}
           citationRawUrl={citationRawUrl}
         />

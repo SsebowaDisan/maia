@@ -80,6 +80,7 @@ function useCitationAnchorBinding({
       return;
     }
     const timer = window.setTimeout(() => {
+      const scheduledPrefetches = new Set<string>();
       for (const anchor of anchors) {
         const resolved = resolveCitationFocusFromAnchor({
           turn: turnForCitation,
@@ -96,10 +97,20 @@ function useCitationAnchorBinding({
         ) {
           continue;
         }
+        const prefetchKey = [
+          focus.fileId,
+          focus.page || "",
+          focus.chunkId || "",
+        ].join("::");
+        if (scheduledPrefetches.has(prefetchKey)) {
+          continue;
+        }
+        scheduledPrefetches.add(prefetchKey);
         void getPdfHighlightTargetCached(focus.fileId, {
           page: focus.page,
           text: focus.extract || "",
           claim_text: focus.claimText || "",
+          chunk_id: focus.chunkId || "",
         }).catch(() => undefined);
       }
     }, 300);
@@ -144,6 +155,7 @@ function useCitationAnchorBinding({
     const openSourceUrl = (url: string) => {
       window.open(url, "_blank", "noopener,noreferrer");
     };
+    const hoverPrefetches = new Set<string>();
 
     const selectCitationFromAnchor = (anchor: HTMLAnchorElement): boolean => {
       if (!onSelectCitationFocus || !isCitationAnchor(anchor)) {
@@ -174,10 +186,20 @@ function useCitationAnchorBinding({
       ) {
         return;
       }
+      const prefetchKey = [
+        focus.fileId,
+        focus.page || "",
+        focus.chunkId || "",
+      ].join("::");
+      if (hoverPrefetches.has(prefetchKey)) {
+        return;
+      }
+      hoverPrefetches.add(prefetchKey);
       void getPdfHighlightTargetCached(focus.fileId, {
         page: focus.page,
         text: focus.extract || "",
         claim_text: focus.claimText || "",
+        chunk_id: focus.chunkId || "",
       }).catch(() => undefined);
     };
 

@@ -192,6 +192,15 @@ function applySuccessfulResponse(
   response: ChatResponse,
   streamedEventsLocal: AgentActivityEvent[],
 ): void {
+  const responseInfoPanel =
+    response.info_panel && typeof response.info_panel === "object" && !Array.isArray(response.info_panel)
+      ? (response.info_panel as Record<string, unknown>)
+      : response.infoPanel && typeof response.infoPanel === "object" && !Array.isArray(response.infoPanel)
+        ? (response.infoPanel as Record<string, unknown>)
+        : {};
+  const responseNextRecommendedSteps = Array.isArray(response.next_recommended_steps)
+    ? response.next_recommended_steps
+    : [];
   const normalizedResponseDocuments = normalizeCanvasDocuments(response.documents);
   context.setConversationProjects((prev) =>
     prev[response.conversation_id]
@@ -236,35 +245,33 @@ function applySuccessfulResponse(
     responseMode: effectiveReturnedMode,
     responseModeRequested,
     responseModeActual,
-    infoPanel:
-      response.info_panel && typeof response.info_panel === "object"
-        ? (response.info_panel as Record<string, unknown>)
-        : null,
+    infoPanel: responseInfoPanel,
     webOnlyResearchRequested: modeContext.webOnlyResearchRequested,
   });
+  const backendModeMismatch = modeContext.orchestratorMode && effectiveReturnedMode === "ask";
+  const haltReason = String(response.halt_reason || "").trim() || null;
+  const haltMessage = String(response.halt_message || "").trim() || null;
+  const modeStatus = deriveModeStatus({
+    isFirstTurn: modeContext.isFirstTurn,
+    requestedMode: responseModeRequested,
+    actualMode: responseModeActual,
+    existingStatus: null,
+    message: haltMessage,
+  });
+  const finalAssistantText = backendModeMismatch
+    ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
+    : response.answer || "";
+  const responseDocumentsForTurn = normalizedResponseDocuments;
 
   context.setChatTurns((prev) => {
     const next = [...prev];
     const last = next[next.length - 1];
-    const backendModeMismatch = modeContext.orchestratorMode && effectiveReturnedMode === "ask";
-    const haltReason = String(response.halt_reason || "").trim() || null;
-    const haltMessage = String(response.halt_message || "").trim() || null;
-    const modeStatus = deriveModeStatus({
-      isFirstTurn: modeContext.isFirstTurn,
-      requestedMode: responseModeRequested,
-      actualMode: responseModeActual,
-      existingStatus: null,
-      message: haltMessage,
-    });
-    const finalAssistantText = backendModeMismatch
-      ? `${response.answer || ""}\n\n[Notice] Backend is not running orchestrator mode. Restart the API server and try again.`
-      : response.answer || "";
     next[next.length - 1] = {
       ...(last || {}),
       user: context.message,
       assistant: finalAssistantText,
       blocks: normalizeMessageBlocks(response.blocks, finalAssistantText),
-      documents: normalizedResponseDocuments,
+      documents: responseDocumentsForTurn,
       info: response.info || "",
       plot: response.plot || null,
       mode: resolvedTurnMode,
@@ -276,11 +283,11 @@ function applySuccessfulResponse(
       actionsTaken: response.actions_taken || [],
       sourcesUsed: response.sources_used || [],
       sourceUsage: response.source_usage || [],
-      nextRecommendedSteps: response.next_recommended_steps || [],
+      nextRecommendedSteps: responseNextRecommendedSteps,
       needsHumanReview: Boolean(response.needs_human_review),
       humanReviewNotes: response.human_review_notes || null,
       webSummary: response.web_summary || {},
-      infoPanel: response.info_panel || {},
+      infoPanel: responseInfoPanel,
       mindmap: response.mindmap || {},
       activityRunId: response.activity_run_id || null,
       activityEvents: streamedEventsLocal,
@@ -288,9 +295,13 @@ function applySuccessfulResponse(
     return next;
   });
 
-  if (resolvedTurnMode === "rag" && normalizedResponseDocuments.length > 0) {
+  if (responseDocumentsForTurn.length > 0) {
     const canvasStore = useCanvasStore.getState();
-    canvasStore.upsertDocuments(normalizedResponseDocuments);
+    canvasStore.upsertDocuments(responseDocumentsForTurn);
+    const firstDocument = responseDocumentsForTurn[0];
+    if (firstDocument?.id) {
+      canvasStore.openDocument(firstDocument.id);
+    }
   }
   context.setActivityEvents(streamedEventsLocal);
   context.setSelectedTurnIndex(modeContext.pendingTurnIndex);

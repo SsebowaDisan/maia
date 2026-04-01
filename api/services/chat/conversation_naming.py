@@ -75,11 +75,38 @@ _ICON_KEY_ALIASES = {
 _SPACE_RE = re.compile(r"\s+")
 _URL_RE = re.compile(r"https?://\S+", flags=re.IGNORECASE)
 _PLACEHOLDER_RE = re.compile(r"^untitled(\s*-\s*.*)?$", flags=re.IGNORECASE)
+_NON_WORD_RE = re.compile(r"[^a-z0-9]+")
+
+_ICON_KEYWORD_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("file-text", ("pdf", "document", "documents", "doc", "docs", "file", "files", "upload", "uploads", "paper", "report", "reports", "resume", "contract", "contracts", "invoice", "invoices", "proposal", "proposals", "brief", "briefs", "slide", "slides")),
+    ("mail", ("email", "emails", "mail", "inbox", "gmail", "newsletter", "reply", "replies", "respond", "response", "outreach")),
+    ("calendar", ("calendar", "schedule", "schedules", "scheduled", "meeting", "meetings", "agenda", "appointment", "appointments", "timeline", "roadmap", "deadline", "deadlines")),
+    ("search", ("search", "research", "researching", "find", "lookup", "investigate", "investigation", "browse", "browsing", "google", "compare", "comparison", "competitor", "competitors", "summarize", "summarise", "summary", "distill", "distilled", "review", "reviews", "reviewing")),
+    ("bar-chart-3", ("chart", "charts", "graph", "graphs", "dashboard", "dashboards", "metric", "metrics", "analytics", "analysis", "analyse", "analyze", "trend", "trends", "kpi", "kpis", "forecast", "forecasts", "roi", "revenue", "financial", "finance", "csv", "spreadsheet", "spreadsheets", "table", "tables", "dataset", "datasets", "data")),
+    ("code-2", ("code", "debug", "debugging", "bug", "bugs", "traceback", "python", "typescript", "javascript", "react", "api", "backend", "frontend", "implement", "implementation", "refactor", "refactoring", "fix", "fixing")),
+    ("book-open", ("guide", "guides", "learn", "learning", "tutorial", "tutorials", "explain", "explainer", "explanation", "explanations", "documentation", "docs")),
+    ("list-checks", ("checklist", "checklists", "todo", "todos", "task", "tasks", "step", "steps", "requirements", "action", "actions")),
+    ("lightbulb", ("idea", "ideas", "brainstorm", "brainstorming", "concept", "concepts", "strategy", "strategies", "creative", "creativity", "name")),
+    ("globe", ("website", "websites", "webpage", "webpages", "site", "sites", "internet", "online", "country", "countries", "market", "markets")),
+    ("shield", ("security", "secure", "compliance", "risk", "risks", "audit", "audits", "privacy", "policy", "policies", "legal")),
+    ("briefcase", ("business", "client", "clients", "customer", "customers", "sales", "enterprise", "account", "accounts", "vendor", "vendors", "crm")),
+    ("building-2", ("company", "companies", "team", "teams", "organization", "organisation", "department", "departments", "office")),
+    ("rocket", ("launch", "launched", "startup", "startups", "growth", "campaign", "campaigns", "release", "releases", "ship", "shipping")),
+    ("wrench", ("tool", "tools", "configure", "configuration", "setup", "install", "installation", "repair", "maintenance", "operations", "ops")),
+)
 
 
 def _clean_text(value: Any) -> str:
     text = _SPACE_RE.sub(" ", str(value or "").strip())
     return text.strip()
+
+
+def _normalized_word_tokens(value: Any) -> set[str]:
+    text = _clean_text(_URL_RE.sub(" ", str(value or "")).lower())
+    if not text:
+        return set()
+    normalized = _NON_WORD_RE.sub(" ", text)
+    return {token for token in normalized.split() if token}
 
 
 def _starts_with_icon(text: str) -> bool:
@@ -145,6 +172,11 @@ def normalize_conversation_icon_key(value: Any) -> str | None:
 
 def _fallback_icon_key_from_text(text: str, *, agent_mode: str = "ask") -> str:
     normalized = _clean_text(text)
+    tokens = _normalized_word_tokens(normalized)
+    if tokens:
+        for icon_key, keywords in _ICON_KEYWORD_HINTS:
+            if any(keyword in tokens for keyword in keywords):
+                return icon_key
     if not normalized and str(agent_mode).strip().lower() == "company_agent":
         return "briefcase"
     if str(agent_mode).strip().lower() == "company_agent":

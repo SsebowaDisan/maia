@@ -7,7 +7,6 @@ import {
   FolderOpen,
   FolderPlus,
   LayoutGrid,
-  LineChart,
   PencilLine,
   Route,
   Trash2,
@@ -112,7 +111,6 @@ export function ProjectsPane({
   onNavigateAppRoute,
 }: ProjectsPaneProps) {
   const quickLinks = [
-    { id: "operations", label: "Operations", icon: LineChart, path: "/operations" },
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
   ] as const;
   const normalizedPath = String(currentPath || "/").toLowerCase();

@@ -9,7 +9,7 @@ import { clamp, readStoredText, readStoredWidth } from "./storage";
 import type { ResizeSide, WorkspaceTab } from "./types";
 
 const WORKSPACE_TABS: WorkspaceTab[] = ["Chat", "Files", "Resources", "Settings", "Help"];
-const SETTINGS_TABS = new Set(["general", "models", "apis"]);
+const SETTINGS_TABS = new Set(["general", "models", "access"]);
 const WORKSPACE_VIEW_PARAM = "view";
 const WORKSPACE_TAB_BY_QUERY: Record<string, WorkspaceTab> = {
   chat: "Chat",
@@ -33,6 +33,10 @@ function readWorkspaceTabFromUrl(): WorkspaceTab | null {
   const settingsTab = String(params.get("tab") || "")
     .trim()
     .toLowerCase();
+  if (settingsTab === "apis") {
+    // Legacy compatibility: old settings URLs still resolve to Settings.
+    return "Settings";
+  }
   if (SETTINGS_TABS.has(settingsTab)) {
     return "Settings";
   }

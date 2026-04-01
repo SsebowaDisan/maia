@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { MANUAL_CONNECTOR_DEFINITIONS } from "./settings/connectorDefinitions";
 import { SettingsLayout } from "./settings/layout/SettingsLayout";
-import { ApiSettings } from "./settings/tabs/ApiSettings";
+import { AccessSettings } from "./settings/tabs/AccessSettings";
 import { GeneralSettings } from "./settings/tabs/GeneralSettings";
 import { ModelsSettings } from "./settings/tabs/ModelsSettings";
 import { SETTINGS_TABS, type SettingsTabId } from "./settings/types";
@@ -113,28 +112,8 @@ export function SettingsView() {
         />
       ) : null}
 
-      {activeTab === "apis" ? (
-        <ApiSettings
-          mapsStatus={controller.mapsStatus}
-          braveStatus={controller.braveStatus}
-          mapsKeyInput={controller.mapsKeyInput}
-          braveKeyInput={controller.braveKeyInput}
-          setMapsKeyInput={controller.setMapsKeyInput}
-          setBraveKeyInput={controller.setBraveKeyInput}
-          onSaveMapsKey={() => void controller.handleSaveMapsKey()}
-          onClearMapsKey={() => void controller.handleClearMapsKey()}
-          onSaveBraveKey={() => void controller.handleSaveBraveKey()}
-          onClearBraveKey={() => void controller.handleClearBraveKey()}
-          connectors={MANUAL_CONNECTOR_DEFINITIONS}
-          healthMap={controller.healthMap}
-          credentialMap={controller.credentialMap}
-          draftValues={controller.draftValues}
-          savingConnectorId={controller.savingConnectorId}
-          statusMessage={controller.statusMessage}
-          onDraftChange={controller.handleDraftChange}
-          onSaveConnector={(connector) => void controller.handleSaveConnector(connector)}
-          onClearConnector={(connector) => void controller.handleClearConnector(connector)}
-        />
+      {activeTab === "access" ? (
+        <AccessSettings onStatusMessage={controller.setStatusMessage} />
       ) : null}
     </SettingsLayout>
   );

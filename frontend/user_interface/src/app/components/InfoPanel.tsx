@@ -9,9 +9,7 @@ import { buildMindmapShareLink } from "../utils/mindmapDeepLink";
 import { MindmapArtifactDialog } from "./MindmapArtifactDialog";
 import { TeamConversationTab } from "./agentActivityPanel/TeamConversationTab";
 import { getMindmapPayload } from "./infoPanelDerived";
-import { getTraceSummary } from "./infoPanelDerived";
 import { CitationPreviewPanel } from "./infoPanel/CitationPreviewPanel";
-import { EvidenceCardsList } from "./infoPanel/EvidenceCardsList";
 import { resolveMindmapFocus } from "./infoPanel/mindmapFocus";
 import { parseWebReviewSourceMap, resolveWebReviewSource } from "./infoPanel/review/webReviewContent";
 import { useResizableViewers } from "./infoPanel/useResizableViewers";
@@ -24,6 +22,8 @@ import {
 } from "./infoPanel/verificationModels";
 import {
   normalizeEvidenceId,
+  normalizeHttpUrl,
+  normalizeUrlToken,
 } from "./infoPanel/urlHelpers";
 import { buildMindmapArtifactSummary } from "./mindmapViewer/presentation";
 import { toMindmapPayload } from "./mindmapViewer/viewerHelpers";
@@ -55,6 +55,7 @@ interface InfoPanelProps {
     sourceName?: string;
   }) => void;
   width?: number;
+  turnMode?: string | null;
 }
 
 type RagScopeSourceRow = {
@@ -78,6 +79,32 @@ type EvidenceConflictSummary = {
   message: string;
   contradictedClaims: number;
   mixedClaims: number;
+};
+
+type AnalysisCoverageItem = {
+  topic: string;
+  covered: boolean;
+  depth: string;
+};
+
+type GapCoverageItem = {
+  topic: string;
+  reason: string;
+};
+
+type CoverageSummary = {
+  analysis: AnalysisCoverageItem[];
+  gaps: GapCoverageItem[];
+};
+
+type PromptSourceItem = {
+  key: string;
+  kind: "pdf" | "url" | "file";
+  title: string;
+  subtitle: string;
+  url?: string;
+  fileId?: string;
+  citation: CitationFocus;
 };
 
 function parseRagScopeSummary(infoPanel: Record<string, unknown>): RagScopeSummary | null {
@@ -142,6 +169,56 @@ function parseEvidenceConflictSummary(infoPanel: Record<string, unknown>): Evide
   };
 }
 
+function parseCoverageSummary(infoPanel: Record<string, unknown>): CoverageSummary | null {
+  const analysisRaw = (infoPanel as { analysis?: unknown }).analysis;
+  const gapsRaw = (infoPanel as { gaps?: unknown }).gaps;
+
+  const analysis = Array.isArray(analysisRaw)
+    ? analysisRaw
+        .map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return null;
+          }
+          const item = row as Record<string, unknown>;
+          const topic = String(item.topic || "").trim();
+          if (!topic) {
+            return null;
+          }
+          return {
+            topic,
+            covered: Boolean(item.covered),
+            depth: String(item.depth || "unknown").trim().toLowerCase() || "unknown",
+          } satisfies AnalysisCoverageItem;
+        })
+        .filter((row): row is AnalysisCoverageItem => Boolean(row))
+    : [];
+
+  const gaps = Array.isArray(gapsRaw)
+    ? gapsRaw
+        .map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) {
+            return null;
+          }
+          const item = row as Record<string, unknown>;
+          const topic = String(item.topic || "").trim();
+          if (!topic) {
+            return null;
+          }
+          return {
+            topic,
+            reason: String(item.reason || "").trim(),
+          } satisfies GapCoverageItem;
+        })
+        .filter((row): row is GapCoverageItem => Boolean(row))
+    : [];
+
+  if (analysis.length === 0 && gaps.length === 0) {
+    return null;
+  }
+
+  return { analysis, gaps };
+}
+
 function sourceIcon(sourceType: string) {
   if (sourceType === "web") {
     return Globe;
@@ -189,6 +266,117 @@ function findSourceById(sources: VerificationSourceItem[], sourceId: string): Ve
   return sources.find((source) => source.id === normalized) || null;
 }
 
+function extractPromptSourceItems(params: {
+  attachments: ChatAttachment[];
+  userPrompt: string;
+  sourcesUsed: AgentSourceRecord[];
+}): PromptSourceItem[] {
+  const items: PromptSourceItem[] = [];
+  const seen = new Set<string>();
+
+  const register = (item: PromptSourceItem) => {
+    if (!item.key || seen.has(item.key)) {
+      return;
+    }
+    seen.add(item.key);
+    items.push(item);
+  };
+
+  for (const attachment of params.attachments || []) {
+    const name = String(attachment?.name || "").trim();
+    const fileId = String(attachment?.fileId || "").trim();
+    if (!name && !fileId) {
+      continue;
+    }
+    const isPdf = /\.pdf$/i.test(name);
+    const key = fileId ? `file:${fileId}` : `name:${name.toLowerCase()}`;
+    register({
+      key,
+      kind: isPdf ? "pdf" : "file",
+      title: name || "Attached file",
+      subtitle: fileId ? `File ID: ${fileId}` : "Attached in prompt",
+      fileId: fileId || undefined,
+      citation: {
+        fileId: fileId || undefined,
+        sourceType: "file",
+        sourceName: name || fileId || "Attached file",
+        extract: "Prompt attachment",
+      },
+    });
+  }
+
+  for (const source of params.sourcesUsed || []) {
+    const fileId = String(source?.file_id || "").trim();
+    const sourceUrl = normalizeHttpUrl(source?.url);
+    const label = String(source?.label || "").trim() || "Indexed source";
+    if (fileId) {
+      register({
+        key: `file:${fileId}`,
+        kind: /\.pdf$/i.test(label) ? "pdf" : "file",
+        title: label,
+        subtitle: `File ID: ${fileId}`,
+        fileId,
+        citation: {
+          fileId,
+          sourceType: "file",
+          sourceName: label || fileId,
+          extract: "Prompt attachment",
+        },
+      });
+    }
+    if (sourceUrl) {
+      let hostname = sourceUrl;
+      try {
+        hostname = new URL(sourceUrl).hostname || sourceUrl;
+      } catch {
+        hostname = sourceUrl;
+      }
+      register({
+        key: `url:${sourceUrl}`,
+        kind: "url",
+        title: label || sourceUrl,
+        subtitle: hostname,
+        url: sourceUrl,
+        citation: {
+          sourceUrl,
+          sourceType: "website",
+          sourceName: label || hostname || sourceUrl,
+          extract: sourceUrl,
+        },
+      });
+    }
+  }
+
+  const promptTokens = String(params.userPrompt || "").match(/https?:\/\/[^\s<>'")\]]+/gi) || [];
+  for (const rawToken of promptTokens) {
+    const sourceUrl = normalizeUrlToken(rawToken);
+    if (!sourceUrl) {
+      continue;
+    }
+    let hostname = sourceUrl;
+    try {
+      hostname = new URL(sourceUrl).hostname || sourceUrl;
+    } catch {
+      hostname = sourceUrl;
+    }
+    register({
+      key: `url:${sourceUrl}`,
+      kind: "url",
+      title: sourceUrl,
+      subtitle: hostname,
+      url: sourceUrl,
+      citation: {
+        sourceUrl,
+        sourceType: "website",
+        sourceName: hostname || sourceUrl,
+        extract: sourceUrl,
+      },
+    });
+  }
+
+  return items;
+}
+
 export function InfoPanel({
   citationFocus = null,
   selectedConversationId = null,
@@ -206,12 +394,14 @@ export function InfoPanel({
   onSelectCitationFocus,
   onAskMindmapNode,
   width = 340,
+  turnMode = "",
 }: InfoPanelProps) {
   const { viewerHeights, renderViewerResizeHandle } = useResizableViewers();
   const { memory, updateMemory } = useVerificationMemory(selectedConversationId);
   const contentViewportRef = useRef<HTMLDivElement | null>(null);
   const citationPanelRef = useRef<HTMLDivElement | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [selectedPromptSourceKey, setSelectedPromptSourceKey] = useState("");
   const [pdfZoom, setPdfZoom] = useState(1);
   const [isMindmapDialogOpen, setIsMindmapDialogOpen] = useState(false);
   const [citationAutoHeight, setCitationAutoHeight] = useState(0);
@@ -276,14 +466,44 @@ export function InfoPanel({
 
   const activeEvidenceId = normalizeEvidenceId(citationFocus?.evidenceId || memory.selectedEvidenceId || "");
   const activeEvidenceIndex = useMemo(() => {
+    if (!citationFocus) {
+      return -1;
+    }
     if (!activeEvidenceId) {
       return evidenceCards.length ? 0 : -1;
     }
     return evidenceCards.findIndex((card) => normalizeEvidenceId(card.id) === activeEvidenceId);
-  }, [activeEvidenceId, evidenceCards]);
+  }, [activeEvidenceId, citationFocus, evidenceCards]);
 
-  const activeEvidenceCard = activeEvidenceIndex >= 0 ? evidenceCards[activeEvidenceIndex] : evidenceCards[0];
-  const activeCitation = citationFocus || (activeEvidenceCard ? toCitationFromEvidence(activeEvidenceCard, activeEvidenceIndex >= 0 ? activeEvidenceIndex : 0) : null);
+  const promptSourceItems = useMemo(
+    () =>
+      extractPromptSourceItems({
+        attachments: Array.isArray(attachments) ? attachments : [],
+        userPrompt: String(userPrompt || ""),
+        sourcesUsed: Array.isArray(sourcesUsed) ? sourcesUsed : [],
+      }),
+    [attachments, sourcesUsed, userPrompt],
+  );
+  useEffect(() => {
+    if (!promptSourceItems.length) {
+      setSelectedPromptSourceKey("");
+      return;
+    }
+    const exists = promptSourceItems.some((item) => item.key === selectedPromptSourceKey);
+    if (!selectedPromptSourceKey || !exists) {
+      setSelectedPromptSourceKey(promptSourceItems[0]?.key || "");
+    }
+  }, [promptSourceItems, selectedPromptSourceKey]);
+  const selectedPromptSource = useMemo(
+    () => promptSourceItems.find((item) => item.key === selectedPromptSourceKey) || promptSourceItems[0] || null,
+    [promptSourceItems, selectedPromptSourceKey],
+  );
+  const promptPreviewCitation = useMemo(
+    () => (citationFocus ? null : selectedPromptSource?.citation || null),
+    [citationFocus, selectedPromptSource],
+  );
+
+  const activeCitation = citationFocus || promptPreviewCitation;
   const activeCitationSourceKey = useMemo(() => sourceIdForCitation(activeCitation), [activeCitation]);
 
   const preferredCitationPage = useMemo(() => {
@@ -323,6 +543,10 @@ export function InfoPanel({
     () => parseEvidenceConflictSummary(infoPanel as Record<string, unknown>),
     [infoPanel],
   );
+  const coverageSummary = useMemo(
+    () => parseCoverageSummary(infoPanel as Record<string, unknown>),
+    [infoPanel],
+  );
   const activeWebReviewSource = useMemo(
     () =>
       resolveWebReviewSource({
@@ -346,7 +570,13 @@ export function InfoPanel({
   );
 
   const mindmapPayload = useMemo(() => getMindmapPayload(infoPanel, mindmap), [infoPanel, mindmap]);
-  const traceSummary = useMemo(() => getTraceSummary(infoPanel), [infoPanel]);
+  const traceSummary: {
+    kind?: string;
+    eventCount: number;
+    lastEventType?: string;
+    traceId: string;
+    eventTypes: string[];
+  } | null = null;
   const hasMindmapPayload = Array.isArray((mindmapPayload as { nodes?: unknown[] }).nodes)
     ? ((mindmapPayload as { nodes?: unknown[] }).nodes as unknown[]).length > 0
     : false;
@@ -359,28 +589,22 @@ export function InfoPanel({
     () => resolvePreferredRunId(activityRunId, activityEvents),
     [activityEvents, activityRunId],
   );
-  const showTeamConversation = Boolean(conversationRunId) || activityEvents.length > 0;
-  const showEvidenceSurfaces = Boolean(citationFocus);
+  const normalizedTurnMode = String(turnMode || "").trim().toLowerCase();
+  const showTeamConversation = normalizedTurnMode === "brain" && (Boolean(conversationRunId) || activityEvents.length > 0);
+  const showEvidenceSurfaces = Boolean(citationFocus) || Boolean(promptPreviewCitation);
+  const isCitationEvidenceMode = Boolean(citationFocus);
+  const isPromptPreviewMode = !citationFocus && Boolean(promptPreviewCitation);
+  const panelEyebrow = showEvidenceSurfaces
+    ? "Evidence"
+    : showTeamConversation
+      ? "Live Team Thread"
+      : "Information";
+  const panelTitle = showEvidenceSurfaces
+    ? "Sources"
+    : showTeamConversation
+      ? "Team Conversation"
+      : "Information";
 
-  useEffect(() => {
-    if (!showEvidenceSurfaces || !activeEvidenceId) {
-      return;
-    }
-    const viewportNode = contentViewportRef.current;
-    if (!viewportNode) {
-      return;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      const targetNode = viewportNode.querySelector<HTMLElement>(
-        `[data-evidence-card-id='${activeEvidenceId}']`,
-      );
-      if (!targetNode) {
-        return;
-      }
-      targetNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, [activeEvidenceId, showEvidenceSurfaces]);
   const mindmapSummary = useMemo(
     () => buildMindmapArtifactSummary(typedMindmapPayload),
     [typedMindmapPayload],
@@ -542,10 +766,10 @@ export function InfoPanel({
       <div className="border-b border-black/[0.06] px-5 py-4">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
-            {showEvidenceSurfaces ? "Evidence" : showTeamConversation ? "Live Team Thread" : "Dialogue"}
+            {panelEyebrow}
           </p>
           <h3 className="mt-1 text-[20px] font-semibold tracking-[-0.02em] text-[#17171b]">
-            {showEvidenceSurfaces ? "Sources" : showTeamConversation ? "Team Conversation" : "Conversation"}
+            {panelTitle}
           </h3>
         </div>
       </div>
@@ -563,7 +787,7 @@ export function InfoPanel({
             </div>
           ) : null}
 
-          {showEvidenceSurfaces ? (
+          {isCitationEvidenceMode ? (
             <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-gradient-to-b from-white to-[#f6f7fa] p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -631,6 +855,38 @@ export function InfoPanel({
                 No mindmap artifact was produced for this answer yet. Research-heavy or comparative questions will populate this surface when the backend emits a structured map.
               </div>
             )}
+            </section>
+          ) : isPromptPreviewMode ? (
+            <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-white px-4 py-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                    Prompt Context
+                  </p>
+                  <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
+                    Source preview
+                  </h4>
+                </div>
+              </div>
+              {promptSourceItems.length > 1 ? (
+                <div className="flex flex-wrap gap-2">
+                  {promptSourceItems.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setSelectedPromptSourceKey(item.key)}
+                      className={`max-w-full rounded-full border px-3 py-1.5 text-left text-[11px] font-medium transition ${
+                        selectedPromptSource?.key === item.key
+                          ? "border-[#17171b] bg-[#17171b] text-white"
+                          : "border-black/[0.08] bg-[#f8f8fb] text-[#4b5563] hover:border-black/[0.18] hover:bg-white"
+                      }`}
+                      title={item.title}
+                    >
+                      <span className="truncate">{item.title}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </section>
           ) : !showTeamConversation ? (
             <section className="rounded-2xl border border-[#e4e7ec] bg-white px-4 py-3 text-[12px] text-[#667085]">
@@ -730,30 +986,59 @@ export function InfoPanel({
             </section>
           ) : null}
 
-          {showEvidenceSurfaces ? (
+          {!showEvidenceSurfaces && coverageSummary ? (
             <section className="space-y-3 rounded-2xl border border-[#d2d2d7] bg-white px-4 py-4 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
-                    Evidence
-                  </p>
-                  <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
-                    Citation evidence
-                  </h4>
-                </div>
-                <div className="text-right text-[11px] text-[#6b6b70]">
-                  {activeEvidenceId ? <div>{sourceEvidence.length} evidence card{sourceEvidence.length === 1 ? "" : "s"}</div> : null}
-                  {selectedSource?.title || activeCitation?.sourceName ? (
-                    <div className="truncate">{selectedSource?.title || activeCitation?.sourceName}</div>
-                  ) : null}
-                </div>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#7b8598]">
+                  Coverage
+                </p>
+                <h4 className="mt-1 text-[16px] font-semibold tracking-[-0.02em] text-[#17171b]">
+                  Analysis and gaps
+                </h4>
               </div>
 
-              <EvidenceCardsList
-                cards={sourceEvidence}
-                selectedEvidenceId={activeEvidenceId}
-                onSelectCard={selectEvidence}
-              />
+              {coverageSummary.analysis.length > 0 ? (
+                <div className="space-y-2">
+                  {coverageSummary.analysis.map((item) => (
+                    <div
+                      key={`analysis-${item.topic}`}
+                      className="flex items-start justify-between gap-3 rounded-xl border border-black/[0.06] bg-[#fbfbfc] px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] font-medium text-[#17171b]">{item.topic}</p>
+                        <p className="mt-0.5 text-[11px] text-[#6b6b70]">
+                          depth: {item.depth}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                          item.covered
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {item.covered ? "Covered" : "Uncovered"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {coverageSummary.gaps.length > 0 ? (
+                <div className="space-y-2">
+                  {coverageSummary.gaps.map((gap) => (
+                    <div
+                      key={`gap-${gap.topic}`}
+                      className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2"
+                    >
+                      <p className="text-[12px] font-medium text-[#17171b]">{gap.topic}</p>
+                      {gap.reason ? (
+                        <p className="mt-1 text-[11px] text-[#6b6b70]">{gap.reason}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </section>
           ) : null}
 
@@ -772,8 +1057,10 @@ export function InfoPanel({
                 reviewQuery={userPrompt || activeCitation?.claimText || ""}
                 preferredPage={preferredCitationPage}
                 webReviewSource={activeWebReviewSource}
-                hasPreviousEvidence={activeEvidenceIndex > 0}
-                hasNextEvidence={activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1}
+                hasPreviousEvidence={isCitationEvidenceMode && activeEvidenceIndex > 0}
+                hasNextEvidence={
+                  isCitationEvidenceMode && activeEvidenceIndex >= 0 && activeEvidenceIndex < evidenceCards.length - 1
+                }
                 onPreviousEvidence={() => jumpToNeighborEvidence(-1)}
                 onNextEvidence={() => jumpToNeighborEvidence(1)}
                 pdfZoom={pdfZoom}
@@ -796,7 +1083,7 @@ export function InfoPanel({
                     },
                   });
                 }}
-                onClear={onClearCitationFocus}
+                onClear={isCitationEvidenceMode ? onClearCitationFocus : undefined}
                 renderResizeHandle={() => renderViewerResizeHandle("citation", "citation")}
               />
             </div>
@@ -859,7 +1146,7 @@ export function InfoPanel({
                 : "No sources"
               : showTeamConversation
                 ? "Live teammate thread"
-                : "No conversation yet"}
+                : "No information yet"}
           </span>
         </div>
       </div>

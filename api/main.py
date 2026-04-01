@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"cryptogr
 warnings.filterwarnings("ignore", message=r"urllib3.*chardet.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=r"ARC4 has been moved", category=DeprecationWarning)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
@@ -112,7 +112,10 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     for message in startup_notices:
         logger.info(message)
     get_context()
-    get_ingestion_manager().start()
+    try:
+        get_ingestion_manager().start()
+    except Exception as _exc:
+        logger.warning("Ingestion manager start failed (non-fatal): %s", _exc)
     get_report_scheduler().start()
     get_agent_scheduler().start()
     try:
@@ -252,6 +255,18 @@ app.include_router(mfa_router)
 app.include_router(roles_router)
 app.include_router(mcp_router)
 app.include_router(og_meta_router)
+
+
+@app.middleware("http")
+async def _disable_html_cache(request: Request, call_next):
+    """Force fresh HTML so clients always pick up the latest hashed JS/CSS bundles."""
+    response = await call_next(request)
+    content_type = str(response.headers.get("content-type", "")).lower()
+    if "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 @app.get("/health", response_model=HealthResponse, include_in_schema=False)

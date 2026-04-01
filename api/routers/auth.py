@@ -12,11 +12,13 @@ PATCH /api/auth/me        Update own full_name or password
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
+from sqlmodel import Session
 
 from api.auth import get_current_user
 from api.routers.auth_logout_patch import logout_with_revocation
@@ -30,12 +32,15 @@ from api.services.auth.store import (
     get_user_by_email,
     update_user,
 )
+from api.services.auth.token_blocklist import block_token
 from api.services.auth.tokens import (
     TokenError,
     create_access_token,
     create_refresh_token,
+    decode_invite_token,
     decode_refresh_token,
 )
+from ktem.db.engine import engine
 from api.services.tenants.store import create_tenant
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -71,6 +76,12 @@ class UpdateMeRequest(BaseModel):
     new_password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -95,6 +106,20 @@ class UserResponse(BaseModel):
             tenant_id=user.tenant_id,
             is_active=user.is_active,
         )
+
+
+class InvitePreviewResponse(BaseModel):
+    email: str
+    full_name: str
+    role: str
+    expires_at: str
+
+
+class AcceptInviteResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -290,6 +315,90 @@ def get_me(
 ) -> UserResponse:
     """Return the profile of the currently authenticated user."""
     return UserResponse.from_user(current_user)
+
+
+@router.get("/invite/preview", response_model=InvitePreviewResponse)
+def invite_preview(
+    token: Annotated[str, Query(min_length=1)],
+) -> InvitePreviewResponse:
+    """Validate invite token and return lightweight profile info for onboarding."""
+    try:
+        payload = decode_invite_token(token)
+    except TokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    user_id = str(payload.get("sub") or "").strip()
+    user = get_user(user_id) if user_id else None
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite is no longer valid.",
+        )
+
+    exp_raw = payload.get("exp")
+    exp_ts = int(exp_raw) if isinstance(exp_raw, (int, float)) else int(datetime.now(tz=timezone.utc).timestamp())
+    expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
+    return InvitePreviewResponse(
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role,
+        expires_at=expires_at,
+    )
+
+
+@router.post("/invite/accept", response_model=AcceptInviteResponse)
+def accept_invite(
+    body: AcceptInviteRequest,
+) -> AcceptInviteResponse:
+    """Accept an invite link, set password, and issue auth tokens."""
+    try:
+        payload = decode_invite_token(body.token)
+    except TokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    user_id = str(payload.get("sub") or "").strip()
+    user = get_user(user_id) if user_id else None
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite is no longer valid.",
+        )
+
+    with Session(engine) as session:
+        record = session.get(User, user.id)
+        if not record or not record.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Invite is no longer valid.",
+            )
+        record.hashed_password = hash_password(body.password)
+        if body.full_name is not None:
+            record.full_name = body.full_name
+        record.date_updated = datetime.utcnow()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        user = record
+
+    token_jti = str(payload.get("jti") or "").strip()
+    if token_jti:
+        exp_raw = payload.get("exp")
+        exp_ts = float(exp_raw) if isinstance(exp_raw, (int, float)) else float(datetime.now(tz=timezone.utc).timestamp())
+        block_token(token_jti, user.id, exp_ts, reason="invite_accepted")
+
+    tokens = _issue_tokens(user)
+    return AcceptInviteResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        token_type=tokens.token_type,
+        user=UserResponse.from_user(user),
+    )
 
 
 @router.patch("/me", response_model=UserResponse)

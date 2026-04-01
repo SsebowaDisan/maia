@@ -21,11 +21,13 @@ type ConversationMessageMeta = {
   source_usage?: ChatTurn["sourceUsage"];
   attachments?: Array<{ name?: string; file_id?: string; fileId?: string }>;
   next_recommended_steps?: string[];
+  nextRecommendedSteps?: string[];
   needs_human_review?: boolean;
   human_review_notes?: string | null;
   activity_run_id?: string | null;
   web_summary?: Record<string, unknown>;
   info_panel?: Record<string, unknown>;
+  infoPanel?: Record<string, unknown>;
   mindmap?: Record<string, unknown>;
   blocks?: unknown[];
   documents?: unknown[];
@@ -323,8 +325,14 @@ export function buildConversationTurns(
   const messageMeta = (detail.data_source?.message_meta || []) as ConversationMessageMeta[];
   const turns: ChatTurn[] = messages.map((entry, index) => {
     const assistant = entry[1] || "";
+    const infoPanelMeta =
+      messageMeta[index]?.info_panel && typeof messageMeta[index]?.info_panel === "object"
+        ? (messageMeta[index]?.info_panel as Record<string, unknown>)
+        : messageMeta[index]?.infoPanel && typeof messageMeta[index]?.infoPanel === "object"
+          ? (messageMeta[index]?.infoPanel as Record<string, unknown>)
+          : {};
     const rawMode = messageMeta[index]?.mode || "ask";
-    const resolvedMode = resolveTurnMode(rawMode, messageMeta[index]?.info_panel);
+    const resolvedMode = resolveTurnMode(rawMode, infoPanelMeta);
     const requestedMode = String(messageMeta[index]?.mode_requested || resolvedMode || "ask")
       .trim()
       .toLowerCase();
@@ -357,14 +365,15 @@ export function buildConversationTurns(
       actionsTaken: messageMeta[index]?.actions_taken || [],
       sourcesUsed: messageMeta[index]?.sources_used || [],
       sourceUsage: messageMeta[index]?.source_usage || [],
-      nextRecommendedSteps: messageMeta[index]?.next_recommended_steps || [],
+      nextRecommendedSteps:
+        messageMeta[index]?.next_recommended_steps || messageMeta[index]?.nextRecommendedSteps || [],
       needsHumanReview: Boolean(messageMeta[index]?.needs_human_review),
       humanReviewNotes: messageMeta[index]?.human_review_notes || null,
       webSummary: messageMeta[index]?.web_summary || {},
-      infoPanel: messageMeta[index]?.info_panel || {},
+      infoPanel: infoPanelMeta,
       mindmap:
         messageMeta[index]?.mindmap ||
-        ((messageMeta[index]?.info_panel as { mindmap?: Record<string, unknown> } | undefined)
+        ((infoPanelMeta as { mindmap?: Record<string, unknown> } | undefined)
           ?.mindmap || {}),
       activityRunId: messageMeta[index]?.activity_run_id || null,
     };

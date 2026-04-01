@@ -1,4 +1,5 @@
 import type { ChatTurn, CitationFocus, CitationHighlightBox } from "../../types";
+import { buildRawFileUrl } from "../../../api/client/uploads";
 import { parseEvidence } from "../../utils/infoInsights";
 import type { EvidenceCard } from "../../utils/infoInsights";
 
@@ -173,7 +174,15 @@ function normalizePageLabel(...candidates: Array<string | undefined | null>): st
     }
     const match = raw.match(/(\d{1,4})/);
     if (match?.[1]) {
-      return match[1];
+      const parsed = Number(match[1]);
+      if (!Number.isFinite(parsed)) {
+        continue;
+      }
+      if (parsed <= 0) {
+        // Older records may store zero-indexed page labels.
+        return "1";
+      }
+      return String(Math.floor(parsed));
     }
   }
   return undefined;
@@ -461,6 +470,7 @@ function resolveCitationFocusFromAnchor(params: {
     });
   const fileIdAttr = citationAnchor.getAttribute("data-file-id") || "";
   const pageAttr = citationAnchor.getAttribute("data-page") || "";
+  const chunkIdAttr = (citationAnchor.getAttribute("data-chunk-id") || "").trim();
   const sourceUrlAttr = citationAnchor.getAttribute("data-source-url") || "";
   const phraseAttr =
     citationAnchor.getAttribute("data-phrase") ||
@@ -516,6 +526,7 @@ function resolveCitationFocusFromAnchor(params: {
     .replace(/^\[\d+\]\s*/, "")
     .trim();
   const resolvedFileId = fileIdAttr || matchedEvidence?.fileId || fallbackEvidence?.fileId || attachmentFileId;
+  const resolvedChunkId = chunkIdAttr || matchedEvidence?.chunkId || fallbackEvidence?.chunkId;
   const sourceNameLooksUrl = /^https?:\/\//i.test(sourceName);
   const sourceUrl = choosePreferredSourceUrl([
     extractExplicitSourceUrl(phraseAttr),
@@ -558,6 +569,7 @@ function resolveCitationFocusFromAnchor(params: {
 
   const focus: CitationFocus = {
     fileId: resolvedFileId,
+    chunkId: resolvedChunkId || undefined,
     sourceUrl: sourceUrl || undefined,
     sourceType:
       sourceUrl && !sourceUrlLooksBinaryDocument
@@ -630,7 +642,7 @@ function prefetchCitationSources(container: HTMLElement): void {
       try {
         const link = document.createElement("link");
         link.rel = "prefetch";
-        link.href = `/api/uploads/files/${encodeURIComponent(fileId)}/raw`;
+        link.href = buildRawFileUrl(fileId);
         link.as = "fetch";
         document.head.appendChild(link);
       } catch {
@@ -648,6 +660,7 @@ async function fetchHighlightBoxesFromServer(
   fileId: string,
   page: string,
   text: string,
+  chunkId?: string,
   claimText?: string,
 ): Promise<{ highlightBoxes: CitationHighlightBox[]; evidenceUnits?: EvidenceUnit[] } | null> {
   if (!fileId || !page) return null;
@@ -655,7 +668,7 @@ async function fetchHighlightBoxesFromServer(
     const response = await fetch(`/api/uploads/files/${encodeURIComponent(fileId)}/highlight-target`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page, text, claim_text: claimText || "" }),
+      body: JSON.stringify({ page, text, chunk_id: chunkId || "", claim_text: claimText || "" }),
     });
     if (!response.ok) return null;
     const data = await response.json();

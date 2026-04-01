@@ -564,6 +564,7 @@ function parseEvidenceItemsFromInfoPanel(rawInfoPanel: unknown): EvidenceCard[] 
       sourceUrl: normalizeHttpUrl(item.source_url ?? item.sourceUrl ?? sourceMap.url ?? reviewLocation.source_url ?? reviewLocation.sourceUrl) || undefined,
       page: normalizeText(String(item.page ?? sourceMap.page ?? reviewLocation.page ?? "")).trim() || undefined,
       fileId: normalizeText(String(item.file_id ?? item.fileId ?? sourceMap.file_id ?? sourceMap.fileId ?? reviewLocation.file_id ?? reviewLocation.fileId ?? "")).trim() || undefined,
+      chunkId: normalizeText(String(item.chunk_id ?? item.chunkId ?? reviewLocation.chunk_id ?? reviewLocation.chunkId ?? "")).trim() || undefined,
       extract: extract || "No extract available for this citation.",
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,
       evidenceUnits,
@@ -662,6 +663,7 @@ function parseEvidence(
     const pageAttr = (details.getAttribute("data-page") || "").trim();
     const pageMatch = summary.match(/page\s+(\d+)/i);
     const fileId = (details.getAttribute("data-file-id") || "").trim() || undefined;
+    const chunkId = (details.getAttribute("data-chunk-id") || "").trim() || undefined;
     const highlightBoxes = parseHighlightBoxesFromDetails(details);
     const evidenceUnits = parseEvidenceUnitsFromDetails(details);
     const rawStrength = Number(details.getAttribute("data-strength") || "");
@@ -691,6 +693,7 @@ function parseEvidence(
       sourceUrl,
       page: pageAttr || pageMatch?.[1],
       fileId,
+      chunkId,
       extract,
       imageSrc,
       highlightBoxes: highlightBoxes.length ? highlightBoxes : undefined,

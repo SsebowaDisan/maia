@@ -53,6 +53,7 @@ from .verification_contract import (
 )
 from .citations import enforce_required_citations, normalize_info_evidence_html
 from .conversation_store import persist_conversation
+from .canvas_turn import attach_canvas_document
 from .app_prompt_helpers import _DEEP_SEARCH_MODE
 
 
@@ -448,6 +449,20 @@ def run_orchestrator_stream_turn(
         question=message,
         workspace_ids=captured_workspace_ids,
     )
+    blocks, documents, canvas_payload = attach_canvas_document(
+        user_id=user_id,
+        question=message,
+        answer_text=answer_text,
+        info_html=normalized_agent_info_html,
+        info_panel=info_panel,
+        mode_variant=mode_variant or requested_mode,
+        source_agent_id=str(agent_result.run_id or ""),
+        blocks=blocks,
+        documents=documents,
+    )
+    if canvas_payload:
+        info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
+        info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
 
     messages = chat_history + [[message, answer_text]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))

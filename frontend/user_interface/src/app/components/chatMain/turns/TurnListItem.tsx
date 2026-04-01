@@ -2,6 +2,10 @@ import { Check, Copy, FileText, PenLine, RotateCcw } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import type { AgentActivityEvent, ChatTurn, CitationFocus } from "../../../types";
 import { fallbackAssistantBlocks } from "../../../messageBlocks";
+import {
+  EVT_INTERACTION_SUGGESTION_SEND,
+  type InteractionSuggestionSendDetail,
+} from "../../../constants/uiEvents";
 import { AgentActivityPanel } from "../../AgentActivityPanel";
 import { CanvasWorkspaceSurface } from "../../canvas/CanvasWorkspaceSurface";
 import { MessageBlocks } from "../../messages/MessageBlocks";
@@ -44,6 +48,21 @@ type TurnListItemProps = {
 function stopBubbleAction(event: ReactMouseEvent<HTMLButtonElement>) {
   event.preventDefault();
   event.stopPropagation();
+}
+
+function dispatchRecommendedStep(prompt: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const trimmedPrompt = String(prompt || "").trim();
+  if (!trimmedPrompt) {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent<InteractionSuggestionSendDetail>(EVT_INTERACTION_SUGGESTION_SEND, {
+      detail: { prompt: trimmedPrompt },
+    }),
+  );
 }
 
 function resolveTurnModeLabel(mode: ChatTurn["mode"]): string {
@@ -118,8 +137,8 @@ function TurnListItem({
     turn.blocks && turn.blocks.length > 0
       ? turn.blocks
       : fallbackAssistantBlocks(turn.assistant);
-  const ragCanvasOnly = turn.mode === "rag" && Boolean(primaryCanvasDocument);
-  const hasAssistantOutput = (!ragCanvasOnly && assistantBlocks.length > 0) || Boolean(turn.plot);
+  const canvasOnlyResponse = Boolean(primaryCanvasDocument);
+  const hasAssistantOutput = (!canvasOnlyResponse && assistantBlocks.length > 0) || Boolean(turn.plot);
   const shouldAnchorTheatre =
     isLatestTurn && !hasAssistantOutput && (isSending || isActivityStreaming);
   const userCopyFeedbackKey = `user-${index}`;
@@ -132,6 +151,10 @@ function TurnListItem({
   const haltNoticeText =
     String(turn.haltMessage || "").trim() ||
     (turn.haltReason ? `Run halted: ${turn.haltReason.replace(/_/g, " ")}` : "");
+  const recommendedSteps = (turn.nextRecommendedSteps || [])
+    .map((step) => String(step || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
 
   return (
     <div
@@ -316,9 +339,12 @@ function TurnListItem({
           </div>
         </div>
       ) : null}
-      {ragCanvasOnly ? (
+      {canvasOnlyResponse ? (
         <div className="flex justify-start">
-          <div className="max-w-[95%] min-w-0 space-y-1.5">
+          <div
+            className="max-w-[95%] min-w-0 space-y-1.5"
+            data-response-anchor={isLatestTurn ? "true" : undefined}
+          >
             <CanvasWorkspaceSurface
               documentId={primaryCanvasDocument?.id || ""}
               fallbackDocument={primaryCanvasDocument}
@@ -353,6 +379,29 @@ function TurnListItem({
                     reason: {turn.haltReason}
                   </p>
                 ) : null}
+              </div>
+            ) : null}
+            {recommendedSteps.length > 0 ? (
+              <div className="mt-1.5 rounded-xl border border-black/[0.06] bg-white/80 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7b8598]">
+                  Suggested next steps
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {recommendedSteps.map((step) => (
+                    <button
+                      key={step}
+                      type="button"
+                      onClick={(event) => {
+                        stopBubbleAction(event);
+                        dispatchRecommendedStep(step);
+                      }}
+                      className="inline-flex max-w-full items-center rounded-full border border-black/[0.08] bg-[#f6f6f7] px-2.5 py-1 text-left text-[11px] font-medium text-[#1d1d1f] transition hover:border-black/[0.2] hover:bg-white"
+                      title={step}
+                    >
+                      <span className="truncate">{step}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : null}
             <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">

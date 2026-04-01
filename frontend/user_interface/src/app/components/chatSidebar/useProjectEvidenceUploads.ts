@@ -26,7 +26,7 @@ export function useProjectEvidenceUploads({
     while (true) {
       const job = await getIngestionJob(jobId);
       const status = String(job.status || "").toLowerCase();
-      if (status === "completed") {
+      if (status === "completed" || status === "completed_with_errors") {
         return job;
       }
       if (status === "failed" || status === "canceled") {

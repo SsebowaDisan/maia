@@ -450,6 +450,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "rel",
     "target",
     "data-file-id",
+    "data-chunk-id",
     "data-source-url",
     "data-viewer-url",
     "data-page",
@@ -477,6 +478,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
     "id",
     "open",
     "data-file-id",
+    "data-chunk-id",
     "data-source-url",
     "data-viewer-url",
     "data-page",
@@ -544,6 +546,7 @@ const ALLOWED_ATTRIBUTES_BY_TAG: Record<string, Set<string>> = {
   SPAN: new Set([
     "aria-hidden",
     "class",
+    "data-cite-idx",
     "data-math-display",
     "data-math-fallback",
     "data-math-rendered",
@@ -877,7 +880,30 @@ function toHtml(input: string): string {
     return normalized;
   }
 
-  return marked.parse(normalized, { gfm: true, breaks: true }) as string;
+  // Protect citation <a> tags from markdown escaping.
+  // Use <span data-cite-idx="N"></span> as sentinel — survives both
+  // marked (inline HTML preserved) and sanitizeHtml (SPAN is allowed).
+  const citationSegments: string[] = [];
+  const withSentinels = normalized.replace(CITATION_HTML_ANCHOR_RE, (match) => {
+    const idx = citationSegments.length;
+    citationSegments.push(match);
+    return `<span data-cite-idx="${idx}"></span>`;
+  });
+
+  let html = marked.parse(withSentinels, { gfm: true, breaks: true }) as string;
+
+  // Restore citation anchors by replacing sentinel spans
+  if (citationSegments.length > 0) {
+    html = html.replace(
+      /<span\s+data-cite-idx="(\d+)"[^>]*>\s*<\/span>/gi,
+      (_match, idxStr) => {
+        const idx = Number(idxStr);
+        return idx >= 0 && idx < citationSegments.length ? citationSegments[idx] : "";
+      },
+    );
+  }
+
+  return html;
 }
 
 function normalizeHeadingText(value: string): string {

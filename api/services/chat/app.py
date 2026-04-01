@@ -29,6 +29,7 @@ from .fallbacks import build_extractive_timeout_answer
 from .fast_qa import run_fast_chat_turn
 from .info_panel_copy import build_info_panel_copy
 from .citations import enforce_required_citations, normalize_info_evidence_html
+from .canvas_turn import attach_canvas_document
 from .verification_contract import VERIFICATION_CONTRACT_VERSION
 
 # Re-exported constants for backward compatibility and tests.
@@ -184,6 +185,45 @@ def _resolve_chat_timeout_seconds(*, requested_mode: str) -> int:
     )
 
 
+def _ensure_canvas_for_response(
+    *,
+    payload: dict[str, Any] | None,
+    user_id: str,
+    question: str,
+    mode_variant: str,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload or {}
+    existing_documents = payload.get("documents")
+    if isinstance(existing_documents, list) and existing_documents:
+        return payload
+    answer_text = str(payload.get("answer") or "")
+    if not answer_text.strip():
+        return payload
+    info_html = str(payload.get("info") or "")
+    info_panel = payload.get("info_panel") if isinstance(payload.get("info_panel"), dict) else {}
+    blocks = payload.get("blocks") if isinstance(payload.get("blocks"), list) else []
+    documents = payload.get("documents") if isinstance(payload.get("documents"), list) else []
+    merged_blocks, merged_documents, canvas_payload = attach_canvas_document(
+        user_id=user_id,
+        question=question,
+        answer_text=answer_text,
+        info_html=info_html,
+        info_panel=info_panel,
+        mode_variant=mode_variant,
+        blocks=blocks,
+        documents=documents,
+    )
+    payload["blocks"] = merged_blocks
+    payload["documents"] = merged_documents
+    if canvas_payload:
+        if not isinstance(payload.get("info_panel"), dict):
+            payload["info_panel"] = {}
+        payload["info_panel"]["canvas_document_id"] = str(canvas_payload.get("id") or "")
+        payload["info_panel"]["canvas_title"] = str(canvas_payload.get("title") or "")
+    return payload
+
+
 def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> dict[str, Any]:
     request = _auto_index_urls_for_request(
         context=context,
@@ -201,7 +241,12 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             fast_result = run_fast_chat_turn(context=context, user_id=user_id, request=request)
             if fast_result is not None:
                 logger.warning("chat_path_selected path=fast_qa")
-                return fast_result
+                return _ensure_canvas_for_response(
+                    payload=fast_result,
+                    user_id=user_id,
+                    question=request.message,
+                    mode_variant=str(fast_result.get("mode_actually_used") or fast_result.get("mode") or "ask"),
+                )
             if request.command in (None, "", DEFAULT_SETTING):
                 try:
                     _conversation_id, _conversation_name, data_source, _conversation_icon_key = get_or_create_conversation(
@@ -247,7 +292,13 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(consume_stream)
     try:
-        return future.result(timeout=timeout_seconds)
+        result = future.result(timeout=timeout_seconds)
+        return _ensure_canvas_for_response(
+            payload=result,
+            user_id=user_id,
+            question=request.message,
+            mode_variant=str(result.get("mode_actually_used") or result.get("mode") or requested_mode or "ask"),
+        )
     except FutureTimeoutError:
         message = request.message.strip()
         timeout_mode = requested_mode if _is_orchestrator_mode(requested_mode) else "ask"
@@ -289,6 +340,19 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         if timeout_mode_variant:
             timeout_info_panel["mode_variant"] = timeout_mode_variant
         blocks, documents = build_turn_blocks(answer_text=timeout_answer, question=message)
+        blocks, documents, canvas_payload = attach_canvas_document(
+            user_id=user_id,
+            question=message,
+            answer_text=timeout_answer,
+            info_html=timeout_info,
+            info_panel=timeout_info_panel,
+            mode_variant=timeout_display_mode,
+            blocks=blocks,
+            documents=documents,
+        )
+        if canvas_payload:
+            timeout_info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
+            timeout_info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
 
         messages = deepcopy(data_source.get("messages", []))
         if message:
@@ -331,7 +395,7 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
         }
         persist_conversation(conversation_id, conversation_payload)
 
-        return {
+        timeout_payload = {
             "conversation_id": conversation_id,
             "conversation_name": conversation_name,
             "message": message,
@@ -356,5 +420,11 @@ def run_chat_turn(context: ApiContext, user_id: str, request: ChatRequest) -> di
             "mode_requested": timeout_display_mode,
             "mode_actually_used": "extractive_fallback",
         }
+        return _ensure_canvas_for_response(
+            payload=timeout_payload,
+            user_id=user_id,
+            question=message,
+            mode_variant=timeout_display_mode or "ask",
+        )
     finally:
         executor.shutdown(wait=False, cancel_futures=True)

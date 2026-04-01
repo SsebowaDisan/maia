@@ -20,6 +20,7 @@ type EvidenceCard = {
   sourceUrl?: string;
   page?: string;
   fileId?: string;
+  chunkId?: string;
   extract: string;
   imageSrc?: string;
   highlightBoxes?: HighlightBox[];

@@ -207,6 +207,7 @@ function AppChatWorkspaceLayout(props: AppChatWorkspaceLayoutProps) {
                 webSummary={props.activeTurn?.webSummary || {}}
                 sourceUsage={props.activeTurn?.sourceUsage || []}
                 indexId={props.fileLibrary.defaultIndexId}
+                turnMode={props.activeTurn?.modeActuallyUsed || props.activeTurn?.mode || ""}
                 onClearCitationFocus={() => props.chatState.setCitationFocus(null)}
                 onSelectCitationFocus={(citation) => props.chatState.setCitationFocus(citation)}
                 onAskMindmapNode={(node) => {
@@ -283,7 +284,7 @@ function AppChatWorkspaceLayout(props: AppChatWorkspaceLayoutProps) {
               </WorkspaceOverlayModal>
             ) : null}
 
-            {props.sidebarOverlay ? (
+            {props.sidebarOverlay && !props.liveWorkspaceModalTab ? (
               <AppRouteOverlayModal
                 title={props.sidebarOverlay.title}
                 subtitle={props.sidebarOverlay.subtitle}

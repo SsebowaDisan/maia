@@ -335,15 +335,26 @@ export default function App() {
     webSummaryHasUrl(activeTurn?.webSummary) ||
     /(?:href=['"]https?:\/\/|https?:\/\/)/i.test(String(activeTurn?.info || "")) ||
     /https?:\/\//i.test(String(activeTurn?.user || ""));
+  const activeTurnMode = String(activeTurn?.modeActuallyUsed || activeTurn?.mode || "")
+    .trim()
+    .toLowerCase();
+  const isStandardTurn = !activeTurnMode || activeTurnMode === "ask";
+  const hasAttachedFileSource = (activeTurn?.attachments || []).some((attachment) => Boolean(attachment?.fileId));
+  const hasSourceRecordEvidence = (activeTurn?.sourcesUsed || []).some(
+    (source) => Boolean(source?.file_id) || hasHttpUrl(source?.url),
+  );
   const hasEvidenceHtml = String(activeTurn?.info || "").replace(/<[^>]+>/g, " ").trim().length > 0;
   const hasActivityConversationContent =
     Boolean(activeTurn?.activityRunId) || (Array.isArray(chatState.activityEvents) && chatState.activityEvents.length > 0);
-  const hasInfoPanelContent =
+  const hasStandardSourceContext = hasSourceUrl || hasAttachedFileSource || hasSourceRecordEvidence;
+  const hasNonStandardInfoPanelContent =
     Boolean(chatState.citationFocus) ||
     hasMindmapPayload ||
     hasSourceUrl ||
     hasEvidenceHtml ||
     hasActivityConversationContent;
+  const hasInfoPanelContent =
+    isStandardTurn ? hasStandardSourceContext : hasNonStandardInfoPanelContent;
   const isInfoPanelVisible = layout.isInfoPanelOpen && hasInfoPanelContent;
   const toggleInfoPanel = () => {
     if (!hasInfoPanelContent) {
@@ -361,6 +372,9 @@ export default function App() {
   };
 
   const openWorkspaceModal = (tab: WorkspaceModalTab) => {
+    if (sidebarOverlay) {
+      setSidebarOverlay(null);
+    }
     setWorkspaceModalTab(tab);
     if (layout.activeTab !== "Chat") {
       layout.setActiveTab("Chat");

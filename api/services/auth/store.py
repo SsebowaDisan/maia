@@ -75,6 +75,15 @@ def list_users_for_tenant(tenant_id: str) -> Sequence[User]:
         ).all()
 
 
+def list_all_active_users() -> Sequence[User]:
+    with Session(engine) as session:
+        return session.exec(
+            select(User)
+            .where(User.is_active == True)  # noqa: E712
+            .order_by(User.date_created)
+        ).all()
+
+
 # ── Write ──────────────────────────────────────────────────────────────────────
 
 def create_user(

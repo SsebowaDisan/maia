@@ -42,4 +42,15 @@ describe("richText evidence anchors", () => {
 
     expect(anchor?.getAttribute("data-viewer-url")).toBe("/api/uploads/files/file_123/raw#page=2");
   });
+
+  it("does not leak citation sentinel text when markdown and citation anchors are mixed", () => {
+    const html = renderRichText(
+      `## Summary
+
+Claim with evidence <a class="citation" href="#evidence-1" id="citation-1">[1]</a>.`,
+    );
+
+    expect(html).toContain('class="citation"');
+    expect(html).not.toContain("MAIA_CITATION_SENTINEL");
+  });
 });

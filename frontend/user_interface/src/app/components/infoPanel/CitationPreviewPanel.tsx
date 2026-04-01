@@ -62,10 +62,12 @@ function CitationPreviewPanel({
     traceId?: string;
   } | null>(null);
   const [isResolvingGeometry, setIsResolvingGeometry] = useState(false);
+  const [sourceUnavailableReason, setSourceUnavailableReason] = useState<string>("");
 
   useEffect(() => {
     setResolvedGeometry(null);
     setIsResolvingGeometry(false);
+    setSourceUnavailableReason("");
   }, [citationFocus.evidenceId, citationFocus.fileId, citationFocus.page, preferredPage]);
 
   useEffect(() => {
@@ -80,6 +82,7 @@ function CitationPreviewPanel({
       page: backfillPage,
       text: citationFocus.extract || "",
       claim_text: citationFocus.claimText || "",
+      chunk_id: citationFocus.chunkId || "",
     })
       .then((result) => {
         if (cancelled) {
@@ -119,10 +122,15 @@ function CitationPreviewPanel({
           evidenceUnits,
           traceId: String(result.trace_id || "").trim() || undefined,
         });
+        setSourceUnavailableReason("");
         setIsResolvingGeometry(false);
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) {
+          const message = String((error as Error | undefined)?.message || "").toLowerCase();
+          if (message.includes("404") || message.includes("not found")) {
+            setSourceUnavailableReason("Source file is no longer available for this citation.");
+          }
           setResolvedGeometry({
             highlightBoxes: [],
             evidenceUnits: [],
@@ -138,6 +146,7 @@ function CitationPreviewPanel({
     backfillPage,
     backfillText,
     citationFocus.claimText,
+    citationFocus.chunkId,
     citationFocus.extract,
     citationFocus.fileId,
     citationIsPdf,
@@ -239,7 +248,12 @@ function CitationPreviewPanel({
             Highlight trace: <span className="font-mono text-[#111827]">{highlightTraceId}</span>
           </div>
         ) : null}
-        {citationRawUrl && citationIsPdf ? (
+        {sourceUnavailableReason ? (
+          <div className="rounded-xl border border-[#fecaca] bg-[#fff1f2] p-3 text-[12px] text-[#9f1239]">
+            {sourceUnavailableReason}
+          </div>
+        ) : null}
+        {citationRawUrl && citationIsPdf && !sourceUnavailableReason ? (
           <WidgetRenderBoundary
             fallback={
               <div className="rounded-xl border border-[#fecaca] bg-[#fff1f2] p-3 text-[12px] text-[#9f1239]">

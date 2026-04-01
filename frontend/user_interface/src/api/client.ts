@@ -11,4 +11,5 @@ export * from "./client/pageMonitor";
 export * from "./client/settings";
 export * from "./client/types";
 export * from "./client/uploads";
+export * from "./client/users";
 export * from "./client/workflows";

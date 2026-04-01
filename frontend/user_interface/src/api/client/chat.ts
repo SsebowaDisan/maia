@@ -268,6 +268,14 @@ async function sendChatStream(
       if (!parsed) {
         continue;
       }
+      if (parsed.event === "chat_response") {
+        donePayload = parsed.payload as ChatResponse;
+        options.onEvent?.({
+          type: "chat_response",
+          response: donePayload,
+        });
+        continue;
+      }
       if (parsed.event === "done") {
         donePayload = parsed.payload as ChatResponse;
         continue;
@@ -281,19 +289,45 @@ async function sendChatStream(
         }
         throw new Error(detail);
       }
+      if (
+        parsed.payload &&
+        typeof parsed.payload === "object" &&
+        !Array.isArray(parsed.payload) &&
+        String((parsed.payload as { type?: unknown }).type || "").trim().toLowerCase() === "chat_response" &&
+        (parsed.payload as { response?: unknown }).response &&
+        typeof (parsed.payload as { response?: unknown }).response === "object"
+      ) {
+        donePayload = (parsed.payload as { response: ChatResponse }).response;
+      }
       options.onEvent?.(parsed.payload as ChatStreamEvent);
     }
   }
 
   if (buffer.trim()) {
     const parsed = parseSseBlock(buffer);
-    if (parsed?.event === "done") {
+    if (parsed?.event === "chat_response") {
+      donePayload = parsed.payload as ChatResponse;
+      options.onEvent?.({
+        type: "chat_response",
+        response: donePayload,
+      });
+    } else if (parsed?.event === "done") {
       donePayload = parsed.payload as ChatResponse;
     } else if (parsed?.event === "error") {
       const detail =
         (parsed.payload as { detail?: string })?.detail || "Unknown streaming error";
       throw new Error(detail);
     } else if (parsed) {
+      if (
+        parsed.payload &&
+        typeof parsed.payload === "object" &&
+        !Array.isArray(parsed.payload) &&
+        String((parsed.payload as { type?: unknown }).type || "").trim().toLowerCase() === "chat_response" &&
+        (parsed.payload as { response?: unknown }).response &&
+        typeof (parsed.payload as { response?: unknown }).response === "object"
+      ) {
+        donePayload = (parsed.payload as { response: ChatResponse }).response;
+      }
       options.onEvent?.(parsed.payload as ChatStreamEvent);
     }
   }

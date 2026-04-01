@@ -115,6 +115,12 @@ def list_conversations(user_id: str) -> list[dict]:
 
             existing_icon_key = _conversation_icon_key_from_data_source(data_source)
             icon_reviewed = bool(data_source.get(CONVERSATION_ICON_REVIEWED_FIELD))
+            icon_seed_text = " ".join(part for part in [row.name, first_message] if str(part or "").strip()).strip()
+            heuristic_icon_key = (
+                infer_conversation_icon_key(icon_seed_text, agent_mode=agent_mode)
+                if icon_seed_text
+                else DEFAULT_CONVERSATION_ICON_KEY
+            )
             needs_name = (
                 backfilled < AUTONAME_BACKFILL_LIMIT
                 and is_placeholder_conversation_name(row.name)
@@ -130,6 +136,12 @@ def list_conversations(user_id: str) -> list[dict]:
                         and not icon_reviewed
                     )
                 )
+            )
+            needs_generic_icon_upgrade = (
+                icon_backfilled < ICON_BACKFILL_LIMIT
+                and bool(icon_seed_text)
+                and existing_icon_key == DEFAULT_CONVERSATION_ICON_KEY
+                and heuristic_icon_key != DEFAULT_CONVERSATION_ICON_KEY
             )
 
             if needs_name or needs_icon:
@@ -168,6 +180,15 @@ def list_conversations(user_id: str) -> list[dict]:
                         data_source = next_data_source
                         icon_backfilled += 1
                         updated = True
+
+            if needs_generic_icon_upgrade:
+                next_data_source = deepcopy(data_source)
+                next_data_source[CONVERSATION_ICON_KEY_FIELD] = heuristic_icon_key
+                next_data_source[CONVERSATION_ICON_REVIEWED_FIELD] = True
+                row.data_source = next_data_source
+                data_source = next_data_source
+                icon_backfilled += 1
+                updated = True
 
             if (
                 icon_backfilled < ICON_BACKFILL_LIMIT

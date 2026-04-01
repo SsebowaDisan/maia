@@ -195,18 +195,6 @@ export function useProjectEvidenceState({
         },
       }));
 
-      if (!projectConversations.length) {
-        setProjectEvidenceById((prev) => ({
-          ...prev,
-          [projectId]: {
-            ...EMPTY_PROJECT_EVIDENCE,
-            status: "ready",
-            projectChatCount: 0,
-          },
-        }));
-        return;
-      }
-
       const documents = new Map<string, {
         key: string;
         label: string;
@@ -263,7 +251,7 @@ export function useProjectEvidenceState({
           documents,
           urls,
         );
-        if (documents.size === 0 && urls.size === 0) {
+        if (projectConversations.length > 0 && documents.size === 0 && urls.size === 0) {
           for (const file of fileCatalog.files || []) {
             const fileId = String(file.id || "").trim();
             if (!fileId) {

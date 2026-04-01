@@ -61,6 +61,39 @@ def finalize_turn(
 
     blocks, documents = build_turn_blocks_fn(answer_text=answer, question=message)
     chat_answer = answer
+    if mode_variant != "rag":
+        canvas_title = derive_rag_canvas_title_fn(message, answer)
+        canvas_document = create_document_fn(
+            tenant_id=user_id,
+            title=canvas_title,
+            content=answer,
+            info_html=info_text,
+            info_panel=deepcopy(info_panel),
+            user_prompt=message,
+            mode_variant=display_mode,
+            source_agent_id=activity_run_id or "",
+        )
+        canvas_payload = document_to_dict_fn(canvas_document)
+        canvas_document_id = str(canvas_payload.get("id") or "").strip()
+        if canvas_document_id:
+            documents = [canvas_payload] + [
+                row
+                for row in documents
+                if str((row if isinstance(row, dict) else {}).get("id") or "").strip() != canvas_document_id
+            ]
+            blocks = [
+                {
+                    "type": "document_action",
+                    "action": {
+                        "kind": "open_canvas",
+                        "title": str(canvas_payload.get("title") or canvas_title),
+                        "documentId": canvas_document_id,
+                    },
+                },
+                *blocks,
+            ]
+            info_panel["canvas_document_id"] = canvas_document_id
+            info_panel["canvas_title"] = str(canvas_payload.get("title") or canvas_title)
 
     messages = chat_history + [[message, answer]]
     retrieval_history = deepcopy(data_source.get("retrieval_messages", []))

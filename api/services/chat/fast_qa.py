@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import queue
 import logging
 import threading
@@ -34,6 +35,7 @@ from .constants import (
     MAIA_CITATION_STRENGTH_ORDERING_ENABLED,
     MAIA_SOURCE_USAGE_HEATMAP_ENABLED,
 )
+from .canvas_turn import attach_canvas_document
 from .conversation_store import (
     build_selected_payload,
     get_or_create_conversation,
@@ -106,6 +108,9 @@ MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_ENABLED = bool(
 MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE = float(
     config("MAIA_FAST_QA_EVIDENCE_SUFFICIENCY_MIN_CONFIDENCE", default=0.58, cast=float)
 )
+
+# New RAG pipeline (feature flag)
+_USE_NEW_RAG = config("MAIA_USE_NEW_RAG", default="true", cast=str).lower() == "true"
 
 
 def _normalize_request_attachments(request: ChatRequest) -> list[dict[str, str]]:
@@ -460,6 +465,51 @@ def call_openai_fast_qa(
     )
 
 
+def _build_analysis_and_gaps(
+    question: str, answer: str, api_key: str, base_url: str, model: str,
+) -> dict[str, Any]:
+    """Ask the LLM to generate analysis, gaps, and next steps from the answer."""
+    try:
+        import httpx as _httpx
+        import json as _json
+
+        resp = _httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You analyse an AI assistant's answer and return JSON with three fields:\n"
+                            "1. \"analysis\": a list of 3-5 key topics covered in the answer, each as {\"topic\": \"...\", \"covered\": true/false, \"depth\": \"shallow|moderate|deep\"}\n"
+                            "2. \"gaps\": a list of 2-4 important aspects that were NOT covered or need more depth, each as {\"topic\": \"...\", \"reason\": \"why it matters\"}\n"
+                            "3. \"next_steps\": a list of 2-3 follow-up questions the user might want to ask next\n\n"
+                            "Return ONLY valid JSON. No markdown, no explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Question: {question}\n\nAnswer:\n{answer[:3000]}",
+                    },
+                ],
+                "temperature": 0.3,
+            },
+            timeout=30.0,
+        )
+        if resp.status_code == 200:
+            text = resp.json()["choices"][0]["message"]["content"]
+            # Parse JSON from response
+            text = text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
+            return _json.loads(text)
+    except Exception as exc:
+        logger.debug("Analysis/gaps generation failed (non-fatal): %s", exc)
+    return {}
+
+
 def _build_knowledge_map_with_llm_steps(
     *,
     question: str,
@@ -503,6 +553,368 @@ def run_fast_chat_turn(
     user_id: str,
     request: ChatRequest,
 ) -> dict[str, Any] | None:
+    # Only use RAG pipeline when user has files attached or selected sources
+    _has_attachments = hasattr(request, "attachments") and request.attachments and any(
+        getattr(att, "file_id", None) or (att.get("file_id") if isinstance(att, dict) else None)
+        for att in request.attachments
+    )
+    _has_selected_files = hasattr(request, "index_selection") and request.index_selection and any(
+        (hasattr(sel, "file_ids") and sel.file_ids) or (isinstance(sel, dict) and sel.get("file_ids"))
+        for sel in request.index_selection.values()
+    )
+    _use_rag_for_this_request = _USE_NEW_RAG and (_has_attachments or _has_selected_files)
+
+    # ── Standard mode (no files): direct LLM, no citations ───────────
+    if not _use_rag_for_this_request:
+        try:
+            import httpx
+            from dotenv import load_dotenv
+            load_dotenv()  # Ensure .env is loaded
+
+            api_key = os.environ.get("MAIA_LLM_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+            base_url = os.environ.get("MAIA_LLM_API_BASE", "") or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+            model = os.environ.get("MAIA_LLM_CHAT_MODEL", "") or os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+            logger.info("Standard LLM call: key=%s... base=%s model=%s", api_key[:10] if api_key else "NONE", base_url, model)
+
+            if api_key:
+                resp = httpx.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are Maia, an intelligent assistant.\n\n"
+
+                                    "Rules:\n"
+                                    "1. Start every response with a # title in sentence case — the FIRST letter MUST be uppercase. Capitalise the first word and proper nouns only (e.g. '# Machine learning is a data-driven approach to AI', NOT '# machine learning is a data-driven approach to AI').\n"
+                                    "2. Give the direct answer first. No greeting, no preamble.\n"
+                                    "3. Explain in depth. Write full paragraphs, not just bullet points. "
+                                    "Each section should have 2-4 sentences of explanation before or after any list.\n"
+                                    "4. Explain WHY things work, not just WHAT they are. Help the reader understand the reasoning.\n"
+                                    "5. Use real-world examples with specific details — names, numbers, scenarios that feel concrete.\n"
+                                    "6. When comparing things, state which is better and why with reasoning.\n"
+                                    "7. Point out common mistakes and misconceptions the user should know about.\n"
+                                    "8. End with a key insight that changes how they think about the topic.\n\n"
+
+                                    "Format:\n"
+                                    "- Use ## headings in sentence case (first letter UPPERCASE, e.g. '## How it learns from data' not '## how it learns from data').\n"
+                                    "- Write explanatory paragraphs between headings — do not rely solely on lists.\n"
+                                    "- Use **bold** for key terms and the most important point in each section.\n"
+                                    "- Use tables when comparing 2+ items side by side.\n"
+                                    "- Use numbered lists for sequential steps. Use bullet lists for non-sequential items.\n"
+                                    "- For numbered lists, always put the number and content on the SAME line: '1. **Title** — explanation text here' not '1.\\n\\nTitle\\n\\ntext'.\n"
+                                    "- Use ```code blocks``` for code, commands, or technical syntax.\n"
+                                    "- Always provide context and explanation around lists and tables, not just the list alone.\n\n"
+
+                                    "Never:\n"
+                                    "- Never say 'Great question!' or 'Sure!' or 'Of course!'\n"
+                                    "- Never repeat the question back.\n"
+                                    "- Never give a response that is just bullet points without explanatory text.\n"
+                                    "- Never use 'In conclusion' or 'To summarize' — just end when done."
+                                ),
+                            },
+                            {"role": "user", "content": request.message},
+                        ],
+                        "temperature": 0.7,
+                    },
+                    timeout=120.0,
+                )
+                logger.info("Standard LLM response: status=%d", resp.status_code)
+                if resp.status_code != 200:
+                    logger.error("Standard LLM error: %s", resp.text[:300])
+                if resp.status_code == 200:
+                    answer = resp.json()["choices"][0]["message"]["content"]
+                    conv_id = getattr(request, "conversation_id", "") or ""
+
+                    # Persist conversation to database so it survives refresh
+                    try:
+                        _conv_id, conv_name, _data_source, _icon = get_or_create_conversation(
+                            user_id=user_id,
+                            conversation_id=conv_id,
+                        )
+                        conv_id = _conv_id
+                        maybe_autoname_conversation(
+                            user_id=user_id,
+                            conversation_id=conv_id,
+                            current_name=conv_name,
+                            message=request.message,
+                            agent_mode=getattr(request, "agent_mode", "ask") or "ask",
+                        )
+                        messages = _data_source.get("messages", []) if isinstance(_data_source, dict) else []
+                        messages.append([request.message, answer])
+                        retrieval_messages = _data_source.get("retrieval_messages", []) if isinstance(_data_source, dict) else []
+                        retrieval_messages.append("")
+                        plot_history = _data_source.get("plot_history", []) if isinstance(_data_source, dict) else []
+                        plot_history.append(None)
+                        message_meta = _data_source.get("message_meta", []) if isinstance(_data_source, dict) else []
+                        # message_meta entry added after blocks are built (below)
+                    except Exception as persist_exc:
+                        logger.warning("Conversation persist failed (non-fatal): %s", persist_exc)
+                        messages = []
+                        retrieval_messages = []
+                        plot_history = []
+                        message_meta = []
+
+                    # Build mind map from the answer
+                    mindmap_data = {}
+                    try:
+                        mindmap_data = _build_knowledge_map_with_llm_steps(
+                            question=request.message,
+                            context=answer,
+                            answer_text=answer,
+                            max_depth=4,
+                            include_reasoning_map=True,
+                            map_type="structure",
+                        )
+                    except Exception as map_exc:
+                        logger.debug("Mind map generation failed (non-fatal): %s", map_exc)
+
+                    # Build analysis and gaps via LLM
+                    analysis_and_gaps = _build_analysis_and_gaps(
+                        request.message, answer, api_key, base_url, model,
+                    )
+
+                    info_panel: dict[str, Any] = {}
+                    if mindmap_data:
+                        info_panel["mindmap"] = mindmap_data
+                    if analysis_and_gaps.get("analysis"):
+                        info_panel["analysis"] = analysis_and_gaps["analysis"]
+                    if analysis_and_gaps.get("gaps"):
+                        info_panel["gaps"] = analysis_and_gaps["gaps"]
+
+                    blocks, documents, canvas_payload = attach_canvas_document(
+                        user_id=user_id,
+                        question=request.message,
+                        answer_text=answer,
+                        info_html="",
+                        info_panel=info_panel,
+                        mode_variant="ask",
+                        blocks=[{"type": "markdown", "markdown": answer}],
+                        documents=[],
+                    )
+                    if canvas_payload:
+                        info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
+                        info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
+
+                    # Persist with correct format for frontend reload
+                    try:
+                        turn_attachments = normalize_request_attachments_impl(request)
+                        message_meta.append({
+                            "mode": "ask",
+                            "actions_taken": [],
+                            "sources_used": [],
+                            "source_usage": [],
+                            "attachments": turn_attachments,
+                            "next_recommended_steps": analysis_and_gaps.get("next_steps", []),
+                            "info_panel": info_panel,
+                            "mindmap": mindmap_data,
+                            "blocks": blocks,
+                            "documents": documents,
+                        })
+                        persist_conversation(conv_id, {
+                            "messages": messages,
+                            "retrieval_messages": retrieval_messages,
+                            "plot_history": plot_history,
+                            "message_meta": message_meta,
+                        })
+                    except Exception as meta_exc:
+                        logger.warning("Message meta persist failed (non-fatal): %s", meta_exc)
+
+                    return {
+                        "conversation_id": conv_id,
+                        "conversation_name": "",
+                        "message": request.message,
+                        "answer": answer,
+                        "info": "",
+                        "blocks": blocks,
+                        "documents": documents,
+                        "plot": None,
+                        "state": {"mindmap": mindmap_data} if mindmap_data else {},
+                        "mode": "ask",
+                        "actions_taken": [],
+                        "sources_used": [],
+                        "source_usage": [],
+                        "next_recommended_steps": analysis_and_gaps.get("next_steps", []),
+                        "needs_human_review": False,
+                        "info_panel": info_panel,
+                        "infoPanel": info_panel,
+                    }
+        except Exception as exc:
+            logger.warning("Direct LLM call failed: %s", exc, exc_info=True)
+        # Fall through to old pipeline
+
+    if _use_rag_for_this_request:
+        import asyncio
+        from api.services.rag.bridge import run_rag_query_bridge
+
+        # Extract source IDs from request
+        selected_ids = []
+        group_id = ""
+        try:
+            # 1. From attachments (chat-uploaded PDFs)
+            if hasattr(request, "attachments") and request.attachments:
+                for att in request.attachments:
+                    fid = getattr(att, "file_id", None) or (att.get("file_id") if isinstance(att, dict) else None)
+                    if fid:
+                        selected_ids.append(str(fid))
+
+            # 2. From index_selection (selected files in the file picker)
+            if not selected_ids and hasattr(request, "index_selection") and request.index_selection:
+                for _idx_key, sel in request.index_selection.items():
+                    if hasattr(sel, "file_ids") and sel.file_ids:
+                        selected_ids.extend([str(f) for f in sel.file_ids])
+                    elif isinstance(sel, dict) and sel.get("file_ids"):
+                        selected_ids.extend([str(f) for f in sel["file_ids"]])
+        except Exception:
+            pass
+
+        try:
+            # Handle both sync and async contexts
+            try:
+                loop = asyncio.get_running_loop()
+                # We're inside an async context — use nest_asyncio or thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    result = pool.submit(
+                        asyncio.run,
+                        run_rag_query_bridge(
+                            question=request.message,
+                            source_ids=selected_ids,
+                            group_id=group_id,
+                            owner_id=user_id,
+                        )
+                    ).result(timeout=60)
+            except RuntimeError:
+                # No running loop — safe to use asyncio.run
+                result = asyncio.run(
+                    run_rag_query_bridge(
+                        question=request.message,
+                        source_ids=selected_ids,
+                        group_id=group_id,
+                        owner_id=user_id,
+                    )
+                )
+
+            if result and result.get("answer_text"):
+                conv_id = getattr(request, "conversation_id", "") or ""
+
+                # Persist conversation to database
+                try:
+                    _conv_id, conv_name, _data_source, _icon = get_or_create_conversation(
+                        user_id=user_id,
+                        conversation_id=conv_id,
+                    )
+                    conv_id = _conv_id
+                    maybe_autoname_conversation(
+                        user_id=user_id,
+                        conversation_id=conv_id,
+                        current_name=conv_name,
+                        message=request.message,
+                        agent_mode=getattr(request, "agent_mode", "ask") or "ask",
+                    )
+                    messages = _data_source.get("messages", []) if isinstance(_data_source, dict) else []
+                    retrieval_messages = _data_source.get("retrieval_messages", []) if isinstance(_data_source, dict) else []
+                    plot_history = _data_source.get("plot_history", []) if isinstance(_data_source, dict) else []
+                    message_meta = _data_source.get("message_meta", []) if isinstance(_data_source, dict) else []
+                except Exception as persist_exc:
+                    logger.warning("RAG conversation persist failed (non-fatal): %s", persist_exc)
+                    messages = []
+                    retrieval_messages = []
+                    plot_history = []
+                    message_meta = []
+
+                # Use citation-rich HTML answer (with <a class="citation"> tags)
+                answer_html = result.get("answer_html", result["answer_text"])
+
+                # Build infoPanel for the evidence right panel
+                info_panel = result.get("info_panel", {})
+                blocks, documents, canvas_payload = attach_canvas_document(
+                    user_id=user_id,
+                    question=request.message,
+                    answer_text=answer_html,
+                    info_html=str(result.get("info_html", "") or ""),
+                    info_panel=info_panel if isinstance(info_panel, dict) else {},
+                    mode_variant="rag",
+                    blocks=[{"type": "markdown", "markdown": answer_html}],
+                    documents=[],
+                )
+                if canvas_payload and isinstance(info_panel, dict):
+                    info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
+                    info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
+
+                # Persist with correct format for frontend reload
+                try:
+                    turn_attachments = normalize_request_attachments_impl(request)
+                    messages.append([request.message, answer_html])
+                    retrieval_messages.append(result.get("info_html", ""))
+                    plot_history.append(None)
+                    rag_sources_used = [
+                        {
+                            "source_type": s.get("source_type", "file"),
+                            "label": s.get("source_name", "") or s.get("label", "source"),
+                            "source_id": s.get("source_id", ""),
+                            "source_name": s.get("source_name", ""),
+                            "score": s.get("relevance_score", 0),
+                        }
+                        for s in result.get("sources_used", [])
+                    ]
+                    message_meta.append({
+                        "mode": "ask",
+                        "actions_taken": [],
+                        "sources_used": rag_sources_used,
+                        "source_usage": [],
+                        "attachments": turn_attachments,
+                        "next_recommended_steps": [],
+                        "info_panel": info_panel,
+                        "mindmap": {},
+                        "blocks": blocks,
+                        "documents": documents,
+                    })
+                    persist_conversation(conv_id, {
+                        "messages": messages,
+                        "retrieval_messages": retrieval_messages,
+                        "plot_history": plot_history,
+                        "message_meta": message_meta,
+                    })
+                except Exception as meta_exc:
+                    logger.warning("RAG message meta persist failed (non-fatal): %s", meta_exc)
+
+                return {
+                    "conversation_id": conv_id,
+                    "conversation_name": "",
+                    "message": request.message,
+                    "answer": answer_html,
+                    "info": result.get("info_html", ""),
+                    "info_panel": info_panel,
+                    "infoPanel": info_panel,
+                    "blocks": blocks,
+                    "documents": documents,
+                    "plot": None,
+                    "state": {},
+                    "mode": "ask",
+                    "actions_taken": [],
+                    "sources_used": [
+                        {
+                            "source_type": s.get("source_type", "file"),
+                            "label": s.get("source_name", "") or s.get("label", "source"),
+                            "source_id": s.get("source_id", ""),
+                            "source_name": s.get("source_name", ""),
+                            "score": s.get("relevance_score", 0),
+                            "relevance": s.get("relevance_score", 0),
+                        }
+                        for s in result.get("sources_used", [])
+                    ],
+                    "source_usage": [],
+                    "next_recommended_steps": [],
+                    "needs_human_review": False,
+                }
+        except Exception as exc:
+            logger.warning("New RAG pipeline failed, falling back to old: %s", exc, exc_info=True)
+        # Fall through to old pipeline
+
     return run_fast_chat_turn_impl(
         context=context,
         user_id=user_id,

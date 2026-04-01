@@ -70,21 +70,25 @@ export function tryFocusHighlight({
     appliedHighlightKeyRef.current = appliedKey;
     return true;
   }
-  if (externalOverlayRects.length) {
-    applyOverlayRects(safePage, externalOverlayRects);
-    scrollToOverlayRect({
-      pageSurface,
-      page: safePage,
-      overlayRect: externalOverlayRects[0],
-    });
-    appliedHighlightKeyRef.current = appliedKey;
-    return true;
-  }
   if (!searchCandidates.length) {
+    if (externalOverlayRects.length) {
+      applyOverlayRects(safePage, externalOverlayRects);
+      scrollToOverlayRect({
+        pageSurface,
+        page: safePage,
+        overlayRect: externalOverlayRects[0],
+      });
+      appliedHighlightKeyRef.current = appliedKey;
+      return true;
+    }
     appliedHighlightKeyRef.current = appliedKey;
     return true;
   }
   const { segments, combined } = collectSpanSegments(pageSurface);
+  if (!segments.length) {
+    // Wait until the text layer is available so we can render line-precise highlights.
+    return false;
+  }
   const highlightRange =
     findRangeByCharOffsets(segments, charStart, charEnd) ||
     findHighlightRange({
@@ -97,6 +101,17 @@ export function tryFocusHighlight({
       candidates: searchCandidates,
     });
   if (!highlightRange) {
+    // If precise text matching fails, fall back to backend-provided geometry.
+    if (externalOverlayRects.length) {
+      applyOverlayRects(safePage, externalOverlayRects);
+      scrollToOverlayRect({
+        pageSurface,
+        page: safePage,
+        overlayRect: externalOverlayRects[0],
+      });
+      appliedHighlightKeyRef.current = appliedKey;
+      return true;
+    }
     return false;
   }
 

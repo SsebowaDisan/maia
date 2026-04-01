@@ -27,7 +27,7 @@ from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from api.models.user import User
-from api.services.auth.store import get_user
+from api.services.auth.store import get_user, list_all_active_users
 from api.services.auth.tokens import TokenError, decode_access_token
 
 # Optional — skip token auth for local dev / migration period
@@ -45,6 +45,27 @@ def _truthy_env(name: str, *, default: bool = False) -> bool:
 
 def _normalize(value: str | None) -> str | None:
     return value.strip() or None if value else None
+
+
+def _pick_active_dev_user() -> User | None:
+    """Return an active DB-backed user for dev fallback mode.
+
+    Preference order:
+    1) active super_admin
+    2) first active user
+    """
+    try:
+        users = list_all_active_users()
+    except Exception:
+        return None
+
+    for user in users:
+        if bool(user.is_active) and str(user.role or "").strip().lower() == "super_admin":
+            return user
+    for user in users:
+        if bool(user.is_active):
+            return user
+    return None
 
 
 # ── Core identity resolution ───────────────────────────────────────────────────
@@ -114,8 +135,11 @@ def get_current_user(
             # Try to load real user; if missing, synthesise a super_admin shell
             # so existing dev data continues to work without a login step.
             user = get_user(resolved)
-            if user:
+            if user and user.is_active:
                 return user
+            active_fallback = _pick_active_dev_user()
+            if active_fallback:
+                return active_fallback
             # Synthesise an in-memory user so callers don't need a DB record
             fallback = User(
                 id=resolved,
@@ -130,8 +154,11 @@ def get_current_user(
         dev_default = _normalize(os.getenv("MAIA_DEV_DEFAULT_USER_ID", "default"))
         if dev_default:
             user = get_user(dev_default)
-            if user:
+            if user and user.is_active:
                 return user
+            active_fallback = _pick_active_dev_user()
+            if active_fallback:
+                return active_fallback
             fallback = User(
                 id=dev_default,
                 email="dev@local",
@@ -157,6 +184,31 @@ def get_current_user_id(
     Drop-in replacement for the old header-only version so all existing
     routers continue to work without changes.
     """
+    return user.id
+
+
+def get_current_registered_user(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Require that the resolved identity exists as an active DB-backed user.
+
+    This blocks dev-only synthetic fallback identities for endpoints that must
+    be restricted to invited/registered accounts.
+    """
+    stored = get_user(str(user.id))
+    if not stored or not stored.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found. Please sign in with an invited account.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return stored
+
+
+def get_current_registered_user_id(
+    user: Annotated[User, Depends(get_current_registered_user)],
+) -> str:
+    """Return the user id for a DB-backed authenticated user."""
     return user.id
 
 

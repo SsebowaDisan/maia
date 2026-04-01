@@ -10,21 +10,28 @@ DELETE /api/users/{user_id}     Deactivate a user (cannot deactivate yourself)
 """
 from __future__ import annotations
 
+import os
+import secrets
+from datetime import datetime, timezone
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from api.auth import get_current_user, require_org_admin
 from api.models.user import User
+from api.services.auth.invite_delivery import send_invite_email
 from api.services.auth.passwords import hash_password
 from api.services.auth.store import (
     create_user,
     deactivate_user,
     get_user,
+    list_all_active_users,
     list_users_for_tenant,
     update_user,
 )
+from api.services.auth.tokens import create_invite_token, decode_invite_token
 from api.services.tenants.store import add_member
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -38,7 +45,8 @@ class InviteRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(default="", max_length=120)
     role: str = Field(default="org_user")
-    temporary_password: str = Field(..., min_length=8, max_length=128)
+    temporary_password: str | None = Field(default=None, min_length=8, max_length=128)
+    send_invite_email: bool = False
 
 
 class UpdateUserRequest(BaseModel):
@@ -64,6 +72,28 @@ class UserResponse(BaseModel):
             tenant_id=user.tenant_id,
             is_active=user.is_active,
         )
+
+
+class InviteResponse(BaseModel):
+    user: UserResponse
+    invite_link: str
+    invite_expires_at: str
+    email_sent: bool = False
+    email_error: str | None = None
+
+
+def _frontend_base_url() -> str:
+    raw = str(
+        os.getenv("MAIA_INVITE_LINK_BASE_URL")
+        or os.getenv("MAIA_FRONTEND_BASE_URL")
+        or "http://127.0.0.1:5173"
+    ).strip()
+    return raw.rstrip("/")
+
+
+def _build_invite_link(token: str) -> str:
+    base = _frontend_base_url()
+    return f"{base}/accept-invite?token={quote(token, safe='')}"
 
 
 # ── Guards ────────────────────────────────────────────────────────────────────
@@ -104,21 +134,19 @@ def list_users(
     if actor.role == "super_admin":
         # super_admin sees all — tenant_id filter skipped
         # For a cleaner UX, require a tenant_id query param in future
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="super_admin must list users per-tenant via /api/tenants/{id}/members.",
-        )
+        users = list_all_active_users()
+        return [UserResponse.from_user(u) for u in users]
     if not actor.tenant_id:
         return []
     users = list_users_for_tenant(actor.tenant_id)
     return [UserResponse.from_user(u) for u in users]
 
 
-@router.post("/invite", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/invite", response_model=InviteResponse, status_code=status.HTTP_201_CREATED)
 def invite_user(
     body: InviteRequest,
     actor: Annotated[User, Depends(require_org_admin)],
-) -> UserResponse:
+) -> InviteResponse:
     """Invite a new user into the calling admin's organisation.
 
     Assigns a temporary password — the user should change it on first login.
@@ -135,9 +163,13 @@ def invite_user(
         )
 
     tenant_id = actor.tenant_id  # new user joins the same org
+    temporary_password = str(body.temporary_password or "").strip()
+    if not temporary_password:
+        temporary_password = secrets.token_urlsafe(24)
+
     user = create_user(
         email=body.email,
-        hashed_password=hash_password(body.temporary_password),
+        hashed_password=hash_password(temporary_password),
         full_name=body.full_name,
         role=role,
         tenant_id=tenant_id,
@@ -150,7 +182,37 @@ def invite_user(
         except ValueError:
             pass  # tenant not found — tolerate silently
 
-    return UserResponse.from_user(user)
+    invite_token = create_invite_token(
+        user_id=user.id,
+        email=user.email,
+        role=user.role,
+        tenant_id=user.tenant_id,
+        invited_by=actor.id,
+        full_name=user.full_name,
+    )
+    payload = decode_invite_token(invite_token)
+    exp_raw = payload.get("exp")
+    exp_ts = int(exp_raw) if isinstance(exp_raw, (int, float)) else int(datetime.now(tz=timezone.utc).timestamp())
+    invite_expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
+    invite_link = _build_invite_link(invite_token)
+
+    email_sent = False
+    email_error: str | None = None
+    if body.send_invite_email:
+        email_sent, email_error = send_invite_email(
+            recipient=user.email,
+            invite_link=invite_link,
+            inviter_email=actor.email,
+            workspace_label="Maia",
+        )
+
+    return InviteResponse(
+        user=UserResponse.from_user(user),
+        invite_link=invite_link,
+        invite_expires_at=invite_expires_at,
+        email_sent=email_sent,
+        email_error=email_error,
+    )
 
 
 @router.get("/{user_id}", response_model=UserResponse)
