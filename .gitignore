@@ -499,3 +499,8 @@ tmp_*.txt
 # Node modules (root and nested workspaces)
 node_modules/
 **/node_modules/
+
+# Local runtime artifacts
+.maia_ingestion_jobs/
+maia.db
+test-spawn2.txt

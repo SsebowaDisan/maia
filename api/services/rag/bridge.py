@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+import json as _stdlib_json
 import logging
+import os
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -37,7 +39,7 @@ from api.services.rag.pipeline import (
 )
 from api.services.rag.types import (
     DeliveryPayload, SourceRecord, Citation, CitationTier,
-    IngestionStatus,
+    IngestionStatus, SourceType,
 )
 from api.services.rag.config import get_config
 
@@ -46,6 +48,99 @@ logger = logging.getLogger(__name__)
 _SOURCE_REGISTRY_LOCK = RLock()
 _SOURCE_REGISTRY: dict[str, SourceRecord] = {}
 _SOURCE_REGISTRY_ORDER: list[str] = []
+
+# ── Registry persistence ────────────────────────────────────────────────────
+
+_REGISTRY_FILE = os.environ.get(
+    "MAIA_RAG_REGISTRY_FILE",
+    str(
+        Path("D:/maia-data/rag_source_registry.json")
+        if Path("D:/").exists()
+        else Path("ktem_app_data/rag_source_registry.json")
+    ),
+)
+
+
+def _save_registry() -> None:
+    """Persist the source registry to disk (JSON)."""
+    try:
+        registry_path = Path(_REGISTRY_FILE)
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        with _SOURCE_REGISTRY_LOCK:
+            entries = []
+            for source_id in _SOURCE_REGISTRY_ORDER:
+                source = _SOURCE_REGISTRY.get(source_id)
+                if not source:
+                    continue
+                entries.append({
+                    "id": source.id,
+                    "filename": source.filename,
+                    "source_type": source.source_type.value if isinstance(source.source_type, SourceType) else str(source.source_type or ""),
+                    "group_id": source.group_id or "",
+                    "owner_id": source.owner_id or "",
+                    "upload_url": source.upload_url or "",
+                    "file_size": source.file_size or 0,
+                    "rag_ready": source.rag_ready,
+                    "citation_ready": source.citation_ready,
+                    "status": source.status.value if isinstance(source.status, IngestionStatus) else str(source.status or ""),
+                    "created_at": source.created_at or "",
+                    "updated_at": source.updated_at or "",
+                    "metadata": source.metadata if isinstance(source.metadata, dict) else {},
+                })
+        registry_path.write_text(_stdlib_json.dumps(entries, indent=2, default=str), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to save source registry: %s", exc)
+
+
+def _load_registry() -> None:
+    """Load the source registry from disk on startup."""
+    registry_path = Path(_REGISTRY_FILE)
+    if not registry_path.exists():
+        return
+    try:
+        raw = _stdlib_json.loads(registry_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return
+        count = 0
+        for entry in raw:
+            if not isinstance(entry, dict) or not entry.get("id"):
+                continue
+            try:
+                st = SourceType(entry.get("source_type", "unknown"))
+            except (ValueError, KeyError):
+                st = SourceType.UNKNOWN
+            try:
+                status = IngestionStatus(entry.get("status", "rag_ready"))
+            except (ValueError, KeyError):
+                status = IngestionStatus.RAG_READY
+            source = SourceRecord(
+                id=entry["id"],
+                filename=entry.get("filename", ""),
+                source_type=st,
+                group_id=entry.get("group_id", ""),
+                owner_id=entry.get("owner_id", ""),
+                upload_url=entry.get("upload_url", ""),
+                file_size=entry.get("file_size", 0),
+                rag_ready=entry.get("rag_ready", False),
+                citation_ready=entry.get("citation_ready", False),
+                status=status,
+                created_at=entry.get("created_at", ""),
+                updated_at=entry.get("updated_at", ""),
+                metadata=entry.get("metadata", {}),
+            )
+            with _SOURCE_REGISTRY_LOCK:
+                sid = str(source.id).strip()
+                _SOURCE_REGISTRY[sid] = source
+                if sid not in _SOURCE_REGISTRY_ORDER:
+                    _SOURCE_REGISTRY_ORDER.append(sid)
+            count += 1
+        logger.info("Loaded %d sources from registry file", count)
+    except Exception as exc:
+        logger.warning("Failed to load source registry: %s", exc)
+
+
+# Load on import
+_load_registry()
 
 
 def _source_scope(source: SourceRecord) -> str:
@@ -81,9 +176,10 @@ def _register_source(source: SourceRecord) -> None:
             return
         if source_id in _SOURCE_REGISTRY:
             _SOURCE_REGISTRY[source_id] = safe_source
-            return
-        _SOURCE_REGISTRY[source_id] = safe_source
-        _SOURCE_REGISTRY_ORDER.append(source_id)
+        else:
+            _SOURCE_REGISTRY[source_id] = safe_source
+            _SOURCE_REGISTRY_ORDER.append(source_id)
+    _save_registry()
 
 
 def list_registered_sources(
