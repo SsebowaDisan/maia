@@ -26,10 +26,9 @@ import {
   syncFallbackProject,
 } from "./useConversationChatSections/actions";
 import {
-  deriveInitialSelectedTurnIndex,
   getInitialConversationCache,
-  readStoredJson,
   readStoredMindmapSettings,
+  readStoredJson,
   storageScopeForUser,
   stripTurnActivityForCache,
   type CachedConversationSnapshot,
@@ -49,22 +48,18 @@ export function useConversationChat({
   const userStorageScope = storageScopeForUser(ACTIVE_USER_ID);
   const mindmapSettingsStorageKey = `${MINDMAP_SETTINGS_STORAGE_KEY}:${userStorageScope}`;
   const {
-    cachedConversationId,
     conversationsCacheStorageKey,
     conversationDetailCacheStorageKey,
-    initialCachedSnapshot,
     lastConversationStorageKey,
   } = getInitialConversationCache(userStorageScope);
 
   const [conversations, setConversations] = useState<ConversationSummary[]>(() =>
     readStoredJson<ConversationSummary[]>(conversationsCacheStorageKey, []),
   );
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(cachedConversationId);
-  const [chatTurns, setChatTurns] = useState<ChatTurn[]>(() => initialCachedSnapshot?.turns || []);
-  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(() =>
-    deriveInitialSelectedTurnIndex(initialCachedSnapshot),
-  );
-  const [infoText, setInfoText] = useState(() => initialCachedSnapshot?.infoText || "");
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(null);
+  const [infoText, setInfoText] = useState("");
   const [citationMode, setCitationMode] = useState("inline");
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
   const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
@@ -74,7 +69,7 @@ export function useConversationChat({
     Record<string, ConversationMindmapSettings>
   >(() => readStoredMindmapSettings(mindmapSettingsStorageKey, MINDMAP_SETTINGS_STORAGE_KEY));
   const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
-  const [composerMode, setComposerMode] = useState<AgentMode>(() => initialCachedSnapshot?.composerMode || "ask");
+  const [composerMode, setComposerMode] = useState<AgentMode>("ask");
   const [accessMode, setAccessMode] = useState<AccessMode>("restricted");
   const [activityEvents, setActivityEvents] = useState<AgentActivityEvent[]>([]);
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
@@ -333,19 +328,13 @@ export function useConversationChat({
     hydrateInitialConversation({
       selectedConversationId,
       initialConversationHydrated,
-      conversationsLength: conversations.length,
-      visibleConversations,
-      lastConversationStorageKey,
       handleSelectConversation,
       setInitialConversationHydrated,
     });
   }, [
-    conversations.length,
     handleSelectConversation,
     initialConversationHydrated,
-    lastConversationStorageKey,
     selectedConversationId,
-    visibleConversations,
   ]);
 
   const handleUpdateUserTurn = useCallback((turnIndex: number, message: string) => {

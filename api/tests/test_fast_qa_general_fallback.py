@@ -101,3 +101,49 @@ def test_run_fast_chat_turn_falls_back_to_llm_without_indexed_snippets(monkeypat
     assert isinstance(info_panel, dict)
     assert info_panel.get("answer_origin") == "llm_general_knowledge"
     assert info_panel.get("verification_contract_version") == VERIFICATION_CONTRACT_VERSION
+
+
+def test_run_fast_chat_turn_rag_sets_rag_mode_metadata(monkeypatch) -> None:
+    monkeypatch.setattr("api.services.chat.fast_qa._USE_NEW_RAG", True)
+    monkeypatch.setattr(
+        "api.services.chat.fast_qa.get_or_create_conversation",
+        lambda user_id, conversation_id: ("conv-2", "Library chat", {}, "spark"),
+    )
+    monkeypatch.setattr(
+        "api.services.chat.fast_qa.maybe_autoname_conversation",
+        lambda **kwargs: ("Library chat", "spark"),
+    )
+    monkeypatch.setattr("api.services.chat.fast_qa.persist_conversation", lambda *args, **kwargs: None)
+
+    async def _fake_bridge(**kwargs):
+        return {
+            "answer_text": "The PDF discusses refinery process flow [1].",
+            "answer_html": "The PDF discusses refinery process flow [1].",
+            "sources_used": [
+                {
+                    "source_id": "src-1",
+                    "source_name": "20409.pdf",
+                    "source_type": "pdf",
+                    "relevance_score": 0.92,
+                }
+            ],
+            "info_panel": {"evidence_items": []},
+            "info_html": "",
+        }
+
+    monkeypatch.setattr("api.services.rag.bridge.run_rag_query_bridge", _fake_bridge)
+
+    result = run_fast_chat_turn(
+        context=None,
+        user_id="user-1",
+        request=ChatRequest(
+            message="what is the pdf about",
+            agent_mode="rag",
+            attachments=[{"name": "20409.pdf", "file_id": "src-1"}],
+        ),
+    )
+
+    assert result is not None
+    assert result.get("mode") == "rag"
+    assert result.get("mode_requested") == "rag"
+    assert result.get("mode_actually_used") == "rag"

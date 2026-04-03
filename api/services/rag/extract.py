@@ -412,26 +412,114 @@ def _extract_pdf_native(file_data: bytes, source_id: str) -> ExtractionResult:
 def _extract_pdf_ocr(
     file_data: bytes, source_id: str, scientific: bool = False,
 ) -> ExtractionResult:
-    """Extract text from scanned/image PDFs using Docling.
+    """Extract text from scanned/image PDFs using OpenAI vision API.
 
-    Docling handles: OCR, layout analysis, tables, formulas, figures, reading order.
-    Falls back to PyMuPDF native text if Docling is not installed.
+    Renders each page as an image and sends to gpt-4o for text extraction.
+    Falls back to PyMuPDF native text if the API fails.
     """
-    # Try Docling first
     try:
-        return _extract_with_docling(file_data, source_id)
-    except ImportError:
-        import logging
-        logging.getLogger(__name__).warning(
-            "Docling not installed — falling back to PyMuPDF native text. "
-            "Install with: pip install docling"
-        )
+        return _extract_with_openai_vision(file_data, source_id)
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("Docling extraction failed: %s — falling back to PyMuPDF", exc)
+        _logger.warning("OpenAI vision OCR failed: %s — falling back to PyMuPDF", exc)
 
-    # Fallback: PyMuPDF native text (works for PDFs with embedded text layer)
     return _extract_pdf_native_fallback(file_data, source_id)
+
+
+def _extract_with_openai_vision(file_data: bytes, source_id: str) -> ExtractionResult:
+    """Render PDF pages as images, send to gpt-4o vision for text extraction."""
+    import fitz
+    import base64
+    import httpx
+
+    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+    vision_model = os.environ.get("MAIA_RAG_VISION_MODEL", "gpt-4o")
+    if not api_key:
+        raise RuntimeError("No API key for vision OCR")
+
+    doc = fitz.open(stream=file_data, filetype="pdf")
+    max_pages = int(os.environ.get("MAIA_RAG_MAX_EXTRACT_PAGES", "0")) or doc.page_count
+    pages_to_process = min(max_pages, doc.page_count)
+
+    pages: list[PageExtraction] = []
+    full_parts: list[str] = []
+    char_cursor = 0
+
+    for page_idx in range(pages_to_process):
+        page = doc[page_idx]
+        page_rect = page.rect
+        page_width = page_rect.width or 595
+        page_height = page_rect.height or 842
+
+        # Render page to image
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        # Send to OpenAI vision
+        try:
+            resp = httpx.post(
+                os.environ.get("MAIA_RAG_LLM_BASE_URL", "https://api.openai.com/v1") + "/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": vision_model,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Extract ALL text from this PDF page. Preserve the structure: headings, paragraphs, tables, formulas. Output the text exactly as it appears. Do not summarise."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "high"}},
+                        ],
+                    }],
+                    "max_tokens": 4096,
+                },
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                page_text = resp.json()["choices"][0]["message"]["content"]
+            else:
+                _logger.warning("Vision OCR page %d failed: HTTP %d", page_idx, resp.status_code)
+                page_text = page.get_text("text") or ""
+        except Exception as exc:
+            _logger.warning("Vision OCR page %d failed: %s", page_idx, exc)
+            page_text = page.get_text("text") or ""
+
+        # Build spans
+        page_spans = []
+        lines = [ln for ln in page_text.split("\n") if ln.strip()]
+        line_height = page_height / max(len(lines), 1)
+        for i, line in enumerate(lines):
+            span = EvidenceSpan(
+                text=line,
+                source_id=source_id,
+                page=page_idx,
+                char_start=char_cursor,
+                char_end=char_cursor + len(line),
+                bbox=BoundingBox(
+                    x=50, y=i * line_height,
+                    width=page_width - 100, height=line_height,
+                    page=page_idx, page_width=page_width, page_height=page_height,
+                ),
+            )
+            page_spans.append(span)
+            char_cursor += len(line) + 1
+
+        full_parts.append(page_text)
+        pages.append(PageExtraction(
+            page_number=page_idx,
+            text=page_text,
+            char_offset=char_cursor - len(page_text),
+            spans=page_spans,
+        ))
+
+    doc.close()
+    full_text = "\n".join(full_parts)
+
+    return ExtractionResult(
+        source_id=source_id,
+        full_text=full_text,
+        pages=pages,
+        extraction_method="openai_vision",
+        warnings=[f"Extracted {pages_to_process} pages via OpenAI vision ({vision_model})"] if pages_to_process < doc.page_count else [],
+    )
 
 
 def _extract_with_docling(file_data: bytes, source_id: str) -> ExtractionResult:

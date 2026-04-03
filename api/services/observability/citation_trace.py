@@ -120,12 +120,25 @@ def emit_trace_log(*, level: int = logging.INFO) -> None:
     logger.log(level, "citation_trace %s", json.dumps(trace, default=str))
 
 
+def _safe_reset(var: contextvars.ContextVar[Any], token: contextvars.Token) -> None:
+    """Best-effort contextvar reset.
+
+    Streaming responses can finalize in a different execution context than the
+    one where the trace started. In that case ContextVar.reset(token) raises,
+    and we should not let observability teardown crash the request.
+    """
+    try:
+        var.reset(token)
+    except (ValueError, RuntimeError):
+        logger.debug("Skipped citation trace context reset due to context mismatch.")
+
+
 def end_trace(handle: TraceHandle, *, emit_log: bool = True, level: int = logging.INFO) -> None:
     try:
         record_trace_event("trace.completed", {"event_count": len(_trace_events_var.get(None) or [])})
         if emit_log:
             emit_trace_log(level=level)
     finally:
-        _trace_meta_var.reset(handle._meta_token)
-        _trace_events_var.reset(handle._events_token)
-        _trace_id_var.reset(handle._trace_token)
+        _safe_reset(_trace_meta_var, handle._meta_token)
+        _safe_reset(_trace_events_var, handle._events_token)
+        _safe_reset(_trace_id_var, handle._trace_token)

@@ -107,6 +107,7 @@ def list_indexed_files(*, context, user_id: str, include_chat_temp: bool = False
                 id=str(source.id or ""),
                 name=str(source.filename or source.id or "Indexed file"),
                 size=int(source.file_size or 0),
+                token_count=int(metadata.get("token_count") or 0) or None,
                 scope=scope,
                 rag_ready=bool(source.rag_ready),
                 citation_ready=bool(source.citation_ready),

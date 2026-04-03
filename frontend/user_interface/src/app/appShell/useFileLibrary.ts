@@ -78,11 +78,15 @@ export function useFileLibrary() {
 
   const refreshFileCount = useCallback(async () => {
     const filesPayload = await listFiles();
+    const normalizedIndexId =
+      typeof filesPayload.index_id === "number" && filesPayload.index_id > 0
+        ? filesPayload.index_id
+        : null;
     setFileCount(filesPayload.files.length);
     setIndexedFiles(filesPayload.files);
-    setDefaultIndexId(filesPayload.index_id);
+    setDefaultIndexId(normalizedIndexId);
     try {
-      const groupsPayload = await listFileGroups({ indexId: filesPayload.index_id });
+      const groupsPayload = await listFileGroups({ indexId: normalizedIndexId ?? undefined });
       setFileGroups(groupsPayload.groups);
     } catch {
       setFileGroups([]);

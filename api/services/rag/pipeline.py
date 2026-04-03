@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,13 @@ async def ingest_file(
     source.status = IngestionStatus.NORMALIZING
     with StageTimer(trace_id, "normalize", source.id):
         normalized = await phase_normalize.normalize_document(extraction)
+
+    # Count tokens (approx: chars / 4) and store in metadata
+    total_text = " ".join(p.text for p in normalized.pages) if hasattr(normalized, "pages") else ""
+    token_count = len(total_text) // 4
+    meta = source.metadata if isinstance(source.metadata, dict) else {}
+    meta["token_count"] = token_count
+    source = replace(source, metadata=meta)
 
     # Phase 5: Chunk
     source.status = IngestionStatus.CHUNKING
@@ -212,6 +220,13 @@ async def ingest_chat_upload(
     with StageTimer(trace_id, "normalize", source.id):
         normalized = await phase_normalize.normalize_document(extraction)
 
+    # Count tokens
+    total_text = " ".join(p.text for p in normalized.pages) if hasattr(normalized, "pages") else ""
+    token_count = len(total_text) // 4
+    meta = source.metadata if isinstance(source.metadata, dict) else {}
+    meta["token_count"] = token_count
+    source = replace(source, metadata=meta)
+
     source.status = IngestionStatus.CHUNKING
     with StageTimer(trace_id, "chunk", source.id):
         chunks = await phase_chunk.chunk_document(normalized, source, cfg)
@@ -265,13 +280,13 @@ async def query_group(
     group_id: str,
     owner_id: str = "",
     config: RAGConfig | None = None,
+    web_context: str = "",
 ) -> DeliveryPayload:
     """Query against all files in a group. Returns answer with highlighted citations."""
     cfg = config or get_config()
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
     scope = phase_retrieve.RetrievalScope(group_id=group_id, owner_id=owner_id)
-
-    return await _run_query(question, scope, f"group:{group_id}", cfg, trace_id)
+    return await _run_query(question, scope, f"group:{group_id}", cfg, trace_id, web_context=web_context)
 
 
 async def query_file(
@@ -279,13 +294,13 @@ async def query_file(
     source_id: str,
     owner_id: str = "",
     config: RAGConfig | None = None,
+    web_context: str = "",
 ) -> DeliveryPayload:
     """Query against a single file. Returns answer with highlighted citations."""
     cfg = config or get_config()
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
     scope = phase_retrieve.RetrievalScope(source_ids=[source_id], owner_id=owner_id)
-
-    return await _run_query(question, scope, f"file:{source_id}", cfg, trace_id)
+    return await _run_query(question, scope, f"file:{source_id}", cfg, trace_id, web_context=web_context)
 
 
 async def query_sources(
@@ -293,13 +308,13 @@ async def query_sources(
     source_ids: list[str],
     owner_id: str = "",
     config: RAGConfig | None = None,
+    web_context: str = "",
 ) -> DeliveryPayload:
     """Query against specific files. Returns answer with highlighted citations."""
     cfg = config or get_config()
     trace_id = f"trace_{uuid.uuid4().hex[:12]}"
     scope = phase_retrieve.RetrievalScope(source_ids=source_ids, owner_id=owner_id)
-
-    return await _run_query(question, scope, f"sources:{len(source_ids)} files", cfg, trace_id)
+    return await _run_query(question, scope, f"sources:{len(source_ids)} files", cfg, trace_id, web_context=web_context)
 
 
 async def _run_query(
@@ -308,15 +323,21 @@ async def _run_query(
     scope_description: str,
     config: RAGConfig,
     trace_id: str,
+    web_context: str = "",
 ) -> DeliveryPayload:
-    """Internal: run the full query pipeline."""
+    """Internal: run the full query pipeline.
+
+    Args:
+        web_context: Optional web search results to include in the answer
+                     (from gpt-4o-search-preview for deep search mode).
+    """
 
     # Phase 9: Retrieve
     with StageTimer(trace_id, "retrieve", ""):
         retrieved = await phase_retrieve.retrieve(question, config, scope)
 
-    if not retrieved:
-        # No evidence found
+    if not retrieved and not web_context:
+        # No evidence found from PDFs or web
         from api.services.rag.types import (
             GeneratedAnswer, CoverageResult, CoverageVerdict,
         )
@@ -328,16 +349,21 @@ async def _run_query(
         return await phase_deliver.deliver(empty_answer, [], [], scope_description, trace_id)
 
     # Phase 10: Rerank
-    with StageTimer(trace_id, "rerank", ""):
-        ranked = await phase_rerank.rerank(retrieved, question, config)
+    ranked = []
+    if retrieved:
+        with StageTimer(trace_id, "rerank", ""):
+            ranked = await phase_rerank.rerank(retrieved, question, config)
 
     # Phase 11: Coverage Check
     with StageTimer(trace_id, "coverage", ""):
         coverage_result = await phase_coverage.check_coverage(question, ranked, config)
 
-    # Phase 12: Answer
+    # Phase 12: Answer (includes web context for deep search)
     with StageTimer(trace_id, "answer", ""):
-        answer = await phase_answer.generate_answer(question, ranked, coverage_result, config)
+        answer = await phase_answer.generate_answer(
+            question, ranked, coverage_result, config,
+            web_context=web_context,
+        )
 
     # Phase 13: Citations
     with StageTimer(trace_id, "citations", ""):

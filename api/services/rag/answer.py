@@ -192,8 +192,15 @@ async def _call_llm_with_page_images(
 
 
 _SYSTEM_STRICT = """\
-You are a research assistant. You MUST answer ONLY from the evidence blocks below. \
-Do NOT use your own knowledge. If information is not in the evidence, say "not found in the provided documents".
+You are Maia, an AI research assistant created by Disan Ssebowa Basalidde at Axon Group. \
+You MUST answer ONLY from the evidence blocks below. \
+Do NOT use your own knowledge. If information is not in the evidence, say "not found in the provided documents". \
+If asked about your identity or creator, you are Maia by Disan Ssebowa Basalidde / Axon Group. \
+LANGUAGE RULE (CRITICAL): ALWAYS write your answer in the SAME language as the user's question. \
+The documents/evidence may be in a DIFFERENT language — that does NOT matter. \
+You MUST translate the evidence into the user's language. \
+Example: if the user asks in French but the PDF is in English, your entire answer MUST be in French. \
+Only keep citation markers [1][2] and highly technical terms in their original form.
 
 === CITATION FORMAT (YOU MUST FOLLOW THIS EXACTLY) ===
 
@@ -222,8 +229,15 @@ This is BAD because: no citations, vague language, missing numbers.
 9. Never fabricate information not in the evidence."""
 
 _SYSTEM_RELAXED = """\
-You are a research assistant. Answer primarily from the evidence blocks below. \
-You may add brief context from general knowledge, but mark it clearly as "(general knowledge)".
+You are Maia, an AI research assistant created by Disan Ssebowa Basalidde at Axon Group. \
+Answer primarily from the evidence blocks below. \
+You may add brief context from general knowledge, but mark it clearly as "(general knowledge)". \
+If asked about your identity or creator, you are Maia by Disan Ssebowa Basalidde / Axon Group. \
+LANGUAGE RULE (CRITICAL): ALWAYS write your answer in the SAME language as the user's question. \
+The documents/evidence may be in a DIFFERENT language — that does NOT matter. \
+You MUST translate the evidence into the user's language. \
+Example: if the user asks in French but the PDF is in English, your entire answer MUST be in French. \
+Only keep citation markers [1][2] and highly technical terms in their original form.
 
 === CITATION FORMAT (YOU MUST FOLLOW THIS EXACTLY) ===
 
@@ -251,12 +265,50 @@ This is BAD because: no citations at all.
 8. If evidence is insufficient, state what is missing."""
 
 _MATH_INSTRUCTION = """
-The user is asking for a calculation. From the evidence:
-1. State the relevant formula with its source citation.
-2. List each variable value with its source citation.
-3. Show the substitution step by step.
-4. Compute the final result.
-5. Cite the source of every value used."""
+The user is asking for a calculation. You MUST follow this exact structure:
+
+## Formula
+State the relevant formula with its source citation [N].
+
+## Variables
+List EVERY variable value from the evidence. For each variable:
+- Name = value (unit) [citation]
+
+## Calculation
+Show the step-by-step substitution:
+1. Write the formula
+2. Substitute each variable
+3. Show intermediate steps
+4. State the final result with units
+
+## Verification code
+After your answer, output a Python code block (fenced with ```python) that computes the same result.
+Available libraries: math, numpy (as np), scipy (integrate, optimize, stats), sympy (solve, diff, Integral, Matrix, symbols).
+The code must:
+- Define each variable with a comment showing the unit
+- Compute the result step by step
+- Print the final answer with units
+- For complex problems, use numpy/scipy/sympy as needed
+
+Simple example:
+```python
+n = 2       # moles
+R = 8.314   # J/(mol·K)
+T = 300     # K
+V = 0.1     # m³
+P = n * R * T / V
+print(f"Result: P = {P:.2f} Pa")
+```
+
+Complex example (solving equations):
+```python
+from sympy import symbols, solve, Eq
+x = symbols('x')
+solution = solve(Eq(2*x + 5, 15), x)
+print(f"Result: x = {solution[0]}")
+```
+
+IMPORTANT: Cite the source of every value used [N]."""
 
 _CONFLICT_INSTRUCTION = """
 The evidence contains conflicting information. You must:
@@ -298,6 +350,159 @@ def _extract_highlight_map(answer_text: str) -> tuple[dict, str]:
         logger.info("Extracted highlight_map with %d citations", len(highlight_map))
 
     return highlight_map, clean_text
+
+
+def _extract_and_run_verification(answer_text: str) -> tuple[str, str]:
+    """Extract Python verification code from the answer, execute it safely, return result.
+
+    Returns (clean_answer_text, verification_output).
+    If no Python code found or execution fails, returns (answer_text, "").
+    """
+    pattern = re.compile(r'```python\s*\n(.*?)\n\s*```', re.DOTALL)
+    match = pattern.search(answer_text)
+    if not match:
+        return answer_text, ""
+
+    code = match.group(1).strip()
+    # Strip the code block from the answer
+    clean_text = answer_text[:match.start()].rstrip() + answer_text[match.end():]
+    clean_text = clean_text.strip()
+
+    # Safety: block shell access and dangerous operations
+    _BLOCKED = {"exec(", "eval(", "open(", "subprocess",
+                "globals(", "locals(", "compile(", "getattr(", "setattr(", "delattr(",
+                "breakpoint", "exit(", "quit("}
+    _SAFE_IMPORTS = {"math", "numpy", "scipy", "sympy", "statistics", "fractions", "decimal", "cmath"}
+
+    # Check for blocked patterns
+    code_lower = code.lower()
+    for blocked in _BLOCKED:
+        if blocked in code_lower:
+            # But allow "os." only if it's inside a safe context like "from scipy..."
+            if blocked == "os." and "from " in code_lower:
+                continue
+            logger.warning("Verification code blocked (contains '%s')", blocked)
+            return clean_text, ""
+
+    # Execute in a sandbox with scientific libraries available
+    try:
+        import io
+        import contextlib
+        import math
+        output = io.StringIO()
+
+        # Safe import function — only allows whitelisted modules
+        def _safe_import(name, *args, **kwargs):
+            base_module = name.split(".")[0]
+            if base_module in _SAFE_IMPORTS:
+                return __import__(name, *args, **kwargs)
+            raise ImportError(f"Import of '{name}' is not allowed in verification sandbox")
+
+        safe_globals: dict = {
+            "__builtins__": {
+                "__import__": _safe_import,
+                "print": print, "abs": abs, "round": round, "min": min, "max": max,
+                "sum": sum, "pow": pow, "len": len, "range": range, "enumerate": enumerate,
+                "zip": zip, "map": map, "filter": filter, "sorted": sorted, "reversed": reversed,
+                "float": float, "int": int, "str": str, "bool": bool, "list": list,
+                "dict": dict, "tuple": tuple, "set": set, "type": type,
+                "isinstance": isinstance, "format": format,
+                "True": True, "False": False, "None": None,
+            },
+            "math": math,
+            "pi": math.pi,
+            "e": math.e,
+            "sqrt": math.sqrt,
+            "log": math.log,
+            "log10": math.log10,
+            "exp": math.exp,
+            "sin": math.sin, "cos": math.cos, "tan": math.tan,
+            "asin": math.asin, "acos": math.acos, "atan": math.atan, "atan2": math.atan2,
+            "radians": math.radians, "degrees": math.degrees,
+            "ceil": math.ceil, "floor": math.floor,
+            "factorial": math.factorial,
+            "inf": math.inf, "nan": math.nan,
+        }
+
+        # Add numpy if available (matrices, arrays, statistics)
+        try:
+            import numpy as np
+            safe_globals["np"] = np
+            safe_globals["numpy"] = np
+            safe_globals["array"] = np.array
+            safe_globals["linspace"] = np.linspace
+            safe_globals["arange"] = np.arange
+        except ImportError:
+            pass
+
+        # Add scipy if available (integrals, ODE, optimisation)
+        try:
+            import scipy
+            safe_globals["scipy"] = scipy
+            from scipy import integrate, optimize, interpolate, stats
+            safe_globals["integrate"] = integrate
+            safe_globals["optimize"] = optimize
+            safe_globals["interpolate"] = interpolate
+            safe_globals["stats"] = stats
+        except ImportError:
+            pass
+
+        # Add sympy if available (symbolic algebra, calculus, equation solving)
+        try:
+            import sympy
+            safe_globals["sympy"] = sympy
+            safe_globals["symbols"] = sympy.symbols
+            safe_globals["Symbol"] = sympy.Symbol
+            safe_globals["solve"] = sympy.solve
+            safe_globals["simplify"] = sympy.simplify
+            safe_globals["expand"] = sympy.expand
+            safe_globals["factor"] = sympy.factor
+            safe_globals["diff"] = sympy.diff
+            safe_globals["Integral"] = sympy.Integral
+            safe_globals["Eq"] = sympy.Eq
+            safe_globals["Rational"] = sympy.Rational
+            safe_globals["Matrix"] = sympy.Matrix
+            safe_globals["pi_sym"] = sympy.pi
+        except ImportError:
+            pass
+
+        # Time-limited execution (10 second max)
+        import signal
+        class TimeoutError(Exception):
+            pass
+
+        # On Windows, signal.alarm isn't available — use threading timeout
+        import threading
+        exec_result = {"output": "", "error": None}
+
+        def _run_code():
+            try:
+                with contextlib.redirect_stdout(output):
+                    exec(code, safe_globals)
+                exec_result["output"] = output.getvalue().strip()
+            except Exception as exc:
+                exec_result["error"] = exc
+
+        thread = threading.Thread(target=_run_code, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+
+        if thread.is_alive():
+            logger.warning("Math verification timed out (>10s)")
+            return clean_text, ""
+
+        if exec_result["error"]:
+            logger.warning("Math verification failed: %s", exec_result["error"])
+            return clean_text, ""
+
+        result = exec_result["output"]
+        if result:
+            logger.info("Math verification succeeded: %s", result[:200])
+            return clean_text, result
+        return clean_text, ""
+    except Exception as exc:
+        logger.warning("Math verification setup failed: %s", exc)
+        return clean_text, ""
 
 
 def _build_evidence_context(evidence: list[RankedEvidence]) -> str:
@@ -384,9 +589,9 @@ async def _call_llm(
     max_tokens: int | None = None,
 ) -> str:
     """Call OpenAI chat completion API."""
-    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        logger.warning("No API key set (OPENAI_API_KEY or GROQ_API_KEY); returning placeholder answer")
+        logger.warning("No API key set (MAIA_RAG_API_KEY or OPENAI_API_KEY); returning placeholder answer")
         return (
             "I cannot generate an answer because the API key is not configured. "
             "The evidence has been retrieved and ranked successfully."
@@ -500,6 +705,7 @@ async def generate_answer(
     evidence: list[RankedEvidence],
     coverage: CoverageResult,
     config: RAGConfig,
+    web_context: str = "",
 ) -> GeneratedAnswer:
     """Phase 12: Generate a grounded answer from ranked evidence.
 
@@ -530,6 +736,8 @@ async def generate_answer(
     # Build prompts
     system_prompt = _build_system_prompt(coverage, config)
     evidence_context = _build_evidence_context(evidence)
+    if web_context:
+        evidence_context += f"\n\n---\n\n## Web research results\n\n{web_context}\n\n(Cite web sources with their URLs in markdown link format: [title](url))"
     user_prompt = _build_user_prompt(query, evidence_context)
 
     # Route math questions to the math model (o4-mini), everything else to cheap model
@@ -574,12 +782,19 @@ async def generate_answer(
     highlight_map, clean_text = _extract_highlight_map(answer_text)
     answer_text = clean_text
 
+    # Extract and execute Python verification code if present (math questions)
+    answer_text, verification_result = _extract_and_run_verification(answer_text)
+
+    # If verification produced a result, append it to the answer
+    if verification_result:
+        answer_text += f"\n\n---\n**Computation verified** ✓ `{verification_result}`"
+
     # Parse response into claims
     claims = _parse_claims(answer_text, evidence)
 
     # Check grounding
     grounded = _check_grounding(claims)
-    has_calcs = any(c.is_calculation for c in claims)
+    has_calcs = any(c.is_calculation for c in claims) or bool(verification_result)
 
     result = GeneratedAnswer(
         text=answer_text,

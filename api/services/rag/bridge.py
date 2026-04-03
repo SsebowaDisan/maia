@@ -1,4 +1,4 @@
-﻿"""RAG Bridge â€” adapts the new clean pipeline to the old app interface.
+﻿"""RAG Bridge â€" adapts the new clean pipeline to the old app interface.
 
 This module lets the app use the new RAG pipeline without rewriting every
 callback and router at once. It wraps pipeline.query_* in the shape that
@@ -49,7 +49,7 @@ _SOURCE_REGISTRY_LOCK = RLock()
 _SOURCE_REGISTRY: dict[str, SourceRecord] = {}
 _SOURCE_REGISTRY_ORDER: list[str] = []
 
-# â”€â”€ Registry persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Registry persistence â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _REGISTRY_FILE = os.environ.get(
     "MAIA_RAG_REGISTRY_FILE",
@@ -197,6 +197,32 @@ def _sanitize_source_for_registry(source: SourceRecord) -> SourceRecord:
     return replace(source, metadata=sanitized)
 
 
+def delete_registered_sources(source_ids: list[str]) -> list[str]:
+    """Delete sources from the registry by ID. Returns list of deleted IDs."""
+    deleted = []
+    with _SOURCE_REGISTRY_LOCK:
+        for sid in source_ids:
+            sid = str(sid or "").strip()
+            if sid in _SOURCE_REGISTRY:
+                # Delete the file from disk if it exists
+                source = _SOURCE_REGISTRY[sid]
+                file_path = str(source.upload_url or "").strip()
+                if file_path and not file_path.startswith(("http://", "https://")):
+                    try:
+                        p = Path(file_path)
+                        if p.exists() and p.is_file():
+                            p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                del _SOURCE_REGISTRY[sid]
+                if sid in _SOURCE_REGISTRY_ORDER:
+                    _SOURCE_REGISTRY_ORDER.remove(sid)
+                deleted.append(sid)
+    if deleted:
+        _save_registry()
+    return deleted
+
+
 def _register_source(source: SourceRecord) -> None:
     safe_source = _sanitize_source_for_registry(source)
     with _SOURCE_REGISTRY_LOCK:
@@ -229,7 +255,7 @@ def list_registered_sources(
     selected: list[SourceRecord] = []
     for source in rows:
         source_scope = _source_scope(source)
-        # Library files are shared â€” visible to all users regardless of owner
+        # Library files are shared â€" visible to all users regardless of owner
         if source_scope != "library":
             if normalized_owner and source.owner_id and source.owner_id != normalized_owner:
                 continue
@@ -280,7 +306,7 @@ def resolve_registered_source_path(
     return path, filename
 
 
-# â”€â”€ Registry public helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Registry public helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def get_registered_source(source_id: str) -> SourceRecord | None:
     """Return a single source by ID, or None if not found."""
@@ -318,7 +344,7 @@ def list_flagged_sources() -> list[SourceRecord]:
     return [s for s in rows if s.flagged]
 
 
-# â”€â”€ Query Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Query Bridge â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 async def run_rag_query_bridge(
     question: str,
@@ -340,24 +366,35 @@ async def run_rag_query_bridge(
         "trace_id": str,
     }
     """
-    cfg = get_config(config_overrides)
+    # Extract web context before passing to config (not a real config key)
+    overrides = dict(config_overrides or {})
+    web_context = str(overrides.pop("web_context", "") or "")
+    web_citations = overrides.pop("web_citations", [])
+    cfg = get_config(overrides if overrides else None)
 
     # Normalize source_ids to strings
     str_source_ids = [str(s) for s in source_ids] if source_ids else []
+    normalized_owner = str(owner_id or "").strip()
+    accessible_source_ids = set(_accessible_source_ids_for_owner(normalized_owner)) if normalized_owner else set()
 
     # Route to the right query function
     try:
         if group_id:
-            payload = await query_group(question, group_id, owner_id, cfg)
+            payload = await query_group(question, group_id, normalized_owner, cfg, web_context=web_context)
         elif str_source_ids:
+            if accessible_source_ids:
+                str_source_ids = [sid for sid in str_source_ids if sid in accessible_source_ids]
+                if not str_source_ids:
+                    return _empty_result("No accessible indexed sources were selected for this question.")
+
+            # Source-scoped queries should not additionally filter by owner_id;
+            # otherwise shared-library documents become invisible.
             if len(str_source_ids) == 1:
-                payload = await query_file(question, str_source_ids[0], owner_id, cfg)
+                payload = await query_file(question, str_source_ids[0], "", cfg, web_context=web_context)
             else:
-                payload = await query_sources(question, str_source_ids, owner_id, cfg)
+                payload = await query_sources(question, str_source_ids, "", cfg, web_context=web_context)
         else:
-            # No specific scope â€” search all documents for this user
-            from api.services.rag.retrieve import RetrievalScope
-            payload = await _run_query_unscoped(question, owner_id, cfg)
+            payload = await _run_query_unscoped(question, normalized_owner, cfg, web_context=web_context)
     except Exception as exc:
         logger.error("RAG pipeline query failed: %s", exc, exc_info=True)
         return _empty_result(f"RAG query failed: {exc}")
@@ -544,7 +581,7 @@ def _inject_citation_anchors(
         # or fall back to first sentence of chunk snippet
         hm_sentences = hm_entry.get("sentences", [])
         if hm_sentences and isinstance(hm_sentences, list):
-            # Join sentences for the phrase â€” these are exact copies from the PDF
+            # Join sentences for the phrase â€" these are exact copies from the PDF
             phrase = " ".join(str(s) for s in hm_sentences[:3])
             safe_phrase = phrase[:300].replace('"', '&quot;')
             attrs.append(f'data-phrase="{safe_phrase}"')
@@ -658,7 +695,7 @@ def _build_info_panel(
             fe_item["highlight_boxes"] = normalized
 
         # Evidence units for character-level highlighting
-        # Use LLM sentences if available â€” these are exact PDF text for precise highlighting
+        # Use LLM sentences if available â€" these are exact PDF text for precise highlighting
         if hm_sentences:
             fe_item["evidence_units"] = [
                 {"text": str(s), "highlight_boxes": fe_item.get("highlight_boxes", [])}
@@ -742,16 +779,56 @@ async def _run_query_unscoped(
     question: str,
     owner_id: str,
     config: Any,
+    web_context: str = "",
 ) -> DeliveryPayload:
-    """Query all indexed documents for this user (no specific file/group scope)."""
+    """Query all documents visible to this user (shared library + own temporary files)."""
+    normalized_owner = str(owner_id or "").strip()
+    accessible_source_ids = _accessible_source_ids_for_owner(normalized_owner) if normalized_owner else []
+    if accessible_source_ids:
+        return await query_sources(question, accessible_source_ids, "", config, web_context=web_context)
+
     from api.services.rag.pipeline import _run_query
     from api.services.rag.retrieve import RetrievalScope
 
-    scope = RetrievalScope(owner_id=owner_id)
-    return await _run_query(question, scope, "all documents", config, f"trace_{__import__('uuid').uuid4().hex[:12]}")
+    scope = RetrievalScope(owner_id=normalized_owner)
+    return await _run_query(question, scope, "all documents", config, f"trace_{__import__('uuid').uuid4().hex[:12]}", web_context=web_context)
 
 
-# â”€â”€ Ingestion Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def _accessible_source_ids_for_owner(owner_id: str) -> list[str]:
+    normalized_owner = str(owner_id or "").strip()
+    if not normalized_owner:
+        return []
+    rows = list_registered_sources(owner_id=normalized_owner, include_chat_temp=True)
+    ids: list[str] = []
+    for row in rows:
+        sid = str(getattr(row, "id", "") or "").strip()
+        if sid:
+            ids.append(sid)
+    return ids
+
+
+# â"€â"€ Ingestion Bridge â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+def _file_hash(file_path: str) -> str:
+    """Compute SHA-256 hash of a file for duplicate detection."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _find_duplicate(file_hash: str, filename: str, owner_id: str) -> SourceRecord | None:
+    """Check if a file with the same hash already exists in the registry."""
+    with _SOURCE_REGISTRY_LOCK:
+        for source in _SOURCE_REGISTRY.values():
+            source_meta = source.metadata if isinstance(source.metadata, dict) else {}
+            if source_meta.get("file_hash") == file_hash:
+                # Same file content — duplicate
+                return source
+    return None
+
 
 async def run_rag_ingest_bridge(
     file_path: str,
@@ -766,6 +843,11 @@ async def run_rag_ingest_bridge(
         fast: If True, uses fast composer path (keyword-only, embeds in background).
               If False, uses full library path (waits for embeddings).
 
+    Duplicate detection:
+        Computes file SHA-256 hash. If reindex=False and an identical file
+        already exists, returns the existing source without re-processing.
+        If reindex=True, deletes the old entry and re-processes.
+
     Returns:
     {
         "source_id": str,
@@ -776,24 +858,53 @@ async def run_rag_ingest_bridge(
     }
     """
     try:
+        resolved_path = Path(file_path).resolve()
+        meta = metadata or {}
+        reindex = bool(meta.get("reindex", True))
+
+        # Compute file hash for duplicate detection
+        file_hash = ""
+        try:
+            file_hash = _file_hash(str(resolved_path))
+        except Exception:
+            pass
+
+        # Check for existing duplicate
+        if file_hash:
+            existing = _find_duplicate(file_hash, resolved_path.name, owner_id)
+            if existing:
+                if not reindex:
+                    # Skip — file already indexed
+                    logger.info("Duplicate file skipped (reindex=False): %s hash=%s", resolved_path.name, file_hash[:12])
+                    return _source_to_legacy_format(existing)
+                else:
+                    # Reindex — delete old entry first
+                    logger.info("Reindexing file (deleting old): %s hash=%s", resolved_path.name, file_hash[:12])
+                    delete_registered_sources([existing.id])
+
         if fast:
             # Composer path: read file data, use fast ingest_chat_upload
-            resolved_path = Path(file_path).resolve()
             file_data = resolved_path.read_bytes()
             filename = resolved_path.name
-            chat_id = str((metadata or {}).get("chat_id", ""))
+            chat_id = str(meta.get("chat_id", ""))
             source = await ingest_chat_upload(file_data, filename, chat_id, owner_id)
             source = replace(source, scope="user_temp")
         else:
             # Library path: full pipeline with embeddings
             source = await ingest_file(file_path, group_id, owner_id, metadata=metadata)
-            # Resolve scope from metadata: persistent/library uploads from admins -> "library"
-            raw_scope = str((metadata or {}).get("scope") or "").strip().lower()
+            raw_scope = str(meta.get("scope") or "").strip().lower()
             if raw_scope in {"chat_temp", "user_temp"}:
                 resolved = "user_temp"
             else:
-                resolved = "library"  # persistent / explicit library uploads
+                resolved = "library"
             source = replace(source, scope=resolved)
+
+        # Store file hash in metadata for future duplicate checks
+        if file_hash:
+            source_meta = source.metadata if isinstance(source.metadata, dict) else {}
+            source_meta["file_hash"] = file_hash
+            source = replace(source, metadata=source_meta)
+
         _register_source(source)
         return _source_to_legacy_format(source)
     except Exception as exc:
@@ -867,7 +978,7 @@ def _source_to_legacy_format(source: SourceRecord) -> dict[str, Any]:
     }
 
 
-# â”€â”€ Highlight Bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Highlight Bridge â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 async def get_highlight_target_bridge(
     source_id: str,
@@ -907,7 +1018,7 @@ async def get_highlight_target_bridge(
             "snippet": "",
         }
 
-    # Find best anchor â€” prefer EXACT tier, or matching page
+    # Find best anchor â€" prefer EXACT tier, or matching page
     best = anchors[0]
     for a in anchors:
         if a.tier == CitationTier.EXACT:
@@ -947,4 +1058,3 @@ async def get_highlight_target_bridge(
         "tier": best.tier.value if best.tier else "fallback",
         "snippet": best.text_snippet,
     }
-

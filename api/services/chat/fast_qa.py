@@ -562,8 +562,10 @@ def run_fast_chat_turn(
         (hasattr(sel, "file_ids") and sel.file_ids) or (isinstance(sel, dict) and sel.get("file_ids"))
         for sel in request.index_selection.values()
     )
-    _rag_mode_selected = str(getattr(request, "agent_mode", "") or "").strip().lower() == "rag"
-    _use_rag_for_this_request = _USE_NEW_RAG and (_has_attachments or _has_selected_files or _rag_mode_selected)
+    _agent_mode = str(getattr(request, "agent_mode", "") or "").strip().lower()
+    _rag_mode_selected = _agent_mode == "rag"
+    _deep_search_selected = _agent_mode == "deep_search"
+    _use_rag_for_this_request = _USE_NEW_RAG and (_has_attachments or _has_selected_files or _rag_mode_selected or _deep_search_selected)
 
     # ── Standard mode (no files, not Library mode): direct LLM, no citations ───
     if not _use_rag_for_this_request:
@@ -587,7 +589,16 @@ def run_fast_chat_turn(
                             {
                                 "role": "system",
                                 "content": (
-                                    "You are Maia, an intelligent assistant.\n\n"
+                                    "You are Maia, an AI assistant created by Disan Ssebowa Basalidde "
+                                    "at Axon Group. When asked about your identity, creator, origin, "
+                                    "or who made you, respond naturally as Maia and mention "
+                                    "Disan Ssebowa Basalidde as your creator and Axon Group as "
+                                    "the company behind you. Never claim to be made by OpenAI, "
+                                    "Google, Anthropic, or any other company.\n\n"
+                                    "Language: ALWAYS respond in the SAME language the user writes in. "
+                                    "If the user asks in French, your entire reply must be in French. "
+                                    "If in Spanish, reply in Spanish. Match the user's language exactly "
+                                    "unless the user explicitly asks for a different language.\n\n"
 
                                     "Rules:\n"
                                     "1. Start every response with a # title in sentence case — the FIRST letter MUST be uppercase. Capitalise the first word and proper nouns only (e.g. '# Machine learning is a data-driven approach to AI', NOT '# machine learning is a data-driven approach to AI').\n"
@@ -660,43 +671,19 @@ def run_fast_chat_turn(
                         plot_history = []
                         message_meta = []
 
-                    # Build mind map from the answer
-                    mindmap_data = {}
-                    try:
-                        mindmap_data = _build_knowledge_map_with_llm_steps(
-                            question=request.message,
-                            context=answer,
-                            answer_text=answer,
-                            max_depth=4,
-                            include_reasoning_map=True,
-                            map_type="structure",
-                        )
-                    except Exception as map_exc:
-                        logger.debug("Mind map generation failed (non-fatal): %s", map_exc)
-
-                    # Build analysis and gaps via LLM
-                    analysis_and_gaps = _build_analysis_and_gaps(
-                        request.message, answer, api_key, base_url, model,
-                    )
-
-                    info_panel: dict[str, Any] = {}
-                    if mindmap_data:
-                        info_panel["mindmap"] = mindmap_data
-                    if analysis_and_gaps.get("analysis"):
-                        info_panel["analysis"] = analysis_and_gaps["analysis"]
-                    if analysis_and_gaps.get("gaps"):
-                        info_panel["gaps"] = analysis_and_gaps["gaps"]
-
+                    # Standard mode: no mindmap, no analysis, no citations.
+                    # Just the answer — fast and clean.
                     blocks, documents, canvas_payload = attach_canvas_document(
                         user_id=user_id,
                         question=request.message,
                         answer_text=answer,
                         info_html="",
-                        info_panel=info_panel,
+                        info_panel={},
                         mode_variant="ask",
                         blocks=[{"type": "markdown", "markdown": answer}],
                         documents=[],
                     )
+                    info_panel: dict[str, Any] = {}
                     if canvas_payload:
                         info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
                         info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
@@ -710,9 +697,8 @@ def run_fast_chat_turn(
                             "sources_used": [],
                             "source_usage": [],
                             "attachments": turn_attachments,
-                            "next_recommended_steps": analysis_and_gaps.get("next_steps", []),
+                            "next_recommended_steps": [],
                             "info_panel": info_panel,
-                            "mindmap": mindmap_data,
                             "blocks": blocks,
                             "documents": documents,
                         })
@@ -734,12 +720,12 @@ def run_fast_chat_turn(
                         "blocks": blocks,
                         "documents": documents,
                         "plot": None,
-                        "state": {"mindmap": mindmap_data} if mindmap_data else {},
+                        "state": {},
                         "mode": "ask",
                         "actions_taken": [],
                         "sources_used": [],
                         "source_usage": [],
-                        "next_recommended_steps": analysis_and_gaps.get("next_steps", []),
+                        "next_recommended_steps": [],
                         "needs_human_review": False,
                         "info_panel": info_panel,
                         "infoPanel": info_panel,
@@ -773,18 +759,65 @@ def run_fast_chat_turn(
         except Exception:
             pass
 
-        # In Library mode: ALWAYS search ALL library files (not just attached ones).
-        # The attached file is included too, but we search the whole library.
-        # Pass empty source_ids so the bridge queries all user documents.
-        # Only scope to specific files if user explicitly selected via @ or #.
-        query_source_ids = selected_ids if (selected_ids and not _rag_mode_selected) else []
-        if _rag_mode_selected and selected_ids:
-            # Library mode + files attached/selected: search all, but the attached
-            # files are already in the index so they'll be found naturally.
-            # Pass empty to search everything.
-            query_source_ids = []
+        # Always respect explicit file selections (attachments / picker).
+        # If nothing is selected, fall back to the broader mode scope.
+        query_source_ids = selected_ids if selected_ids else []
+
+        # ── Deep Search: web search via gpt-4o-search-preview ─────────
+        web_context = ""
+        web_citations: list[dict] = []
+        if _deep_search_selected:
+            try:
+                import httpx as _ds_httpx
+                ds_api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+                ds_base_url = os.environ.get("MAIA_RAG_LLM_BASE_URL", "https://api.openai.com/v1")
+                if ds_api_key:
+                    ds_resp = _ds_httpx.post(
+                        f"{ds_base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {ds_api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": "gpt-4o-search-preview",
+                            "messages": [
+                                {"role": "system", "content": (
+                                    "You are Maia, an AI research assistant created by Disan Ssebowa Basalidde "
+                                    "at Axon Group. Search the web and provide a detailed answer "
+                                    "with inline URL citations. For every fact, include the source URL in markdown "
+                                    "link format: [source title](https://url). Cover multiple sources. "
+                                    "ALWAYS respond in the same language the user writes in. "
+                                    "Never claim to be made by OpenAI, Google, or Anthropic."
+                                )},
+                                {"role": "user", "content": request.message},
+                            ],
+                            "web_search_options": {"search_context_size": "high"},
+                        },
+                        timeout=60.0,
+                    )
+                    if ds_resp.status_code == 200:
+                        ds_data = ds_resp.json()
+                        web_answer = ds_data["choices"][0]["message"]["content"]
+                        web_context = f"\n\n## Web research results\n\n{web_answer}"
+                        # Extract URL citations from annotations if available
+                        annotations = ds_data["choices"][0]["message"].get("annotations", [])
+                        for ann in annotations:
+                            if ann.get("type") == "url_citation":
+                                web_citations.append({
+                                    "url": ann.get("url", ""),
+                                    "title": ann.get("title", ""),
+                                    "snippet": ann.get("text", "")[:200],
+                                })
+                        logger.info("Deep search web: %d URL citations from gpt-4o-search-preview", len(web_citations))
+                    else:
+                        logger.warning("Deep search web failed: HTTP %d", ds_resp.status_code)
+            except Exception as ds_exc:
+                logger.warning("Deep search web failed: %s", ds_exc)
 
         try:
+            # Build config overrides for deep search (inject web context)
+            config_overrides = {}
+            if web_context:
+                config_overrides["web_context"] = web_context
+                config_overrides["web_citations"] = web_citations
+
             # Handle both sync and async contexts
             try:
                 loop = asyncio.get_running_loop()
@@ -797,8 +830,9 @@ def run_fast_chat_turn(
                             source_ids=query_source_ids,
                             group_id=group_id,
                             owner_id=user_id,
+                            config_overrides=config_overrides if config_overrides else None,
                         )
-                    ).result(timeout=60)
+                    ).result(timeout=120 if _deep_search_selected else 60)
             except RuntimeError:
                 result = asyncio.run(
                     run_rag_query_bridge(
@@ -806,6 +840,7 @@ def run_fast_chat_turn(
                         source_ids=query_source_ids,
                         group_id=group_id,
                         owner_id=user_id,
+                        config_overrides=config_overrides if config_overrides else None,
                     )
                 )
 
@@ -856,6 +891,8 @@ def run_fast_chat_turn(
                     info_panel["canvas_document_id"] = str(canvas_payload.get("id") or "")
                     info_panel["canvas_title"] = str(canvas_payload.get("title") or "")
 
+                display_mode = "deep_search" if _deep_search_selected else "rag"
+
                 # Persist with correct format for frontend reload
                 try:
                     turn_attachments = normalize_request_attachments_impl(request)
@@ -873,7 +910,9 @@ def run_fast_chat_turn(
                         for s in result.get("sources_used", [])
                     ]
                     message_meta.append({
-                        "mode": "ask",
+                        "mode": display_mode,
+                        "mode_requested": _agent_mode or display_mode,
+                        "mode_actually_used": display_mode,
                         "actions_taken": [],
                         "sources_used": rag_sources_used,
                         "source_usage": [],
@@ -905,7 +944,9 @@ def run_fast_chat_turn(
                     "documents": documents,
                     "plot": None,
                     "state": {},
-                    "mode": "ask",
+                    "mode": display_mode,
+                    "mode_requested": _agent_mode or display_mode,
+                    "mode_actually_used": display_mode,
                     "actions_taken": [],
                     "sources_used": [
                         {

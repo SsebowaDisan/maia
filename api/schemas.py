@@ -129,6 +129,7 @@ class FileRecord(BaseModel):
     id: str
     name: str
     size: int
+    token_count: int | None = None
     scope: str | None = None
     rag_ready: bool | None = None
     citation_ready: bool | None = None
@@ -340,7 +341,7 @@ class ChatResponse(BaseModel):
     info: str
     plot: dict[str, Any] | None = None
     state: dict[str, Any] = Field(default_factory=dict)
-    mode: Literal["ask", "company_agent", "deep_search", "brain"] = "ask"
+    mode: Literal["ask", "rag", "company_agent", "deep_search", "brain"] = "ask"
     actions_taken: list[AgentActionRecord] = Field(default_factory=list)
     sources_used: list[AgentSourceRecord] = Field(default_factory=list)
     source_usage: list[SourceUsageRecord] = Field(default_factory=list)

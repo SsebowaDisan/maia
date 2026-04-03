@@ -29,10 +29,16 @@ export function useProjectState() {
       SCOPED_STORAGE_KEYS.projects,
       readStoredJson<SidebarProject[]>(STORAGE_KEYS.projects, []),
     );
+    const isLegacyDefaultOnly =
+      stored.length === 1 &&
+      String(stored[0]?.name || "").trim().toLowerCase() === "general";
+    if (isLegacyDefaultOnly) {
+      return [];
+    }
     if (stored.length > 0) {
       return stored;
     }
-    return [{ id: DEFAULT_PROJECT_ID, name: "General" }];
+    return [];
   });
   const [selectedProjectId, setSelectedProjectId] = useState(() =>
     readStoredText(
@@ -91,6 +97,24 @@ export function useProjectState() {
     }
   }, [projects, selectedProjectId]);
 
+  useEffect(() => {
+    const singleton = projects.length === 1 ? projects[0] : null;
+    if (!singleton) {
+      return;
+    }
+    const singletonName = String(singleton.name || "").trim().toLowerCase();
+    if (singletonName !== "general") {
+      return;
+    }
+    const hasConversationMappedToSingleton = Object.values(conversationProjects).some(
+      (projectId) => String(projectId || "").trim() === singleton.id,
+    );
+    if (hasConversationMappedToSingleton) {
+      return;
+    }
+    setProjects([]);
+  }, [conversationProjects, projects]);
+
   const handleCreateProject = (name: string) => {
     const normalizedName = name.trim();
     if (!normalizedName) {
@@ -132,13 +156,8 @@ export function useProjectState() {
 
   const handleDeleteProject = (projectId: string) => {
     const remainingProjects = projects.filter((project) => project.id !== projectId);
-    const nextProjects = remainingProjects.length
-      ? remainingProjects
-      : [{ id: createProjectId(), name: "General" }];
-
-    const fallbackProjectId =
-      nextProjects.find((project) => project.id === DEFAULT_PROJECT_ID)?.id ||
-      nextProjects[0].id;
+    const nextProjects = remainingProjects;
+    const fallbackProjectId = nextProjects[0]?.id || DEFAULT_PROJECT_ID;
 
     setProjects(nextProjects);
     setConversationProjects((prev) => {

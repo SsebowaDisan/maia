@@ -1,10 +1,6 @@
-import { BookOpenText, Brain, ChevronDown, ChevronRight, GitBranch, Globe, Search, Sparkles } from "lucide-react";
+import { BookOpenText, ChevronDown, Globe, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import {
-  AgentCommandMenu,
-  type AgentCommandSelection,
-  type WorkflowCommandSelection,
-} from "./chatMain/composer/AgentCommandMenu";
+import type { AgentCommandSelection, WorkflowCommandSelection } from "./chatMain/composer/AgentCommandMenu";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 type ComposerMode = "ask" | "rag" | "company_agent" | "deep_search" | "web_search" | "brain";
@@ -32,8 +28,6 @@ const MODE_OPTIONS: ModeOption[] = [
     Icon: BookOpenText,
     description: "Search, summarize, and answer from Axon Group files and URLs",
   },
-  { value: "brain", label: "Maia Brain", Icon: Brain, description: "Auto-builds a team and runs it" },
-  { value: "company_agent", label: "Workflow", Icon: GitBranch, description: "Pick an existing workflow" },
   { value: "deep_search", label: "Deep research", Icon: Search, description: "Multi-source deep analysis" },
   { value: "web_search", label: "Web search", Icon: Globe, description: "Live web results" },
 ];
@@ -50,11 +44,8 @@ const MODE_LABEL_CLASS: Record<ComposerMode, string> = {
 export function ComposerModeSelector({
   value,
   onChange,
-  onAgentSelect,
-  onSelectWorkflow,
 }: ComposerModeSelectorProps) {
   const [open, setOpen] = useState(false);
-  const [workflowMenuOpen, setWorkflowMenuOpen] = useState(false);
 
   const selected = useMemo(
     () => MODE_OPTIONS.find((item) => item.value === value) || MODE_OPTIONS[0],
@@ -65,14 +56,7 @@ export function ComposerModeSelector({
     <div className="relative">
       <Popover
         open={open}
-        onOpenChange={(nextOpen) => {
-          if (nextOpen && value === "company_agent") {
-            setOpen(false);
-            setWorkflowMenuOpen(true);
-            return;
-          }
-          setOpen(nextOpen);
-        }}
+        onOpenChange={setOpen}
       >
         <PopoverTrigger asChild>
           <button
@@ -93,18 +77,12 @@ export function ComposerModeSelector({
         >
           <div className="space-y-0.5">
             {MODE_OPTIONS.map((option) => {
-              const opensWorkflowMenu = option.value === "company_agent";
               const isActive = value === option.value;
               return (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => {
-                    if (opensWorkflowMenu) {
-                      setOpen(false);
-                      setWorkflowMenuOpen(true);
-                      return;
-                    }
                     onChange(option.value);
                     setOpen(false);
                   }}
@@ -119,9 +97,7 @@ export function ComposerModeSelector({
                       <p className="text-[11px] text-[#94a3b8]">{option.description}</p>
                     ) : null}
                   </div>
-                  {opensWorkflowMenu ? (
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#94a3b8]" />
-                  ) : isActive ? (
+                  {isActive ? (
                     <span className="shrink-0 text-[10px] font-semibold text-[#7c3aed]">Active</span>
                   ) : null}
                 </button>
@@ -130,27 +106,6 @@ export function ComposerModeSelector({
           </div>
         </PopoverContent>
       </Popover>
-      <AgentCommandMenu
-        open={workflowMenuOpen}
-        onClose={() => setWorkflowMenuOpen(false)}
-        onSelect={(agent) => {
-          onChange("company_agent");
-          onAgentSelect?.(agent);
-          setWorkflowMenuOpen(false);
-        }}
-        onSelectWorkflow={(workflow) => {
-          onSelectWorkflow?.(workflow);
-          setWorkflowMenuOpen(false);
-        }}
-        onOpenWorkflow={(workflowId) => {
-          setWorkflowMenuOpen(false);
-          window.location.href = `/workflow-builder?id=${encodeURIComponent(workflowId)}`;
-        }}
-        onSelectStandard={() => {
-          onChange("ask");
-          setWorkflowMenuOpen(false);
-        }}
-      />
     </div>
   );
 }

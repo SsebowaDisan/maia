@@ -8,8 +8,11 @@ from api.context import ApiContext
 
 
 def get_index(context: ApiContext, index_id: int | None):
+    resolved_index_id: int | None = index_id
+    if isinstance(resolved_index_id, int) and resolved_index_id <= 0:
+        resolved_index_id = None
     try:
-        return context.get_index(index_id)
+        return context.get_index(resolved_index_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

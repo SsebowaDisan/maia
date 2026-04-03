@@ -316,19 +316,22 @@ function UploadSidebar({
         )}
 
         <div className="mt-5 flex items-center justify-between">
-          <span className="text-[13px] text-[#1d1d1f]">Force reindex</span>
+          <span className="text-[13px] font-medium text-[#1d1d1f]">Force reindex</span>
           <button
             type="button"
             role="switch"
             aria-checked={forceReindex}
+            aria-label="Force reindex"
             onClick={() => setForceReindex(!forceReindex)}
-            className={`relative h-6 w-11 rounded-full transition-colors ${
-              forceReindex ? "bg-[#1d1d1f]" : "bg-[#d7d7dc]"
+            className={`relative inline-flex h-7 w-12 items-center overflow-hidden rounded-full border shadow-[inset_0_1px_1px_rgba(0,0,0,0.06)] transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black/25 ${
+              forceReindex
+                ? "border-[#1d1d1f] bg-[#1d1d1f]"
+                : "border-black/[0.1] bg-[#d7d7dc]"
             }`}
           >
             <span
-              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                forceReindex ? "translate-x-[22px]" : "translate-x-[2px]"
+              className={`pointer-events-none absolute left-0.5 h-6 w-6 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.2)] transition-transform duration-200 ease-out ${
+                forceReindex ? "translate-x-5" : "translate-x-0"
               }`}
             />
           </button>

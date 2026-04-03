@@ -5,6 +5,7 @@ import { normalizeSourceUrl, type ProjectEvidenceItem, type ProjectSourceBinding
 import type { DeletePromptArgs } from "./useDeletePromptController";
 
 type UseProjectEvidenceDeletionArgs = {
+  canManageSources: boolean;
   evidenceProjectId: string;
   getEvidenceDisplayLabel: (item: ProjectEvidenceItem) => string;
   openDeletePrompt: (args: DeletePromptArgs) => void;
@@ -16,6 +17,7 @@ type UseProjectEvidenceDeletionArgs = {
 };
 
 export function useProjectEvidenceDeletion({
+  canManageSources,
   evidenceProjectId,
   getEvidenceDisplayLabel,
   openDeletePrompt,
@@ -28,6 +30,13 @@ export function useProjectEvidenceDeletion({
   const handleDeleteEvidenceItem = useCallback(
     (item: ProjectEvidenceItem) => {
       if (!evidenceProjectId) {
+        return;
+      }
+      if (!canManageSources) {
+        setProjectUploadStatus(
+          evidenceProjectId,
+          "Only workspace admins can delete indexed sources.",
+        );
         return;
       }
       const fileIds = Array.from(new Set((item.fileIds || []).filter(Boolean)));
@@ -125,6 +134,7 @@ export function useProjectEvidenceDeletion({
       });
     },
     [
+      canManageSources,
       evidenceProjectId,
       getEvidenceDisplayLabel,
       loadProjectEvidence,

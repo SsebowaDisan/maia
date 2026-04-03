@@ -3,6 +3,8 @@ import type { FileGroupRecord, FileRecord, IngestionJob } from "../../../api/cli
 import type { DeleteConfirmationState, PendingDeleteJob } from "./types";
 import { createUploadActions } from "./uploadActions";
 
+const DELETE_QUEUE_DELAY_MS = 0;
+
 interface UseFilesViewActionsParams {
   onDeleteFiles?: (fileIds: string[]) => Promise<{
     deleted_ids: string[];
@@ -172,15 +174,19 @@ function useFilesViewActions({
 
   const queueDeletion = (fileIds: string[]) => {
     if (!fileIds.length) return;
+    if (DELETE_QUEUE_DELAY_MS <= 0) {
+      void commitPendingDelete(fileIds);
+      return;
+    }
     if (pendingDelete) {
       window.clearTimeout(pendingDelete.timeoutId);
     }
-    const expiresAt = Date.now() + 5000;
+    const expiresAt = Date.now() + DELETE_QUEUE_DELAY_MS;
     const timeoutId = window.setTimeout(() => {
       void commitPendingDelete(fileIds);
-    }, 5000);
+    }, DELETE_QUEUE_DELAY_MS);
     setPendingDelete({ fileIds, count: fileIds.length, expiresAt, timeoutId });
-    setActionMessage(`Queued ${fileIds.length} file(s) for deletion. Undo within 5s.`);
+    setActionMessage(`Queued ${fileIds.length} file(s) for deletion. Undo while pending.`);
   };
 
   const handleDeleteSelected = () => {

@@ -1,10 +1,6 @@
 import { useState } from "react";
 import { useAuthStore } from "../../stores/authStore";
 
-type Props = {
-  onSwitchToRegister: () => void;
-};
-
 async function apiLogin(email: string, password: string) {
   const res = await fetch("/api/auth/login", {
     method: "POST",
@@ -26,7 +22,7 @@ async function apiGetMe(token: string) {
   return res.json();
 }
 
-export function LoginPage({ onSwitchToRegister }: Props) {
+export function LoginPage() {
   const { setTokens, setUser } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -104,16 +100,6 @@ export function LoginPage({ onSwitchToRegister }: Props) {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-[12px] text-[#6e6e73]">
-          New company?{" "}
-          <button
-            type="button"
-            onClick={onSwitchToRegister}
-            className="font-medium text-[#1d1d1f] hover:underline"
-          >
-            Create an account
-          </button>
-        </p>
       </div>
     </div>
   );

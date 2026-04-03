@@ -22,6 +22,7 @@ import { useDeletePromptController } from "./chatSidebar/useDeletePromptControll
 import { useProjectEvidenceDeletion } from "./chatSidebar/useProjectEvidenceDeletion";
 import { useProjectEvidenceState } from "./chatSidebar/useProjectEvidenceState";
 import { DEFAULT_PROJECT_ID } from "../appShell/constants";
+import { useAuthStore } from "../stores/authStore";
 
 interface SidebarProject {
   id: string;
@@ -77,6 +78,7 @@ export function ChatSidebar({
   onNavigateAppRoute,
   width = 300,
 }: ChatSidebarProps) {
+  const canManageProjectSources = useAuthStore((state) => state.isOrgAdmin());
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [projectDraft, setProjectDraft] = useState("");
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -164,6 +166,7 @@ export function ChatSidebar({
   });
 
   const { handleDeleteEvidenceItem } = useProjectEvidenceDeletion({
+    canManageSources: canManageProjectSources,
     evidenceProjectId,
     getEvidenceDisplayLabel,
     openDeletePrompt,
@@ -498,6 +501,7 @@ export function ChatSidebar({
       />
 
       <ProjectEvidenceModal
+        canManageSources={canManageProjectSources}
         evidenceProject={evidenceProject}
         evidenceProjectId={evidenceProjectId}
         evidenceProjectState={evidenceProjectState}

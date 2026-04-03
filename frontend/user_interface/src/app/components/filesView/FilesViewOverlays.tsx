@@ -26,6 +26,7 @@ interface FilesViewOverlaysProps {
   handleDeleteSelected: () => void;
   isDeletingSelection: boolean;
   canDeleteFiles: boolean;
+  deleteDisabledReason?: string;
   pendingDeleteSeconds: number;
   pendingDeleteActive: boolean;
   deleteConfirmation: DeleteConfirmationState | null;
@@ -58,6 +59,7 @@ function FilesViewOverlays({
   handleDeleteSelected,
   isDeletingSelection,
   canDeleteFiles,
+  deleteDisabledReason,
   pendingDeleteSeconds,
   pendingDeleteActive,
   deleteConfirmation,
@@ -66,11 +68,16 @@ function FilesViewOverlays({
   handleCancelDeleteConfirmation,
   handleConfirmDeleteAfterTyping,
 }: FilesViewOverlaysProps) {
+  const overlayCardClass =
+    "w-full rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_20px_48px_rgba(0,0,0,0.2)]";
+  const blackButtonClass =
+    "h-9 rounded-lg border border-black bg-[#1d1d1f] px-3 text-[12px] text-white hover:bg-[#2c2c30] disabled:opacity-45";
+
   return (
     <>
       {showCreateGroupModal ? (
         <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/25 px-4 backdrop-blur-[10px]">
-          <div className="w-full max-w-[460px] rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_20px_48px_rgba(0,0,0,0.2)]">
+          <div className={`${overlayCardClass} max-w-[460px]`}>
             <p className="text-[20px] font-semibold tracking-tight text-[#1d1d1f]">New Group</p>
             <input
               value={quickGroupName}
@@ -91,7 +98,7 @@ function FilesViewOverlays({
                   setShowCreateGroupModal(false);
                   setQuickGroupName("");
                 }}
-                className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[13px] text-[#1d1d1f] hover:bg-[#f8f8fa]"
+                className="h-10 rounded-xl border border-black bg-[#1d1d1f] px-3 text-[13px] text-white hover:bg-[#2c2c30]"
               >
                 Cancel
               </button>
@@ -148,7 +155,8 @@ function FilesViewOverlays({
             <button
               onClick={handleDeleteSelected}
               disabled={isDeletingSelection || !canDeleteFiles || pendingDeleteActive}
-              className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#ffd3d6] bg-white px-2.5 text-[12px] text-[#b42318] disabled:opacity-45"
+              title={!canDeleteFiles ? (deleteDisabledReason || "Delete unavailable") : "Delete selected files"}
+              className="inline-flex h-9 items-center gap-1 rounded-lg border border-black bg-[#1d1d1f] px-2.5 text-[12px] text-white hover:bg-[#2c2c30] disabled:opacity-45"
             >
               <Trash2 className="h-3.5 w-3.5" />
               {isDeletingSelection ? "Deleting..." : pendingDeleteActive ? `Queued (${pendingDeleteSeconds}s)` : "Delete"}
@@ -159,7 +167,7 @@ function FilesViewOverlays({
 
       {deleteConfirmation ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 px-4 backdrop-blur-[10px]">
-          <div className="w-full max-w-[520px] rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_52px_rgba(0,0,0,0.2)]">
+          <div className={`${overlayCardClass} max-w-[520px]`}>
             <p className="text-[18px] font-semibold tracking-tight text-[#1d1d1f]">Confirm file deletion</p>
             <p className="mt-2 text-[13px] text-[#4b4b50]">
               Type <span className="font-semibold text-[#1d1d1f]">delete</span> to remove{" "}
@@ -178,14 +186,14 @@ function FilesViewOverlays({
             <div className="mt-4 flex items-center justify-end gap-2">
               <button
                 onClick={handleCancelDeleteConfirmation}
-                className="h-9 rounded-lg border border-black/[0.08] bg-white px-3 text-[12px] text-[#1d1d1f] hover:bg-[#f8f8fa]"
+                className={blackButtonClass}
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmDeleteAfterTyping}
                 disabled={deleteConfirmText.trim().toLowerCase() !== "delete"}
-                className="h-9 rounded-lg border border-[#ffd3d6] bg-[#fff5f5] px-3 text-[12px] text-[#b42318] disabled:opacity-45"
+                className={blackButtonClass}
               >
                 Delete Files
               </button>

@@ -114,6 +114,159 @@ export function ProjectsPane({
     { id: "workflows", label: "Workflows", icon: Route, path: "/workflow-builder" },
   ] as const;
   const normalizedPath = String(currentPath || "/").toLowerCase();
+  const canMoveConversation = projects.length > 1;
+
+  const renderConversationGroups = (scopeKey: string, subtitleLabel: string) => (
+    <>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="min-w-0">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#8d8d93]">Chats</span>
+          <p className="truncate text-[11px] text-[#8d8d93]">{subtitleLabel}</p>
+        </div>
+        <span className="text-[11px] text-[#8d8d93]">{selectedProjectConversations.length}</span>
+      </div>
+
+      {selectedProjectConversations.length ? (
+        <div className="space-y-2">
+          {(["Today", "Yesterday", "Earlier"] as const).map((groupLabel) => {
+            const rows = groupedProjectConversations[groupLabel];
+            if (!rows.length) {
+              return null;
+            }
+            return (
+              <div key={`${scopeKey}-${groupLabel}`} className="space-y-1">
+                <p className="px-2 text-[11px] font-medium text-[#8d8d93]">{groupLabel}</p>
+                {rows.map((conversation) => {
+                  const isSelected = conversation.id === selectedConversationId;
+                  const isMoving = movingConversationId === conversation.id;
+                  const isRenaming = renamingConversationId === conversation.id;
+                  const isBusy = busyConversationId === conversation.id;
+                  const assignedProjectId = conversationProjects[conversation.id] || fallbackProjectId;
+                  const subtitle = conversationMetaLabel(conversation.date_updated, new Date());
+                  const ConversationIcon = CHAT_ICON_COMPONENTS[normalizeChatIconKey(conversation.icon_key)];
+
+                  return (
+                    <div key={conversation.id} className="rounded-lg">
+                      {isRenaming ? (
+                        <div className="bg-white border border-black/[0.08] rounded-lg px-2 py-1.5 flex items-center gap-1">
+                          <input
+                            value={renamingConversationDraft}
+                            onChange={(event) => onRenamingConversationDraftChange(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void onCommitRenameConversation(conversation.id);
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                onCancelRenameConversation();
+                              }
+                            }}
+                            className="flex-1 h-7 px-2 rounded-md border border-black/[0.1] bg-white text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-black/10"
+                          />
+                          <button
+                            onClick={() => void onCommitRenameConversation(conversation.id)}
+                            disabled={isBusy}
+                            className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/10 disabled:opacity-40"
+                            title="Save name"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={onCancelRenameConversation}
+                            disabled={isBusy}
+                            className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/10 disabled:opacity-40"
+                            title="Cancel"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className={`group inline-flex min-h-[44px] w-full items-center gap-1 rounded-xl px-2.5 py-1.5 ${isSelected ? "bg-[#e3e3e8]" : "hover:bg-[#ececef]"}`}
+                        >
+                          <button
+                            onClick={() => onSelectConversation(conversation.id)}
+                            className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
+                          >
+                            <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                              <ConversationIcon
+                                className={`h-3.5 w-3.5 ${isSelected ? "text-[#1d1d1f]" : "text-[#8d8d93]"}`}
+                              />
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-[14px] font-medium text-[#1d1d1f]">
+                                {displayConversationName(conversation.name)}
+                              </p>
+                              <p className="mt-0.5 truncate text-[11px] text-[#8d8d93]">{subtitle}</p>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => onStartRenameConversation(conversation)}
+                            disabled={isBusy}
+                            className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
+                            title="Rename chat"
+                          >
+                            <PencilLine className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() =>
+                              onSetMovingConversationId(
+                                movingConversationId === conversation.id ? null : conversation.id,
+                              )
+                            }
+                            disabled={isBusy || !canMoveConversation}
+                            className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
+                            title={canMoveConversation ? "Move chat" : "Create another project to move chats"}
+                          >
+                            <ArrowRightLeft className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => onRequestDeleteConversation(conversation)}
+                            disabled={isBusy}
+                            className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
+                            title="Delete chat"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
+                      {isMoving && canMoveConversation ? (
+                        <div className="mt-1 rounded-lg border border-black/[0.08] bg-white p-1 space-y-1">
+                          {projects.map((targetProject) => {
+                            const isAssigned = targetProject.id === assignedProjectId;
+                            return (
+                              <button
+                                key={targetProject.id}
+                                onClick={() => {
+                                  onMoveConversationToProject(conversation.id, targetProject.id);
+                                  onSetMovingConversationId(null);
+                                }}
+                                className={`w-full text-left px-2 py-1.5 rounded-md text-[12px] transition-colors ${
+                                  isAssigned
+                                    ? "bg-[#1d1d1f] text-white"
+                                    : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
+                                }`}
+                              >
+                                {targetProject.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-[12px] text-[#8d8d93] py-1.5">No chats yet.</p>
+      )}
+    </>
+  );
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -262,154 +415,18 @@ export function ProjectsPane({
 
               {isProjectOpen ? (
                 <div className="pl-8 pr-1 pb-2 pt-1">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="min-w-0">
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-[#8d8d93]">Chats</span>
-                      <p className="truncate text-[11px] text-[#8d8d93]">{project.name}</p>
-                    </div>
-                    <span className="text-[11px] text-[#8d8d93]">{selectedProjectConversations.length}</span>
-                  </div>
-
-                  {selectedProjectConversations.length ? (
-                    <div className="space-y-2">
-                      {(["Today", "Yesterday", "Earlier"] as const).map((groupLabel) => {
-                        const rows = groupedProjectConversations[groupLabel];
-                        if (!rows.length) {
-                          return null;
-                        }
-                        return (
-                          <div key={`${project.id}-${groupLabel}`} className="space-y-1">
-                            <p className="px-2 text-[11px] font-medium text-[#8d8d93]">{groupLabel}</p>
-                            {rows.map((conversation) => {
-                              const isSelected = conversation.id === selectedConversationId;
-                              const isMoving = movingConversationId === conversation.id;
-                              const isRenaming = renamingConversationId === conversation.id;
-                              const isBusy = busyConversationId === conversation.id;
-                              const assignedProjectId = conversationProjects[conversation.id] || fallbackProjectId;
-                              const subtitle = conversationMetaLabel(conversation.date_updated, new Date());
-                              const ConversationIcon = CHAT_ICON_COMPONENTS[normalizeChatIconKey(conversation.icon_key)];
-
-                              return (
-                                <div key={conversation.id} className="rounded-lg">
-                                  {isRenaming ? (
-                                    <div className="bg-white border border-black/[0.08] rounded-lg px-2 py-1.5 flex items-center gap-1">
-                                      <input
-                                        value={renamingConversationDraft}
-                                        onChange={(event) => onRenamingConversationDraftChange(event.target.value)}
-                                        onKeyDown={(event) => {
-                                          if (event.key === "Enter") {
-                                            event.preventDefault();
-                                            void onCommitRenameConversation(conversation.id);
-                                          }
-                                          if (event.key === "Escape") {
-                                            event.preventDefault();
-                                            onCancelRenameConversation();
-                                          }
-                                        }}
-                                        className="flex-1 h-7 px-2 rounded-md border border-black/[0.1] bg-white text-[12px] text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-black/10"
-                                      />
-                                      <button
-                                        onClick={() => void onCommitRenameConversation(conversation.id)}
-                                        disabled={isBusy}
-                                        className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/10 disabled:opacity-40"
-                                        title="Save name"
-                                      >
-                                        <Check className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={onCancelRenameConversation}
-                                        disabled={isBusy}
-                                        className="p-1 rounded-md text-[#1d1d1f] hover:bg-black/10 disabled:opacity-40"
-                                        title="Cancel"
-                                      >
-                                        <X className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div
-                                      className={`group inline-flex min-h-[44px] w-full items-center gap-1 rounded-xl px-2.5 py-1.5 ${isSelected ? "bg-[#e3e3e8]" : "hover:bg-[#ececef]"}`}
-                                    >
-                                      <button
-                                        onClick={() => onSelectConversation(conversation.id)}
-                                        className="inline-flex min-w-0 flex-1 items-center gap-2 text-left"
-                                      >
-                                        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                                          <ConversationIcon
-                                            className={`h-3.5 w-3.5 ${isSelected ? "text-[#1d1d1f]" : "text-[#8d8d93]"}`}
-                                          />
-                                        </span>
-                                        <div className="min-w-0">
-                                          <p className="truncate text-[14px] font-medium text-[#1d1d1f]">
-                                            {displayConversationName(conversation.name)}
-                                          </p>
-                                          <p className="mt-0.5 truncate text-[11px] text-[#8d8d93]">{subtitle}</p>
-                                        </div>
-                                      </button>
-                                      <button
-                                        onClick={() => onStartRenameConversation(conversation)}
-                                        disabled={isBusy}
-                                        className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
-                                        title="Rename chat"
-                                      >
-                                        <PencilLine className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => onSetMovingConversationId(movingConversationId === conversation.id ? null : conversation.id)}
-                                        disabled={isBusy}
-                                        className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
-                                        title="Move chat"
-                                      >
-                                        <ArrowRightLeft className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => onRequestDeleteConversation(conversation)}
-                                        disabled={isBusy}
-                                        className="rounded-md p-1 text-[#6e6e73] opacity-0 transition-opacity hover:bg-black/5 hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-40"
-                                        title="Delete chat"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  )}
-
-                                  {isMoving ? (
-                                    <div className="mt-1 rounded-lg border border-black/[0.08] bg-white p-1 space-y-1">
-                                      {projects.map((targetProject) => {
-                                        const isAssigned = targetProject.id === assignedProjectId;
-                                        return (
-                                          <button
-                                            key={targetProject.id}
-                                            onClick={() => {
-                                              onMoveConversationToProject(conversation.id, targetProject.id);
-                                              onSetMovingConversationId(null);
-                                            }}
-                                            className={`w-full text-left px-2 py-1.5 rounded-md text-[12px] transition-colors ${
-                                              isAssigned
-                                                ? "bg-[#1d1d1f] text-white"
-                                                : "text-[#1d1d1f] hover:bg-[#f5f5f7]"
-                                            }`}
-                                          >
-                                            {targetProject.name}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-[12px] text-[#8d8d93] py-1.5">No chats yet.</p>
-                  )}
+                  {renderConversationGroups(project.id, project.name)}
                 </div>
               ) : null}
             </div>
           );
         })}
+
+        {projects.length === 0 ? (
+          <div className="mt-2 rounded-xl border border-black/[0.08] bg-white px-2.5 py-2">
+            {renderConversationGroups("no-project", "No project")}
+          </div>
+        ) : null}
       </div>
     </div>
   );

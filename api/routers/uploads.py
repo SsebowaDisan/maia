@@ -100,6 +100,7 @@ async def _persist_uploaded_files_sequential(files: list[UploadFile]) -> list[di
         ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf", ".odt",
         ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp",
         ".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs", ".rb",
+        ".zip",
     }
     for upload in files:
         name = str(upload.filename or "").strip()
@@ -289,6 +290,45 @@ async def create_file_ingestion_job(
                 "persisted_names": [str((item or {}).get("name") or "") for item in persisted[:20]],
             },
         )
+        # ── Extract ZIP files into individual files ──────────────────
+        import zipfile as _zipfile
+        _INDEXABLE_EXTS = {
+            ".pdf", ".txt", ".md", ".csv", ".json", ".html", ".htm", ".xml",
+            ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf", ".odt",
+            ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp",
+        }
+        expanded: list[dict[str, object]] = []
+        for pf in persisted:
+            file_path_str = str(pf.get("path") or "")
+            file_name = str(pf.get("name") or "")
+            if file_name.lower().endswith(".zip") and file_path_str:
+                try:
+                    zip_dir = Path(file_path_str).parent / Path(file_name).stem
+                    zip_dir.mkdir(parents=True, exist_ok=True)
+                    with _zipfile.ZipFile(file_path_str, "r") as zf:
+                        for member in zf.infolist():
+                            if member.is_dir():
+                                continue
+                            member_name = os.path.basename(member.filename)
+                            member_ext = member_name[member_name.rfind("."):].lower() if "." in member_name else ""
+                            if member_ext not in _INDEXABLE_EXTS:
+                                continue
+                            extracted_path = zip_dir / member_name
+                            with zf.open(member) as src, open(extracted_path, "wb") as dst:
+                                dst.write(src.read())
+                            expanded.append({
+                                "name": member_name,
+                                "path": str(extracted_path),
+                                "size": member.file_size,
+                            })
+                    logger.info("Extracted %d files from ZIP: %s", len(expanded) - len([e for e in expanded if e not in expanded]), file_name)
+                except Exception as zip_exc:
+                    logger.warning("Failed to extract ZIP %s: %s", file_name, zip_exc)
+                    expanded.append(pf)  # Fall back to treating ZIP as a file
+            else:
+                expanded.append(pf)
+        persisted = expanded
+
         total_bytes = sum(int((item or {}).get("size") or 0) for item in persisted)
 
         # ── New RAG pipeline ingestion (background) ────────────────────
@@ -615,12 +655,35 @@ def delete_files(
 ):
     user_id = user.id
     context = get_context()
-    return delete_indexed_files(
-        context=context,
-        user_id=user_id,
-        index_id=payload.index_id,
-        file_ids=payload.file_ids,
-    )
+
+    # Delete from new RAG registry first
+    from api.services.rag.bridge import delete_registered_sources
+    rag_deleted = delete_registered_sources(payload.file_ids)
+
+    # Also try deleting from old ktem database (for legacy files)
+    try:
+        result = delete_indexed_files(
+            context=context,
+            user_id=user_id,
+            index_id=payload.index_id,
+            file_ids=payload.file_ids,
+        )
+        # Merge RAG-deleted IDs into result
+        if rag_deleted:
+            existing_deleted = result.get("deleted_ids", []) if isinstance(result, dict) else []
+            all_deleted = list(set(existing_deleted + rag_deleted))
+            if isinstance(result, dict):
+                result["deleted_ids"] = all_deleted
+        return result
+    except Exception as exc:
+        # Old DB delete failed but RAG registry delete succeeded
+        if rag_deleted:
+            return BulkDeleteFilesResponse(
+                index_id=payload.index_id or 0,
+                deleted_ids=rag_deleted,
+                failed=[],
+            )
+        raise
 
 
 @router.post("/urls/delete", response_model=BulkDeleteUrlsResponse)
@@ -645,10 +708,32 @@ def list_groups(
 ):
     context = get_context()
     try:
-        return list_file_groups(context=context, user_id=user_id, index_id=index_id)
+        result = list_file_groups(context=context, user_id=user_id, index_id=index_id)
     except HTTPException:
-        # Index not found — return empty groups list instead of 404
-        return FileGroupListResponse(index_id=index_id or 0, groups=[])
+        result = {"index_id": index_id or 0, "groups": []}
+
+    # Enrich group file_ids from RAG registry (new pipeline files have group_id
+    # in their metadata but aren't tracked in the old ktem FileGroup.data.files)
+    try:
+        from api.services.rag.bridge import list_registered_sources
+        rag_sources = list_registered_sources(owner_id=user_id)
+        # Build group_id → [source_id] mapping
+        group_files: dict[str, list[str]] = {}
+        for source in rag_sources:
+            gid = source.group_id or ""
+            if gid:
+                group_files.setdefault(gid, []).append(source.id)
+
+        for group in result.get("groups", []):
+            gid = str(group.get("id", ""))
+            existing_ids = set(group.get("file_ids", []))
+            rag_ids = group_files.get(gid, [])
+            merged = list(existing_ids | set(rag_ids))
+            group["file_ids"] = merged
+    except Exception as exc:
+        logger.debug("Group enrichment failed (non-fatal): %s", exc)
+
+    return result
 
 
 @router.post("/groups", response_model=MoveFilesToGroupResponse)

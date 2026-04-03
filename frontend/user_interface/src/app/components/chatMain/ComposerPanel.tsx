@@ -49,7 +49,6 @@ type ComposerPanelProps = {
   fileInputRef: RefObject<HTMLInputElement | null>;
   isSending: boolean;
   isUploading: boolean;
-  latestHighlightSnippets: string[];
   message: string;
   messageActionStatus: string;
   documentOptions: FileRecord[];
@@ -60,7 +59,6 @@ type ComposerPanelProps = {
   onAttachDocument: (documentId: string) => void;
   onAttachGroup: (groupId: string) => void;
   onAttachProject: (projectId: string) => void;
-  pasteHighlightsToComposer: () => void;
   setMessage: (value: string) => void;
   submit: () => Promise<void>;
   onFocusWithinChange?: (focused: boolean) => void;
@@ -88,7 +86,6 @@ function ComposerPanel({
   fileInputRef,
   isSending,
   isUploading,
-  latestHighlightSnippets,
   message,
   messageActionStatus,
   documentOptions,
@@ -99,11 +96,11 @@ function ComposerPanel({
   onAttachDocument,
   onAttachGroup,
   onAttachProject,
-  pasteHighlightsToComposer,
   setMessage,
   submit,
   onFocusWithinChange,
 }: ComposerPanelProps) {
+  const attachmentsEnabled = composerMode !== "ask";
   const hasPendingAttachments = attachments.some(
     (attachment) => attachment.status === "uploading" || attachment.status === "indexing",
   );
@@ -147,12 +144,12 @@ function ComposerPanel({
     message,
     setMessage,
     textareaRef,
-    documentOptions,
-    groupOptions,
-    projectOptions,
-    onAttachDocument,
-    onAttachGroup,
-    onAttachProject,
+    documentOptions: attachmentsEnabled ? documentOptions : [],
+    groupOptions: attachmentsEnabled ? groupOptions : [],
+    projectOptions: attachmentsEnabled ? projectOptions : [],
+    onAttachDocument: attachmentsEnabled ? onAttachDocument : () => {},
+    onAttachGroup: attachmentsEnabled ? onAttachGroup : () => {},
+    onAttachProject: attachmentsEnabled ? onAttachProject : () => {},
     onSubmit: submitIfPossible,
   });
 
@@ -238,7 +235,7 @@ function ComposerPanel({
           </div>
         ) : null}
         {/* Document/file mention popup — renders above the composer */}
-        {commandQuery && commandOptions.length > 0 ? (
+        {attachmentsEnabled && commandQuery && commandOptions.length > 0 ? (
           <div className="relative mb-2">
             <ComposerCommandMenu
               query={commandQuery}
@@ -299,13 +296,13 @@ function ComposerPanel({
                   void onFileChange(event);
                 }}
               />
-              <ComposerQuickActionsCard
-                onUploadFile={() => fileInputRef.current?.click()}
-                onPasteHighlights={pasteHighlightsToComposer}
-                canPasteHighlights={latestHighlightSnippets.length > 0}
-                disableUpload={isUploading || isSending}
-                triggerClassName="composerAttachButton inline-flex items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f] disabled:opacity-40"
-              />
+              {attachmentsEnabled ? (
+                <ComposerQuickActionsCard
+                  onUploadFile={() => fileInputRef.current?.click()}
+                  disableUpload={isUploading || isSending}
+                  triggerClassName="composerAttachButton inline-flex items-center justify-center rounded-full border border-black/[0.08] bg-white text-[#6e6e73] shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-colors duration-150 hover:bg-[#f7f7f8] hover:text-[#1d1d1f] disabled:opacity-40"
+                />
+              ) : null}
               <ComposerModeSelector
                 value={composerMode}
                 activeAgent={activeAgent}
@@ -336,13 +333,15 @@ function ComposerPanel({
                 }}
               />
 
-              <ComposerAttachmentChips
-                attachments={attachments}
-                isSending={isSending}
-                onClearAttachments={clearAttachments}
-                onOpenPreview={setPreviewAttachment}
-                onRemoveAttachment={removeAttachment}
-              />
+              {attachmentsEnabled ? (
+                <ComposerAttachmentChips
+                  attachments={attachments}
+                  isSending={isSending}
+                  onClearAttachments={clearAttachments}
+                  onOpenPreview={setPreviewAttachment}
+                  onRemoveAttachment={removeAttachment}
+                />
+              ) : null}
 
               <div className="assistantComposerAccessSlot">
                 <div

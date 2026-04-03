@@ -42,33 +42,52 @@ class RetrievalScope:
 
 # ── Embedding ───────────────────────────────────────────────────────────────
 
-async def _get_embedding(text: str, model: str = "text-embedding-3-small") -> list[float]:
-    """Call embedding API. Falls back to zero vector if embedding provider is unavailable."""
-    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
-        logger.warning("No API key set; returning zero vector for keyword-only retrieval")
-        return [0.0] * 1536
+def _is_dimension_mismatch_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "dimension" in message
+        and (
+            "dimensionality" in message
+            or "does not match collection" in message
+            or "does not match collection dimensionality" in message
+        )
+    )
 
-    embed_url = os.environ.get("MAIA_RAG_EMBEDDING_BASE_URL", os.environ.get("OPENAI_BASE_URL", os.environ.get("OPENAI_API_BASE", "")))
-    if not embed_url:
-        return [0.0] * 1536
+
+async def _get_embedding(
+    text: str,
+    model: str = "",
+    dimensions: int = 0,
+) -> list[float]:
+    """Call OpenAI embedding API for query vector."""
+    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        logger.warning("No API key set; returning empty vector for keyword-only retrieval")
+        return []
+
+    embed_url = os.environ.get("MAIA_RAG_EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+    if not model:
+        model = os.environ.get("MAIA_RAG_EMBEDDING_MODEL", "text-embedding-3-large")
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        payload: dict[str, str | int] = {"model": model, "input": text}
+        if dimensions > 0 and "embedding-3" in model:
+            payload["dimensions"] = dimensions
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 embed_url + "/embeddings",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"model": model, "input": text},
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()
             return data["data"][0]["embedding"]
     except Exception as exc:
         logger.warning("Embedding API failed (%s); using keyword-only retrieval", exc)
-        return [0.0] * 1536
+        return []
 
 
 # ── BM25-style keyword matching ────────────────────────────────────────────
@@ -248,20 +267,45 @@ async def retrieve(
     source_ids_filter = scope.source_ids if scope.source_ids else None
 
     # ── Vector search ───────────────────────────────────────────────────
-    query_embedding = await _get_embedding(query, config.embedding_model)
+    query_embedding = await _get_embedding(
+        query,
+        config.embedding_model,
+        config.embedding_dimensions,
+    )
 
     vector_results: list[tuple[Chunk, float]] = []
     if source_ids_filter:
         # Run a search per source_id and merge (index only supports single-value)
         for sid in source_ids_filter:
             sid_filters = {**filters, "source_id": sid}
-            hits = vector_search(query_embedding, top_k=(config.top_k or 10000), filters=sid_filters)
-            vector_results.extend(hits)
+            try:
+                hits = vector_search(query_embedding, top_k=(config.top_k or 10000), filters=sid_filters)
+                vector_results.extend(hits)
+            except Exception as exc:
+                if _is_dimension_mismatch_error(exc):
+                    logger.warning(
+                        "Vector search skipped for source %s due to embedding dimension mismatch: %s",
+                        sid,
+                        exc,
+                    )
+                    vector_results = []
+                    break
+                raise
         # Re-sort and truncate
         vector_results.sort(key=lambda x: x[1], reverse=True)
         vector_results = vector_results[: (config.top_k or 10000)]
     else:
-        vector_results = vector_search(query_embedding, top_k=(config.top_k or 10000), filters=filters)
+        try:
+            vector_results = vector_search(query_embedding, top_k=(config.top_k or 10000), filters=filters)
+        except Exception as exc:
+            if _is_dimension_mismatch_error(exc):
+                logger.warning(
+                    "Vector search skipped due to embedding dimension mismatch: %s",
+                    exc,
+                )
+                vector_results = []
+            else:
+                raise
 
     # ── Keyword search ──────────────────────────────────────────────────
     keyword_results = _keyword_search(query, filters, source_ids_filter, (config.top_k or 10000))

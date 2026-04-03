@@ -366,34 +366,17 @@ function syncFallbackProject(params: {
 function hydrateInitialConversation(params: {
   selectedConversationId: string | null;
   initialConversationHydrated: boolean;
-  conversationsLength: number;
-  visibleConversations: Array<{ id: string }>;
-  lastConversationStorageKey: string;
   handleSelectConversation: (conversationId: string) => Promise<void>;
   setInitialConversationHydrated: (value: boolean) => void;
 }) {
-  if (params.selectedConversationId && !params.initialConversationHydrated) {
-    params.setInitialConversationHydrated(true);
-    void params.handleSelectConversation(params.selectedConversationId).catch(() => undefined);
-    return;
-  }
-  if (!params.conversationsLength || params.initialConversationHydrated || params.selectedConversationId) {
-    return;
-  }
-  if (!params.visibleConversations.length) {
-    return;
-  }
-  const storedConversationId = localStorage.getItem(params.lastConversationStorageKey)?.trim() || "";
-  const visibleIds = new Set(params.visibleConversations.map((item) => item.id));
-  const candidateConversationId = visibleIds.has(storedConversationId)
-    ? storedConversationId
-    : params.visibleConversations[0].id;
-  if (!candidateConversationId) {
-    params.setInitialConversationHydrated(true);
+  if (params.initialConversationHydrated) {
     return;
   }
   params.setInitialConversationHydrated(true);
-  void params.handleSelectConversation(candidateConversationId).catch(() => undefined);
+  if (!params.selectedConversationId) {
+    return;
+  }
+  void params.handleSelectConversation(params.selectedConversationId).catch(() => undefined);
 }
 
 export {

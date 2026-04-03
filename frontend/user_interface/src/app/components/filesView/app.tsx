@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { buildRawFileUrl } from "../../../api/client";
+import { useAuthStore } from "../../stores/authStore";
 import { FilesViewOverlays } from "./FilesViewOverlays";
 import { inferFileKind, tokenNumber, UNGROUPED_FILTER } from "./helpers";
 import { MainPanel } from "./MainPanel";
@@ -63,6 +64,7 @@ export function FilesView({
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPdfPreviewModalOpen, setIsPdfPreviewModalOpen] = useState(false);
+  const canManageFileLibrary = useAuthStore((state) => state.isOrgAdmin());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const groupsByFileId = useMemo(() => {
@@ -294,6 +296,7 @@ export function FilesView({
   }, [pendingDelete, deleteCountdownTick]);
 
   const canMoveSelection = hasSelection && Boolean(onMoveFilesToGroup);
+  const canDeleteFiles = canManageFileLibrary && Boolean(onDeleteFiles);
   const canUploadFilesToGroup = Boolean(onCreateFileIngestionJob && fileGroups.length > 0 && uploadGroupId);
   const canIndexUrlsToGroup = Boolean(onUploadUrls && onMoveFilesToGroup && fileGroups.length > 0 && uploadGroupId);
   const canRenameGroup = Boolean(manageGroupId && manageGroupName.trim() && onRenameFileGroup);
@@ -316,7 +319,7 @@ export function FilesView({
     handleUrlIndex,
     startFileDrag,
   } = useFilesViewActions({
-    onDeleteFiles,
+    onDeleteFiles: canDeleteFiles ? onDeleteFiles : undefined,
     onMoveFilesToGroup,
     onCreateFileGroup,
     onRenameFileGroup,
@@ -465,7 +468,8 @@ export function FilesView({
         clearSelection={clearSelection}
         handleDeleteSelected={handleDeleteSelected}
         isDeletingSelection={isDeletingSelection}
-        canDeleteFiles={Boolean(onDeleteFiles)}
+        canDeleteFiles={canDeleteFiles}
+        deleteDisabledReason="Admin privileges are required to delete indexed files"
         pendingDeleteSeconds={pendingDeleteSeconds}
         pendingDeleteActive={pendingDelete !== null}
         deleteConfirmation={deleteConfirmation}

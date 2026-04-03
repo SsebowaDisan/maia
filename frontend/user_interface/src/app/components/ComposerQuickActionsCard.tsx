@@ -1,20 +1,16 @@
-import { ClipboardPaste, FileUp, Plus } from "lucide-react";
+import { FileUp, Plus } from "lucide-react";
 import { useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { cn } from "./ui/utils";
 
 type ComposerQuickActionsCardProps = {
   onUploadFile: () => void;
-  onPasteHighlights?: () => void;
-  canPasteHighlights?: boolean;
   disableUpload?: boolean;
   triggerClassName?: string;
 };
 
 export function ComposerQuickActionsCard({
   onUploadFile,
-  onPasteHighlights,
-  canPasteHighlights = false,
   disableUpload = false,
   triggerClassName,
 }: ComposerQuickActionsCardProps) {
@@ -51,19 +47,6 @@ export function ComposerQuickActionsCard({
           >
             <FileUp className="h-4 w-4 text-[#6e6e73]" />
             <span>Upload file</span>
-          </button>
-          <button
-            type="button"
-            disabled={!canPasteHighlights || !onPasteHighlights}
-            onClick={() => {
-              if (onPasteHighlights) {
-                runAction(onPasteHighlights);
-              }
-            }}
-            className="inline-flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[12px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7] disabled:opacity-50"
-          >
-            <ClipboardPaste className="h-4 w-4 text-[#6e6e73]" />
-            <span>Paste highlights</span>
           </button>
         </div>
       </PopoverContent>

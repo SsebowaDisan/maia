@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { ChatTurn } from "../../types";
 import { buildWorkspaceModeOverride } from "./workspaceModeOverride";
 import type { ChatMainProps, ComposerAttachment } from "./types";
@@ -109,36 +109,6 @@ function useChatMainInteractions({
     [],
   );
 
-  const latestHighlightSnippets = useMemo(() => {
-    const snippets: string[] = [];
-    for (let index = activityEvents.length - 1; index >= 0; index -= 1) {
-      const event = activityEvents[index];
-      const copied = event.data?.["copied_snippets"];
-      if (Array.isArray(copied)) {
-        for (const row of copied) {
-          const text = String(row || "").trim();
-          if (text && !snippets.includes(text)) {
-            snippets.push(text);
-          }
-          if (snippets.length >= 8) {
-            return snippets;
-          }
-        }
-      }
-      const clipboardText =
-        typeof event.data?.["clipboard_text"] === "string"
-          ? event.data["clipboard_text"].trim()
-          : "";
-      if (clipboardText && !snippets.includes(clipboardText)) {
-        snippets.push(clipboardText);
-      }
-      if (snippets.length >= 8) {
-        return snippets;
-      }
-    }
-    return snippets;
-  }, [activityEvents]);
-
   const removeAttachment = (attachmentId: string) => {
     setAttachments((previous) => {
       const next: ComposerAttachment[] = [];
@@ -236,9 +206,12 @@ function useChatMainInteractions({
       setActiveWorkflow(null);
     }
     const sendOptions = buildSendOptions();
-    const turnAttachments = attachments
-      .filter((item) => item.status === "indexed")
-      .map((item) => ({ name: item.name, fileId: item.fileId }));
+    const turnAttachments =
+      agentMode === "ask"
+        ? []
+        : attachments
+            .filter((item) => item.status === "indexed")
+            .map((item) => ({ name: item.name, fileId: item.fileId }));
     setMessage("");
     await onSendMessage(payload, turnAttachments, sendOptions);
     clearAttachments();
@@ -353,6 +326,7 @@ function useChatMainInteractions({
     setAgentControlsVisible(false);
     setDeepSearchProfile("default");
     setActiveAgent(null);
+    clearAttachments();
     onAgentModeChange("ask");
     showActionStatus("Standard mode enabled.");
   };
@@ -395,22 +369,6 @@ function useChatMainInteractions({
   const composerMode: ComposerMode =
     agentMode === "deep_search" && deepSearchProfile === "web_search" ? "web_search" : agentMode;
 
-  const pasteHighlightsToComposer = () => {
-    if (!latestHighlightSnippets.length) {
-      showActionStatus("No copied highlights available yet.");
-      return;
-    }
-    const block = [
-      "Copied highlights:",
-      ...latestHighlightSnippets.slice(0, 6).map((snippet) => `- ${snippet}`),
-    ].join("\n");
-    setMessage((previous) => {
-      const current = previous.trim();
-      return current ? `${current}\n\n${block}` : block;
-    });
-    showActionStatus("Highlights pasted into the command bar.");
-  };
-
   const quoteAssistant = (turn: ChatTurn) => {
     const quoteSource = turn.assistant.replace(/\s+/g, " ").trim();
     if (!quoteSource) {
@@ -448,7 +406,7 @@ function useChatMainInteractions({
       latest.event_type === "browser_copy_selection"
     ) {
       lastClipboardEventRef.current = latest.event_id;
-      showActionStatus("Highlights copied. Use + -> Paste highlights.");
+      showActionStatus("Highlights copied.");
     }
   }, [activityEvents]);
 
@@ -527,11 +485,9 @@ function useChatMainInteractions({
     enableWebSearch,
     fileInputRef,
     isUploading,
-    latestHighlightSnippets,
     message,
     messageActionStatus,
     onFileChange,
-    pasteHighlightsToComposer,
     quoteAssistant,
     removeAttachment,
     retryTurn,

@@ -1,4 +1,4 @@
-import { fetchApi, request } from "./core";
+import { request } from "./core";
 import type {
   ChatResponse,
   ChatStreamEvent,
@@ -151,36 +151,6 @@ function sendChat(
   });
 }
 
-function parseSseBlock(block: string): { event: string; payload: unknown } | null {
-  const lines = block
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
-  if (!lines.length) {
-    return null;
-  }
-  let eventName = "message";
-  const dataLines: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      eventName = line.slice(6).trim();
-      continue;
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trim());
-    }
-  }
-  const dataText = dataLines.join("\n");
-  if (!dataText) {
-    return { event: eventName, payload: {} };
-  }
-  try {
-    return { event: eventName, payload: JSON.parse(dataText) };
-  } catch {
-    return { event: eventName, payload: { raw: dataText } };
-  }
-}
-
 async function sendChatStream(
   message: string,
   conversationId: string | null,
@@ -201,149 +171,25 @@ async function sendChatStream(
     idleTimeoutMs?: number;
   },
 ) {
-  const controller = new AbortController();
-  const idleTimeoutMs = Math.max(5000, options.idleTimeoutMs ?? 45000);
-  let timer: number | null = null;
-  const armTimeout = () => {
-    if (timer) {
-      window.clearTimeout(timer);
-    }
-    timer = window.setTimeout(() => {
-      controller.abort();
-    }, idleTimeoutMs);
-  };
-  armTimeout();
-
-  const response = await fetchApi("/api/chat/stream", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    signal: controller.signal,
-    body: JSON.stringify({
-      message,
-      conversation_id: conversationId,
-      index_selection: options?.indexSelection ?? {},
-      citation: options?.citation,
-      language: options?.language,
-      use_mindmap: options?.useMindmap,
-      mindmap_settings: options?.mindmapSettings ?? {},
-      mindmap_focus: options?.mindmapFocus ?? {},
-      setting_overrides: options?.settingOverrides ?? {},
-      agent_mode: options?.agentMode ?? "ask",
-      agent_id: options?.agentId ?? null,
-      agent_goal: options?.agentGoal,
-      access_mode: options?.accessMode,
-      attachments: (options?.attachments || []).map((item) => ({
-        name: item.name,
-        file_id: item.fileId,
-      })),
-    }),
+  const response = await sendChat(message, conversationId, {
+    indexSelection: options?.indexSelection,
+    citation: options?.citation,
+    language: options?.language,
+    useMindmap: options?.useMindmap,
+    mindmapSettings: options?.mindmapSettings,
+    mindmapFocus: options?.mindmapFocus,
+    settingOverrides: options?.settingOverrides,
+    agentMode: options?.agentMode,
+    agentId: options?.agentId,
+    agentGoal: options?.agentGoal,
+    accessMode: options?.accessMode,
+    attachments: options?.attachments,
   });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Stream request failed: ${response.status}`);
-  }
-  if (!response.body) {
-    throw new Error("No stream body returned by backend.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let donePayload: ChatResponse | null = null;
-
-  while (true) {
-    const read = await reader.read();
-    if (read.done) {
-      break;
-    }
-    armTimeout();
-    buffer += decoder.decode(read.value, { stream: true });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() || "";
-    for (const block of blocks) {
-      const parsed = parseSseBlock(block);
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.event === "chat_response") {
-        donePayload = parsed.payload as ChatResponse;
-        options.onEvent?.({
-          type: "chat_response",
-          response: donePayload,
-        });
-        continue;
-      }
-      if (parsed.event === "done") {
-        donePayload = parsed.payload as ChatResponse;
-        continue;
-      }
-      if (parsed.event === "error") {
-        const detail =
-          (parsed.payload as { detail?: string })?.detail || "Unknown streaming error";
-        if (timer) {
-          window.clearTimeout(timer);
-          timer = null;
-        }
-        throw new Error(detail);
-      }
-      if (
-        parsed.payload &&
-        typeof parsed.payload === "object" &&
-        !Array.isArray(parsed.payload) &&
-        String((parsed.payload as { type?: unknown }).type || "").trim().toLowerCase() === "chat_response" &&
-        (parsed.payload as { response?: unknown }).response &&
-        typeof (parsed.payload as { response?: unknown }).response === "object"
-      ) {
-        donePayload = (parsed.payload as { response: ChatResponse }).response;
-      }
-      options.onEvent?.(parsed.payload as ChatStreamEvent);
-    }
-  }
-
-  if (buffer.trim()) {
-    const parsed = parseSseBlock(buffer);
-    if (parsed?.event === "chat_response") {
-      donePayload = parsed.payload as ChatResponse;
-      options.onEvent?.({
-        type: "chat_response",
-        response: donePayload,
-      });
-    } else if (parsed?.event === "done") {
-      donePayload = parsed.payload as ChatResponse;
-    } else if (parsed?.event === "error") {
-      const detail =
-        (parsed.payload as { detail?: string })?.detail || "Unknown streaming error";
-      throw new Error(detail);
-    } else if (parsed) {
-      if (
-        parsed.payload &&
-        typeof parsed.payload === "object" &&
-        !Array.isArray(parsed.payload) &&
-        String((parsed.payload as { type?: unknown }).type || "").trim().toLowerCase() === "chat_response" &&
-        (parsed.payload as { response?: unknown }).response &&
-        typeof (parsed.payload as { response?: unknown }).response === "object"
-      ) {
-        donePayload = (parsed.payload as { response: ChatResponse }).response;
-      }
-      options.onEvent?.(parsed.payload as ChatStreamEvent);
-    }
-  }
-
-  if (!donePayload) {
-    if (timer) {
-      window.clearTimeout(timer);
-      timer = null;
-    }
-    throw new Error("Stream ended without final payload.");
-  }
-  if (timer) {
-    window.clearTimeout(timer);
-    timer = null;
-  }
-  return donePayload;
+  options.onEvent?.({
+    type: "chat_response",
+    response,
+  });
+  return response;
 }
 
 export {

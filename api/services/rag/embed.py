@@ -45,7 +45,7 @@ async def _call_openai_embeddings(
         "model": model,
     }
     # text-embedding-3-* models support the dimensions parameter
-    if "embedding-3" in model:
+    if "embedding-3" in model and dimensions and dimensions > 0:
         payload["dimensions"] = dimensions
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -74,7 +74,7 @@ async def embed_chunks(
     if not chunks:
         return []
 
-    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "") or os.environ.get("GROQ_API_KEY", "")
+    api_key = os.environ.get("MAIA_RAG_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         logger.warning("No API key set — using empty embeddings (keyword-only retrieval)")
         return [_chunk_to_embedded(c, [], config.embedding_model or "none") for c in chunks]

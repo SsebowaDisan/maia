@@ -800,6 +800,10 @@ function WorkflowCanvasInner({
         fitViewOptions={{ maxZoom: 1.1, minZoom: 0.45, padding: 0.24 }}
         minZoom={0.32}
         maxZoom={1.8}
+        panOnScroll
+        zoomOnScroll={false}
+        zoomOnPinch
+        zoomOnDoubleClick={false}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={22} size={1.2} color="#d7e0ee" />

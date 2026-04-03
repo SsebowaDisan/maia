@@ -15,7 +15,7 @@ from ktem.llms.manager import llms
 from .app_index_helpers import _selected_index_ids_for_deep_search
 
 _DEEP_SEARCH_MODE = "deep_search"
-_ORCHESTRATOR_MODES = {"company_agent", _DEEP_SEARCH_MODE, "brain"}
+_ORCHESTRATOR_MODES = {"company_agent", "brain"}  # deep_search uses new RAG + web pipeline
 _DEEP_SEARCH_DEFAULT_WEB_SEARCH_BUDGET = 100
 _DEEP_SEARCH_DEFAULT_SOURCE_LIMIT = 350
 _DEEP_SEARCH_NORMAL_WEB_BUDGET = 100

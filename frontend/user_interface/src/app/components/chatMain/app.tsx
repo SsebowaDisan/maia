@@ -338,7 +338,6 @@ function ChatMain({
               fileInputRef={interactions.fileInputRef}
               isSending={isSending}
               isUploading={interactions.isUploading}
-              latestHighlightSnippets={interactions.latestHighlightSnippets}
               message={interactions.message}
               messageActionStatus={interactions.messageActionStatus}
               onAccessModeChange={onAccessModeChange}
@@ -349,7 +348,6 @@ function ChatMain({
               onAttachDocument={interactions.attachDocumentById}
               onAttachGroup={interactions.attachGroupById}
               onAttachProject={interactions.attachProjectById}
-              pasteHighlightsToComposer={interactions.pasteHighlightsToComposer}
               setMessage={interactions.setMessage}
               submit={interactions.submit}
               onFocusWithinChange={(focused) => {
