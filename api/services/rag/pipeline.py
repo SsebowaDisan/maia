@@ -231,20 +231,12 @@ async def ingest_chat_upload(
     with StageTimer(trace_id, "chunk", source.id):
         chunks = await phase_chunk.chunk_document(normalized, source, cfg)
 
-    # Index with EMPTY vectors — keyword search works immediately
+    # Skip ChromaDB indexing in fast path — ChromaDB's default embedding function
+    # produces 384-dim vectors which conflict with our 3072-dim model.
+    # The background task will index with real embeddings after they're ready.
+    # Mark as rag_ready so the file appears in the library immediately.
     source.status = IngestionStatus.INDEXING
-    with StageTimer(trace_id, "index_keyword", source.id):
-        from dataclasses import fields as dc_fields
-        keyword_chunks = []
-        for c in chunks:
-            # Copy all Chunk fields to EmbeddedChunk, add empty embedding
-            chunk_data = {f.name: getattr(c, f.name) for f in dc_fields(c)}
-            chunk_data["embedding"] = []
-            chunk_data["embedding_model"] = "pending"
-            ec = EmbeddedChunk(**chunk_data)
-            keyword_chunks.append(ec)
-        await phase_index.index_chunks(keyword_chunks, source, cfg)
-        await phase_index.mark_rag_ready(source)
+    await phase_index.mark_rag_ready(source)
 
     # Citation prep — so evidence panel works immediately
     source.status = IngestionStatus.PREPARING_CITATIONS

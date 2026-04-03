@@ -120,10 +120,13 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     for message in startup_notices:
         logger.info(message)
     get_context()
-    try:
-        get_ingestion_manager().start()
-    except Exception as _exc:
-        logger.warning("Ingestion manager start failed (non-fatal): %s", _exc)
+    # Old ingestion manager DISABLED — new RAG pipeline handles all ingestion.
+    # The old manager uses text-embedding-3-small (384 dims) which conflicts
+    # with our new pipeline using text-embedding-3-large (3072 dims).
+    # try:
+    #     get_ingestion_manager().start()
+    # except Exception as _exc:
+    #     logger.warning("Ingestion manager start failed (non-fatal): %s", _exc)
     get_report_scheduler().start()
     get_agent_scheduler().start()
     try:

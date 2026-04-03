@@ -28,9 +28,51 @@ def _token_len(text: str) -> int:
     return max(1, len(text) // _CHARS_PER_TOKEN)
 
 
+# ── Boilerplate detection ─────────────────────────────────────────────────
+# Chunks whose text is almost entirely boilerplate (TOC, preface, index,
+# copyright) carry no useful evidence and pollute citation cards with text
+# like "PREFACE ix" or "CONTENTS".
+
+_BOILERPLATE_RE = re.compile(
+    r"^("
+    r"(table\s+of\s+)?contents"
+    r"|preface(\s+[ivxlcdm]+)?"
+    r"|foreword"
+    r"|acknowledgements?"
+    r"|copyright(\s+©.*)?"
+    r"|all\s+rights\s+reserved"
+    r"|index"
+    r"|list\s+of\s+(figures|tables|abbreviations)"
+    r"|about\s+the\s+authors?"
+    r"|bibliography"
+    r"|references"
+    r"|appendix\s*[a-z]?"
+    r"|glossary"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_boilerplate_chunk(text: str) -> bool:
+    """Return True if the chunk text is purely boilerplate with no real content.
+
+    Only filters chunks where the *entire* text (after whitespace cleanup)
+    matches a boilerplate pattern. Chunks that happen to contain a heading
+    like "Contents" alongside real paragraph text are kept.
+    """
+    stripped = re.sub(r"\s+", " ", text.strip())
+    # Very short text that is just a label
+    if len(stripped) < 40 and _BOILERPLATE_RE.match(stripped):
+        return True
+    # Page-number-only chunks (e.g. "iv", "xii", "15")
+    if re.match(r"^[ivxlcdm\d\s\-\.]+$", stripped, re.IGNORECASE) and len(stripped) < 20:
+        return True
+    return False
+
+
 # ── Sentence splitting ─────────────────────────────────────────────────────
 
-_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+_SENTENCE_RE = re.compile(r"(?<=[.!?)\]])\s+")
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -307,8 +349,10 @@ async def chunk_document(
       4. If a paragraph is too long, split by sentences
       5. Every chunk carries page, char offsets, heading_path, and spans
     """
-    max_tokens = config.chunk_size or 10000  # 0 = effectively no limit
-    overlap_tokens = config.chunk_overlap or 0
+    # Sentence-level chunking: group 2-3 sentences per chunk for granular citations.
+    # Each citation [1], [2], [3] will point to a specific passage, not a whole page.
+    max_tokens = config.chunk_size or 150  # ~3 sentences per chunk
+    overlap_tokens = config.chunk_overlap or 30  # 1 sentence overlap for context
     heading_tracker = _HeadingTracker(normalized.headings)
 
     chunks: list[Chunk] = []
@@ -356,5 +400,8 @@ async def chunk_document(
             text_spans, source, heading_tracker, max_tokens, overlap_tokens,
         )
         chunks.extend(section_chunks)
+
+    # Filter out boilerplate-only chunks (TOC, preface, index labels)
+    chunks = [c for c in chunks if not _is_boilerplate_chunk(c.text)]
 
     return chunks

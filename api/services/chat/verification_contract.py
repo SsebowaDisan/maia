@@ -297,12 +297,14 @@ def build_verification_evidence_items(
         if ref_id:
             seen_ref_ids.add(ref_id)
         ref = refs_by_id.get(ref_id or 0, {})
+        resolved_source_id = snippet.get("source_id") or ref.get("source_id")
         candidate: dict[str, Any] = {
             "id": f"evidence-{ref_id}" if ref_id and ref_id > 0 else "",
             "title": f"Evidence [{ref_id}]" if ref_id and ref_id > 0 else "Evidence",
             "source_name": snippet.get("source_name") or ref.get("source_name") or ref.get("label") or "Indexed source",
             "source_url": snippet.get("source_url") or snippet.get("page_url") or snippet.get("url") or ref.get("source_url"),
-            "source_id": snippet.get("source_id") or ref.get("source_id"),
+            "source_id": resolved_source_id,
+            "file_id": snippet.get("file_id") or ref.get("file_id") or resolved_source_id,
             "source_type": snippet.get("source_type") or ref.get("source_type"),
             "page": snippet.get("page_label") or ref.get("page_label"),
             "extract": snippet.get("text") or ref.get("phrase"),
@@ -321,13 +323,15 @@ def build_verification_evidence_items(
     for ref_id, ref in sorted(refs_by_id.items(), key=lambda item: item[0]):
         if ref_id in seen_ref_ids:
             continue
+        ref_source_id = ref.get("source_id")
         candidates.append(
             {
                 "id": f"evidence-{ref_id}",
                 "title": f"Evidence [{ref_id}]",
                 "source_name": ref.get("source_name") or ref.get("label") or "Indexed source",
                 "source_url": ref.get("source_url"),
-                "source_id": ref.get("source_id"),
+                "source_id": ref_source_id,
+                "file_id": ref.get("file_id") or ref_source_id,
                 "source_type": ref.get("source_type"),
                 "page": ref.get("page_label"),
                 "extract": ref.get("phrase"),

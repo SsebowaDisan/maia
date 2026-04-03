@@ -586,17 +586,9 @@ def _inject_citation_anchors(
             safe_phrase = phrase[:300].replace('"', '&quot;')
             attrs.append(f'data-phrase="{safe_phrase}"')
         elif cit.get("snippet"):
-            raw_snippet = cit["snippet"]
-            # Skip heading-like lines (e.g. "1 Introduction", "Chapter 3")
-            # and find the first real content sentence
-            lines = [ln.strip() for ln in raw_snippet.split("\n") if ln.strip()]
-            content_lines = [
-                ln for ln in lines
-                if len(ln) > 30 and not _re.match(r'^(\d+[\.\s]+)?[A-Z][a-z]+(\s[A-Z][a-z]+){0,3}$', ln)
-            ]
-            best_text = content_lines[0] if content_lines else (lines[0] if lines else raw_snippet)
-            first_sentence = _re.split(r'[.!?]', best_text, maxsplit=1)[0].strip()
-            safe_phrase = (first_sentence[:150] if len(first_sentence) > 20 else best_text[:150]).replace('"', '&quot;')
+            # Use the full citation snippet (already cleaned by _extract_content_snippet)
+            # This contains 2-3 real content sentences — good for highlighting
+            safe_phrase = _re.sub(r'\s+', ' ', cit["snippet"]).strip()[:300].replace('"', '&quot;')
             attrs.append(f'data-phrase="{safe_phrase}"')
 
         # Strength tier from relevance score
@@ -747,7 +739,6 @@ def _build_info_html(citations: list[dict], sources_used: list[dict], coverage: 
         return ""
 
     parts = ['<div class="rag-evidence-summary">']
-    parts.append(f'<p><strong>{len(citations)} source{"s" if len(citations) != 1 else ""}</strong> cited from {len(sources_used)} file{"s" if len(sources_used) != 1 else ""}</p>')
 
     for cit in citations:
         ref = cit.get("ref_id", "")

@@ -33,9 +33,6 @@ function VerificationFooter({ quality, sourceCount, evidenceCount, details = [] 
           {Math.round(quality.score * 100)}%
         </span>
       </div>
-      <p className="mt-1 text-[11px] text-[#6e6e73]">
-        {sourceCount} source{sourceCount === 1 ? "" : "s"} • {evidenceCount} evidence snippet{evidenceCount === 1 ? "" : "s"}
-      </p>
       {quality.warning ? <p className="mt-2 text-[11px] text-[#8a3a2d]">{quality.warning}</p> : null}
       {hasDetails ? (
         <div className="mt-2 border-t border-black/[0.06] pt-2">

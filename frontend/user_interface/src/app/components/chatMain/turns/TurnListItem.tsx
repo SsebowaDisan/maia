@@ -10,6 +10,7 @@ import { AgentActivityPanel } from "../../AgentActivityPanel";
 import { CanvasWorkspaceSurface } from "../../canvas/CanvasWorkspaceSurface";
 import { MessageBlocks } from "../../messages/MessageBlocks";
 import { ChatTurnPlot } from "../ChatTurnPlot";
+import { TypewriterLoader } from "./TypewriterLoader";
 import type { FilePreviewAttachment } from "../types";
 
 type TurnCopyFeedback = {
@@ -141,6 +142,9 @@ function TurnListItem({
   const hasAssistantOutput = (!canvasOnlyResponse && assistantBlocks.length > 0) || Boolean(turn.plot);
   const shouldAnchorTheatre =
     isLatestTurn && !hasAssistantOutput && (isSending || isActivityStreaming);
+  const isPendingPlaceholder =
+    isLatestTurn && isSending && !turn.plot && assistantBlocks.length <= 1 &&
+    /^(Analyzing your sources|Thinking|Starting my desktop|Running|Brain is assembling)/.test(turn.assistant);
   const userCopyFeedbackKey = `user-${index}`;
   const assistantCopyFeedbackKey = `assistant-${index}`;
   const userCopyFeedback = copyFeedback?.key === userCopyFeedbackKey ? copyFeedback.status : null;
@@ -360,7 +364,11 @@ function TurnListItem({
             className="group max-w-[90%] space-y-1.5"
             data-response-anchor={isLatestTurn ? "true" : undefined}
           >
-            {assistantBlocks.length > 0 ? (
+            {isPendingPlaceholder ? (
+              <div className="assistantAnswerCard px-1 py-2">
+                <TypewriterLoader text={turn.assistant} />
+              </div>
+            ) : assistantBlocks.length > 0 ? (
               <div className="assistantAnswerCard">
                 <MessageBlocks blocks={assistantBlocks} documents={turn.documents || []} />
               </div>

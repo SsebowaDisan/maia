@@ -1,14 +1,12 @@
-"""RAG Pipeline Phase 15: Configuration — scoring weights, credibility tiers, defaults.
-
-Provides a single get_config() entry point that returns a RAGConfig with
-sensible defaults, optionally overridden by a dict of key→value pairs.
-
-Credibility tiers drive the reranker: a PDF from arxiv.org scores higher
-than a Reddit thread. The tiers are domain-suffix lists checked against
-the source URL or filename metadata.
-"""
-
+"""RAG Pipeline Phase 15: Configuration — scoring weights, credibility tiers, defaults."""
 from __future__ import annotations
+
+# Load .env BEFORE reading any os.environ values at module level
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=False)
+except ImportError:
+    pass
 
 from api.services.rag.types import RAGConfig
 

@@ -927,13 +927,6 @@ export function InfoPanel({
                     Maia sources searched
                   </h4>
                 </div>
-                <div className="text-right text-[11px] text-[#6b6b70]">
-                  {ragScopeSummary.fileCount > 0 ? (
-                    <div>{ragScopeSummary.coveredFileCount}/{ragScopeSummary.fileCount} selected files covered</div>
-                  ) : (
-                    <div>{ragScopeSummary.searchedSourceCount} indexed source{ragScopeSummary.searchedSourceCount === 1 ? "" : "s"}</div>
-                  )}
-                </div>
               </div>
 
               {ragScopeSummary.fileIds.length > 0 ? (

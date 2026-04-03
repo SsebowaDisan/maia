@@ -418,12 +418,12 @@ function buildDelayedPendingAssistantMessage(modeContext: Pick<SendModeContext, 
       return modeContext.webOnlyResearchRequested ? "Running web search..." : "Running deep search...";
     }
     if (modeContext.effectiveMode === "rag") {
-      return "Reviewing the selected files and indexed URLs...";
+      return "Analyzing your sources...";
     }
     return "Starting my desktop...";
   }
   if (modeContext.effectiveMode === "rag") {
-    return "Grounding the answer in files and indexed URLs already in Maia...";
+    return "Analyzing your sources...";
   }
   return "Thinking....";
 }

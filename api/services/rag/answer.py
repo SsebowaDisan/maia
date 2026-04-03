@@ -218,15 +218,17 @@ This is BAD because: no citations, vague language, missing numbers.
 
 === ANSWER FORMAT ===
 
-1. Start with a # title in sentence case (capitalise first word only, e.g. "# Overview of the document").
-2. Use ## headings to organise sections.
-3. Write DETAILED paragraphs — not short summaries. Cover every relevant fact from the evidence.
-4. Every paragraph must have multiple citations. Aim for 2-5 citations per paragraph.
-5. Cite specific numbers, dates, names, percentages, and definitions — not just general claims.
-6. Use EVERY evidence block at least once if it has relevant information.
-7. If evidence is insufficient, clearly state what is missing.
-8. If sources conflict, present both sides with their citations.
-9. Never fabricate information not in the evidence."""
+1. Start with a # title in sentence case (capitalise first word only).
+2. Use ## headings to organise sections — at least 2-3 sections.
+3. Write LONG, DETAILED paragraphs. Each paragraph should be 3-5 sentences minimum.
+4. Do NOT summarise — EXPLAIN. For every fact, explain what it means, why it matters, and how it connects to other facts.
+5. Include ALL specific numbers, dates, amounts, percentages, names from the evidence. Never say "various" or "several" when the evidence has exact values.
+6. Use EVERY evidence block at least once. If there are 5 evidence blocks, your answer should have citations [1] through [5].
+7. Each sentence must have a different citation where possible — spread citations across all evidence blocks, not just [1].
+8. If evidence is insufficient, clearly state what is missing.
+9. If sources conflict, present both sides with their citations.
+10. Never fabricate information not in the evidence.
+11. Minimum answer length: at least 200 words. Short answers are NOT acceptable when evidence is available."""
 
 _SYSTEM_RELAXED = """\
 You are Maia, an AI research assistant created by Disan Ssebowa Basalidde at Axon Group. \
@@ -256,13 +258,14 @@ This is BAD because: no citations at all.
 === ANSWER FORMAT ===
 
 1. Start with a # title in sentence case (capitalise first word only).
-2. Use ## headings to organise sections.
-3. Write DETAILED paragraphs — not short summaries. Cover every relevant fact.
-4. Every paragraph must have multiple citations. Aim for 2-5 citations per paragraph.
-5. Cite specific numbers, dates, names, percentages, and definitions.
-6. Use EVERY evidence block at least once if it has relevant information.
+2. Use ## headings to organise sections — at least 2-3 sections.
+3. Write LONG, DETAILED paragraphs. Each paragraph should be 3-5 sentences minimum.
+4. Do NOT summarise — EXPLAIN. For every fact, explain what it means, why it matters, and how it connects.
+5. Include ALL specific numbers, dates, amounts, percentages, names from the evidence.
+6. Use EVERY evidence block at least once. Spread citations across all evidence blocks, not just [1].
 7. Mark non-evidence statements with "(general knowledge)".
-8. If evidence is insufficient, state what is missing."""
+8. If evidence is insufficient, state what is missing.
+9. Minimum answer length: at least 200 words."""
 
 _MATH_INSTRUCTION = """
 The user is asking for a calculation. You MUST follow this exact structure:
@@ -552,8 +555,12 @@ def _build_user_prompt(query: str, evidence_context: str) -> str:
     return (
         f"## Evidence\n\n{evidence_context}\n\n"
         f"## Question\n\n{query}\n\n"
-        f"REMEMBER: You MUST cite every sentence. Write [1], [2], etc. at the end of each sentence. "
-        f"Example: \"The value is 20 [1]. It is calculated weekly [1][2].\"\n\n"
+        f"CRITICAL RULES:\n"
+        f"1. Use as MANY different citation numbers as possible. If there are 5 evidence blocks, cite [1], [2], [3], [4], [5] — not just [1] repeatedly.\n"
+        f"2. Write a LONG, detailed answer (200+ words). Explain every fact thoroughly.\n"
+        f"3. Every sentence MUST end with a citation: [1], [2], etc.\n"
+        f"4. Include ALL numbers, amounts, dates, names from the evidence — never be vague.\n"
+        f"Example: \"The value is 20 [1]. It is calculated weekly [2]. The total amount is €5,192.31 [3].\"\n\n"
         f"=== HIGHLIGHT MAP (required after your answer) ===\n\n"
         f"After your answer, you MUST output a JSON block.\n"
         f"For EVERY citation number you used, copy-paste the EXACT sentence(s) from the evidence block.\n"

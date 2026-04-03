@@ -197,7 +197,7 @@ function ChatMain({
   const hasActiveRun = isSending || isActivityStreaming;
   const isBrainActive = interactions.composerMode === "brain" && hasActiveRun;
   const composerVisible = hasActiveRun
-    ? false
+    ? scroll.composerHovering
     : !scroll.composerCollapsed || scroll.composerHovering || scroll.composerFocused;
 
   const handleSelectWorkflow = useCallback(
@@ -296,17 +296,14 @@ function ChatMain({
           </button>
         ) : null}
       </div>
+      {/* ── Composer footer ── */}
       <div
-        className="z-20 mt-auto shrink-0"
+        className={`relative z-20 shrink-0 ${hasActiveRun ? "" : "mt-auto"}`}
         onMouseEnter={() => {
-          if (!hasActiveRun) {
-            scroll.setComposerHovering(true);
-          }
+          scroll.setComposerHovering(true);
         }}
         onMouseLeave={() => {
-          if (!hasActiveRun) {
-            scroll.setComposerHovering(false);
-          }
+          scroll.setComposerHovering(false);
         }}
       >
         {!composerVisible && isBrainActive ? (
@@ -314,7 +311,7 @@ function ChatMain({
             <div className="h-1 w-10 rounded-full bg-black/[0.08]" />
           </div>
         ) : null}
-        {composerVisible ? (
+        {composerVisible && !hasActiveRun ? (
           <div className={`border-t border-black/[0.06] bg-[#f6f6f7] px-3 pb-3 pt-2 ${isBrainActive ? "transition-opacity duration-200" : ""}`}>
             <ComposerPanel
               accessMode={accessMode}
@@ -367,6 +364,50 @@ function ChatMain({
             <div className="mx-auto h-1.5 w-16 rounded-full bg-black/[0.12]" />
           </div>
         )}
+        {/* Overlay composer on hover during active run — inside the hover
+            wrapper so mouseLeave from the bar doesn't flicker the overlay */}
+        {composerVisible && hasActiveRun ? (
+          <div className="absolute inset-x-0 bottom-0 z-30 rounded-b-[28px] border-t border-black/[0.06] bg-[#f6f6f7]/95 px-3 pb-3 pt-2 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur-sm">
+            <ComposerPanel
+              accessMode={accessMode}
+              agentControlsVisible={interactions.agentControlsVisible}
+              agentMode={agentMode}
+              composerMode={interactions.composerMode}
+              attachments={interactions.attachments}
+              clearAttachments={interactions.clearAttachments}
+              removeAttachment={interactions.removeAttachment}
+              enableAskMode={interactions.enableAskMode}
+              enableAgentMode={interactions.enableAgentMode}
+              enableBrainMode={interactions.enableBrainMode}
+              enableRagMode={interactions.enableRagMode}
+              enableWebSearch={interactions.enableWebSearch}
+              enableDeepResearch={interactions.enableDeepResearch}
+              activeAgent={interactions.activeAgent}
+              onAgentSelect={interactions.onAgentSelect}
+              onSelectWorkflow={handleSelectWorkflow}
+              activeWorkflow={interactions.activeWorkflow}
+              onClearWorkflow={() => interactions.setActiveWorkflow(null)}
+              fileInputRef={interactions.fileInputRef}
+              isSending={isSending}
+              isUploading={interactions.isUploading}
+              message={interactions.message}
+              messageActionStatus={interactions.messageActionStatus}
+              onAccessModeChange={onAccessModeChange}
+              onFileChange={interactions.onFileChange}
+              documentOptions={availableDocuments}
+              groupOptions={availableGroups}
+              projectOptions={availableProjects}
+              onAttachDocument={interactions.attachDocumentById}
+              onAttachGroup={interactions.attachGroupById}
+              onAttachProject={interactions.attachProjectById}
+              setMessage={interactions.setMessage}
+              submit={interactions.submit}
+              onFocusWithinChange={(focused) => {
+                scroll.setComposerFocused(focused);
+              }}
+            />
+          </div>
+        ) : null}
       </div>
 
       {clarificationPrompt ? (

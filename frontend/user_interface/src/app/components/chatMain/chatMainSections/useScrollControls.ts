@@ -123,7 +123,7 @@ export function useScrollControls(params: UseScrollControlsParams) {
   useEffect(() => {
     if (isActivityStreaming || isSending) {
       setComposerCollapsed(true);
-      setComposerHovering(false);
+      // Don't clear hovering — allow hover-to-reveal while sending
       setComposerFocused(false);
       return;
     }

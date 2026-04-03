@@ -33,37 +33,53 @@ _HEADING_RE = re.compile(
 
 
 def _extract_content_snippet(chunk_text: str, fallback_snippet: str = "") -> str:
-    """Extract the first real content sentences from chunk text, skipping headings.
+    """Extract meaningful content sentences from chunk text for citation display.
 
-    Returns 1-2 full sentences that represent actual evidence, not section titles.
+    Skips headings, short labels, and formatting artifacts.
+    Returns 2-3 real content sentences (up to 400 chars) that represent
+    the actual evidence — suitable for citation hover cards and highlights.
     """
-    lines = [ln.strip() for ln in chunk_text.split("\n") if ln.strip()]
+    # Merge all text, normalize whitespace
+    text = re.sub(r'\s+', ' ', chunk_text.strip())
 
-    # Find content lines: longer than 40 chars AND don't look like a heading
+    # Split into sentences (handle period, question mark, exclamation, or closing paren/bracket + space)
+    raw_sentences = re.split(r'(?<=[.!?)\]])\s+', text)
+
     content_sentences: list[str] = []
-    for line in lines:
-        if len(line) < 40:
+    for sent in raw_sentences:
+        sent = sent.strip()
+        # Skip short fragments (headings, labels, numbers)
+        if len(sent) < 25:
             continue
-        if _HEADING_RE.match(line):
+        # Skip lines that are ONLY a number/code (e.g. "020102-427-76")
+        if re.match(r'^[\d\s\-/.,]+$', sent):
             continue
-        if line.isupper() and len(line) < 80:
+        # Skip pure heading patterns
+        if _HEADING_RE.match(sent):
             continue
-        # Split into sentences and take the first 2
-        sentences = re.split(r'(?<=[.!?])\s+', line)
-        for sent in sentences:
-            sent = sent.strip()
-            if len(sent) > 30:
-                content_sentences.append(sent)
-                if len(content_sentences) >= 2:
-                    break
-        if len(content_sentences) >= 2:
+
+        content_sentences.append(sent)
+        if len(content_sentences) >= 3:
             break
 
     if content_sentences:
-        return " ".join(content_sentences)[:300]
+        result = " ".join(content_sentences)
+        # Limit length but don't cut mid-sentence
+        if len(result) > 400:
+            # Find last sentence boundary before 400
+            cut = result[:400].rfind('. ')
+            if cut > 100:
+                result = result[:cut + 1]
+            else:
+                result = result[:400]
+        return result
 
-    # Fallback: use the raw fallback_snippet or chunk text
+    # Fallback: use whatever we have, but avoid showing pure boilerplate labels
     raw = fallback_snippet or chunk_text
+    raw = re.sub(r'\s+', ' ', raw.strip())
+    # If the fallback is too short to be meaningful, return a generic placeholder
+    if len(raw) < 20:
+        return "(see source document)"
     return raw[:300]
 
 

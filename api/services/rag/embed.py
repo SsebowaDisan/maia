@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Load .env before reading os.environ
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)
+except ImportError:
+    pass
+
 import logging
 import os
 from dataclasses import fields
