@@ -740,6 +740,16 @@ async def generate_answer(
             has_calculations=False,
         )
 
+    # Cap evidence to avoid batched LLM explosion — 15 chunks is enough for
+    # a thorough answer and keeps the prompt under the batching threshold.
+    MAX_EVIDENCE_FOR_ANSWER = 15
+    if len(evidence) > MAX_EVIDENCE_FOR_ANSWER:
+        logger.info(
+            "Capping evidence from %d to %d for answer generation",
+            len(evidence), MAX_EVIDENCE_FOR_ANSWER,
+        )
+        evidence = evidence[:MAX_EVIDENCE_FOR_ANSWER]
+
     # Build prompts
     system_prompt = _build_system_prompt(coverage, config)
     evidence_context = _build_evidence_context(evidence)

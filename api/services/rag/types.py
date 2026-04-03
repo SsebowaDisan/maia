@@ -404,8 +404,8 @@ class RAGConfig:
     preserve_tables: bool = True        # never split tables
 
     # Retrieval
-    top_k: int = 0                      # 0 = return all matches
-    final_k: int = 0                    # 0 = return all after rerank
+    top_k: int = 20                     # max chunks from retrieve (0 = unbounded — avoid)
+    final_k: int = 8                    # max evidence after rerank (0 = unbounded — avoid)
     hybrid_weight: float = 0.7          # vector vs keyword (0=keyword, 1=vector)
 
     # Reranking
