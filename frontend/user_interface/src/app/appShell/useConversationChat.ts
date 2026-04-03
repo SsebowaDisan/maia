@@ -48,6 +48,8 @@ export function useConversationChat({
   const userStorageScope = storageScopeForUser(ACTIVE_USER_ID);
   const mindmapSettingsStorageKey = `${MINDMAP_SETTINGS_STORAGE_KEY}:${userStorageScope}`;
   const {
+    cachedConversationId,
+    initialCachedSnapshot,
     conversationsCacheStorageKey,
     conversationDetailCacheStorageKey,
     lastConversationStorageKey,
@@ -56,10 +58,16 @@ export function useConversationChat({
   const [conversations, setConversations] = useState<ConversationSummary[]>(() =>
     readStoredJson<ConversationSummary[]>(conversationsCacheStorageKey, []),
   );
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [chatTurns, setChatTurns] = useState<ChatTurn[]>([]);
-  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(null);
-  const [infoText, setInfoText] = useState("");
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(cachedConversationId);
+  const [chatTurns, setChatTurns] = useState<ChatTurn[]>(() =>
+    initialCachedSnapshot?.turns ?? [],
+  );
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState<number | null>(() =>
+    initialCachedSnapshot?.selectedTurnIndex ?? null,
+  );
+  const [infoText, setInfoText] = useState(() =>
+    initialCachedSnapshot?.infoText ?? "",
+  );
   const [citationMode, setCitationMode] = useState("inline");
   const [mindmapEnabled, setMindmapEnabled] = useState(true);
   const [mindmapMaxDepth, setMindmapMaxDepth] = useState(4);
@@ -69,7 +77,9 @@ export function useConversationChat({
     Record<string, ConversationMindmapSettings>
   >(() => readStoredMindmapSettings(mindmapSettingsStorageKey, MINDMAP_SETTINGS_STORAGE_KEY));
   const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
-  const [composerMode, setComposerMode] = useState<AgentMode>("ask");
+  const [composerMode, setComposerMode] = useState<AgentMode>(() =>
+    (initialCachedSnapshot?.composerMode as AgentMode) || "ask",
+  );
   const [accessMode, setAccessMode] = useState<AccessMode>("restricted");
   const [activityEvents, setActivityEvents] = useState<AgentActivityEvent[]>([]);
   const [isActivityStreaming, setIsActivityStreaming] = useState(false);
